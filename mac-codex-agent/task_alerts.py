@@ -1,0 +1,421 @@
+"""Persist per-conversation Codex progress alerts from rollout events."""
+
+from __future__ import annotations
+
+import dataclasses
+import datetime
+import json
+import os
+import pathlib
+import sqlite3
+import threading
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+
+
+UTC = datetime.timezone.utc
+DEFAULT_STATE_DB = pathlib.Path.home() / ".codex" / "state_5.sqlite"
+DEFAULT_LEDGER_PATH = pathlib.Path.home() / ".codex" / ".stopwatch_alerts.json"
+LEDGER_VERSION = 1
+RETENTION_DAYS = 7
+MAX_DISCOVERED_THREADS = 50
+
+
+@dataclasses.dataclass(frozen=True)
+class TaskAlert:
+    id: str
+    thread_id: str
+    project: str
+    title: str
+    progress_at: str
+    handled_at: Optional[str]
+    state: str
+    watch_notified: bool
+
+
+@dataclasses.dataclass(frozen=True)
+class TaskAlertSnapshot:
+    pending_count: int = 0
+    handled_count: int = 0
+    revision: int = 0
+    alerts: Tuple[TaskAlert, ...] = ()
+
+
+@dataclasses.dataclass(frozen=True)
+class _ThreadInfo:
+    id: str
+    cwd: str
+    title: str
+    rollout_path: pathlib.Path
+
+    @property
+    def project(self) -> str:
+        name = pathlib.Path(self.cwd.rstrip("/")).name
+        return name or self.cwd or "--"
+
+
+def _utc_now() -> datetime.datetime:
+    return datetime.datetime.now(tz=UTC)
+
+
+def _iso(timestamp: datetime.datetime) -> str:
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=UTC)
+    return timestamp.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _parse_timestamp(value: Any) -> Optional[datetime.datetime]:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
+class TaskAlertTracker:
+    def __init__(
+        self,
+        state_db: pathlib.Path = DEFAULT_STATE_DB,
+        ledger_path: pathlib.Path = DEFAULT_LEDGER_PATH,
+        now: Callable[[], datetime.datetime] = _utc_now,
+        local_timezone=None,
+    ):
+        self.state_db = pathlib.Path(state_db)
+        self.ledger_path = pathlib.Path(ledger_path)
+        self._now = now
+        self._local_timezone = local_timezone or datetime.datetime.now().astimezone().tzinfo
+        self._lock = threading.RLock()
+        self._state: Optional[Dict[str, Any]] = None
+
+    def refresh(self) -> TaskAlertSnapshot:
+        with self._lock:
+            if self._state is None:
+                loaded = self._load_state()
+                if loaded is not None:
+                    self._state = loaded
+            threads = self._discover_threads()
+            if self._state is None:
+                self._state = self._initial_state(threads)
+                self._save_state()
+                return self._snapshot()
+
+            changed = self._scan_threads(threads)
+            if self._prune_old_alerts():
+                changed = True
+            if changed:
+                self._state["last_scan_at"] = _iso(self._now())
+                self._save_state()
+            return self._snapshot()
+
+    def pending_watch_notification_ids(self) -> Tuple[str, ...]:
+        with self._lock:
+            self._ensure_loaded()
+            return tuple(
+                alert.id
+                for alert in self._snapshot().alerts
+                if alert.state == "pending" and not alert.watch_notified
+            )
+
+    def mark_watch_notified(self, alert_ids: Iterable[str]) -> None:
+        target = set(alert_ids)
+        if not target:
+            return
+        with self._lock:
+            self._ensure_loaded()
+            changed = False
+            for item in self._state["alerts"]:
+                if (
+                    item.get("id") in target
+                    and item.get("state") == "pending"
+                    and not item.get("watch_notified", False)
+                ):
+                    item["watch_notified"] = True
+                    changed = True
+            if changed:
+                self._save_state()
+
+    def _ensure_loaded(self) -> None:
+        if self._state is not None:
+            return
+        loaded = self._load_state()
+        self._state = loaded or self._initial_state(self._discover_threads())
+        if loaded is None:
+            self._save_state()
+
+    def _discover_threads(self) -> List[_ThreadInfo]:
+        if not self.state_db.exists():
+            return []
+        try:
+            connection = sqlite3.connect(
+                "file:{}?mode=ro".format(self.state_db), uri=True, timeout=1.0
+            )
+            try:
+                rows = connection.execute(
+                    """
+                    SELECT id, cwd, title, rollout_path
+                      FROM threads
+                     WHERE model_provider = 'openai'
+                       AND (thread_source IS NULL OR thread_source != 'subagent')
+                     ORDER BY updated_at_ms DESC
+                     LIMIT ?
+                    """,
+                    (MAX_DISCOVERED_THREADS,),
+                ).fetchall()
+
+                known_ids = set((self._state or {}).get("cursors", {}))
+                present_ids = {str(row[0]) for row in rows}
+                missing = sorted(known_ids - present_ids)
+                if missing:
+                    placeholders = ",".join("?" for _ in missing)
+                    rows.extend(
+                        connection.execute(
+                            "SELECT id, cwd, title, rollout_path FROM threads "
+                            "WHERE id IN ({})".format(placeholders),
+                            missing,
+                        ).fetchall()
+                    )
+            finally:
+                connection.close()
+        except (OSError, sqlite3.Error):
+            return []
+
+        result = []
+        seen = set()
+        for thread_id, cwd, title, rollout_path in rows:
+            if not thread_id or not rollout_path or thread_id in seen:
+                continue
+            seen.add(thread_id)
+            result.append(
+                _ThreadInfo(
+                    id=str(thread_id),
+                    cwd=str(cwd or ""),
+                    title=str(title or "Untitled conversation"),
+                    rollout_path=pathlib.Path(str(rollout_path)),
+                )
+            )
+        return result
+
+    def _initial_state(self, threads: List[_ThreadInfo]) -> Dict[str, Any]:
+        now = _iso(self._now())
+        cursors = {}
+        for thread in threads:
+            try:
+                offset = thread.rollout_path.stat().st_size
+            except OSError:
+                offset = 0
+            cursors[thread.id] = {
+                "path": str(thread.rollout_path),
+                "offset": offset,
+            }
+        return {
+            "version": LEDGER_VERSION,
+            "initialized_at": now,
+            "last_scan_at": now,
+            "revision": 0,
+            "cursors": cursors,
+            "alerts": [],
+        }
+
+    def _scan_threads(self, threads: List[_ThreadInfo]) -> bool:
+        changed = False
+        cursors = self._state.setdefault("cursors", {})
+        last_scan = _parse_timestamp(self._state.get("last_scan_at"))
+        for thread in threads:
+            existing = cursors.get(thread.id)
+            threshold = None
+            if existing is None:
+                offset = 0
+                threshold = last_scan
+            else:
+                offset = int(existing.get("offset", 0))
+                if existing.get("path") != str(thread.rollout_path):
+                    offset = 0
+                    threshold = last_scan
+
+            lines, new_offset, reset = self._read_complete_lines(
+                thread.rollout_path, offset
+            )
+            if reset:
+                threshold = last_scan
+            if existing is None or new_offset != offset or reset:
+                cursors[thread.id] = {
+                    "path": str(thread.rollout_path),
+                    "offset": new_offset,
+                }
+                changed = True
+            for line in lines:
+                if self._reduce_line(thread, line, threshold):
+                    changed = True
+        return changed
+
+    def _read_complete_lines(
+        self, path: pathlib.Path, offset: int
+    ) -> Tuple[List[bytes], int, bool]:
+        try:
+            size = path.stat().st_size
+            reset = offset > size
+            if reset:
+                offset = 0
+            with path.open("rb") as stream:
+                stream.seek(offset)
+                data = stream.read()
+        except OSError:
+            return [], offset, False
+        last_newline = data.rfind(b"\n")
+        if last_newline < 0:
+            return [], offset, reset
+        complete = data[: last_newline + 1]
+        return complete.splitlines(), offset + len(complete), reset
+
+    def _reduce_line(
+        self,
+        thread: _ThreadInfo,
+        line: bytes,
+        threshold: Optional[datetime.datetime],
+    ) -> bool:
+        try:
+            item = json.loads(line)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return False
+        if not isinstance(item, dict) or item.get("type") != "event_msg":
+            return False
+        payload = item.get("payload")
+        if not isinstance(payload, dict):
+            return False
+        event_type = payload.get("type")
+        if event_type not in ("task_complete", "user_message"):
+            return False
+        timestamp_text = item.get("timestamp") or payload.get("timestamp")
+        timestamp = _parse_timestamp(timestamp_text)
+        if timestamp is None or (threshold is not None and timestamp <= threshold):
+            return False
+        timestamp_text = _iso(timestamp)
+
+        if event_type == "task_complete":
+            alert_id = "{}:{}".format(thread.id, timestamp_text)
+            if any(entry.get("id") == alert_id for entry in self._state["alerts"]):
+                return False
+            self._state["alerts"].append(
+                {
+                    "id": alert_id,
+                    "thread_id": thread.id,
+                    "project": thread.project,
+                    "title": thread.title,
+                    "progress_at": timestamp_text,
+                    "handled_at": None,
+                    "state": "pending",
+                    "watch_notified": False,
+                }
+            )
+            self._state["revision"] = int(self._state.get("revision", 0)) + 1
+            return True
+
+        changed = False
+        for entry in self._state["alerts"]:
+            progress = _parse_timestamp(entry.get("progress_at"))
+            if (
+                entry.get("thread_id") == thread.id
+                and entry.get("state") == "pending"
+                and progress is not None
+                and progress < timestamp
+            ):
+                entry["state"] = "handled"
+                entry["handled_at"] = timestamp_text
+                changed = True
+        if changed:
+            self._state["revision"] = int(self._state.get("revision", 0)) + 1
+        return changed
+
+    def _prune_old_alerts(self) -> bool:
+        cutoff = self._now().astimezone(self._local_timezone).date() - datetime.timedelta(
+            days=RETENTION_DAYS - 1
+        )
+        retained = []
+        for item in self._state["alerts"]:
+            timestamp = _parse_timestamp(item.get("progress_at"))
+            if timestamp is None:
+                continue
+            if timestamp.astimezone(self._local_timezone).date() >= cutoff:
+                retained.append(item)
+        if len(retained) == len(self._state["alerts"]):
+            return False
+        self._state["alerts"] = retained
+        self._state["revision"] = int(self._state.get("revision", 0)) + 1
+        return True
+
+    def _snapshot(self) -> TaskAlertSnapshot:
+        today = self._now().astimezone(self._local_timezone).date()
+        alerts = []
+        for item in self._state["alerts"]:
+            timestamp = _parse_timestamp(item.get("progress_at"))
+            if timestamp is None or timestamp.astimezone(self._local_timezone).date() != today:
+                continue
+            state = item.get("state")
+            if state not in ("pending", "handled"):
+                continue
+            alerts.append(
+                TaskAlert(
+                    id=str(item.get("id") or ""),
+                    thread_id=str(item.get("thread_id") or ""),
+                    project=str(item.get("project") or "--"),
+                    title=str(item.get("title") or "Untitled conversation"),
+                    progress_at=str(item.get("progress_at") or ""),
+                    handled_at=(
+                        str(item["handled_at"]) if item.get("handled_at") else None
+                    ),
+                    state=state,
+                    watch_notified=bool(item.get("watch_notified", False)),
+                )
+            )
+        alerts.sort(
+            key=lambda alert: (
+                0 if alert.state == "pending" else 1,
+                -(
+                    _parse_timestamp(alert.progress_at)
+                    or datetime.datetime.min.replace(tzinfo=UTC)
+                ).timestamp(),
+            )
+        )
+        pending = sum(alert.state == "pending" for alert in alerts)
+        return TaskAlertSnapshot(
+            pending_count=pending,
+            handled_count=len(alerts) - pending,
+            revision=int(self._state.get("revision", 0)),
+            alerts=tuple(alerts),
+        )
+
+    def _load_state(self) -> Optional[Dict[str, Any]]:
+        if not self.ledger_path.exists():
+            return None
+        try:
+            state = json.loads(self.ledger_path.read_text(encoding="utf-8"))
+            if (
+                not isinstance(state, dict)
+                or state.get("version") != LEDGER_VERSION
+                or not isinstance(state.get("cursors"), dict)
+                or not isinstance(state.get("alerts"), list)
+            ):
+                raise ValueError("invalid alert ledger")
+            return state
+        except (OSError, ValueError, json.JSONDecodeError):
+            suffix = self._now().strftime("%Y%m%dT%H%M%S")
+            corrupt = self.ledger_path.with_name(
+                self.ledger_path.name + ".corrupt-" + suffix
+            )
+            try:
+                os.replace(self.ledger_path, corrupt)
+            except OSError:
+                pass
+            return None
+
+    def _save_state(self) -> None:
+        self.ledger_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.ledger_path.with_suffix(self.ledger_path.suffix + ".tmp")
+        temporary.write_text(
+            json.dumps(self._state, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        os.replace(temporary, self.ledger_path)
