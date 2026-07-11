@@ -1,0 +1,301 @@
+--- a/main/CMakeLists.txt
++++ b/main/CMakeLists.txt
+@@ -62,6 +62,32 @@
+     "boards/common/system_reset.cc"
+ )
+ list(APPEND INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/boards/common)
++
++if(CONFIG_BOARD_TYPE_M5STACK_STOPWATCH)
++    list(REMOVE_ITEM SOURCES
++        "audio/codecs/no_audio_codec.cc"
++        "audio/codecs/box_audio_codec.cc"
++        "audio/codecs/es8374_audio_codec.cc"
++        "audio/codecs/es8388_audio_codec.cc"
++        "audio/codecs/es8389_audio_codec.cc"
++        "audio/codecs/dummy_audio_codec.cc"
++        "led/single_led.cc"
++        "led/circular_strip.cc"
++        "led/gpio_led.cc"
++        "display/emote_display.cc"
++        "boards/common/ml307_board.cc"
++        "boards/common/nt26_board.cc"
++        "boards/common/dual_network_board.cc"
++        "boards/common/adc_battery_monitor.cc"
++        "boards/common/afsk_demod.cc"
++        "boards/common/axp2101.cc"
++        "boards/common/knob.cc"
++        "boards/common/press_to_talk_mcp_tool.cc"
++        "boards/common/sleep_timer.cc"
++        "boards/common/sy6970.cc"
++        "boards/common/system_reset.cc"
++    )
++endif()
+ 
+ 
+ idf_build_get_property(build_components BUILD_COMPONENTS)
+--- a/sdkconfig
++++ b/sdkconfig
+@@ -1858,27 +1858,25 @@
+ #
+ # CONFIG_LOG_DEFAULT_LEVEL_NONE is not set
+ # CONFIG_LOG_DEFAULT_LEVEL_ERROR is not set
+-# CONFIG_LOG_DEFAULT_LEVEL_WARN is not set
+-CONFIG_LOG_DEFAULT_LEVEL_INFO=y
++CONFIG_LOG_DEFAULT_LEVEL_WARN=y
++# CONFIG_LOG_DEFAULT_LEVEL_INFO is not set
+ # CONFIG_LOG_DEFAULT_LEVEL_DEBUG is not set
+ # CONFIG_LOG_DEFAULT_LEVEL_VERBOSE is not set
+-CONFIG_LOG_DEFAULT_LEVEL=3
++CONFIG_LOG_DEFAULT_LEVEL=2
+ CONFIG_LOG_MAXIMUM_EQUALS_DEFAULT=y
++# CONFIG_LOG_MAXIMUM_LEVEL_INFO is not set
+ # CONFIG_LOG_MAXIMUM_LEVEL_DEBUG is not set
+ # CONFIG_LOG_MAXIMUM_LEVEL_VERBOSE is not set
+-CONFIG_LOG_MAXIMUM_LEVEL=3
++CONFIG_LOG_MAXIMUM_LEVEL=2
+ 
+ #
+ # Level Settings
+ #
+ # CONFIG_LOG_MASTER_LEVEL is not set
+-CONFIG_LOG_DYNAMIC_LEVEL_CONTROL=y
+-# CONFIG_LOG_TAG_LEVEL_IMPL_NONE is not set
++# CONFIG_LOG_DYNAMIC_LEVEL_CONTROL is not set
++CONFIG_LOG_TAG_LEVEL_IMPL_NONE=y
+ # CONFIG_LOG_TAG_LEVEL_IMPL_LINKED_LIST is not set
+-CONFIG_LOG_TAG_LEVEL_IMPL_CACHE_AND_LINKED_LIST=y
+-# CONFIG_LOG_TAG_LEVEL_CACHE_ARRAY is not set
+-CONFIG_LOG_TAG_LEVEL_CACHE_BINARY_MIN_HEAP=y
+-CONFIG_LOG_TAG_LEVEL_IMPL_CACHE_SIZE=31
++# CONFIG_LOG_TAG_LEVEL_IMPL_CACHE_AND_LINKED_LIST is not set
+ # end of Level Settings
+ # end of Log Level
+ 
+--- a/main/display/lvgl_display/lvgl_display.h
++++ b/main/display/lvgl_display/lvgl_display.h
+@@ -34,11 +34,17 @@
+     lv_obj_t *notification_label_ = nullptr;
+     lv_obj_t *mute_label_ = nullptr;
+     lv_obj_t *battery_label_ = nullptr;
++    lv_obj_t *battery_percent_label_ = nullptr;
++    lv_obj_t *battery_container_ = nullptr;
++    lv_obj_t *battery_body_ = nullptr;
++    lv_obj_t *battery_fill_ = nullptr;
++    lv_obj_t *battery_cap_ = nullptr;
+     lv_obj_t* low_battery_popup_ = nullptr;
+     lv_obj_t* low_battery_label_ = nullptr;
+     
+     const char* battery_icon_ = nullptr;
+     const char* network_icon_ = nullptr;
++    int battery_percent_ = -1;
+     bool muted_ = false;
+ 
+     std::chrono::system_clock::time_point last_status_update_time_;
+--- a/main/display/lvgl_display/lvgl_display.cc
++++ b/main/display/lvgl_display/lvgl_display.cc
+@@ -1,5 +1,7 @@
+ #include <esp_log.h>
+ #include <esp_err.h>
++#include <algorithm>
++#include <cstdio>
+ #include <string>
+ #include <cstdlib>
+ #include <cstring>
+@@ -58,8 +60,15 @@
+     if (mute_label_ != nullptr) {
+         lv_obj_del(mute_label_);
+     }
+-    if (battery_label_ != nullptr) {
+-        lv_obj_del(battery_label_);
++    if (battery_container_ != nullptr) {
++        lv_obj_del(battery_container_);
++    } else {
++        if (battery_label_ != nullptr) {
++            lv_obj_del(battery_label_);
++        }
++        if (battery_percent_label_ != nullptr) {
++            lv_obj_del(battery_percent_label_);
++        }
+     }
+     if( low_battery_popup_ != nullptr ) {
+         lv_obj_del(low_battery_popup_);
+@@ -155,6 +164,7 @@
+     bool charging, discharging;
+     const char* icon = nullptr;
+     if (board.GetBatteryLevel(battery_level, charging, discharging)) {
++        battery_level = std::clamp(battery_level, 0, 100);
+         if (charging) {
+             icon = FONT_AWESOME_BATTERY_BOLT;
+         } else {
+@@ -169,6 +179,24 @@
+             icon = levels[battery_level / 20];
+         }
+         DisplayLockGuard lock(this);
++        if (battery_percent_label_ != nullptr && (battery_percent_ != battery_level || update_all)) {
++            battery_percent_ = battery_level;
++            char percent_text[8];
++            snprintf(percent_text, sizeof(percent_text), "%d%%", battery_level);
++            lv_label_set_text(battery_percent_label_, percent_text);
++        }
++        if (battery_fill_ != nullptr) {
++            int fill_max_width = battery_body_ != nullptr ? lv_obj_get_width(battery_body_) - 6 : 0;
++            int fill_width = battery_level * fill_max_width / 100;
++            if (battery_level > 0 && fill_width == 0) {
++                fill_width = 1;
++            }
++            lv_obj_set_width(battery_fill_, fill_width);
++            lv_obj_set_style_bg_color(
++                battery_fill_,
++                charging ? lv_color_hex(0x34C759) : (discharging && battery_level <= 20 ? lv_color_hex(0xFF453A) : lv_color_hex(0x2F80ED)),
++                0);
++        }
+         if (battery_label_ != nullptr && battery_icon_ != icon) {
+             battery_icon_ = icon;
+             lv_label_set_text(battery_label_, battery_icon_);
+--- a/main/display/lcd_display.cc
++++ b/main/display/lcd_display.cc
+@@ -21,7 +21,73 @@
+ LV_FONT_DECLARE(BUILTIN_TEXT_FONT);
+ LV_FONT_DECLARE(BUILTIN_ICON_FONT);
+ LV_FONT_DECLARE(font_awesome_30_4);
++LV_FONT_DECLARE(lv_font_montserrat_14);
+ 
++namespace {
++constexpr int kBatteryWidgetWidth = 48;
++constexpr int kBatteryWidgetHeight = 22;
++constexpr int kBatteryBodyWidth = 43;
++constexpr int kBatteryBodyHeight = 22;
++constexpr int kBatteryFillHeight = 16;
++constexpr int kBatteryCapWidth = 4;
++constexpr int kBatteryCapHeight = 9;
++
++void CreateBatteryStatusWidget(lv_obj_t* parent, LvglTheme* lvgl_theme, lv_obj_t*& container,
++                               lv_obj_t*& body, lv_obj_t*& fill, lv_obj_t*& cap,
++                               lv_obj_t*& percent_label) {
++    container = lv_obj_create(parent);
++    lv_obj_set_size(container, kBatteryWidgetWidth, kBatteryWidgetHeight);
++    lv_obj_set_style_bg_opa(container, LV_OPA_TRANSP, 0);
++    lv_obj_set_style_border_width(container, 0, 0);
++    lv_obj_set_style_pad_all(container, 0, 0);
++    lv_obj_set_scrollbar_mode(container, LV_SCROLLBAR_MODE_OFF);
++    lv_obj_clear_flag(container, LV_OBJ_FLAG_SCROLLABLE);
++    lv_obj_set_style_margin_left(container, lvgl_theme->spacing(2), 0);
++
++    body = lv_obj_create(container);
++    lv_obj_set_size(body, kBatteryBodyWidth, kBatteryBodyHeight);
++    lv_obj_align(body, LV_ALIGN_LEFT_MID, 0, 0);
++    lv_obj_set_style_bg_opa(body, LV_OPA_TRANSP, 0);
++    lv_obj_set_style_border_width(body, 2, 0);
++    lv_obj_set_style_border_color(body, lvgl_theme->text_color(), 0);
++    lv_obj_set_style_radius(body, 3, 0);
++    lv_obj_set_style_pad_all(body, 0, 0);
++    lv_obj_set_scrollbar_mode(body, LV_SCROLLBAR_MODE_OFF);
++    lv_obj_clear_flag(body, LV_OBJ_FLAG_SCROLLABLE);
++
++    fill = lv_obj_create(body);
++    lv_obj_set_size(fill, 0, kBatteryFillHeight);
++    lv_obj_align(fill, LV_ALIGN_LEFT_MID, 3, 0);
++    lv_obj_set_style_bg_color(fill, lv_color_hex(0x2F80ED), 0);
++    lv_obj_set_style_bg_opa(fill, LV_OPA_COVER, 0);
++    lv_obj_set_style_border_width(fill, 0, 0);
++    lv_obj_set_style_radius(fill, 2, 0);
++    lv_obj_set_style_pad_all(fill, 0, 0);
++    lv_obj_clear_flag(fill, LV_OBJ_FLAG_SCROLLABLE);
++
++    percent_label = lv_label_create(body);
++    lv_label_set_text(percent_label, "");
++    lv_obj_set_width(percent_label, kBatteryBodyWidth);
++    lv_obj_set_style_text_align(percent_label, LV_TEXT_ALIGN_CENTER, 0);
++    lv_obj_set_style_text_font(percent_label, &lv_font_montserrat_14, 0);
++    lv_obj_set_style_text_color(percent_label, lv_color_white(), 0);
++    lv_obj_set_style_text_outline_stroke_color(percent_label, lv_color_black(), 0);
++    lv_obj_set_style_text_outline_stroke_width(percent_label, 1, 0);
++    lv_obj_set_style_text_outline_stroke_opa(percent_label, LV_OPA_COVER, 0);
++    lv_obj_center(percent_label);
++
++    cap = lv_obj_create(container);
++    lv_obj_set_size(cap, kBatteryCapWidth, kBatteryCapHeight);
++    lv_obj_align(cap, LV_ALIGN_RIGHT_MID, 0, 0);
++    lv_obj_set_style_bg_color(cap, lvgl_theme->text_color(), 0);
++    lv_obj_set_style_bg_opa(cap, LV_OPA_COVER, 0);
++    lv_obj_set_style_border_width(cap, 0, 0);
++    lv_obj_set_style_radius(cap, 1, 0);
++    lv_obj_set_style_pad_all(cap, 0, 0);
++    lv_obj_clear_flag(cap, LV_OBJ_FLAG_SCROLLABLE);
++}
++}
++
+ void LcdDisplay::InitializeLcdThemes() {
+     auto text_font = std::make_shared<LvglBuiltInFont>(&BUILTIN_TEXT_FONT);
+     auto icon_font = std::make_shared<LvglBuiltInFont>(&BUILTIN_ICON_FONT);
+@@ -419,11 +482,8 @@
+     lv_obj_set_style_text_font(mute_label_, icon_font, 0);
+     lv_obj_set_style_text_color(mute_label_, lvgl_theme->text_color(), 0);
+ 
+-    battery_label_ = lv_label_create(right_icons);
+-    lv_label_set_text(battery_label_, "");
+-    lv_obj_set_style_text_font(battery_label_, icon_font, 0);
+-    lv_obj_set_style_text_color(battery_label_, lvgl_theme->text_color(), 0);
+-    lv_obj_set_style_margin_left(battery_label_, lvgl_theme->spacing(2), 0);
++    CreateBatteryStatusWidget(right_icons, lvgl_theme, battery_container_, battery_body_,
++        battery_fill_, battery_cap_, battery_percent_label_);
+ 
+     /* Layer 2: Status bar - for center text labels */
+     status_bar_ = lv_obj_create(screen);
+@@ -890,11 +950,8 @@
+     lv_obj_set_style_text_font(mute_label_, icon_font, 0);
+     lv_obj_set_style_text_color(mute_label_, lvgl_theme->text_color(), 0);
+ 
+-    battery_label_ = lv_label_create(right_icons);
+-    lv_label_set_text(battery_label_, "");
+-    lv_obj_set_style_text_font(battery_label_, icon_font, 0);
+-    lv_obj_set_style_text_color(battery_label_, lvgl_theme->text_color(), 0);
+-    lv_obj_set_style_margin_left(battery_label_, lvgl_theme->spacing(2), 0);
++    CreateBatteryStatusWidget(right_icons, lvgl_theme, battery_container_, battery_body_,
++        battery_fill_, battery_cap_, battery_percent_label_);
+ 
+     /* Layer 2: Status bar - for center text labels */
+     status_bar_ = lv_obj_create(screen);
+@@ -1165,13 +1222,20 @@
+ 
+     if (text_font->line_height >= 40) {
+         lv_obj_set_style_text_font(mute_label_, large_icon_font, 0);
+-        lv_obj_set_style_text_font(battery_label_, large_icon_font, 0);
++        if (battery_label_ != nullptr) {
++            lv_obj_set_style_text_font(battery_label_, large_icon_font, 0);
++        }
+         lv_obj_set_style_text_font(network_label_, large_icon_font, 0);
+     } else {
+         lv_obj_set_style_text_font(mute_label_, icon_font, 0);
+-        lv_obj_set_style_text_font(battery_label_, icon_font, 0);
++        if (battery_label_ != nullptr) {
++            lv_obj_set_style_text_font(battery_label_, icon_font, 0);
++        }
+         lv_obj_set_style_text_font(network_label_, icon_font, 0);
+     }
++    if (battery_percent_label_ != nullptr) {
++        lv_obj_set_style_text_font(battery_percent_label_, &lv_font_montserrat_14, 0);
++    }
+ 
+     // Set parent text color
+     lv_obj_set_style_text_font(screen, text_font, 0);
+@@ -1196,7 +1260,18 @@
+     lv_obj_set_style_text_color(status_label_, lvgl_theme->text_color(), 0);
+     lv_obj_set_style_text_color(notification_label_, lvgl_theme->text_color(), 0);
+     lv_obj_set_style_text_color(mute_label_, lvgl_theme->text_color(), 0);
+-    lv_obj_set_style_text_color(battery_label_, lvgl_theme->text_color(), 0);
++    if (battery_label_ != nullptr) {
++        lv_obj_set_style_text_color(battery_label_, lvgl_theme->text_color(), 0);
++    }
++    if (battery_body_ != nullptr) {
++        lv_obj_set_style_border_color(battery_body_, lvgl_theme->text_color(), 0);
++    }
++    if (battery_cap_ != nullptr) {
++        lv_obj_set_style_bg_color(battery_cap_, lvgl_theme->text_color(), 0);
++    }
++    if (battery_percent_label_ != nullptr) {
++        lv_obj_set_style_text_color(battery_percent_label_, lv_color_white(), 0);
++    }
+     lv_obj_set_style_text_color(emoji_label_, lvgl_theme->text_color(), 0);
+ 
+     // If we have the chat message style, update all message bubbles

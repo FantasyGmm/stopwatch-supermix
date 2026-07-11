@@ -1,0 +1,73 @@
+/*
+ * SPDX-FileCopyrightText: 2026 M5Stack Technology CO LTD
+ *
+ * SPDX-License-Identifier: MIT
+ */
+#pragma once
+#include <apps/common/key_manager/key_manager.h>
+#include <mooncake.h>
+#include <lvgl.h>
+#include <memory>
+#include <cstdint>
+#include <string>
+#include <esp_event_base.h>
+
+class CodexBleTransport;
+struct esp_websocket_event_data;
+typedef struct esp_websocket_client* esp_websocket_client_handle_t;
+
+class AppCodexStatus : public mooncake::AppAbility {
+public:
+    AppCodexStatus();
+    ~AppCodexStatus() override;
+
+    void onCreate() override;
+    void onOpen() override;
+    void onRunning() override;
+    void onClose() override;
+
+private:
+    std::unique_ptr<input::KeyManager> _key_manager;
+
+    lv_obj_t* _panel             = nullptr;
+    lv_obj_t* _model_value       = nullptr;
+    lv_obj_t* _effort_value      = nullptr;
+    lv_obj_t* _five_hour_pct     = nullptr;
+    lv_obj_t* _five_hour_bar     = nullptr;
+    lv_obj_t* _week_pct          = nullptr;
+    lv_obj_t* _week_bar          = nullptr;
+    lv_obj_t* _day_value         = nullptr;
+    lv_obj_t* _week_value        = nullptr;
+    lv_obj_t* _battery_label     = nullptr;
+    lv_obj_t* _status_label      = nullptr;
+    lv_obj_t* _host_label        = nullptr;
+    lv_obj_t* _pet_image         = nullptr;
+    lv_timer_t* _pet_timer       = nullptr;
+    esp_websocket_client_handle_t _ws_client = nullptr;
+    std::unique_ptr<CodexBleTransport> _ble_transport;
+    std::string _server_host;
+    std::string _transport_mode;
+    std::string _ble_name;
+    uint8_t _pet_frame           = 0;
+    uint32_t _last_battery_ms    = 0;
+    uint32_t _last_network_ms    = 0;
+    uint32_t _ble_wait_started_ms = 0;
+    uint32_t _last_status_payload_ms = 0;
+    bool _wifi_started           = false;
+    bool _wifi_fallback_started  = false;
+    bool _ble_was_connected      = false;
+    bool _ws_connected           = false;
+
+    void create_view();
+    void destroy_view();
+    void update_battery();
+    void ensure_network_started();
+    void start_websocket();
+    void stop_websocket();
+    void set_status(const char* status, uint32_t color);
+    void set_host_text(const char* prefix);
+    bool handle_status_json(const char* data, int length, const char* live_status = "LIVE");
+    void set_percent(lv_obj_t* label, lv_obj_t* bar, int value);
+    static void pet_timer_cb(lv_timer_t* timer);
+    static void websocket_event_handler(void* handler_args, esp_event_base_t base, int32_t event_id, void* event_data);
+};
