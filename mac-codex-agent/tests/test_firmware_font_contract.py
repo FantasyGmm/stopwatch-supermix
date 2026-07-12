@@ -68,7 +68,7 @@ class FirmwareFontContractTests(unittest.TestCase):
         self.assertNotIn("ALL HANDLED", carousel)
         self.assertNotIn("all_handled", carousel)
 
-    def test_model_and_effort_instruments_show_only_direct_values(self):
+    def test_model_and_effort_instruments_match_precision_console_mockup(self):
         app = (self.codex_root / "app_codex_status.cpp").read_text(encoding="utf-8")
 
         for legacy_caption in (
@@ -78,22 +78,24 @@ class FirmwareFontContractTests(unittest.TestCase):
             'make_arc_value(_panel, 306, 182, "reason"',
         ):
             self.assertNotIn(legacy_caption, app)
+        self.assertIn("make_instrument_frame(", app)
+        self.assertNotIn("make_instrument_arc(", app)
+        self.assertIn('132, "MODEL", &lv_font_montserrat_14, kEtchedGray', app)
+        self.assertIn('132, "EFFORT", &lv_font_montserrat_14, kEtchedGray', app)
+        self.assertIn("kModelInstrument, kAlertVermilion, true", app)
+        self.assertIn("kEffortInstrument, kCalibrationBlue, false", app)
+        self.assertIn("_model_value = make_instrument_value(", app)
         self.assertIn(
-            "_model_value = make_instrument_value(",
+            '_panel, kModelInstrument, 157, "--", &lv_font_montserrat_18, kSignalWhite',
             app,
         )
+        self.assertIn("_effort_value = make_instrument_value(", app)
         self.assertIn(
-            '_panel, kModelInstrument, 145, "--", &lv_font_montserrat_14',
+            '_panel, kEffortInstrument, 157, "--", &lv_font_montserrat_18, kSignalWhite',
             app,
         )
-        self.assertIn(
-            "_effort_value = make_instrument_value(",
-            app,
-        )
-        self.assertIn(
-            '_panel, kEffortInstrument, 143, "--", &lv_font_montserrat_18',
-            app,
-        )
+        self.assertIn('"Codex", kBrandX, kBrandY, &lv_font_montserrat_24, kSignalWhite', app)
+        self.assertIn("make_line(_panel, kAlertDividerX, kAlertDividerY, kAlertDividerWidth)", app)
         self.assertIn("lv_label_set_long_mode(label, LV_LABEL_LONG_MODE_DOTS)", app)
 
 

@@ -62,22 +62,42 @@ lv_obj_t* make_center_label(lv_obj_t* parent, const char* text, int y, const lv_
     return label;
 }
 
-lv_obj_t* make_instrument_arc(lv_obj_t* parent, const Rect& rect, int rotation)
+lv_obj_t* make_frame_segment(
+    lv_obj_t* parent,
+    int x,
+    int y,
+    int width,
+    int height,
+    uint32_t color
+)
 {
-    lv_obj_t* arc = lv_arc_create(parent);
-    lv_obj_set_size(arc, rect.w, rect.h);
-    lv_obj_set_pos(arc, rect.x, rect.y);
-    lv_arc_set_range(arc, 0, 100);
-    lv_arc_set_value(arc, 100);
-    lv_arc_set_rotation(arc, rotation);
-    lv_arc_set_bg_angles(arc, 0, 115);
-    lv_obj_remove_style(arc, nullptr, LV_PART_KNOB);
-    lv_obj_set_style_arc_width(arc, 5, LV_PART_MAIN);
-    lv_obj_set_style_arc_width(arc, 5, LV_PART_INDICATOR);
-    lv_obj_set_style_arc_color(arc, lv_color_hex(kPanelGraphite), LV_PART_MAIN);
-    lv_obj_set_style_arc_color(arc, lv_color_hex(kCalibrationBlue), LV_PART_INDICATOR);
-    lv_obj_clear_flag(arc, LV_OBJ_FLAG_CLICKABLE);
-    return arc;
+    lv_obj_t* segment = lv_obj_create(parent);
+    lv_obj_set_size(segment, width, height);
+    lv_obj_set_pos(segment, x, y);
+    lv_obj_set_style_border_width(segment, 0, 0);
+    lv_obj_set_style_pad_all(segment, 0, 0);
+    lv_obj_set_style_radius(segment, 0, 0);
+    lv_obj_set_style_bg_color(segment, lv_color_hex(color), 0);
+    lv_obj_set_style_bg_opa(segment, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(segment, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(segment, LV_OBJ_FLAG_CLICKABLE);
+    return segment;
+}
+
+void make_instrument_frame(
+    lv_obj_t* parent,
+    const Rect& rect,
+    uint32_t accent,
+    bool accent_on_left
+)
+{
+    constexpr int kRule = 3;
+    make_frame_segment(parent, rect.x, rect.y, rect.w, kRule, kPanelGraphite);
+    make_frame_segment(
+        parent, rect.x, rect.y + rect.h - kRule, rect.w, kRule, kPanelGraphite
+    );
+    const int accent_x = accent_on_left ? rect.x : rect.x + rect.w - kRule;
+    make_frame_segment(parent, accent_x, rect.y, kRule, rect.h, accent);
 }
 
 lv_obj_t* make_instrument_value(
@@ -153,13 +173,6 @@ lv_obj_t* make_line(lv_obj_t* parent, int x, int y, int width)
     lv_obj_clear_flag(line, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_clear_flag(line, LV_OBJ_FLAG_CLICKABLE);
     return line;
-}
-
-void make_split_line(lv_obj_t* parent, int x, int y, int width, int gap)
-{
-    const int segment = (width - gap) / 2;
-    make_line(parent, x, y, segment);
-    make_line(parent, x + segment + gap, y, segment);
 }
 
 const char* battery_symbol(int percent)
@@ -376,7 +389,7 @@ void AppCodexStatus::create_view()
     lv_image_set_scale(logo, kLogoScale);
     lv_obj_set_pos(logo, kLogoX, kLogoY);
 
-    make_label(_panel, "Codex", kBrandX, kBrandY, &lv_font_montserrat_24, kCalibrationBlue);
+    make_label(_panel, "Codex", kBrandX, kBrandY, &lv_font_montserrat_24, kSignalWhite);
 
     _status_label = make_center_label(_panel, "START", kStatusY, &lv_font_montserrat_14, kEtchedGray);
     lv_obj_set_width(_status_label, 180);
@@ -390,24 +403,23 @@ void AppCodexStatus::create_view()
     lv_label_set_long_mode(_host_label, LV_LABEL_LONG_MODE_DOTS);
     lv_obj_align(_host_label, LV_ALIGN_TOP_MID, 0, kHostY);
 
-    make_instrument_arc(_panel, kModelInstrument, 195);
+    make_instrument_frame(_panel, kModelInstrument, kAlertVermilion, true);
+    lv_obj_t* model_caption = make_instrument_value(
+        _panel, kModelInstrument, 132, "MODEL", &lv_font_montserrat_14, kEtchedGray
+    );
+    lv_obj_set_style_text_letter_space(model_caption, 3, 0);
     _model_value = make_instrument_value(
-        _panel, kModelInstrument, 145, "--", &lv_font_montserrat_14, kSignalWhite
+        _panel, kModelInstrument, 157, "--", &lv_font_montserrat_18, kSignalWhite
     );
 
-    make_instrument_arc(_panel, kEffortInstrument, 230);
+    make_instrument_frame(_panel, kEffortInstrument, kCalibrationBlue, false);
+    lv_obj_t* effort_caption = make_instrument_value(
+        _panel, kEffortInstrument, 132, "EFFORT", &lv_font_montserrat_14, kEtchedGray
+    );
+    lv_obj_set_style_text_letter_space(effort_caption, 3, 0);
     _effort_value = make_instrument_value(
-        _panel, kEffortInstrument, 143, "--", &lv_font_montserrat_18, kCalibrationBlue
+        _panel, kEffortInstrument, 157, "--", &lv_font_montserrat_18, kSignalWhite
     );
-
-    constexpr int kPetClearance = 8;
-    const int pet_left = kPetCenterX - CODEX_PET_FRAME_W / 2;
-    const int pet_right = pet_left + CODEX_PET_FRAME_W;
-    const int model_right = kModelInstrument.x + kModelInstrument.w;
-    make_line(_panel, model_right, kCalibrationY,
-              pet_left - kPetClearance - model_right);
-    make_line(_panel, pet_right + kPetClearance, kCalibrationY,
-              kEffortInstrument.x - pet_right - kPetClearance);
 
     _pet_image = lv_image_create(_panel);
     lv_image_set_src(_pet_image, codex_pet_idle_frames[0]);
@@ -430,13 +442,7 @@ void AppCodexStatus::create_view()
     _week_pct = week.pct;
     _week_bar = week.bar;
 
-    make_split_line(
-        _panel,
-        kAlertDividerX,
-        kAlertDividerY,
-        kAlertDividerWidth,
-        kAlertDividerGap
-    );
+    make_line(_panel, kAlertDividerX, kAlertDividerY, kAlertDividerWidth);
 
     _activity_title = make_center_label(
         _panel, "NO ALERTS", kAlertHeadingY, &lv_font_montserrat_18, kEtchedGray
