@@ -5,19 +5,199 @@ from __future__ import annotations
 import dataclasses
 import datetime
 import json
+import logging
 import os
 import pathlib
+import select
+import shutil
 import sqlite3
+import subprocess
 import threading
+import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 
 UTC = datetime.timezone.utc
 DEFAULT_STATE_DB = pathlib.Path.home() / ".codex" / "state_5.sqlite"
 DEFAULT_LEDGER_PATH = pathlib.Path.home() / ".codex" / ".stopwatch_alerts.json"
-LEDGER_VERSION = 1
+DEFAULT_CODEX_BINARIES = (
+    pathlib.Path("/Applications/ChatGPT.app/Contents/Resources/codex"),
+    pathlib.Path("/Applications/Codex.app/Contents/Resources/codex"),
+)
+LEDGER_VERSION = 2
 RETENTION_DAYS = 7
 MAX_DISCOVERED_THREADS = 50
+THREAD_LIST_LIMIT = 200
+THREAD_NAME_REFRESH_SECONDS = 30.0
+APP_SERVER_TIMEOUT_SECONDS = 2.0
+WAITING_PHRASES = (
+    "请确认",
+    "请回复",
+    "请提供",
+    "请选择",
+    "需要你",
+    "可以吗",
+    "请重新",
+    "告诉我",
+    "等待你的",
+    "等待回复",
+    "等待确认",
+    "需要进一步指令",
+    "无法继续",
+    "let me know",
+    "please confirm",
+    "please reply",
+    "please provide",
+    "please choose",
+    "need your",
+    "waiting for your",
+    "cannot continue",
+)
+
+
+LOGGER = logging.getLogger(__name__)
+
+
+def _codex_binary() -> Optional[str]:
+    configured = os.environ.get("STOPWATCH_CODEX_BINARY")
+    if configured and pathlib.Path(configured).is_file():
+        return configured
+    discovered = shutil.which("codex")
+    if discovered:
+        return discovered
+    for candidate in DEFAULT_CODEX_BINARIES:
+        if candidate.is_file():
+            return str(candidate)
+    return None
+
+
+def _send_rpc(process, request_id: int, method: str, params: Dict[str, Any]) -> None:
+    if process.stdin is None:
+        raise OSError("Codex app server stdin is unavailable")
+    process.stdin.write(
+        json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "method": method,
+                "params": params,
+            },
+            separators=(",", ":"),
+        )
+        + "\n"
+    )
+    process.stdin.flush()
+
+
+def _read_rpc_response(process, request_id: int, deadline: float) -> Dict[str, Any]:
+    if process.stdout is None:
+        return {}
+    while process.poll() is None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return {}
+        readable, _, _ = select.select([process.stdout], [], [], remaining)
+        if not readable:
+            return {}
+        line = process.stdout.readline()
+        if not line:
+            return {}
+        try:
+            message = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(message, dict) and message.get("id") == request_id:
+            return message
+    return {}
+
+
+def load_codex_thread_names() -> Dict[str, str]:
+    binary = _codex_binary()
+    if binary is None:
+        return {}
+    process = None
+    try:
+        process = subprocess.Popen(
+            [binary, "app-server", "--stdio"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            encoding="utf-8",
+            bufsize=1,
+        )
+        deadline = time.monotonic() + APP_SERVER_TIMEOUT_SECONDS
+        _send_rpc(
+            process,
+            1,
+            "initialize",
+            {
+                "clientInfo": {
+                    "name": "stopwatch-codex-agent",
+                    "title": "StopWatch Codex Agent",
+                    "version": "2.0",
+                },
+                "capabilities": {},
+            },
+        )
+        initialized = _read_rpc_response(process, 1, deadline)
+        if not isinstance(initialized.get("result"), dict):
+            return {}
+        _send_rpc(
+            process,
+            2,
+            "thread/list",
+            {
+                "limit": THREAD_LIST_LIMIT,
+                "sortKey": "recency_at",
+                "sortDirection": "desc",
+            },
+        )
+        response = _read_rpc_response(process, 2, deadline)
+        result = response.get("result")
+        rows = result.get("data") if isinstance(result, dict) else None
+        if not isinstance(rows, list):
+            return {}
+        names = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            thread_id = row.get("id")
+            name = row.get("name")
+            if isinstance(thread_id, str) and isinstance(name, str) and name.strip():
+                names[thread_id] = name.strip()
+        return names
+    except (OSError, ValueError, subprocess.SubprocessError):
+        LOGGER.debug("Unable to read Codex thread names", exc_info=True)
+        return {}
+    finally:
+        if process is not None:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=0.5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=0.5)
+            if process.stdin is not None:
+                process.stdin.close()
+            if process.stdout is not None:
+                process.stdout.close()
+
+
+def classify_outcome(message: Any) -> str:
+    if not isinstance(message, str):
+        return "completed"
+    paragraphs = [part.strip() for part in message.split("\n\n") if part.strip()]
+    if not paragraphs:
+        return "completed"
+    final = paragraphs[-1]
+    lowered = final.casefold()
+    if final.endswith(("?", "？")) or any(
+        phrase in lowered for phrase in WAITING_PHRASES
+    ):
+        return "waiting"
+    return "completed"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -30,11 +210,14 @@ class TaskAlert:
     handled_at: Optional[str]
     state: str
     watch_notified: bool
+    outcome: str
 
 
 @dataclasses.dataclass(frozen=True)
 class TaskAlertSnapshot:
     pending_count: int = 0
+    running_count: int = 0
+    completed_count: int = 0
     handled_count: int = 0
     revision: int = 0
     alerts: Tuple[TaskAlert, ...] = ()
@@ -82,13 +265,20 @@ class TaskAlertTracker:
         ledger_path: pathlib.Path = DEFAULT_LEDGER_PATH,
         now: Callable[[], datetime.datetime] = _utc_now,
         local_timezone=None,
+        thread_name_loader: Callable[[], Dict[str, str]] = load_codex_thread_names,
+        thread_name_refresh_seconds: float = THREAD_NAME_REFRESH_SECONDS,
     ):
         self.state_db = pathlib.Path(state_db)
         self.ledger_path = pathlib.Path(ledger_path)
         self._now = now
         self._local_timezone = local_timezone or datetime.datetime.now().astimezone().tzinfo
+        self._thread_name_loader = thread_name_loader
+        self._thread_name_refresh_seconds = max(0.0, thread_name_refresh_seconds)
+        self._thread_names: Dict[str, str] = {}
+        self._thread_names_loaded_at: Optional[float] = None
         self._lock = threading.RLock()
         self._state: Optional[Dict[str, Any]] = None
+        self._needs_save = False
 
     def refresh(self) -> TaskAlertSnapshot:
         with self._lock:
@@ -102,7 +292,11 @@ class TaskAlertTracker:
                 self._save_state()
                 return self._snapshot()
 
-            changed = self._scan_threads(threads)
+            changed = self._needs_save
+            if self._scan_threads(threads):
+                changed = True
+            if self._sync_thread_metadata(threads):
+                changed = True
             if self._prune_old_alerts():
                 changed = True
             if changed:
@@ -182,6 +376,7 @@ class TaskAlertTracker:
         except (OSError, sqlite3.Error):
             return []
 
+        self._refresh_thread_names()
         result = []
         seen = set()
         for thread_id, cwd, title, rollout_path in rows:
@@ -192,11 +387,32 @@ class TaskAlertTracker:
                 _ThreadInfo(
                     id=str(thread_id),
                     cwd=str(cwd or ""),
-                    title=str(title or "Untitled conversation"),
+                    title=self._thread_names.get(
+                        str(thread_id), str(title or "Untitled conversation")
+                    ),
                     rollout_path=pathlib.Path(str(rollout_path)),
                 )
             )
         return result
+
+    def _refresh_thread_names(self) -> None:
+        now = time.monotonic()
+        if (
+            self._thread_names_loaded_at is not None
+            and now - self._thread_names_loaded_at < self._thread_name_refresh_seconds
+        ):
+            return
+        self._thread_names_loaded_at = now
+        try:
+            loaded = self._thread_name_loader()
+        except Exception:
+            LOGGER.debug("Codex thread name loader failed", exc_info=True)
+            return
+        if not isinstance(loaded, dict):
+            return
+        for thread_id, name in loaded.items():
+            if isinstance(thread_id, str) and isinstance(name, str) and name.strip():
+                self._thread_names[thread_id] = name.strip()
 
     def _initial_state(self, threads: List[_ThreadInfo]) -> Dict[str, Any]:
         now = _iso(self._now())
@@ -251,6 +467,21 @@ class TaskAlertTracker:
                     changed = True
         return changed
 
+    def _sync_thread_metadata(self, threads: List[_ThreadInfo]) -> bool:
+        current = {thread.id: thread for thread in threads}
+        changed = False
+        for item in self._state["alerts"]:
+            thread = current.get(item.get("thread_id"))
+            if thread is None:
+                continue
+            for key, value in (("project", thread.project), ("title", thread.title)):
+                if item.get(key) != value:
+                    item[key] = value
+                    changed = True
+        if changed:
+            self._state["revision"] = int(self._state.get("revision", 0)) + 1
+        return changed
+
     def _read_complete_lines(
         self, path: pathlib.Path, offset: int
     ) -> Tuple[List[bytes], int, bool]:
@@ -286,7 +517,7 @@ class TaskAlertTracker:
         if not isinstance(payload, dict):
             return False
         event_type = payload.get("type")
-        if event_type not in ("task_complete", "user_message"):
+        if event_type not in ("task_started", "task_complete", "user_message"):
             return False
         timestamp_text = item.get("timestamp") or payload.get("timestamp")
         timestamp = _parse_timestamp(timestamp_text)
@@ -294,7 +525,7 @@ class TaskAlertTracker:
             return False
         timestamp_text = _iso(timestamp)
 
-        if event_type == "task_complete":
+        if event_type == "task_started":
             alert_id = "{}:{}".format(thread.id, timestamp_text)
             if any(entry.get("id") == alert_id for entry in self._state["alerts"]):
                 return False
@@ -306,10 +537,60 @@ class TaskAlertTracker:
                     "title": thread.title,
                     "progress_at": timestamp_text,
                     "handled_at": None,
-                    "state": "pending",
-                    "watch_notified": False,
+                    "state": "running",
+                    "watch_notified": True,
+                    "outcome": "running",
                 }
             )
+            self._state["revision"] = int(self._state.get("revision", 0)) + 1
+            return True
+
+        if event_type == "task_complete":
+            outcome = classify_outcome(payload.get("last_agent_message"))
+            state = "pending" if outcome == "waiting" else "completed"
+            running = []
+            for entry in self._state["alerts"]:
+                progress = _parse_timestamp(entry.get("progress_at"))
+                if (
+                    entry.get("thread_id") == thread.id
+                    and entry.get("state") == "running"
+                    and progress is not None
+                    and progress <= timestamp
+                ):
+                    running.append((progress, entry))
+            if running:
+                target = max(running, key=lambda candidate: candidate[0])[1]
+                target.update(
+                    {
+                        "id": "{}:{}".format(thread.id, timestamp_text),
+                        "project": thread.project,
+                        "title": thread.title,
+                        "progress_at": timestamp_text,
+                        "handled_at": timestamp_text if state == "completed" else None,
+                        "state": state,
+                        "watch_notified": state != "pending",
+                        "outcome": outcome,
+                    }
+                )
+            else:
+                alert_id = "{}:{}".format(thread.id, timestamp_text)
+                if any(
+                    entry.get("id") == alert_id for entry in self._state["alerts"]
+                ):
+                    return False
+                self._state["alerts"].append(
+                    {
+                        "id": alert_id,
+                        "thread_id": thread.id,
+                        "project": thread.project,
+                        "title": thread.title,
+                        "progress_at": timestamp_text,
+                        "handled_at": timestamp_text if state == "completed" else None,
+                        "state": state,
+                        "watch_notified": state != "pending",
+                        "outcome": outcome,
+                    }
+                )
             self._state["revision"] = int(self._state.get("revision", 0)) + 1
             return True
 
@@ -322,8 +603,10 @@ class TaskAlertTracker:
                 and progress is not None
                 and progress < timestamp
             ):
-                entry["state"] = "handled"
+                entry["state"] = "completed"
+                entry["outcome"] = "completed"
                 entry["handled_at"] = timestamp_text
+                entry["watch_notified"] = True
                 changed = True
         if changed:
             self._state["revision"] = int(self._state.get("revision", 0)) + 1
@@ -348,14 +631,30 @@ class TaskAlertTracker:
 
     def _snapshot(self) -> TaskAlertSnapshot:
         today = self._now().astimezone(self._local_timezone).date()
-        alerts = []
+        latest_by_thread = {}
         for item in self._state["alerts"]:
             timestamp = _parse_timestamp(item.get("progress_at"))
             if timestamp is None or timestamp.astimezone(self._local_timezone).date() != today:
                 continue
             state = item.get("state")
-            if state not in ("pending", "handled"):
+            if state not in ("pending", "running", "completed"):
                 continue
+            thread_id = str(item.get("thread_id") or "")
+            existing = latest_by_thread.get(thread_id)
+            if existing is None or timestamp >= existing[0]:
+                latest_by_thread[thread_id] = (timestamp, item)
+
+        alerts = []
+        for _timestamp, item in latest_by_thread.values():
+            state = item["state"]
+            fallback_outcome = {
+                "pending": "waiting",
+                "running": "running",
+                "completed": "completed",
+            }[state]
+            outcome = item.get("outcome")
+            if outcome not in ("completed", "waiting", "running"):
+                outcome = fallback_outcome
             alerts.append(
                 TaskAlert(
                     id=str(item.get("id") or ""),
@@ -368,11 +667,13 @@ class TaskAlertTracker:
                     ),
                     state=state,
                     watch_notified=bool(item.get("watch_notified", False)),
+                    outcome=outcome,
                 )
             )
+        priority = {"pending": 0, "running": 1, "completed": 2}
         alerts.sort(
             key=lambda alert: (
-                0 if alert.state == "pending" else 1,
+                priority[alert.state],
                 -(
                     _parse_timestamp(alert.progress_at)
                     or datetime.datetime.min.replace(tzinfo=UTC)
@@ -380,9 +681,13 @@ class TaskAlertTracker:
             )
         )
         pending = sum(alert.state == "pending" for alert in alerts)
+        running = sum(alert.state == "running" for alert in alerts)
+        completed = sum(alert.state == "completed" for alert in alerts)
         return TaskAlertSnapshot(
             pending_count=pending,
-            handled_count=len(alerts) - pending,
+            running_count=running,
+            completed_count=completed,
+            handled_count=completed,
             revision=int(self._state.get("revision", 0)),
             alerts=tuple(alerts),
         )
@@ -394,11 +699,39 @@ class TaskAlertTracker:
             state = json.loads(self.ledger_path.read_text(encoding="utf-8"))
             if (
                 not isinstance(state, dict)
-                or state.get("version") != LEDGER_VERSION
+                or state.get("version") not in (1, LEDGER_VERSION)
                 or not isinstance(state.get("cursors"), dict)
                 or not isinstance(state.get("alerts"), list)
             ):
                 raise ValueError("invalid alert ledger")
+            for item in state["alerts"]:
+                if not isinstance(item, dict):
+                    raise ValueError("invalid alert ledger entry")
+                item_state = item.get("state")
+                outcome = item.get("outcome")
+                if item_state == "handled" or (
+                    item_state == "pending" and outcome == "completed"
+                ):
+                    item["state"] = "completed"
+                    item["outcome"] = "completed"
+                    self._needs_save = True
+                elif item_state == "running":
+                    if outcome != "running":
+                        item["outcome"] = "running"
+                        self._needs_save = True
+                elif item_state == "pending":
+                    if outcome != "waiting":
+                        item["outcome"] = "waiting"
+                        self._needs_save = True
+                elif item_state == "completed":
+                    if outcome != "completed":
+                        item["outcome"] = "completed"
+                        self._needs_save = True
+                else:
+                    raise ValueError("invalid alert ledger state")
+            if state.get("version") != LEDGER_VERSION:
+                state["version"] = LEDGER_VERSION
+                self._needs_save = True
             return state
         except (OSError, ValueError, json.JSONDecodeError):
             suffix = self._now().strftime("%Y%m%dT%H%M%S")
@@ -419,3 +752,4 @@ class TaskAlertTracker:
             encoding="utf-8",
         )
         os.replace(temporary, self.ledger_path)
+        self._needs_save = False

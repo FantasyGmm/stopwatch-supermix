@@ -9,7 +9,7 @@ import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
-from task_alerts import TaskAlertTracker
+from task_alerts import TaskAlertTracker, classify_outcome
 
 
 UTC = datetime.timezone.utc
@@ -52,11 +52,26 @@ def add_thread(state_db, thread_id, cwd, title, rollout, updated_at_ms):
     connection.close()
 
 
-def append_event(path, event_type, timestamp, complete_line=True):
+def update_thread_metadata(state_db, thread_id, cwd, title, updated_at_ms):
+    connection = sqlite3.connect(state_db)
+    connection.execute(
+        "UPDATE threads SET cwd = ?, title = ?, updated_at_ms = ? WHERE id = ?",
+        (cwd, title, updated_at_ms, thread_id),
+    )
+    connection.commit()
+    connection.close()
+
+
+def append_event(
+    path, event_type, timestamp, complete_line=True, last_agent_message=None
+):
+    payload = {"type": event_type}
+    if last_agent_message is not None:
+        payload["last_agent_message"] = last_agent_message
     item = {
         "timestamp": timestamp,
         "type": "event_msg",
-        "payload": {"type": event_type},
+        "payload": payload,
     }
     with path.open("ab") as stream:
         stream.write(json.dumps(item).encode("utf-8"))
@@ -86,13 +101,34 @@ class TaskAlertTrackerTests(unittest.TestCase):
     def tearDown(self):
         self.temporary.cleanup()
 
-    def tracker(self):
+    def tracker(self, **overrides):
+        options = {
+            "state_db": self.state_db,
+            "ledger_path": self.ledger,
+            "now": self.clock,
+            "local_timezone": UTC,
+            "thread_name_loader": lambda: {},
+        }
+        options.update(overrides)
         return TaskAlertTracker(
-            state_db=self.state_db,
-            ledger_path=self.ledger,
-            now=self.clock,
-            local_timezone=UTC,
+            **options,
         )
+
+    def test_classifies_only_the_final_paragraph(self):
+        cases = (
+            ("Build and tests passed.", "completed"),
+            ("Build passed.\n\n可以确认这个方案吗？", "waiting"),
+            ("Everything is ready.\n\n请回复确认后继续。", "waiting"),
+            ("请重新插入手表的数据线。", "waiting"),
+            ("任务尚未完成，等待回复。", "waiting"),
+            ("当前停在配置步骤，需要进一步指令。", "waiting"),
+            ("Please provide the missing token.", "waiting"),
+            ("The log previously asked 'continue?'.\n\nThe repair is complete.", "completed"),
+            ("", "completed"),
+        )
+        for message, expected in cases:
+            with self.subTest(message=message):
+                self.assertEqual(classify_outcome(message), expected)
 
     def test_first_refresh_baselines_existing_history_without_alerting(self):
         append_event(self.rollout, "task_complete", "2026-07-11T23:59:00Z")
@@ -100,15 +136,22 @@ class TaskAlertTrackerTests(unittest.TestCase):
         snapshot = self.tracker().refresh()
 
         self.assertEqual(snapshot.pending_count, 0)
-        self.assertEqual(snapshot.handled_count, 0)
+        self.assertEqual(snapshot.running_count, 0)
+        self.assertEqual(snapshot.completed_count, 0)
         self.assertEqual(snapshot.alerts, ())
         saved = json.loads(self.ledger.read_text(encoding="utf-8"))
         self.assertEqual(saved["cursors"]["thread-a"]["offset"], self.rollout.stat().st_size)
 
-    def test_completion_creates_pending_and_reply_handles_same_conversation(self):
+    def test_waiting_completion_creates_pending_and_reply_completes_conversation(self):
         tracker = self.tracker()
         tracker.refresh()
-        append_event(self.rollout, "task_complete", "2026-07-12T00:01:00Z")
+        append_event(self.rollout, "task_started", "2026-07-12T00:00:30Z")
+        append_event(
+            self.rollout,
+            "task_complete",
+            "2026-07-12T00:01:00Z",
+            last_agent_message="请确认是否继续？",
+        )
 
         pending = tracker.refresh()
 
@@ -121,13 +164,166 @@ class TaskAlertTrackerTests(unittest.TestCase):
         )
 
         append_event(self.rollout, "user_message", "2026-07-12T00:02:00Z")
-        handled = tracker.refresh()
+        completed = tracker.refresh()
 
-        self.assertEqual(handled.pending_count, 0)
-        self.assertEqual(handled.handled_count, 1)
-        self.assertEqual(handled.alerts[0].state, "handled")
-        self.assertEqual(handled.alerts[0].handled_at, "2026-07-12T00:02:00Z")
+        self.assertEqual(completed.pending_count, 0)
+        self.assertEqual(completed.completed_count, 1)
+        self.assertEqual(completed.alerts[0].state, "completed")
+        self.assertEqual(completed.alerts[0].handled_at, "2026-07-12T00:02:00Z")
         self.assertEqual(tracker.pending_watch_notification_ids(), ())
+
+    def test_started_then_user_message_remains_running(self):
+        tracker = self.tracker()
+        tracker.refresh()
+        append_event(self.rollout, "task_started", "2026-07-12T00:01:00Z")
+        append_event(self.rollout, "user_message", "2026-07-12T00:01:01Z")
+
+        snapshot = tracker.refresh()
+
+        self.assertEqual(snapshot.pending_count, 0)
+        self.assertEqual(snapshot.running_count, 1)
+        self.assertEqual(snapshot.completed_count, 0)
+        self.assertEqual(snapshot.alerts[0].state, "running")
+
+    def test_normal_completion_becomes_completed_without_notification(self):
+        tracker = self.tracker()
+        tracker.refresh()
+        append_event(self.rollout, "task_started", "2026-07-12T00:02:00Z")
+        append_event(
+            self.rollout,
+            "task_complete",
+            "2026-07-12T00:02:30Z",
+            last_agent_message="Build and tests passed.",
+        )
+
+        snapshot = tracker.refresh()
+
+        self.assertEqual(snapshot.pending_count, 0)
+        self.assertEqual(snapshot.running_count, 0)
+        self.assertEqual(snapshot.completed_count, 1)
+        self.assertEqual(snapshot.alerts[0].state, "completed")
+        self.assertEqual(snapshot.alerts[0].outcome, "completed")
+        self.assertEqual(tracker.pending_watch_notification_ids(), ())
+
+    def test_waiting_outcome_is_persisted_across_restart(self):
+        tracker = self.tracker()
+        tracker.refresh()
+        append_event(self.rollout, "task_started", "2026-07-12T00:02:00Z")
+        append_event(
+            self.rollout,
+            "task_complete",
+            "2026-07-12T00:02:30Z",
+            last_agent_message="Please provide the missing token.",
+        )
+
+        waiting = tracker.refresh()
+
+        self.assertEqual(waiting.alerts[0].outcome, "waiting")
+        self.assertEqual(self.tracker().refresh().alerts[0].outcome, "waiting")
+
+    def test_version_one_ledger_migrates_handled_to_completed(self):
+        tracker = self.tracker()
+        tracker.refresh()
+        saved = json.loads(self.ledger.read_text(encoding="utf-8"))
+        saved["version"] = 1
+        saved["alerts"] = [
+            {
+                "id": "thread-a:2026-07-12T00:03:00Z",
+                "thread_id": "thread-a",
+                "project": "StopWatch",
+                "title": "Codex status monitor",
+                "progress_at": "2026-07-12T00:03:00Z",
+                "handled_at": "2026-07-12T00:04:00Z",
+                "state": "handled",
+                "watch_notified": True,
+            }
+        ]
+        self.ledger.write_text(json.dumps(saved), encoding="utf-8")
+
+        migrated = self.tracker().refresh().alerts[0]
+
+        self.assertEqual(migrated.outcome, "completed")
+        self.assertEqual(migrated.state, "completed")
+        self.assertEqual(migrated.handled_at, "2026-07-12T00:04:00Z")
+        self.assertTrue(migrated.watch_notified)
+        persisted = json.loads(self.ledger.read_text(encoding="utf-8"))
+        self.assertEqual(persisted["version"], 2)
+        self.assertEqual(persisted["alerts"][0]["state"], "completed")
+        self.assertEqual(persisted["alerts"][0]["outcome"], "completed")
+
+    def test_existing_alert_synchronizes_live_project_and_title_once(self):
+        tracker = self.tracker()
+        tracker.refresh()
+        append_event(
+            self.rollout,
+            "task_complete",
+            "2026-07-12T00:05:00Z",
+            last_agent_message="Done.",
+        )
+        initial = tracker.refresh()
+
+        update_thread_metadata(
+            self.state_db,
+            "thread-a",
+            "/workspace/StopWatch-v2",
+            "添加蓝牙开关",
+            2,
+        )
+        synchronized = tracker.refresh()
+
+        self.assertEqual(synchronized.alerts[0].project, "StopWatch-v2")
+        self.assertEqual(synchronized.alerts[0].title, "添加蓝牙开关")
+        self.assertEqual(synchronized.revision, initial.revision + 1)
+        self.assertEqual(tracker.refresh().revision, synchronized.revision)
+
+    def test_codex_thread_name_overrides_full_sqlite_title(self):
+        update_thread_metadata(
+            self.state_db,
+            "thread-a",
+            "/workspace/StopWatch",
+            "This is the complete first user message that should not reach the watch",
+            2,
+        )
+        tracker = self.tracker(
+            thread_name_loader=lambda: {"thread-a": "codex监控器"},
+            thread_name_refresh_seconds=0,
+        )
+        tracker.refresh()
+        append_event(
+            self.rollout,
+            "task_complete",
+            "2026-07-12T00:05:30Z",
+            last_agent_message="Done.",
+        )
+
+        snapshot = tracker.refresh()
+
+        self.assertEqual(snapshot.alerts[0].title, "codex监控器")
+
+    def test_cached_codex_thread_name_survives_loader_failure(self):
+        calls = []
+
+        def load_names():
+            calls.append(True)
+            if len(calls) == 1:
+                return {"thread-a": "Short title"}
+            raise RuntimeError("app server unavailable")
+
+        tracker = self.tracker(
+            thread_name_loader=load_names,
+            thread_name_refresh_seconds=0,
+        )
+        tracker.refresh()
+        append_event(
+            self.rollout,
+            "task_complete",
+            "2026-07-12T00:05:45Z",
+            last_agent_message="Done.",
+        )
+
+        snapshot = tracker.refresh()
+
+        self.assertEqual(snapshot.alerts[0].title, "Short title")
 
     def test_reply_does_not_clear_another_conversation_in_same_project(self):
         rollout_b = self.root / "rollout-b.jsonl"
@@ -142,37 +338,110 @@ class TaskAlertTrackerTests(unittest.TestCase):
         )
         tracker = self.tracker()
         tracker.refresh()
-        append_event(self.rollout, "task_complete", "2026-07-12T00:03:00Z")
-        append_event(rollout_b, "task_complete", "2026-07-12T00:04:00Z")
+        append_event(
+            self.rollout,
+            "task_complete",
+            "2026-07-12T00:03:00Z",
+            last_agent_message="请回复确认。",
+        )
+        append_event(
+            rollout_b,
+            "task_complete",
+            "2026-07-12T00:04:00Z",
+            last_agent_message="Please confirm.",
+        )
         tracker.refresh()
 
         append_event(self.rollout, "user_message", "2026-07-12T00:05:00Z")
         snapshot = tracker.refresh()
 
         by_thread = {alert.thread_id: alert for alert in snapshot.alerts}
-        self.assertEqual(by_thread["thread-a"].state, "handled")
+        self.assertEqual(by_thread["thread-a"].state, "completed")
         self.assertEqual(by_thread["thread-b"].state, "pending")
+
+    def test_snapshot_prioritizes_pending_then_running_then_completed(self):
+        rollout_b = self.root / "rollout-b.jsonl"
+        rollout_c = self.root / "rollout-c.jsonl"
+        rollout_b.touch()
+        rollout_c.touch()
+        add_thread(
+            self.state_db,
+            "thread-b",
+            "/workspace/webshot",
+            "Improve UI",
+            rollout_b,
+            2,
+        )
+        add_thread(
+            self.state_db,
+            "thread-c",
+            "/workspace/docs",
+            "Update docs",
+            rollout_c,
+            3,
+        )
+        tracker = self.tracker()
+        tracker.refresh()
+        append_event(self.rollout, "task_started", "2026-07-12T00:01:00Z")
+        append_event(
+            rollout_b,
+            "task_complete",
+            "2026-07-12T00:02:00Z",
+            last_agent_message="Please confirm.",
+        )
+        append_event(
+            rollout_c,
+            "task_complete",
+            "2026-07-12T00:03:00Z",
+            last_agent_message="Documentation updated.",
+        )
+
+        snapshot = tracker.refresh()
+
+        self.assertEqual(snapshot.pending_count, 1)
+        self.assertEqual(snapshot.running_count, 1)
+        self.assertEqual(snapshot.completed_count, 1)
+        self.assertEqual(
+            [alert.state for alert in snapshot.alerts],
+            ["pending", "running", "completed"],
+        )
 
     def test_restart_resumes_saved_cursor_and_deduplicates(self):
         first = self.tracker()
         first.refresh()
-        append_event(self.rollout, "task_complete", "2026-07-12T00:06:00Z")
+        append_event(
+            self.rollout,
+            "task_complete",
+            "2026-07-12T00:06:00Z",
+            last_agent_message="Please confirm.",
+        )
         self.assertEqual(first.refresh().pending_count, 1)
 
         restarted = self.tracker()
         self.assertEqual(restarted.refresh().pending_count, 1)
-        append_event(self.rollout, "task_complete", "2026-07-12T00:07:00Z")
+        append_event(
+            self.rollout,
+            "task_complete",
+            "2026-07-12T00:07:00Z",
+            last_agent_message="Please confirm again.",
+        )
         snapshot = restarted.refresh()
 
-        self.assertEqual(snapshot.pending_count, 2)
-        self.assertEqual(len({alert.id for alert in snapshot.alerts}), 2)
+        self.assertEqual(snapshot.pending_count, 1)
+        self.assertEqual(len(snapshot.alerts), 1)
+        self.assertEqual(snapshot.alerts[0].progress_at, "2026-07-12T00:07:00Z")
 
     def test_new_thread_created_during_downtime_is_recovered(self):
         tracker = self.tracker()
         tracker.refresh()
         self.clock.value = datetime.datetime(2026, 7, 12, 0, 10, tzinfo=UTC)
         rollout_b = self.root / "new-thread.jsonl"
-        append_event(rollout_b, "task_complete", "2026-07-12T00:09:00Z")
+        append_event(
+            rollout_b,
+            "task_complete",
+            "2026-07-12T00:09:00Z",
+            last_agent_message="Please confirm.",
+        )
         add_thread(
             self.state_db,
             "thread-new",
@@ -190,7 +459,12 @@ class TaskAlertTrackerTests(unittest.TestCase):
     def test_mark_watch_notified_is_persistent(self):
         tracker = self.tracker()
         tracker.refresh()
-        append_event(self.rollout, "task_complete", "2026-07-12T00:11:00Z")
+        append_event(
+            self.rollout,
+            "task_complete",
+            "2026-07-12T00:11:00Z",
+            last_agent_message="Please confirm.",
+        )
         tracker.refresh()
         alert_ids = tracker.pending_watch_notification_ids()
 
@@ -207,6 +481,7 @@ class TaskAlertTrackerTests(unittest.TestCase):
             "task_complete",
             "2026-07-12T00:12:00Z",
             complete_line=False,
+            last_agent_message="Please confirm.",
         )
         self.assertEqual(tracker.refresh().pending_count, 0)
 
@@ -228,7 +503,12 @@ class TaskAlertTrackerTests(unittest.TestCase):
         self.clock.value = datetime.datetime(2026, 7, 3, 0, 0, tzinfo=UTC)
         tracker = self.tracker()
         tracker.refresh()
-        append_event(self.rollout, "task_complete", "2026-07-03T00:01:00Z")
+        append_event(
+            self.rollout,
+            "task_complete",
+            "2026-07-03T00:01:00Z",
+            last_agent_message="Please confirm.",
+        )
         self.assertEqual(tracker.refresh().pending_count, 1)
 
         self.clock.value = datetime.datetime(2026, 7, 12, 0, 0, tzinfo=UTC)
