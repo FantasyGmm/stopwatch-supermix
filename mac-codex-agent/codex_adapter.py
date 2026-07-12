@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import os
 import pathlib
 import re
 import sqlite3
@@ -12,7 +13,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Iterable, Optional, Tuple
 
 from task_alerts import TaskAlertSnapshot
 
@@ -31,6 +32,10 @@ class CodexPaths:
     auth: pathlib.Path
     logs: pathlib.Path
     sessions: pathlib.Path = pathlib.Path.home() / ".codex" / "sessions"
+    state_db: pathlib.Path = pathlib.Path.home() / ".codex" / "state_5.sqlite"
+    model_selection_cache: pathlib.Path = (
+        pathlib.Path.home() / ".codex" / ".stopwatch_model_selection.json"
+    )
 
 
 DEFAULT_PATHS = CodexPaths(
@@ -50,6 +55,25 @@ def _default_ssl_context():
         return ssl.create_default_context()
 
 
+def _majority_running_pair(
+    candidates: Iterable[Tuple[Any, Any, Any]],
+) -> Optional[Tuple[str, str]]:
+    counts: Dict[Tuple[str, str], int] = {}
+    latest: Dict[Tuple[str, str], str] = {}
+    for model, effort, started_at in candidates:
+        model_text = model.strip() if isinstance(model, str) else ""
+        effort_text = effort.strip().lower() if isinstance(effort, str) else ""
+        timestamp = started_at if isinstance(started_at, str) else ""
+        if not model_text or not effort_text:
+            continue
+        pair = (model_text, effort_text)
+        counts[pair] = counts.get(pair, 0) + 1
+        latest[pair] = max(latest.get(pair, ""), timestamp)
+    if not counts:
+        return None
+    return max(counts, key=lambda pair: (counts[pair], latest[pair], pair))
+
+
 class CodexStateCollector:
     def __init__(
         self,
@@ -66,6 +90,85 @@ class CodexStateCollector:
         self._quota_cache_time = 0.0
         self._alert_tracker = alert_tracker
         self._local_timezone = local_timezone or datetime.datetime.now().astimezone().tzinfo
+        self._remembered_model_pair = self._load_remembered_model_pair()
+
+    def _load_remembered_model_pair(self) -> Optional[Tuple[str, str]]:
+        try:
+            payload = json.loads(
+                self.paths.model_selection_cache.read_text(encoding="utf-8")
+            )
+        except (OSError, json.JSONDecodeError):
+            return None
+        if not isinstance(payload, dict):
+            return None
+        model = payload.get("model")
+        effort = payload.get("effort")
+        if not isinstance(model, str) or not isinstance(effort, str):
+            return None
+        pair = (model.strip(), effort.strip().lower())
+        return pair if all(pair) else None
+
+    def _save_remembered_model_pair(self, pair: Tuple[str, str]) -> None:
+        path = self.paths.model_selection_cache
+        temporary = path.with_name(path.name + ".tmp")
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temporary.write_text(
+                json.dumps(
+                    {"model": pair[0], "effort": pair[1]},
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+                encoding="utf-8",
+            )
+            os.replace(temporary, path)
+        except OSError:
+            try:
+                temporary.unlink()
+            except OSError:
+                pass
+
+    def _read_running_model_pair(
+        self, alerts: TaskAlertSnapshot
+    ) -> Optional[Tuple[str, str]]:
+        running = {
+            alert.thread_id: alert.progress_at
+            for alert in alerts.alerts
+            if alert.state == "running" and alert.thread_id
+        }
+        if not running or not self.paths.state_db.exists():
+            return None
+        placeholders = ",".join("?" for _ in running)
+        try:
+            connection = sqlite3.connect(
+                "file:{}?mode=ro".format(self.paths.state_db),
+                uri=True,
+                timeout=1.0,
+            )
+            try:
+                rows = connection.execute(
+                    "SELECT id, model, reasoning_effort FROM threads "
+                    "WHERE id IN ({})".format(placeholders),
+                    tuple(running),
+                ).fetchall()
+            finally:
+                connection.close()
+        except (OSError, sqlite3.Error):
+            return None
+        return _majority_running_pair(
+            (model, effort, running.get(str(thread_id), ""))
+            for thread_id, model, effort in rows
+        )
+
+    def _apply_running_model_selection(
+        self, status: Dict[str, Any], alerts: TaskAlertSnapshot
+    ) -> None:
+        winner = self._read_running_model_pair(alerts)
+        if winner is not None and winner != self._remembered_model_pair:
+            self._remembered_model_pair = winner
+            self._save_remembered_model_pair(winner)
+        if self._remembered_model_pair is not None:
+            status["model"], status["effort"] = self._remembered_model_pair
 
     def _read_session_quota(self) -> Dict[str, Any]:
         try:
@@ -234,6 +337,7 @@ class CodexStateCollector:
             if self._alert_tracker is not None
             else TaskAlertSnapshot()
         )
+        self._apply_running_model_selection(status, alerts)
         five_hour_used = quota.get("five_hour_used_pct")
         week_used = quota.get("week_used_pct")
         return {
