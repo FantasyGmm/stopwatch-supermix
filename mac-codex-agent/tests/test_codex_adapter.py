@@ -235,6 +235,50 @@ class CodexStateCollectorTests(unittest.TestCase):
         self.assertEqual(snapshot["codex_5h_left_pct"], 2)
         self.assertEqual(snapshot["codex_week_left_pct"], 93)
 
+    def test_classifies_week_only_primary_window_by_duration(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            sessions = root / "sessions"
+            sessions.mkdir()
+            (sessions / "rollout.jsonl").write_text(
+                json.dumps(
+                    {
+                        "timestamp": "2026-07-13T00:00:00Z",
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "token_count",
+                            "rate_limits": {
+                                "primary": {
+                                    "used_percent": 68,
+                                    "window_minutes": 10080,
+                                    "resets_at": 1784392063,
+                                },
+                                "secondary": None,
+                                "plan_type": "prolite",
+                            },
+                        },
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            collector = CodexStateCollector(
+                paths=CodexPaths(
+                    config=root / "missing-config.toml",
+                    auth=root / "missing-auth.json",
+                    logs=root / "missing-logs.sqlite",
+                    sessions=sessions,
+                    state_db=root / "missing-state.sqlite",
+                    model_selection_cache=root / "model-selection.json",
+                ),
+                quota_fetcher=lambda: {},
+            )
+
+            snapshot = collector.get_state()
+
+        self.assertIsNone(snapshot["codex_5h_left_pct"])
+        self.assertEqual(snapshot["codex_week_left_pct"], 32)
+
     def test_drops_http_quota_after_failed_refresh_exceeds_stale_limit(self):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)

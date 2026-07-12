@@ -46,6 +46,40 @@ DEFAULT_PATHS = CodexPaths(
 )
 
 
+def _window_minutes(window: Dict[str, Any]) -> Optional[int]:
+    minutes = window.get("window_minutes")
+    if isinstance(minutes, (int, float)):
+        return int(minutes)
+    seconds = window.get("limit_window_seconds")
+    if isinstance(seconds, (int, float)):
+        return int(seconds) // 60
+    return None
+
+
+def _quota_from_windows(
+    primary: Dict[str, Any],
+    secondary: Dict[str, Any],
+    plan: Any,
+) -> Dict[str, Any]:
+    quota: Dict[str, Any] = {"plan": plan or ""}
+    unclassified = []
+    for position, window in (("primary", primary), ("secondary", secondary)):
+        used = _integer_percent(window.get("used_percent"))
+        if used is None:
+            continue
+        duration = _window_minutes(window)
+        if duration == 300:
+            quota["five_hour_used_pct"] = used
+        elif duration == 10080:
+            quota["week_used_pct"] = used
+        else:
+            unclassified.append((position, used))
+    for position, used in unclassified:
+        key = "five_hour_used_pct" if position == "primary" else "week_used_pct"
+        quota.setdefault(key, used)
+    return quota
+
+
 def _default_ssl_context():
     try:
         import certifi
@@ -208,19 +242,27 @@ class CodexStateCollector:
                 limits = payload.get("rate_limits") or {}
                 primary = limits.get("primary") or {}
                 secondary = limits.get("secondary") or {}
-                used = _integer_percent(primary.get("used_percent"))
-                reset_at = primary.get("resets_at")
-                if used is None or not isinstance(reset_at, (int, float)):
+                quota = _quota_from_windows(
+                    primary,
+                    secondary,
+                    limits.get("plan_type"),
+                )
+                if not any(
+                    key in quota
+                    for key in ("five_hour_used_pct", "week_used_pct")
+                ):
                     continue
-                key = (str(event.get("timestamp") or ""), int(reset_at))
+                reset_values = [
+                    window.get("resets_at")
+                    for window in (primary, secondary)
+                    if isinstance(window.get("resets_at"), (int, float))
+                ]
+                latest_reset = int(max(reset_values)) if reset_values else -1
+                key = (str(event.get("timestamp") or ""), latest_reset)
                 if key <= best_key:
                     continue
                 best_key = key
-                best = {
-                    "five_hour_used_pct": used,
-                    "week_used_pct": _integer_percent(secondary.get("used_percent")),
-                    "plan": limits.get("plan_type") or "",
-                }
+                best = quota
         return best
 
     def _read_config_state(self) -> Dict[str, Any]:
@@ -304,11 +346,11 @@ class CodexStateCollector:
         limits = payload.get("rate_limit") or {}
         primary = limits.get("primary_window") or {}
         secondary = limits.get("secondary_window") or {}
-        return {
-            "five_hour_used_pct": _integer_percent(primary.get("used_percent")),
-            "week_used_pct": _integer_percent(secondary.get("used_percent")),
-            "plan": payload.get("plan_type") or "",
-        }
+        return _quota_from_windows(
+            primary,
+            secondary,
+            payload.get("plan_type"),
+        )
 
     def _get_quota(self) -> Dict[str, Any]:
         session_quota = self._read_session_quota()
