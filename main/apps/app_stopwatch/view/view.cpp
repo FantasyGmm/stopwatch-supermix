@@ -142,13 +142,14 @@ void StopwatchView::update(bool updateButtonStates)
     }
 
     if (GetHAL().btnA.wasPressed()) {
-        handle_btn_left_clicked();
-
         _anim_btn_left_x = _btn_left_x + 8;
         _anim_btn_left_y = _btn_left_y + 8;
     } else if (GetHAL().btnA.wasReleased()) {
         _anim_btn_left_x = _btn_left_x;
         _anim_btn_left_y = _btn_left_y;
+    }
+    if (GetHAL().btnA.wasClicked()) {
+        handle_btn_left_clicked();
     }
 
     if (GetHAL().btnB.wasPressed()) {

@@ -38,6 +38,20 @@ class ClockFirmwareContractTests(unittest.TestCase):
         for label in ("Alarm", "Watch Face", "Stopwatch"):
             self.assertIn(label, selection_cpp)
 
+    def test_stopwatch_left_action_waits_for_short_release(self):
+        stopwatch_view = (
+            ROOT / "main" / "apps" / "app_stopwatch" / "view" / "view.cpp"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(
+            "if (GetHAL().btnA.wasClicked()) {\n        handle_btn_left_clicked();",
+            stopwatch_view,
+        )
+        self.assertNotIn(
+            "if (GetHAL().btnA.wasPressed()) {\n        handle_btn_left_clicked();",
+            stopwatch_view,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
