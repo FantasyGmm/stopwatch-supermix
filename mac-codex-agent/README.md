@@ -1,7 +1,7 @@
 # StopWatch Codex Mac Agent
 
-This menu bar agent reads local Codex model, reasoning effort, quota, activity,
-and native completion events, then sends a compact status snapshot to the
+This menu bar agent reads the local Codex model, reasoning effort, quota, and
+conversation progress events, then sends a compact status snapshot to the
 StopWatch over BLE.
 
 It does not send OAuth credentials, prompts, responses, or source code to the watch.
@@ -38,8 +38,15 @@ Logs are written to:
 ## Menu Bar Controls
 
 - The top **Codex Status** section shows model, reasoning effort, five-hour
-  remaining quota, seven-day remaining quota, today's active minutes, and this
-  week's active minutes. Missing values appear as `--`.
+  remaining quota, and seven-day remaining quota. Missing values appear as
+  `--`.
+- Model and effort are selected as one real pair from conversations currently
+  in Running state. The most common pair wins; ties use the most recently
+  started Running conversation. With no Running conversation, the last winner
+  is restored from `~/.codex/.stopwatch_model_selection.json`.
+- **Task Alerts** shows the latest current-day state of each conversation,
+  grouped into Pending, Running, and Completed. Pending rows are orange,
+  Running rows are blue, and Completed rows are dimmed.
 - Codex status is sampled once every two seconds and shared with the watch. The
   menu continues updating even when the watch is disconnected or watch
   connection is disabled.
@@ -54,6 +61,41 @@ Logs are written to:
 
 After Quit, nothing automatically restarts the agent. Open the application
 manually when synchronization is needed again.
+
+## Task Alerts
+
+The agent watches local Codex rollout events. `task_started` makes a conversation
+Running. The single `task_complete` event is classified locally: responses that
+require user input become Pending and chime once; normal responses become
+Completed without a chime. A later user message completes older Pending records
+in that conversation without affecting another conversation.
+
+Completed and Waiting for Instruction are outcomes of a Codex turn. The agent
+classifies only the final paragraph of `last_agent_message`: direct questions,
+requests for confirmation or information, and required user actions become
+Waiting for Instruction; other completions become Completed. This is a local
+heuristic and does not send the response text to the watch.
+
+The project name is derived from the conversation working directory, and the
+conversation title is refreshed through Codex's local app-server so generated
+short titles replace initial prompt text. The watch displays only project,
+short conversation title, and localized state; it does not display prompt or
+response content. Pending records have priority and rotate exclusively. When no
+Pending exists, Running records rotate. With neither active state, the latest
+Completed record remains static under a green `COMPLETED` heading.
+
+Alert cursors and acknowledgement state are stored at:
+
+```text
+~/.codex/.stopwatch_alerts.json
+```
+
+The first run records the end of existing rollout files, so historical
+completions do not trigger old alerts. Later launches resume from saved cursors
+and recover progress that occurred while the menu app was closed. If several
+unnotified alerts accumulated while disconnected, reconnecting produces one
+summary chime rather than one sound per alert; the individual records remain
+visible in the ledger and carousel.
 
 ## Development Run
 

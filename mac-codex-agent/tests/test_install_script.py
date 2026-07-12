@@ -26,7 +26,7 @@ class InstallScriptTests(unittest.TestCase):
             "app_state.py",
             "agent.py",
             "codex_adapter.py",
-            "completion.py",
+            "task_alerts.py",
             "protocol.py",
         ):
             self.assertIn(module, script)

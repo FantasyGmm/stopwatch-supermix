@@ -42,14 +42,14 @@ The Codex monitor is a full-screen dashboard for a local Codex status stream. It
 - reasoning effort;
 - remaining 5-hour usage quota;
 - remaining weekly usage quota;
-- today's activity minutes;
-- weekly activity minutes;
+- current-day Codex conversation progress alerts;
+- pending, running, and completed conversation counts with a three-second carousel;
 - battery level and charging state;
 - connection state for BLE or the Wi-Fi/WebSocket fallback.
 
 By default, the monitor advertises a BLE peripheral named `StopWatch-Codex`. A
-Mac LaunchAgent reads local Codex state and sends a compact snapshot to the
-watch every two seconds. Install it with:
+manually opened Mac menu bar agent reads local Codex state and sends a compact
+snapshot to the watch every two seconds. Install it with:
 
 ```bash
 ./mac-codex-agent/install_launch_agent.sh
@@ -59,6 +59,17 @@ Open the Codex app on the watch to start advertising. The Mac agent scans,
 pairs using BLE Just Works, reconnects automatically, and writes only rendered
 status fields. It does not send OAuth credentials, prompts, responses, or
 source code to the watch.
+
+The monitor maps `task_started` to Running. A `task_complete` response that asks
+for confirmation, information, or another action becomes Pending; a normal
+completion becomes Completed. Only Pending triggers a chime. The watch shows
+only project, current short conversation title, and `正在处理`, `等待指令`, or
+`已完成`. Pending records have priority and rotate exclusively; when Pending is
+empty, Running records rotate. With neither active state, static `COMPLETED` is
+green. Only the latest current-day state of each conversation is displayed.
+
+The two upper arcs display the model and uppercased reasoning effort directly.
+They do not show separate `MODEL`, `EFFORT`, `auto`, or `reason` captions.
 
 If BLE has not connected after 15 seconds, `auto` mode starts the existing
 Wi-Fi/WebSocket fallback at:

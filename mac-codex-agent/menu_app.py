@@ -102,7 +102,7 @@ class MenuBarApplication(NSObject):
             "7D Remaining: --", indent=STATUS_CHILD_INDENT
         )
         self.alert_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
-            "Task Alerts · 0 Pending / 0 Handled", None, ""
+            "Task Alerts · 0 Pending / 0 Running / 0 Completed", None, ""
         )
         self.alert_item.setEnabled_(True)
         self.alert_submenu = NSMenu.alloc().init()

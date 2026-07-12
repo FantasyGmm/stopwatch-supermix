@@ -23,6 +23,12 @@ class FakeCollector:
             raise item
         return dict(item)
 
+    def pending_watch_notification_ids(self):
+        return ()
+
+    def mark_watch_notified(self, alert_ids):
+        pass
+
 
 class FakeTransport:
     def __init__(
@@ -129,7 +135,8 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 {
                     "codex_model": "gpt-menu",
                     "codex_effort": "high",
-                    "codex_today_min": 9,
+                    "codex_alert_pending": 1,
+                    "codex_alert_revision": 9,
                 }
             ]
         )
@@ -148,7 +155,8 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         snapshot = runtime.snapshot()
         self.assertIs(snapshot.state, ConnectionState.DISABLED)
         self.assertEqual(snapshot.codex.effort, "high")
-        self.assertEqual(snapshot.codex.today_minutes, 9)
+        self.assertEqual(snapshot.codex.alert_pending, 1)
+        self.assertEqual(snapshot.codex.alert_revision, 9)
         self.assertEqual(factory.instances, [])
         runtime.submit(AgentCommand.STOP)
         await asyncio.wait_for(task, 1)

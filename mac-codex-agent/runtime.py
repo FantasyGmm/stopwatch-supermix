@@ -20,7 +20,8 @@ from app_state import (
     Preferences,
     UserDefaultsPreferences,
 )
-from codex_adapter import CodexStateCollector, activity_loop
+from codex_adapter import CodexStateCollector
+from task_alerts import TaskAlertTracker
 
 
 LOGGER = logging.getLogger(__name__)
@@ -272,7 +273,7 @@ class AgentController:
         self._preferences = preferences or UserDefaultsPreferences()
         self._collector = None
         if runtime is None:
-            self._collector = CodexStateCollector()
+            self._collector = CodexStateCollector(alert_tracker=TaskAlertTracker())
             runtime = AgentRuntime(
                 collector=self._collector,
                 connection_enabled=self._preferences.connection_enabled(),
@@ -292,13 +293,6 @@ class AgentController:
         self._thread.start()
 
     def _thread_main(self) -> None:
-        if self._collector is not None:
-            threading.Thread(
-                target=activity_loop,
-                args=(self._collector,),
-                name="codex-activity",
-                daemon=True,
-            ).start()
         asyncio.run(self._runtime.run())
 
     def snapshot(self) -> AgentSnapshot:
