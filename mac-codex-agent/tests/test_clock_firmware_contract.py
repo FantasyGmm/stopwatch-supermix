@@ -52,6 +52,20 @@ class ClockFirmwareContractTests(unittest.TestCase):
             stopwatch_view,
         )
 
+    def test_standalone_wrappers_and_unused_launcher_icons_are_removed(self):
+        obsolete_paths = (
+            "main/apps/app_alarm_clock/app_alarm_clock.h",
+            "main/apps/app_alarm_clock/app_alarm_clock.cpp",
+            "main/apps/app_watch_face/app_watch_face.h",
+            "main/apps/app_watch_face/app_watch_face.cpp",
+            "main/apps/app_stopwatch/app_stopwatch.h",
+            "main/apps/app_stopwatch/app_stopwatch.cpp",
+            "main/assets/images/icon_watch_face.c",
+            "main/assets/images/icon_stopwatch.c",
+        )
+        for relative_path in obsolete_paths:
+            self.assertFalse((ROOT / relative_path).exists(), relative_path)
+
 
 if __name__ == "__main__":
     unittest.main()
