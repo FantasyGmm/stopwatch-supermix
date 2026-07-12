@@ -31,7 +31,7 @@ class FirmwareFontContractTests(unittest.TestCase):
         for character in "中文项目进展监控":
             self.assertIn('U+{:04X} "{}"'.format(ord(character), character), font)
 
-    def test_codex_alert_outcome_is_parsed_and_rendered_without_time(self):
+    def test_codex_alert_states_are_parsed_and_rendered_without_time(self):
         model_header = (self.codex_root / "codex_status_model.h").read_text(
             encoding="utf-8"
         )
@@ -43,11 +43,14 @@ class FirmwareFontContractTests(unittest.TestCase):
         )
         app = (self.codex_root / "app_codex_status.cpp").read_text(encoding="utf-8")
 
-        self.assertIn("bool waiting = false;", model_header)
-        self.assertIn('value != "completed" && value != "waiting"', model_source)
-        self.assertIn('value == "waiting"', model_source)
-        self.assertIn("bool all_handled() const", carousel_header)
-        self.assertIn('alert->waiting ? "等待指令" : "已完成"', app)
+        self.assertIn("enum class CodexTaskState", model_header)
+        self.assertIn("CodexTaskState::Pending", model_source)
+        self.assertIn("CodexTaskState::Running", model_source)
+        self.assertIn("CodexTaskState::Completed", model_source)
+        self.assertIn("CodexTaskState display_state() const", carousel_header)
+        self.assertIn('"等待指令"', app)
+        self.assertIn('"正在处理"', app)
+        self.assertIn('"已完成"', app)
         self.assertNotIn('alert->time + " \\xC2\\xB7 "', app)
 
     def test_codex_alert_heading_uses_distinct_summary_colors(self):
@@ -56,14 +59,16 @@ class FirmwareFontContractTests(unittest.TestCase):
             encoding="utf-8"
         )
 
-        self.assertIn("kHandledGreen", app)
-        self.assertIn("_alert_carousel.all_handled()", app)
-        self.assertIn("? kHandledGreen : kCodexRed", app)
+        self.assertIn("kCompletedGreen", app)
+        self.assertIn("CodexTaskState::Running", app)
+        self.assertIn("kCodexBlue", app)
+        self.assertIn("kCompletedGreen", app)
         self.assertIn('return "COMPLETED";', carousel)
+        self.assertIn('? "PENDING" : "RUNNING"', carousel)
         self.assertNotIn("ALL HANDLED", carousel)
-        self.assertNotIn('alert.pending ? "PENDING" : "HANDLED"', carousel)
+        self.assertNotIn("all_handled", carousel)
 
-    def test_model_and_effort_arcs_show_only_direct_values(self):
+    def test_model_and_effort_instruments_show_only_direct_values(self):
         app = (self.codex_root / "app_codex_status.cpp").read_text(encoding="utf-8")
 
         for legacy_caption in (
@@ -74,13 +79,19 @@ class FirmwareFontContractTests(unittest.TestCase):
         ):
             self.assertNotIn(legacy_caption, app)
         self.assertIn(
-            '_model_value = make_arc_value(_panel, 70, 144, "--", '
-            '&lv_font_montserrat_14',
+            "_model_value = make_instrument_value(",
             app,
         )
         self.assertIn(
-            '_effort_value = make_arc_value(_panel, 306, 142, "--", '
-            '&lv_font_montserrat_18',
+            '_panel, kModelInstrument, 145, "--", &lv_font_montserrat_14',
+            app,
+        )
+        self.assertIn(
+            "_effort_value = make_instrument_value(",
+            app,
+        )
+        self.assertIn(
+            '_panel, kEffortInstrument, 143, "--", &lv_font_montserrat_18',
             app,
         )
         self.assertIn("lv_label_set_long_mode(label, LV_LABEL_LONG_MODE_DOTS)", app)

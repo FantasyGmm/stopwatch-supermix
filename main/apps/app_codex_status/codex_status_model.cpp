@@ -6,6 +6,8 @@
 
 namespace {
 
+constexpr size_t kMaxAlerts = 8;
+
 int json_int_or(cJSON* root, const char* key, int fallback)
 {
     cJSON* item = cJSON_GetObjectItemCaseSensitive(root, key);
@@ -13,10 +15,64 @@ int json_int_or(cJSON* root, const char* key, int fallback)
 }
 
 
+int json_nonnegative_int_or(cJSON* root, const char* key, int fallback)
+{
+    const int value = json_int_or(root, key, fallback);
+    return value >= 0 ? value : fallback;
+}
+
+
 std::string json_string_or_empty(cJSON* root, const char* key)
 {
     cJSON* item = cJSON_GetObjectItemCaseSensitive(root, key);
     return cJSON_IsString(item) && item->valuestring != nullptr ? item->valuestring : "";
+}
+
+
+bool parse_alerts(cJSON* root, std::vector<CodexTaskAlert>& alerts)
+{
+    cJSON* array = cJSON_GetObjectItemCaseSensitive(root, "codex_alerts");
+    if (!cJSON_IsArray(array)) {
+        return false;
+    }
+
+    std::vector<CodexTaskAlert> parsed;
+    cJSON* item = nullptr;
+    cJSON_ArrayForEach(item, array) {
+        if (!cJSON_IsObject(item)) {
+            return false;
+        }
+        cJSON* project = cJSON_GetObjectItemCaseSensitive(item, "project");
+        cJSON* title = cJSON_GetObjectItemCaseSensitive(item, "title");
+        cJSON* time = cJSON_GetObjectItemCaseSensitive(item, "time");
+        cJSON* state = cJSON_GetObjectItemCaseSensitive(item, "state");
+        if (!cJSON_IsString(project) || !cJSON_IsString(title) ||
+            !cJSON_IsString(time) || !cJSON_IsString(state) ||
+            project->valuestring == nullptr || title->valuestring == nullptr ||
+            time->valuestring == nullptr || state->valuestring == nullptr) {
+            return false;
+        }
+
+        const std::string state_text = state->valuestring;
+        CodexTaskState parsed_state = CodexTaskState::Completed;
+        if (state_text == "pending") {
+            parsed_state = CodexTaskState::Pending;
+        } else if (state_text == "running") {
+            parsed_state = CodexTaskState::Running;
+        } else if (state_text == "completed") {
+            parsed_state = CodexTaskState::Completed;
+        } else {
+            return false;
+        }
+        if (parsed.size() < kMaxAlerts) {
+            parsed.push_back(
+                {project->valuestring, title->valuestring, time->valuestring, parsed_state}
+            );
+        }
+    }
+
+    alerts = std::move(parsed);
+    return true;
 }
 
 }  // namespace
@@ -41,16 +97,20 @@ CodexMessageKind parse_codex_message(const char* data, size_t length, CodexStatu
         return agent == "codex" ? CodexMessageKind::Chime : CodexMessageKind::Invalid;
     }
 
+    snapshot = CodexStatusSnapshot{};
     snapshot.model = json_string_or_empty(root, "codex_model");
     snapshot.effort = json_string_or_empty(root, "codex_effort");
     snapshot.five_hour_left_pct = json_int_or(root, "codex_5h_left_pct", -1);
     snapshot.week_left_pct = json_int_or(root, "codex_week_left_pct", -1);
-    snapshot.today_minutes = json_int_or(root, "codex_today_min", -1);
-    snapshot.week_minutes = json_int_or(root, "codex_week_min", -1);
+    snapshot.pending_count = json_nonnegative_int_or(root, "codex_alert_pending", 0);
+    snapshot.running_count = json_nonnegative_int_or(root, "codex_alert_running", 0);
+    snapshot.completed_count = json_nonnegative_int_or(root, "codex_alert_completed", 0);
+    snapshot.alert_revision = json_nonnegative_int_or(root, "codex_alert_revision", 0);
+    snapshot.alerts_valid = parse_alerts(root, snapshot.alerts);
     cJSON_Delete(root);
 
     const bool has_status = !snapshot.model.empty() || !snapshot.effort.empty() ||
                             snapshot.five_hour_left_pct >= 0 || snapshot.week_left_pct >= 0 ||
-                            snapshot.today_minutes >= 0 || snapshot.week_minutes >= 0;
+                            snapshot.alerts_valid;
     return has_status ? CodexMessageKind::Status : CodexMessageKind::Invalid;
 }
