@@ -6,8 +6,7 @@ import json
 from typing import Any, Callable, Optional
 
 from codex_adapter import CodexStateCollector
-from completion import read_latest_completion_signal
-from protocol import EVENT_MESSAGE, STATUS_MESSAGE, encode_message
+from protocol import EVENT_MESSAGE, MAX_MESSAGE_SIZE, STATUS_MESSAGE, encode_message
 
 
 DEVICE_NAME = "StopWatch-Codex"
@@ -15,6 +14,11 @@ SERVICE_UUID = "7a230001-5474-4f50-5741-544348434f44"
 STATUS_RX_UUID = "7a230002-5474-4f50-5741-544348434f44"
 STATUS_INTERVAL_SECONDS = 2.0
 SAFE_WRITE_SIZE = 20
+FRAME_BURST_SIZE = 8
+FRAME_BURST_PAUSE_SECONDS = 0.02
+MAX_WATCH_ALERTS = 8
+MAX_PROJECT_LENGTH = 32
+MAX_TITLE_LENGTH = 48
 
 
 class CodexStatusAgent:
@@ -22,26 +26,22 @@ class CodexStatusAgent:
         self,
         collector: CodexStateCollector,
         transport: Any,
-        completion_reader: Callable[[], Optional[str]] = read_latest_completion_signal,
     ):
         self.collector = collector
         self.transport = transport
-        self.completion_reader = completion_reader
-        self._last_completion: Optional[str] = None
-        self._completion_initialized = False
 
     async def tick(self, status=None):
         if status is None:
             status = await asyncio.to_thread(self.collector.get_state)
+        watch_status = _watch_status(status)
         await self.transport.send_json(
-            json.dumps(status, separators=(",", ":")), STATUS_MESSAGE
+            json.dumps(watch_status, separators=(",", ":")), STATUS_MESSAGE
         )
 
-        completion = await asyncio.to_thread(self.completion_reader)
-        if not self._completion_initialized:
-            self._last_completion = completion
-            self._completion_initialized = True
-        elif completion and completion != self._last_completion:
+        alert_ids = await asyncio.to_thread(
+            self.collector.pending_watch_notification_ids
+        )
+        if alert_ids:
             await self.transport.send_json(
                 json.dumps(
                     {"type": "chime", "agent": "codex"},
@@ -49,8 +49,36 @@ class CodexStatusAgent:
                 ),
                 EVENT_MESSAGE,
             )
-            self._last_completion = completion
+            await asyncio.to_thread(
+                self.collector.mark_watch_notified, alert_ids
+            )
         return status
+
+
+def _watch_status(status):
+    result = dict(status)
+    alerts = status.get("codex_alerts")
+    if isinstance(alerts, list):
+        result["codex_alerts"] = [
+            {
+                "project": str(item.get("project") or "")[:MAX_PROJECT_LENGTH],
+                "title": str(item.get("title") or "")[:MAX_TITLE_LENGTH],
+                "time": str(item.get("time") or ""),
+                "state": str(item.get("state") or ""),
+                "outcome": (
+                    str(item.get("outcome"))
+                    if item.get("outcome") in ("completed", "waiting", "running")
+                    else "completed"
+                ),
+            }
+            for item in alerts[:MAX_WATCH_ALERTS]
+            if isinstance(item, dict)
+        ]
+        while result["codex_alerts"] and len(
+            json.dumps(result, separators=(",", ":")).encode("utf-8")
+        ) > MAX_MESSAGE_SIZE:
+            result["codex_alerts"].pop()
+    return result
 
 
 class BleStatusTransport:
@@ -110,7 +138,12 @@ class BleStatusTransport:
             sequence=sequence,
             max_write_size=SAFE_WRITE_SIZE,
         )
-        for frame in frames:
+        for index, frame in enumerate(frames):
             await self._client.write_gatt_char(
                 STATUS_RX_UUID, frame, response=True
             )
+            if (
+                (index + 1) % FRAME_BURST_SIZE == 0
+                and index + 1 < len(frames)
+            ):
+                await asyncio.sleep(FRAME_BURST_PAUSE_SECONDS)

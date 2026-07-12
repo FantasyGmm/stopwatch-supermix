@@ -67,8 +67,33 @@ class AppStateTests(unittest.TestCase):
                 "codex_effort": "high",
                 "codex_5h_left_pct": 72,
                 "codex_week_left_pct": 64,
-                "codex_today_min": 38,
-                "codex_week_min": 214,
+                "codex_alert_pending": 1,
+                "codex_alert_running": 1,
+                "codex_alert_completed": 1,
+                "codex_alert_revision": 7,
+                "codex_alerts": [
+                    {
+                        "project": "StopWatch",
+                        "title": "Add task alerts",
+                        "time": "09:41",
+                        "state": "pending",
+                        "outcome": "waiting",
+                    },
+                    {
+                        "project": "Docs",
+                        "title": "Update guide",
+                        "time": "09:02",
+                        "state": "running",
+                        "outcome": "running",
+                    },
+                    {
+                        "project": "Website",
+                        "title": "Fix header",
+                        "time": "08:12",
+                        "state": "completed",
+                        "outcome": "completed",
+                    },
+                ],
             },
             now=lambda: 123.0,
         )
@@ -82,8 +107,19 @@ class AppStateTests(unittest.TestCase):
         self.assertEqual(view.effort_text, "Effort: High")
         self.assertEqual(view.five_hour_text, "5H Remaining: 72%")
         self.assertEqual(view.seven_day_text, "7D Remaining: 64%")
-        self.assertEqual(view.today_text, "Today: 38 min")
-        self.assertEqual(view.this_week_text, "This Week: 214 min")
+        self.assertEqual(
+            view.alert_summary_text,
+            "Task Alerts · 1 Pending / 1 Running / 1 Completed",
+        )
+        self.assertEqual(view.alert_revision, 7)
+        self.assertEqual(
+            [alert.project for alert in view.alerts],
+            ["StopWatch", "Docs", "Website"],
+        )
+        self.assertEqual(
+            [alert.outcome for alert in view.alerts],
+            ["waiting", "running", "completed"],
+        )
 
     def test_missing_codex_values_render_as_dashes(self):
         view = present(AgentSnapshot(ConnectionState.SCANNING, True))
@@ -92,36 +128,64 @@ class AppStateTests(unittest.TestCase):
         self.assertEqual(view.effort_text, "Effort: --")
         self.assertEqual(view.five_hour_text, "5H Remaining: --")
         self.assertEqual(view.seven_day_text, "7D Remaining: --")
-        self.assertEqual(view.today_text, "Today: --")
-        self.assertEqual(view.this_week_text, "This Week: --")
+        self.assertEqual(
+            view.alert_summary_text,
+            "Task Alerts · 0 Pending / 0 Running / 0 Completed",
+        )
+        self.assertEqual(view.alerts, ())
 
     def test_numeric_values_are_clamped_without_treating_zero_as_missing(self):
         codex = CodexSnapshot.from_status(
             {
                 "codex_5h_left_pct": -3,
                 "codex_week_left_pct": 140,
-                "codex_today_min": 0,
-                "codex_week_min": -20,
+                "codex_alert_pending": -3,
+                "codex_alert_running": 140,
+                "codex_alert_completed": 150,
             }
         )
         view = present(AgentSnapshot(ConnectionState.WAITING, True, codex=codex))
 
         self.assertEqual(view.five_hour_text, "5H Remaining: 0%")
         self.assertEqual(view.seven_day_text, "7D Remaining: 100%")
-        self.assertEqual(view.today_text, "Today: 0 min")
-        self.assertEqual(view.this_week_text, "This Week: 0 min")
+        self.assertEqual(
+            view.alert_summary_text,
+            "Task Alerts · 0 Pending / 140 Running / 150 Completed",
+        )
 
     def test_boolean_numeric_values_are_treated_as_missing(self):
         codex = CodexSnapshot.from_status(
             {
                 "codex_5h_left_pct": True,
-                "codex_today_min": False,
+                "codex_alert_pending": False,
             }
         )
         view = present(AgentSnapshot(ConnectionState.ERROR, True, codex=codex))
 
         self.assertEqual(view.five_hour_text, "5H Remaining: --")
-        self.assertEqual(view.today_text, "Today: --")
+        self.assertEqual(
+            view.alert_summary_text,
+            "Task Alerts · 0 Pending / 0 Running / 0 Completed",
+        )
+
+    def test_invalid_alert_rows_are_ignored(self):
+        codex = CodexSnapshot.from_status(
+            {
+                "codex_alerts": [
+                    {"project": "ok", "title": "title", "time": "10:00", "state": "PENDING", "outcome": "waiting"},
+                    {"project": "running", "title": "title", "time": "10:00", "state": "running", "outcome": "running"},
+                    {"project": "bad outcome", "title": "title", "time": "10:01", "state": "pending", "outcome": "unknown"},
+                    {"project": "missing state", "title": "title", "time": "10:02", "outcome": "waiting"},
+                    "not a row",
+                ]
+            }
+        )
+
+        self.assertEqual(len(codex.alerts), 2)
+        self.assertEqual(
+            [alert.state for alert in codex.alerts],
+            ["pending", "running"],
+        )
 
 
 if __name__ == "__main__":

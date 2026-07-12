@@ -42,6 +42,7 @@ STATUS_ROW_HEIGHT = 24
 STATUS_HEADER_HEIGHT = 27
 STATUS_LEFT_MARGIN = 18
 STATUS_CHILD_INDENT = 16
+ALERT_ROW_WIDTH = 360
 
 
 def configure_logging(path: pathlib.Path = LOG_PATH) -> None:
@@ -70,6 +71,8 @@ class MenuBarApplication(NSObject):
         self.menu = None
         self.timer: Optional[NSTimer] = None
         self._stopping = False
+        self._last_alert_revision = None
+        self._alert_labels = []
         return self
 
     def applicationDidFinishLaunching_(self, _notification):
@@ -98,12 +101,14 @@ class MenuBarApplication(NSObject):
         self.seven_day_item, self.seven_day_label = self._informational_item(
             "7D Remaining: --", indent=STATUS_CHILD_INDENT
         )
-        self.today_item, self.today_label = self._informational_item(
-            "Today: --", indent=STATUS_CHILD_INDENT
+        self.alert_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "Task Alerts · 0 Pending / 0 Handled", None, ""
         )
-        self.this_week_item, self.this_week_label = self._informational_item(
-            "This Week: --", indent=STATUS_CHILD_INDENT
-        )
+        self.alert_item.setEnabled_(True)
+        self.alert_submenu = NSMenu.alloc().init()
+        self.alert_submenu.setAutoenablesItems_(False)
+        self.alert_item.setSubmenu_(self.alert_submenu)
+        self.menu.addItem_(self.alert_item)
         self.menu.addItem_(NSMenuItem.separatorItem())
         (
             self.connection_header_item,
@@ -147,16 +152,19 @@ class MenuBarApplication(NSObject):
             self.status_item.button().title(),
         )
 
-    def _informational_item(self, title, indent=0, header=False):
+    def _informational_item(
+        self, title, indent=0, header=False, menu=None, color=None, width=STATUS_ROW_WIDTH
+    ):
+        target_menu = menu if menu is not None else self.menu
         height = STATUS_HEADER_HEIGHT if header else STATUS_ROW_HEIGHT
         item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_("", None, "")
         item.setEnabled_(False)
-        view = NSView.alloc().initWithFrame_(((0, 0), (STATUS_ROW_WIDTH, height)))
+        view = NSView.alloc().initWithFrame_(((0, 0), (width, height)))
         label = NSTextField.labelWithString_(title)
         label.setFrame_(
             (
                 (STATUS_LEFT_MARGIN + indent, 2),
-                (STATUS_ROW_WIDTH - STATUS_LEFT_MARGIN - indent - 8, height - 4),
+                (width - STATUS_LEFT_MARGIN - indent - 8, height - 4),
             )
         )
         label.setFont_(
@@ -166,13 +174,54 @@ class MenuBarApplication(NSObject):
             if header
             else NSFont.menuFontOfSize_(0)
         )
-        label.setTextColor_(NSColor.labelColor())
+        label.setTextColor_(color if color is not None else NSColor.labelColor())
         label.setLineBreakMode_(NSLineBreakByTruncatingTail)
         label.setUsesSingleLineMode_(True)
         view.addSubview_(label)
         item.setView_(view)
-        self.menu.addItem_(item)
+        target_menu.addItem_(item)
         return item, label
+
+    def _rebuild_alert_submenu(self, alerts):
+        self.alert_submenu.removeAllItems()
+        self._alert_labels = []
+        groups = (
+            ("Pending", "pending", NSColor.systemOrangeColor()),
+            ("Running", "running", NSColor.systemBlueColor()),
+            ("Completed", "completed", NSColor.secondaryLabelColor()),
+        )
+        for heading, state, color in groups:
+            rows = [alert for alert in alerts if alert.state == state]
+            if not rows:
+                continue
+            _item, label = self._informational_item(
+                heading, header=True, menu=self.alert_submenu, width=ALERT_ROW_WIDTH
+            )
+            self._alert_labels.append(label)
+            for alert in rows:
+                outcome = {
+                    "pending": "Waiting for Instruction",
+                    "running": "Running",
+                    "completed": "Completed",
+                }[alert.state]
+                _item, label = self._informational_item(
+                    "{} · {} · {} · {}".format(
+                        alert.project, outcome, alert.title, alert.time
+                    ),
+                    indent=STATUS_CHILD_INDENT,
+                    menu=self.alert_submenu,
+                    color=color,
+                    width=ALERT_ROW_WIDTH,
+                )
+                self._alert_labels.append(label)
+        if not self._alert_labels:
+            _item, label = self._informational_item(
+                "No alerts today",
+                menu=self.alert_submenu,
+                color=NSColor.secondaryLabelColor(),
+                width=ALERT_ROW_WIDTH,
+            )
+            self._alert_labels.append(label)
 
     def _action_item(self, title, action):
         item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(title, action, "")
@@ -186,8 +235,10 @@ class MenuBarApplication(NSObject):
         self.effort_label.setStringValue_(view.effort_text)
         self.five_hour_label.setStringValue_(view.five_hour_text)
         self.seven_day_label.setStringValue_(view.seven_day_text)
-        self.today_label.setStringValue_(view.today_text)
-        self.this_week_label.setStringValue_(view.this_week_text)
+        self.alert_item.setTitle_(view.alert_summary_text)
+        if self._last_alert_revision != view.alert_revision:
+            self._rebuild_alert_submenu(view.alerts)
+            self._last_alert_revision = view.alert_revision
         self.agent_label.setStringValue_(view.agent_text)
         self.bluetooth_label.setStringValue_(view.bluetooth_text)
         self.device_label.setStringValue_(view.device_text)

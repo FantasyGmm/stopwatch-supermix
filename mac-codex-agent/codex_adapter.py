@@ -4,24 +4,25 @@ from __future__ import annotations
 
 import datetime
 import json
-import os
 import pathlib
 import re
 import sqlite3
 import ssl
-import subprocess
 import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Optional
 
+from task_alerts import TaskAlertSnapshot
+
 
 CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
 HTTP_TIMEOUT_SECONDS = 8
 QUOTA_CACHE_SECONDS = 60
-ACTIVITY_POLL_SECONDS = 5
-CODEX_APP_NAMES = {"Codex"}
+QUOTA_STALE_SECONDS = 120
+SESSION_FILE_LIMIT = 32
+SESSION_TAIL_BYTES = 256 * 1024
 
 
 @dataclass(frozen=True)
@@ -29,14 +30,14 @@ class CodexPaths:
     config: pathlib.Path
     auth: pathlib.Path
     logs: pathlib.Path
-    usage: pathlib.Path
+    sessions: pathlib.Path = pathlib.Path.home() / ".codex" / "sessions"
 
 
 DEFAULT_PATHS = CodexPaths(
     config=pathlib.Path.home() / ".codex" / "config.toml",
     auth=pathlib.Path.home() / ".codex" / "auth.json",
     logs=pathlib.Path.home() / ".codex" / "logs_2.sqlite",
-    usage=pathlib.Path.home() / ".codex" / ".stopwatch_usage.json",
+    sessions=pathlib.Path.home() / ".codex" / "sessions",
 )
 
 
@@ -55,12 +56,69 @@ class CodexStateCollector:
         paths: CodexPaths = DEFAULT_PATHS,
         now: Callable[[], float] = time.time,
         quota_fetcher: Optional[Callable[[], Dict[str, Any]]] = None,
+        alert_tracker=None,
+        local_timezone=None,
     ):
         self.paths = paths
         self._now = now
         self._quota_fetcher = quota_fetcher or self._fetch_quota
         self._quota_cache: Dict[str, Any] = {}
         self._quota_cache_time = 0.0
+        self._alert_tracker = alert_tracker
+        self._local_timezone = local_timezone or datetime.datetime.now().astimezone().tzinfo
+
+    def _read_session_quota(self) -> Dict[str, Any]:
+        try:
+            session_files = sorted(
+                self.paths.sessions.rglob("*.jsonl"),
+                key=lambda path: path.stat().st_mtime,
+                reverse=True,
+            )[:SESSION_FILE_LIMIT]
+        except OSError:
+            return {}
+
+        best_key = ("", -1)
+        best: Dict[str, Any] = {}
+        for path in session_files:
+            try:
+                with path.open("rb") as handle:
+                    handle.seek(0, 2)
+                    size = handle.tell()
+                    offset = max(0, size - SESSION_TAIL_BYTES)
+                    handle.seek(offset)
+                    content = handle.read().decode("utf-8", errors="ignore")
+                lines = content.splitlines()
+                if offset:
+                    lines = lines[1:]
+            except OSError:
+                continue
+            for line in lines:
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if event.get("type") != "event_msg":
+                    continue
+                payload = event.get("payload") or {}
+                if payload.get("type") != "token_count":
+                    continue
+                limits = payload.get("rate_limits") or {}
+                primary = limits.get("primary") or {}
+                secondary = limits.get("secondary") or {}
+                used = _integer_percent(primary.get("used_percent"))
+                reset_at = primary.get("resets_at")
+                if used is None or not isinstance(reset_at, (int, float)):
+                    continue
+                key = (str(event.get("timestamp") or ""), int(reset_at))
+                if key <= best_key:
+                    continue
+                best_key = key
+                best = {
+                    "five_hour_used_pct": used,
+                    "week_used_pct": _integer_percent(secondary.get("used_percent")),
+                    "plan": limits.get("plan_type") or "",
+                }
+        return best
 
     def _read_config_state(self) -> Dict[str, Any]:
         try:
@@ -150,6 +208,9 @@ class CodexStateCollector:
         }
 
     def _get_quota(self) -> Dict[str, Any]:
+        session_quota = self._read_session_quota()
+        if session_quota:
+            return session_quota
         now = self._now()
         if self._quota_cache and now - self._quota_cache_time < QUOTA_CACHE_SECONDS:
             return self._quota_cache
@@ -160,43 +221,19 @@ class CodexStateCollector:
         if fresh:
             self._quota_cache = fresh
             self._quota_cache_time = now
+        elif now - self._quota_cache_time >= QUOTA_STALE_SECONDS:
+            self._quota_cache = {}
         return self._quota_cache
 
-    def _load_usage(self) -> Dict[str, Any]:
-        try:
-            payload = json.loads(self.paths.usage.read_text(encoding="utf-8"))
-            return payload if isinstance(payload, dict) else {}
-        except (OSError, json.JSONDecodeError):
-            return {}
-
-    def _save_usage(self, usage: Dict[str, Any]) -> None:
-        self.paths.usage.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self.paths.usage.with_suffix(self.paths.usage.suffix + ".tmp")
-        temporary.write_text(json.dumps(usage, indent=2), encoding="utf-8")
-        os.replace(str(temporary), str(self.paths.usage))
-
-    def record_frontmost_app(self, app_name: str) -> None:
-        now = self._now()
-        usage = self._load_usage()
-        days = usage.setdefault("days", {})
-        weeks = usage.setdefault("weeks", {})
-        if app_name in CODEX_APP_NAMES:
-            day = _day_key(now)
-            week = _week_key(now)
-            days[day] = days.get(day, 0) + ACTIVITY_POLL_SECONDS
-            weeks[week] = weeks.get(week, 0) + ACTIVITY_POLL_SECONDS
-        usage["last_seen_ts"] = now
-        usage["last_front"] = app_name
-        self._save_usage(usage)
-
     def get_state(self) -> Dict[str, Any]:
-        now = self._now()
         status = self._read_config_state()
         status.update(self._read_live_state())
         quota = self._get_quota()
-        usage = self._load_usage()
-        today_seconds = (usage.get("days") or {}).get(_day_key(now), 0)
-        week_seconds = (usage.get("weeks") or {}).get(_week_key(now), 0)
+        alerts = (
+            self._alert_tracker.refresh()
+            if self._alert_tracker is not None
+            else TaskAlertSnapshot()
+        )
         five_hour_used = quota.get("five_hour_used_pct")
         week_used = quota.get("week_used_pct")
         return {
@@ -204,11 +241,34 @@ class CodexStateCollector:
             "codex_effort": status.get("effort") or "",
             "codex_5h_left_pct": _remaining_percent(five_hour_used),
             "codex_week_left_pct": _remaining_percent(week_used),
-            "codex_today_min": int(today_seconds // 60),
-            "codex_week_min": int(week_seconds // 60),
             "codex_status_ok": bool(status.get("model")),
             "codex_plan": quota.get("plan") or "",
+            "codex_alert_pending": alerts.pending_count,
+            "codex_alert_running": alerts.running_count,
+            "codex_alert_completed": alerts.completed_count,
+            "codex_alert_revision": alerts.revision,
+            "codex_alerts": [
+                {
+                    "project": alert.project,
+                    "title": alert.title,
+                    "time": _format_alert_time(
+                        alert.progress_at, self._local_timezone
+                    ),
+                    "state": alert.state,
+                    "outcome": alert.outcome,
+                }
+                for alert in alerts.alerts
+            ],
         }
+
+    def pending_watch_notification_ids(self):
+        if self._alert_tracker is None:
+            return ()
+        return self._alert_tracker.pending_watch_notification_ids()
+
+    def mark_watch_notified(self, alert_ids) -> None:
+        if self._alert_tracker is not None:
+            self._alert_tracker.mark_watch_notified(alert_ids)
 
 
 def _integer_percent(value: Any) -> Optional[int]:
@@ -222,34 +282,11 @@ def _remaining_percent(value: Any) -> Optional[int]:
     return None if used is None else 100 - used
 
 
-def _day_key(timestamp: float) -> str:
-    return datetime.datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d")
-
-
-def _week_key(timestamp: float) -> str:
-    current = datetime.datetime.fromtimestamp(timestamp)
-    monday = current - datetime.timedelta(days=current.weekday())
-    return monday.strftime("%Y-%m-%d")
-
-
-def frontmost_app() -> str:
+def _format_alert_time(value: str, local_timezone) -> str:
     try:
-        output = subprocess.check_output(
-            [
-                "osascript",
-                "-e",
-                'tell application "System Events" to name of first '
-                "application process whose frontmost is true",
-            ],
-            stderr=subprocess.DEVNULL,
-            timeout=2,
-        )
-        return output.decode("utf-8").strip()
-    except (OSError, subprocess.SubprocessError):
-        return ""
-
-
-def activity_loop(collector: CodexStateCollector) -> None:
-    while True:
-        time.sleep(ACTIVITY_POLL_SECONDS)
-        collector.record_frontmost_app(frontmost_app())
+        timestamp = datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=datetime.timezone.utc)
+        return timestamp.astimezone(local_timezone).strftime("%H:%M")
+    except (AttributeError, TypeError, ValueError):
+        return "--:--"

@@ -31,8 +31,33 @@ class FakeController:
                     "codex_effort": "high",
                     "codex_5h_left_pct": 72,
                     "codex_week_left_pct": 64,
-                    "codex_today_min": 38,
-                    "codex_week_min": 214,
+                    "codex_alert_pending": 1,
+                    "codex_alert_running": 1,
+                    "codex_alert_completed": 1,
+                    "codex_alert_revision": 4,
+                    "codex_alerts": [
+                        {
+                            "project": "StopWatch",
+                            "title": "Task alert support",
+                            "time": "09:41",
+                            "state": "pending",
+                            "outcome": "waiting",
+                        },
+                        {
+                            "project": "Docs",
+                            "title": "Update guide",
+                            "time": "09:02",
+                            "state": "running",
+                            "outcome": "running",
+                        },
+                        {
+                            "project": "Website",
+                            "title": "Header fix",
+                            "time": "08:12",
+                            "state": "completed",
+                            "outcome": "completed",
+                        },
+                    ],
                 }
             ),
         )
@@ -63,8 +88,34 @@ class MenuBarApplicationTests(unittest.TestCase):
         self.assertEqual(delegate.effort_label.stringValue(), "Effort: High")
         self.assertEqual(delegate.five_hour_label.stringValue(), "5H Remaining: 72%")
         self.assertEqual(delegate.seven_day_label.stringValue(), "7D Remaining: 64%")
-        self.assertEqual(delegate.today_label.stringValue(), "Today: 38 min")
-        self.assertEqual(delegate.this_week_label.stringValue(), "This Week: 214 min")
+        self.assertFalse(hasattr(delegate, "today_label"))
+        self.assertFalse(hasattr(delegate, "this_week_label"))
+        self.assertEqual(
+            delegate.alert_item.title(),
+            "Task Alerts · 1 Pending / 1 Running / 1 Completed",
+        )
+        self.assertTrue(delegate.alert_item.isEnabled())
+        self.assertEqual(delegate.alert_submenu.numberOfItems(), 6)
+        self.assertEqual(
+            [label.stringValue() for label in delegate._alert_labels],
+            [
+                "Pending",
+                "StopWatch · Waiting for Instruction · Task alert support · 09:41",
+                "Running",
+                "Docs · Running · Update guide · 09:02",
+                "Completed",
+                "Website · Completed · Header fix · 08:12",
+            ],
+        )
+        self.assertTrue(
+            delegate._alert_labels[1].textColor().isEqual_(NSColor.systemOrangeColor())
+        )
+        self.assertTrue(
+            delegate._alert_labels[3].textColor().isEqual_(NSColor.systemBlueColor())
+        )
+        self.assertTrue(
+            delegate._alert_labels[5].textColor().isEqual_(NSColor.secondaryLabelColor())
+        )
         self.assertEqual(
             delegate.connection_header_label.stringValue(), "Connection Status"
         )
@@ -74,8 +125,6 @@ class MenuBarApplicationTests(unittest.TestCase):
             delegate.effort_item,
             delegate.five_hour_item,
             delegate.seven_day_item,
-            delegate.today_item,
-            delegate.this_week_item,
             delegate.connection_header_item,
             delegate.agent_item,
             delegate.bluetooth_item,
@@ -90,8 +139,6 @@ class MenuBarApplicationTests(unittest.TestCase):
             delegate.effort_label,
             delegate.five_hour_label,
             delegate.seven_day_label,
-            delegate.today_label,
-            delegate.this_week_label,
             delegate.connection_header_label,
             delegate.agent_label,
             delegate.bluetooth_label,

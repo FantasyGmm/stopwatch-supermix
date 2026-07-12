@@ -5,7 +5,7 @@ from __future__ import annotations
 import dataclasses
 import enum
 import time
-from typing import Any, Callable, Mapping, Optional, Protocol
+from typing import Any, Callable, Mapping, Optional, Protocol, Tuple
 
 
 DEVICE_NAME = "StopWatch-Codex"
@@ -25,13 +25,25 @@ class ConnectionState(enum.Enum):
 
 
 @dataclasses.dataclass(frozen=True)
+class TaskAlertView:
+    project: str
+    title: str
+    time: str
+    state: str
+    outcome: str
+
+
+@dataclasses.dataclass(frozen=True)
 class CodexSnapshot:
     model: str = ""
     effort: str = ""
     five_hour_left_pct: Optional[int] = None
     week_left_pct: Optional[int] = None
-    today_minutes: Optional[int] = None
-    week_minutes: Optional[int] = None
+    alert_pending: int = 0
+    alert_running: int = 0
+    alert_completed: int = 0
+    alert_revision: int = 0
+    alerts: Tuple[TaskAlertView, ...] = ()
     updated_at: float = 0.0
 
     @classmethod
@@ -49,8 +61,13 @@ class CodexSnapshot:
             week_left_pct=_normalized_integer(
                 status.get("codex_week_left_pct"), maximum=100
             ),
-            today_minutes=_normalized_integer(status.get("codex_today_min")),
-            week_minutes=_normalized_integer(status.get("codex_week_min")),
+            alert_pending=_normalized_integer(status.get("codex_alert_pending")) or 0,
+            alert_running=_normalized_integer(status.get("codex_alert_running")) or 0,
+            alert_completed=(
+                _normalized_integer(status.get("codex_alert_completed")) or 0
+            ),
+            alert_revision=_normalized_integer(status.get("codex_alert_revision")) or 0,
+            alerts=_alert_views(status.get("codex_alerts")),
             updated_at=now(),
         )
 
@@ -70,8 +87,9 @@ class MenuPresentation:
     effort_text: str
     five_hour_text: str
     seven_day_text: str
-    today_text: str
-    this_week_text: str
+    alert_summary_text: str
+    alerts: Tuple[TaskAlertView, ...]
+    alert_revision: int
     agent_text: str
     bluetooth_text: str
     device_text: str
@@ -104,12 +122,13 @@ def present(snapshot: AgentSnapshot) -> MenuPresentation:
         seven_day_text="7D Remaining: {}".format(
             _format_number(codex.week_left_pct, "%")
         ),
-        today_text="Today: {}".format(
-            _format_number(codex.today_minutes, " min")
+        alert_summary_text=(
+            "Task Alerts · {} Pending / {} Running / {} Completed".format(
+                codex.alert_pending, codex.alert_running, codex.alert_completed
+            )
         ),
-        this_week_text="This Week: {}".format(
-            _format_number(codex.week_minutes, " min")
-        ),
+        alerts=codex.alerts,
+        alert_revision=codex.alert_revision,
         agent_text="Agent: Running",
         bluetooth_text="Bluetooth: {}".format(_STATE_LABELS[snapshot.state]),
         device_text="Device: {}".format(DEVICE_NAME),
@@ -132,6 +151,34 @@ def _normalized_integer(value: Any, maximum: Optional[int] = None) -> Optional[i
         return None
     result = max(0, int(value))
     return min(maximum, result) if maximum is not None else result
+
+
+def _alert_views(value: Any) -> Tuple[TaskAlertView, ...]:
+    if not isinstance(value, list):
+        return ()
+
+    alerts = []
+    for entry in value:
+        if not isinstance(entry, Mapping):
+            continue
+        project = _text_value(entry.get("project"))
+        title = _text_value(entry.get("title"))
+        alert_time = _text_value(entry.get("time"))
+        state = _text_value(entry.get("state")).lower()
+        outcome = _text_value(entry.get("outcome")).lower()
+        if (
+            project
+            and title
+            and alert_time
+            and (state, outcome)
+            in (
+                ("pending", "waiting"),
+                ("running", "running"),
+                ("completed", "completed"),
+            )
+        ):
+            alerts.append(TaskAlertView(project, title, alert_time, state, outcome))
+    return tuple(alerts)
 
 
 def _format_number(value: Optional[int], suffix: str) -> str:
