@@ -14,5 +14,4 @@
 #include "app_imu/app_imu.h"
 #include "app_fft/app_fft.h"
 #include "app_badge/app_badge.h"
-#include "app_lucky_wheel/app_lucky_wheel.h"
 #include "apps/app_alarm_clock/app_alarm_clock.h"

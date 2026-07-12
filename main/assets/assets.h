@@ -23,13 +23,11 @@ LV_IMG_DECLARE(icon_fft);
 LV_IMG_DECLARE(icon_stopwatch);
 LV_IMG_DECLARE(icon_codex);
 LV_IMG_DECLARE(icon_badge);
-LV_IMG_DECLARE(icon_lucky_wheel);
 LV_IMG_DECLARE(icon_watch_face);
 
 LV_IMG_DECLARE(classic_hour_hand);
 LV_IMG_DECLARE(classic_minute_hand);
 LV_IMG_DECLARE(classic_second_hand);
-LV_IMG_DECLARE(lucky_wheel_pointer);
 LV_IMG_DECLARE(alarm_icon);
 LV_IMG_DECLARE(icon_edit_badge);
 LV_IMG_DECLARE(go_home_guide);
