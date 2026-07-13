@@ -13,6 +13,7 @@
 #include <string>
 #include <esp_event_base.h>
 #include "codex_alert_carousel.h"
+#include "runtime/services/shared_wifi_service.h"
 
 class CodexBleTransport;
 struct esp_websocket_event_data;
@@ -49,6 +50,7 @@ private:
     lv_timer_t* _pet_timer       = nullptr;
     esp_websocket_client_handle_t _ws_client = nullptr;
     std::unique_ptr<CodexBleTransport> _ble_transport;
+    WifiStaLease _wifi_lease;
     std::string _server_host;
     std::string _transport_mode;
     std::string _ble_name;
@@ -71,6 +73,7 @@ private:
     void destroy_view();
     void update_battery();
     void ensure_network_started();
+    void stop_network_fallback();
     void start_websocket();
     void stop_websocket();
     void set_status(const char* status, uint32_t color);

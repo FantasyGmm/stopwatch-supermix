@@ -11,7 +11,6 @@
 #include <assets/assets.h>
 #include <hal/hal.h>
 #include <hal/utils/settings/settings.h>
-#include <ssid_manager.h>
 #include <wifi_manager.h>
 #include <esp_websocket_client.h>
 #include <mooncake_log.h>
@@ -240,6 +239,7 @@ void AppCodexStatus::onOpen()
     _screen_off = false;
     _screen_off_wake_armed = true;
     _ws_connected    = false;
+    _wifi_lease.reset();
     _wifi_started    = false;
     _wifi_fallback_started = false;
     _ble_was_connected = false;
@@ -315,7 +315,7 @@ void AppCodexStatus::onRunning()
         }
 
         if (ble_connected && !_ble_was_connected) {
-            stop_websocket();
+            stop_network_fallback();
             _ble_was_connected = true;
             set_status("BLE WAIT", kTextDim);
             set_host_text(_ble_name.c_str());
@@ -363,8 +363,7 @@ void AppCodexStatus::onClose()
     if (_screen_off) {
         wake_screen();
     }
-    WifiManager::GetInstance().SetEventCallback(nullptr);
-    stop_websocket();
+    stop_network_fallback();
     if (_ble_transport) {
         _ble_transport->stop();
         _ble_transport.reset();
@@ -540,14 +539,17 @@ void AppCodexStatus::update_battery()
 
 void AppCodexStatus::ensure_network_started()
 {
-    auto& wifi = WifiManager::GetInstance();
-    if (!wifi.IsInitialized()) {
-        WifiManagerConfig config;
-        config.ssid_prefix = "StopWatch";
-        config.language = "zh-CN";
-        wifi.Initialize(config);
-        wifi.SetPowerSaveLevel(WifiPowerSaveLevel::PERFORMANCE);
+    if (!_wifi_lease.valid()) {
+        _wifi_lease = GetSharedWifiService().acquireSta(RuntimeOwner::Codex);
+        if (!_wifi_lease.valid()) {
+            _wifi_started = false;
+            set_status("WIFI BUSY", kCodexRed);
+            return;
+        }
     }
+
+    auto& wifi = WifiManager::GetInstance();
+    _wifi_started = true;
 
     if (wifi.IsConnected()) {
         _wifi_started = true;
@@ -560,35 +562,26 @@ void AppCodexStatus::ensure_network_started()
         stop_websocket();
     }
 
-    if (_wifi_started) {
-        if (wifi.IsConfigMode()) {
-            set_status("SETUP", kCodexRed);
-            set_host_text(wifi.GetApSsid().c_str());
-        } else {
-            set_status("SCAN", kTextDim);
-            set_host_text(_server_host.c_str());
-        }
-        return;
-    }
-
-    const auto& saved_ssids = SsidManager::GetInstance().GetSsidList();
-    if (saved_ssids.empty()) {
-        wifi.StartConfigAp();
-        _wifi_started = true;
+    if (wifi.IsConfigMode()) {
         set_status("SETUP", kCodexRed);
         set_host_text(wifi.GetApSsid().c_str());
         return;
     }
 
-    wifi.StartStation();
-    _wifi_started = true;
     set_status("SCAN", kTextDim);
     set_host_text(_server_host.c_str());
 }
 
+void AppCodexStatus::stop_network_fallback()
+{
+    stop_websocket();
+    _wifi_lease.reset();
+    _wifi_started = false;
+}
+
 void AppCodexStatus::start_websocket()
 {
-    if (_ws_client != nullptr || !WifiManager::GetInstance().IsConnected()) {
+    if (_ws_client != nullptr || !_wifi_lease.valid() || !WifiManager::GetInstance().IsConnected()) {
         return;
     }
 

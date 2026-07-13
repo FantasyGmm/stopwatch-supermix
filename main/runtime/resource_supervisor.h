@@ -54,3 +54,5 @@ private:
     RuntimeOwner _playback_owner               = RuntimeOwner::None;
     bool _blocked                              = false;
 };
+
+ResourceSupervisor& GetResourceSupervisor();

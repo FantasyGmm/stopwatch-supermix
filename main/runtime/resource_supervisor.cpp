@@ -6,6 +6,15 @@
 #include "resource_supervisor.h"
 #include <algorithm>
 
+namespace {
+ResourceSupervisor resource_supervisor;
+}
+
+ResourceSupervisor& GetResourceSupervisor()
+{
+    return resource_supervisor;
+}
+
 bool ResourceSupervisor::isValidOwner(RuntimeOwner owner)
 {
     return owner != RuntimeOwner::None && ownerIndex(owner) < ownerCount;

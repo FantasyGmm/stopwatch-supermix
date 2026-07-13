@@ -4,12 +4,12 @@
  * SPDX-License-Identifier: MIT
  */
 #include "config_ap.h"
+#include "runtime/services/shared_wifi_service.h"
 
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
-#include <mutex>
 #include <string>
 #include <string_view>
 
@@ -25,7 +25,6 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/event_groups.h>
 #include <lwip/ip_addr.h>
-#include <nvs_flash.h>
 
 namespace badge::config_ap {
 namespace {
@@ -46,50 +45,6 @@ constexpr const char* _captive_portal_urls[] = {
     "/connectivity-check.html",   "/success.txt",   "/portal.html",
     "/library/test/success.html",
 };
-
-bool ensure_wifi_stack_ready()
-{
-    static std::mutex mutex;
-    static bool initialized = false;
-
-    std::lock_guard<std::mutex> lock(mutex);
-    if (initialized) {
-        return true;
-    }
-
-    esp_err_t ret = nvs_flash_init();
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        ret = nvs_flash_init();
-    }
-    if (ret != ESP_OK) {
-        ESP_LOGE(_tag, "nvs init failed: %s", esp_err_to_name(ret));
-        return false;
-    }
-
-    ret = esp_netif_init();
-    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
-        ESP_LOGE(_tag, "netif init failed: %s", esp_err_to_name(ret));
-        return false;
-    }
-
-    ret = esp_event_loop_create_default();
-    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
-        ESP_LOGE(_tag, "event loop init failed: %s", esp_err_to_name(ret));
-        return false;
-    }
-
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    cfg.nvs_enable         = false;
-    ret                    = esp_wifi_init(&cfg);
-    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
-        ESP_LOGE(_tag, "wifi init failed: %s", esp_err_to_name(ret));
-        return false;
-    }
-
-    initialized = true;
-    return true;
-}
 
 std::string make_ap_ssid()
 {
@@ -114,8 +69,9 @@ public:
 
     bool run()
     {
-        if (!ensure_wifi_stack_ready()) {
-            log("Wi-Fi initialization failed");
+        _wifi_session = GetSharedWifiService().acquireAp(RuntimeOwner::Badge);
+        if (!_wifi_session.valid()) {
+            log("Wi-Fi is busy in another application");
             return false;
         }
 
@@ -333,6 +289,8 @@ private:
             vEventGroupDelete(_event_group);
             _event_group = nullptr;
         }
+
+        _wifi_session.reset();
     }
 
     static Session* self_from_request(httpd_req_t* req)
@@ -573,6 +531,7 @@ private:
     Callbacks _callbacks;
     std::string _ssid;
     std::unique_ptr<DnsServer> _dns_server;
+    WifiApSession _wifi_session;
 };
 
 }  // namespace

@@ -500,7 +500,7 @@ git commit -m "Adapt StopWatch audio to Brookesia"
 - Modify: `main/hal/utils/config_ap/config_ap.cpp`
 - Modify: `main/CMakeLists.txt`
 
-- [ ] **Step 1: Test STA lease and AP session policy**
+- [x] **Step 1: Test STA lease and AP session policy**
 
 Write host tests proving:
 
@@ -514,7 +514,7 @@ Write host tests proving:
 
 Inject a fake driver into `SharedWifiService`; do not mock ESP-IDF globals.
 
-- [ ] **Step 2: Implement RAII leases**
+- [x] **Step 2: Implement RAII leases**
 
 Expose move-only handles:
 
@@ -536,25 +536,27 @@ public:
 
 The service wraps the current, validated Wi-Fi code. It does not add a second `esp_wifi_init()` owner. Brookesia manages the higher-level lifetime through `RuntimeSupervisor`; StopWatch retains the driver implementation.
 
-- [ ] **Step 3: Migrate Codex Wi-Fi fallback**
+- [x] **Step 3: Migrate Codex Wi-Fi fallback**
 
 Replace `ensure_network_started()` ownership with a STA lease held for the WebSocket session. BLE-only Codex monitoring must not acquire Wi-Fi. Closing Codex releases its lease after the WebSocket stops.
 
-- [ ] **Step 4: Migrate Badge configuration AP**
+- [x] **Step 4: Migrate Badge configuration AP**
 
 Acquire an AP session before starting DNS/HTTP, and release it only after DNS/HTTP callbacks and sockets stop. Remove direct duplicated Wi-Fi initialization from `config_ap.cpp` while preserving the existing captive portal behavior.
 
 - [ ] **Step 5: Run tests and hardware coexistence checks**
 
 ```bash
-c++ -std=c++17 -Imain tests/shared_wifi_policy_test.cpp main/runtime/resource_supervisor.cpp main/runtime/services/shared_wifi_policy.cpp -o /tmp/shared_wifi_policy_test
+c++ -std=c++17 -pthread -Imain tests/shared_wifi_policy_test.cpp main/runtime/resource_supervisor.cpp main/runtime/services/shared_wifi_policy.cpp main/runtime/services/shared_wifi_service.cpp -o /tmp/shared_wifi_policy_test
 /tmp/shared_wifi_policy_test
 idf.py build
 ```
 
 On hardware, verify Codex BLE monitoring, Codex WebSocket fallback, Badge AP, and return-to-Launcher behavior. Confirm no `ESP_ERR_INVALID_STATE` from repeated Wi-Fi init/deinit.
 
-- [ ] **Step 6: Commit**
+Deferred-validation note (2026-07-13): the host lease/AP policy test passes, Codex and Badge now share the same driver owner, and the firmware compiles and produces `StopWatch-UserDemo.bin`. Hardware coexistence checks and the already-known dual-slot capacity check remain pending the concentrated watch campaign and Task 10 respectively.
+
+- [x] **Step 6: Commit**
 
 ```bash
 git add main/runtime/services main/apps/app_codex_status/app_codex_status.cpp main/hal/utils/config_ap/config_ap.cpp main/CMakeLists.txt tests/shared_wifi_policy_test.cpp
