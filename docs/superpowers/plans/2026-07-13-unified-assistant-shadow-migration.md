@@ -136,7 +136,7 @@ Expected: one passing test and a clean staged diff before commit.
 - Create: `main/runtime/assistant/assistant_state.cpp`
 - Create: `tests/assistant_state_machine_test.cpp`
 
-- [ ] **Step 1: Write the failing state test**
+- [x] **Step 1: Write the failing state test**
 
 ```cpp
 #include "runtime/assistant/assistant_state.h"
@@ -169,7 +169,7 @@ int main()
 }
 ```
 
-- [ ] **Step 2: Compile and confirm RED**
+- [x] **Step 2: Compile and confirm RED**
 
 ```bash
 c++ -std=c++17 -Imain tests/assistant_state_machine_test.cpp \
@@ -179,7 +179,7 @@ c++ -std=c++17 -Imain tests/assistant_state_machine_test.cpp \
 
 Expected: compilation fails because the files and types do not exist.
 
-- [ ] **Step 3: Add the state-machine interface**
+- [x] **Step 3: Add the state-machine interface**
 
 ```cpp
 #pragma once
@@ -270,7 +270,7 @@ TransitionResult AssistantStateMachine::markStopped(uint64_t id)
 }
 ```
 
-- [ ] **Step 4: Run GREEN and commit**
+- [x] **Step 4: Run GREEN and commit**
 
 ```bash
 c++ -std=c++17 -Imain tests/assistant_state_machine_test.cpp \
