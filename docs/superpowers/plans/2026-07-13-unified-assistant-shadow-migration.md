@@ -415,7 +415,7 @@ Expected: executable exits with status 0 and the persistent state is `Running`.
 - Modify: `main/CMakeLists.txt`
 - Modify: `mac-codex-agent/tests/test_xiaozhi_probe_firmware_contract.py`
 
-- [ ] **Step 1: Extend the firmware contract and confirm RED**
+- [x] **Step 1: Extend the firmware contract and confirm RED**
 
 Add these assertions:
 
@@ -443,7 +443,7 @@ python3 -m unittest mac-codex-agent/tests/test_xiaozhi_probe_firmware_contract.p
 
 Expected: `FAIL` because lifecycle ownership still lives in the probe.
 
-- [ ] **Step 2: Define the production interface**
+- [x] **Step 2: Define the production interface**
 
 ```cpp
 #pragma once
@@ -489,7 +489,7 @@ private:
 AssistantRuntime& GetAssistantRuntime();
 ```
 
-- [ ] **Step 3: Move the validated probe mechanics into the runtime**
+- [x] **Step 3: Move the validated probe mechanics into the runtime**
 
 Move wake-model loading, the three service bindings, AFE configuration, volume mapping, identity metadata, target selection, subscriptions, and async action submission from `assistant_probe.cpp` into `assistant_runtime.cpp`.
 
@@ -537,7 +537,7 @@ _mailbox.publish({session_id, AssistantEventKind::State, "Stopped"});
 
 Before the release sequence, call `_state.requestStop()` when a spontaneous Stopped event arrives while the local state is Starting, Running, or Failed. This guarantees that `markStopped()` uses a legal transition while still accepting an authoritative server-side stop.
 
-- [ ] **Step 4: Make the probe a thin wrapper**
+- [x] **Step 4: Make the probe a thin wrapper**
 
 Use this complete wrapper API:
 
@@ -563,7 +563,7 @@ bool AssistantCompatibilityProbeStopped()
 }
 ```
 
-- [ ] **Step 5: Run contracts and the full firmware link**
+- [x] **Step 5: Run contracts and the full firmware link**
 
 ```bash
 python3 -m unittest mac-codex-agent/tests/test_xiaozhi_probe_firmware_contract.py
@@ -573,7 +573,7 @@ ninja -C build StopWatch-UserDemo.bin generated_unified_assets
 
 Expected: contracts pass and the explicit image targets compile, link, and produce `build/StopWatch-UserDemo.bin` without running the legacy OTA partition-size target.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add main/runtime/assistant main/CMakeLists.txt \

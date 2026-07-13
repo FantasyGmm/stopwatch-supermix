@@ -68,26 +68,40 @@ class XiaozhiProbeFirmwareContractTests(unittest.TestCase):
         self.assertNotIn("--emoji_collection", assets_cmake)
         self.assertIn("include(cmake/unified_assets.cmake)", main_cmake)
 
-    def test_probe_uses_official_async_lifecycle_and_stopped_acknowledgement(self):
+    def test_production_runtime_owns_async_lifecycle_and_probe_is_thin(self):
+        runtime = (
+            ROOT / "main" / "runtime" / "assistant" / "assistant_runtime.cpp"
+        ).read_text(encoding="utf-8")
         probe = (
             ROOT / "main" / "runtime" / "assistant" / "assistant_probe.cpp"
         ).read_text(encoding="utf-8")
 
-        self.assertIn("AudioHelper::FunctionId::SetAFE_Config", probe)
-        self.assertIn('model_partition_label = "assets"', probe)
-        self.assertIn("ManagerHelper::FunctionId::SetAgentInfo", probe)
-        self.assertIn("ManagerHelper::FunctionId::SetTargetAgent", probe)
-        self.assertIn("ManagerHelper::EventId::GeneralEventHappened", probe)
-        self.assertIn("XiaozhiHelper::EventId::ActivationCodeReceived", probe)
-        self.assertIn("ManagerHelper::EventId::UserSpeakingTextGot", probe)
-        self.assertIn("ManagerHelper::EventId::AgentSpeakingTextGot", probe)
-        self.assertIn("ManagerHelper::EventId::EmoteGot", probe)
-        self.assertIn("ManagerHelper::GeneralAction::Activate", probe)
-        self.assertIn("ManagerHelper::GeneralAction::Start", probe)
-        self.assertIn("ManagerHelper::GeneralAction::Stop", probe)
-        self.assertIn("ManagerHelper::GeneralEvent::Stopped", probe)
-        self.assertIn("call_function_async", probe)
-        self.assertIn("disconnect", probe)
+        self.assertIn("AssistantStateMachine", runtime)
+        self.assertIn("AssistantEventMailbox", runtime)
+        self.assertIn(
+            "GetSharedWifiService().acquireSta(RuntimeOwner::Assistant)", runtime
+        )
+        self.assertIn("acquireCapture(RuntimeOwner::Assistant)", runtime)
+        self.assertIn("acquirePlayback(RuntimeOwner::Assistant)", runtime)
+        self.assertIn("AudioHelper::FunctionId::SetAFE_Config", runtime)
+        self.assertIn('model_partition_label = "assets"', runtime)
+        self.assertIn("ManagerHelper::FunctionId::SetAgentInfo", runtime)
+        self.assertIn("ManagerHelper::FunctionId::SetTargetAgent", runtime)
+        self.assertIn("ManagerHelper::EventId::GeneralEventHappened", runtime)
+        self.assertIn("XiaozhiHelper::EventId::ActivationCodeReceived", runtime)
+        self.assertIn("ManagerHelper::EventId::UserSpeakingTextGot", runtime)
+        self.assertIn("ManagerHelper::EventId::AgentSpeakingTextGot", runtime)
+        self.assertIn("ManagerHelper::EventId::EmoteGot", runtime)
+        self.assertIn("ManagerHelper::GeneralAction::Activate", runtime)
+        self.assertIn("ManagerHelper::GeneralAction::Start", runtime)
+        self.assertIn("ManagerHelper::GeneralAction::Stop", runtime)
+        self.assertIn("ManagerHelper::GeneralEvent::Stopped", runtime)
+        self.assertIn("call_function_async", runtime)
+        self.assertIn("disconnect", runtime)
+        self.assertIn("stop_started_ms = GetHAL().millis()", runtime)
+        self.assertNotIn("stop_started_ms = last_update_ms", runtime)
+        self.assertIn("GetAssistantRuntime()", probe)
+        self.assertNotIn("std::vector<std::shared_ptr", probe)
 
     def test_hardware_report_keeps_the_gate_pending(self):
         report = (

@@ -5,6 +5,9 @@
  */
 #pragma once
 
+#include <cstdint>
+
 bool StartAssistantCompatibilityProbe();
 bool StopAssistantCompatibilityProbe();
+void UpdateAssistantCompatibilityProbe(uint32_t now_ms);
 bool AssistantCompatibilityProbeStopped();
