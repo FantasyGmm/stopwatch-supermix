@@ -264,7 +264,7 @@ git commit -m "Bootstrap Brookesia service runtime"
 - Create: `main/runtime/resource_supervisor.cpp`
 - Create: `tests/resource_supervisor_test.cpp`
 
-- [ ] **Step 1: Write failing host tests**
+- [x] **Step 1: Write failing host tests**
 
 Cover the policy independently of ESP-IDF:
 
@@ -284,7 +284,7 @@ assert(resources.releaseWifi(RuntimeOwner::Codex) == ReleaseResult::LastOwnerRel
 
 Also test idempotent duplicate release, playback conflict, AP-mode conflict with STA leases, and a blocked resource after stop timeout.
 
-- [ ] **Step 2: Compile and confirm RED**
+- [x] **Step 2: Compile and confirm RED**
 
 ```bash
 c++ -std=c++17 -Imain tests/resource_supervisor_test.cpp main/runtime/resource_supervisor.cpp -o /tmp/resource_supervisor_test
@@ -292,7 +292,7 @@ c++ -std=c++17 -Imain tests/resource_supervisor_test.cpp main/runtime/resource_s
 
 Expected: compilation fails because the policy types do not exist.
 
-- [ ] **Step 3: Implement the minimal policy**
+- [x] **Step 3: Implement the minimal policy**
 
 Use explicit types:
 
@@ -312,14 +312,14 @@ struct ResourceSnapshot {
 
 Keep this class free of FreeRTOS, Brookesia, and LVGL includes. The embedded orchestration layer will serialize calls.
 
-- [ ] **Step 4: Run GREEN**
+- [x] **Step 4: Run GREEN**
 
 ```bash
 c++ -std=c++17 -Imain tests/resource_supervisor_test.cpp main/runtime/resource_supervisor.cpp -o /tmp/resource_supervisor_test
 /tmp/resource_supervisor_test
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add main/runtime/resource_supervisor.h main/runtime/resource_supervisor.cpp tests/resource_supervisor_test.cpp
