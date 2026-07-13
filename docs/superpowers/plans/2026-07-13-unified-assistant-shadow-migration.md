@@ -723,7 +723,7 @@ git commit -m "Add unified runtime diagnostics facade"
 - Modify: `main/apps/app_assistant/app_assistant.cpp`
 - Modify: `mac-codex-agent/tests/test_unified_runtime_firmware_contract.py`
 
-- [ ] **Step 1: Add the failing Mooncake source contract**
+- [x] **Step 1: Add the failing Mooncake source contract**
 
 ```python
 def test_assistant_uses_runtime_supervisor_and_never_switches_boot_slot(self):
@@ -744,7 +744,7 @@ def test_assistant_uses_runtime_supervisor_and_never_switches_boot_slot(self):
 
 Run the test and expect `FAIL` against the current partition-switching application.
 
-- [ ] **Step 2: Add the presentation-only view**
+- [x] **Step 2: Add the presentation-only view**
 
 ```cpp
 enum class AssistantViewState : uint8_t {
@@ -770,7 +770,7 @@ public:
 
 Use the existing black Assistant panel, Montserrat title, primary status label, secondary content label, and a bottom hint. The view contains no Brookesia, runtime, partition, or restart include.
 
-- [ ] **Step 3: Replace partition switching with asynchronous lifecycle**
+- [x] **Step 3: Replace partition switching with asynchronous lifecycle**
 
 `onOpen()` creates the view, clears `_close_requested` and `_retry_available`, and calls `startAssistant()` once. `onRunning()` executes this order:
 
@@ -800,7 +800,7 @@ if (_close_requested && runtime.assistantState() == AssistantRuntimeState::Stopp
 
 `drainRuntimeEvents()` maps State, ActivationCode, Error, UserText, AgentText, and Emotion onto the view. It never holds `LvglLockGuard` while calling the runtime. `onClose()` destroys only UI and input objects; the app calls `close()` only after runtime state is Stopped.
 
-- [ ] **Step 4: Run contracts, host tests, and link**
+- [x] **Step 4: Run contracts, host tests, and link**
 
 ```bash
 PYTHONPATH=mac-codex-agent/tests python3 -m unittest \
@@ -813,7 +813,7 @@ ninja -C build StopWatch-UserDemo.bin generated_unified_assets
 
 Expected: the focused Assistant source contract passes and the explicit image targets link successfully without evaluating the legacy OTA slot size.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add main/apps/app_assistant \

@@ -4,11 +4,12 @@
  * SPDX-License-Identifier: MIT
  */
 #pragma once
+#include "view/assistant_view.h"
 #include <apps/common/key_manager/key_manager.h>
 #include <mooncake.h>
-#include <smooth_lvgl.hpp>
+#include <runtime/assistant/assistant_event_mailbox.h>
+#include <runtime/assistant/assistant_state.h>
 #include <memory>
-#include <cstdint>
 
 class AppAssistant : public mooncake::AppAbility {
 public:
@@ -21,13 +22,10 @@ public:
 
 private:
     std::unique_ptr<input::KeyManager> _key_manager;
-    std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Container> _panel;
-    std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Label> _title_label;
-    std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Label> _message_label;
-    uint32_t _switch_at_ms = 0;
-    bool _switch_started   = false;
+    std::unique_ptr<AssistantView> _view;
+    bool _close_requested = false;
+    bool _retry_available = false;
 
-    void create_switch_view();
-    void set_message(const char* message);
-    void switch_to_assistant();
+    void drainRuntimeEvents();
+    void applyRuntimeEvent(const AssistantEvent& event, AssistantRuntimeState runtime_state);
 };

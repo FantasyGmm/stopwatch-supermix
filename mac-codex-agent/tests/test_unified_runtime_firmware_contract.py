@@ -65,6 +65,77 @@ class UnifiedRuntimeFirmwareContractTest(unittest.TestCase):
         self.assertNotIn("esp_restart", source)
         self.assertNotIn('"ota_1"', source)
 
+    def test_assistant_uses_runtime_supervisor_and_never_switches_boot_slot(self):
+        source = read("main/apps/app_assistant/app_assistant.cpp")
+        self.assertIn("GetRuntimeSupervisor().startAssistant()", source)
+        self.assertIn("GetRuntimeSupervisor().requestStopAssistant()", source)
+        self.assertIn("runtime.update(GetHAL().millis())", source)
+        for forbidden in (
+            "esp_ota_ops.h",
+            "esp_partition.h",
+            "esp_system.h",
+            "esp_ota_set_boot_partition",
+            "esp_restart",
+            "ota_1",
+        ):
+            self.assertNotIn(forbidden, source)
+
+    def test_assistant_mooncake_view_preserves_async_lifecycle_behavior(self):
+        source = read("main/apps/app_assistant/app_assistant.cpp")
+        header = read("main/apps/app_assistant/app_assistant.h")
+        view_header = read("main/apps/app_assistant/view/assistant_view.h")
+        view_source = read("main/apps/app_assistant/view/assistant_view.cpp")
+
+        for state in (
+            "Connecting",
+            "Activating",
+            "Listening",
+            "Thinking",
+            "Speaking",
+            "Failed",
+            "Closing",
+            "StopTimedOut",
+        ):
+            self.assertIn(state, view_header)
+            self.assertIn(f"AssistantViewState::{state}", source + view_source)
+
+        for event_kind in (
+            "ActivationCode",
+            "UserText",
+            "AgentText",
+            "Emotion",
+        ):
+            self.assertIn(f"AssistantEventKind::{event_kind}", source)
+
+        update_at = source.index("runtime.update(GetHAL().millis())")
+        drain_at = source.index("drainRuntimeEvents()", update_at)
+        key_at = source.index("_key_manager->update()", drain_at)
+        self.assertLess(update_at, drain_at)
+        self.assertLess(drain_at, key_at)
+
+        self.assertIn("isConversationEvent(event.kind) && _close_requested", source)
+        self.assertIn(
+            'event.text == "Stopped" && _retry_available && !_close_requested',
+            source,
+        )
+        self.assertRegex(
+            source,
+            r"_retry_available\s*&&\s*!_close_requested\s*&&\s*"
+            r"runtime\.assistantState\(\)\s*==\s*AssistantRuntimeState::Stopped",
+        )
+        self.assertNotIn("_switch_started", header)
+        self.assertNotIn("_switch_at_ms", header)
+
+        for forbidden in (
+            "brookesia",
+            "runtime/",
+            "esp_ota",
+            "esp_partition",
+            "esp_restart",
+        ):
+            self.assertNotIn(forbidden, view_header.lower())
+            self.assertNotIn(forbidden, view_source.lower())
+
     def test_partition_table_has_one_factory_application(self):
         rows = parse_partition_csv("partitions.csv")
         app_rows = [row for row in rows if len(row) >= 3 and row[1] == "app"]

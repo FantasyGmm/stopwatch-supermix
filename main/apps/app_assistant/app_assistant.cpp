@@ -7,14 +7,22 @@
 #include <assets/assets.h>
 #include <hal/hal.h>
 #include <mooncake_log.h>
-#include <esp_app_format.h>
-#include <esp_err.h>
-#include <esp_ota_ops.h>
-#include <esp_partition.h>
-#include <esp_system.h>
+#include <runtime/runtime_supervisor.h>
+
+#include <utility>
+#include <vector>
 
 using namespace mooncake;
-using namespace smooth_ui_toolkit::lvgl_cpp;
+
+namespace {
+bool isConversationEvent(AssistantEventKind kind)
+{
+    return kind == AssistantEventKind::ActivationCode ||
+           kind == AssistantEventKind::UserText ||
+           kind == AssistantEventKind::AgentText ||
+           kind == AssistantEventKind::Emotion;
+}
+} // namespace
 
 AppAssistant::AppAssistant()
 {
@@ -31,31 +39,52 @@ void AppAssistant::onOpen()
 {
     mclog::tagInfo(getAppInfo().name, "on open");
 
-    _key_manager    = std::make_unique<input::KeyManager>();
-    _switch_started = true;
-    _switch_at_ms   = 0;
+    _key_manager = std::make_unique<input::KeyManager>();
+    _close_requested = false;
+    _retry_available = false;
 
     {
         LvglLockGuard lock;
-        create_switch_view();
+        _view = std::make_unique<AssistantView>();
+        _view->init(lv_screen_active());
     }
 
-    // Switch immediately from onOpen(). Waiting for a later onRunning() tick can
-    // leave the launcher-side transition screen visible if the app update loop
-    // is interrupted by the OTA restart path.
-    switch_to_assistant();
+    GetRuntimeSupervisor().startAssistant();
 }
 
 void AppAssistant::onRunning()
 {
-    if (_key_manager && _key_manager->update() == input::KeyEvent::GoHome) {
-        close();
-        return;
+    auto& runtime = GetRuntimeSupervisor();
+    runtime.update(GetHAL().millis());
+    drainRuntimeEvents();
+    const auto key = _key_manager ? _key_manager->update() : input::KeyEvent::None;
+
+    if (key == input::KeyEvent::GoHome && !_close_requested) {
+        _close_requested = true;
+        {
+            LvglLockGuard lock;
+            _view->setState(AssistantViewState::Closing);
+        }
+        GetRuntimeSupervisor().requestStopAssistant();
     }
 
-    if (!_switch_started && GetHAL().millis() >= _switch_at_ms) {
-        _switch_started = true;
-        switch_to_assistant();
+    if (key == input::KeyEvent::GoNext && _retry_available && !_close_requested &&
+        runtime.assistantState() == AssistantRuntimeState::Stopped) {
+        _retry_available = false;
+        {
+            LvglLockGuard lock;
+            _view->setState(AssistantViewState::Connecting);
+        }
+        runtime.startAssistant();
+    }
+
+    if (key == input::KeyEvent::GoNext &&
+        runtime.assistantState() == AssistantRuntimeState::StopTimedOut) {
+        GetRuntimeSupervisor().requestStopAssistant();
+    }
+
+    if (_close_requested && runtime.assistantState() == AssistantRuntimeState::Stopped) {
+        close();
     }
 }
 
@@ -66,73 +95,89 @@ void AppAssistant::onClose()
     _key_manager.reset();
 
     LvglLockGuard lock;
-    _message_label.reset();
-    _title_label.reset();
-    _panel.reset();
+    if (_view) {
+        _view->destroy();
+        _view.reset();
+    }
 }
 
-void AppAssistant::create_switch_view()
+void AppAssistant::drainRuntimeEvents()
 {
-    _panel = std::make_unique<Container>(lv_screen_active());
-    _panel->setSize(466, 466);
-    _panel->setAlign(LV_ALIGN_CENTER);
-    _panel->setRadius(0);
-    _panel->setBorderWidth(0);
-    _panel->setPaddingAll(0);
-    _panel->setScrollbarMode(LV_SCROLLBAR_MODE_OFF);
-    _panel->setBgColor(lv_color_hex(0x000000));
-    _panel->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
+    auto& runtime = GetRuntimeSupervisor();
+    std::vector<AssistantEvent> events;
+    AssistantEvent event;
+    while (runtime.pollAssistantEvent(event)) {
+        events.push_back(std::move(event));
+    }
+    if (events.empty()) {
+        return;
+    }
 
-    _title_label = std::make_unique<Label>(_panel->get());
-    _title_label->setTextFont(&lv_font_montserrat_28);
-    _title_label->setTextColor(lv_color_hex(0xFFFFFF));
-    _title_label->align(LV_ALIGN_CENTER, 0, -28);
-    _title_label->setText("Assistant");
-
-    _message_label = std::make_unique<Label>(_panel->get());
-    _message_label->setTextFont(&lv_font_montserrat_16);
-    _message_label->setTextColor(lv_color_hex(0xAEB7C8));
-    _message_label->align(LV_ALIGN_CENTER, 0, 18);
-    _message_label->setText("Starting Xiaozhi runtime ...");
-}
-
-void AppAssistant::set_message(const char* message)
-{
+    const auto runtime_state = runtime.assistantState();
     LvglLockGuard lock;
-    if (_message_label) {
-        _message_label->setText(message);
+    for (const auto& queued_event : events) {
+        applyRuntimeEvent(queued_event, runtime_state);
     }
 }
 
-void AppAssistant::switch_to_assistant()
+void AppAssistant::applyRuntimeEvent(const AssistantEvent& event,
+                                     AssistantRuntimeState runtime_state)
 {
-    const esp_partition_t* assistant_partition =
-        esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_1, nullptr);
-    if (assistant_partition == nullptr) {
-        mclog::tagError(getAppInfo().name, "assistant ota_1 partition missing");
-        set_message("Assistant partition missing");
+    if (!_view) {
+        return;
+    }
+    if (isConversationEvent(event.kind) && _close_requested) {
         return;
     }
 
-    esp_app_desc_t assistant_desc = {};
-    esp_err_t err = esp_ota_get_partition_description(assistant_partition, &assistant_desc);
-    if (err != ESP_OK) {
-        mclog::tagError(getAppInfo().name, "assistant firmware invalid: {}", esp_err_to_name(err));
-        set_message("Assistant firmware is not installed");
-        return;
+    switch (event.kind) {
+        case AssistantEventKind::State:
+            if (event.text == "Stopped" && _retry_available && !_close_requested) {
+                // A synchronous start failure publishes Error followed by Stopped. Keep the
+                // actionable failure page visible instead of replacing it with a normal state.
+                return;
+            }
+            if (_close_requested && event.text != "Stopping" && event.text != "Stopped") {
+                return;
+            }
+            if (event.text == "Starting") {
+                _view->setState(AssistantViewState::Connecting);
+            } else if (event.text == "Activating" || event.text == "Activated") {
+                _view->setState(AssistantViewState::Activating);
+            } else if (event.text == "Running") {
+                _view->setState(AssistantViewState::Listening);
+            } else if (event.text == "Stopping") {
+                _view->setState(AssistantViewState::Closing);
+            }
+            break;
+        case AssistantEventKind::ActivationCode:
+            _view->setState(AssistantViewState::Activating);
+            _view->setPrimaryText("Activation code");
+            _view->setSecondaryText(event.text.c_str());
+            break;
+        case AssistantEventKind::Error:
+            if (runtime_state == AssistantRuntimeState::StopTimedOut) {
+                _view->setState(AssistantViewState::StopTimedOut);
+            } else if (_close_requested) {
+                _view->setState(AssistantViewState::Closing);
+                _view->setSecondaryText(event.text.c_str());
+            } else {
+                _view->setState(AssistantViewState::Failed);
+                _view->setSecondaryText(event.text.c_str());
+                _retry_available = runtime_state == AssistantRuntimeState::Stopped;
+            }
+            break;
+        case AssistantEventKind::UserText:
+            _view->setState(AssistantViewState::Thinking);
+            _view->setSecondaryText(event.text.c_str());
+            break;
+        case AssistantEventKind::AgentText:
+            _view->setState(AssistantViewState::Speaking);
+            _view->setSecondaryText(event.text.c_str());
+            break;
+        case AssistantEventKind::Emotion:
+            _view->setPrimaryText("Emotion");
+            _view->setSecondaryText(event.text.c_str());
+            break;
     }
-
-    mclog::tagInfo(getAppInfo().name, "boot assistant from {}, version {}", assistant_partition->label,
-                   assistant_desc.version);
-    set_message("Switching to Xiaozhi ...");
-
-    err = esp_ota_set_boot_partition(assistant_partition);
-    if (err != ESP_OK) {
-        mclog::tagError(getAppInfo().name, "failed to set assistant boot partition: {}", esp_err_to_name(err));
-        set_message("Unable to start assistant");
-        return;
-    }
-
-    GetHAL().delay(80);
-    esp_restart();
 }
