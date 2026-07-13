@@ -105,7 +105,7 @@ The critical path is Tasks 2 → 4 → 5 → 7 → 8 → 9 → 10 → 11 → 12.
 - Create: `scripts/report_firmware_metrics.py`
 - Create: `docs/superpowers/reports/unified-runtime-baseline.json`
 
-- [ ] **Step 1: Write the failing source contract**
+- [x] **Step 1: Write the failing source contract**
 
 The unittest must resolve paths from the repository root and initially assert the final state:
 
@@ -137,7 +137,7 @@ class UnifiedRuntimeFirmwareContractTest(unittest.TestCase):
 
 Also assert that `flash_assistant_runtime.sh` is absent, the full-flash script does not reference `xiaozhi.bin`, and no supported source depends on the labels `ota_0` or `ota_1`.
 
-- [ ] **Step 2: Run the contract and confirm RED**
+- [x] **Step 2: Run the contract and confirm RED**
 
 ```bash
 python3 -m unittest mac-codex-agent/tests/test_unified_runtime_firmware_contract.py
@@ -145,7 +145,7 @@ python3 -m unittest mac-codex-agent/tests/test_unified_runtime_firmware_contract
 
 Expected: failures for the current dual-image architecture, missing Brookesia dependencies, and old flash scripts.
 
-- [ ] **Step 3: Add a read-only metrics reporter**
+- [x] **Step 3: Add a read-only metrics reporter**
 
 Implement `scripts/report_firmware_metrics.py` using only the Python standard library. It must read `build/project_description.json`, `build/StopWatch-UserDemo.map`, `build/StopWatch-UserDemo.bin`, and partition CSV data, then write JSON with these keys:
 
@@ -161,7 +161,7 @@ Implement `scripts/report_firmware_metrics.py` using only the Python standard li
 
 Fail with a clear message if a required build artifact is missing; do not silently output zeros.
 
-- [ ] **Step 4: Capture the current two-image baseline**
+- [x] **Step 4: Capture the current two-image baseline**
 
 ```bash
 . /Users/bytedance/esp/esp-idf-v5.5.4/export.sh
@@ -172,7 +172,7 @@ wc -c build/StopWatch-UserDemo.bin third_party/xiaozhi-esp32/build-m5stack-stopw
 
 Record the current measured values and device commit SHA. Preserve the known reference values of 4,283,824 bytes for Launcher and 2,907,312 bytes for Assistant only if the fresh measurements match.
 
-- [ ] **Step 5: Commit the contract and baseline**
+- [x] **Step 5: Commit the contract and baseline**
 
 ```bash
 git add mac-codex-agent/tests/test_unified_runtime_firmware_contract.py scripts/report_firmware_metrics.py docs/superpowers/reports/unified-runtime-baseline.json

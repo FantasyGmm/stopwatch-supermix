@@ -1,0 +1,18 @@
+{
+  "app_bin": "build/StopWatch-UserDemo.bin",
+  "app_bytes": 4284944,
+  "app_headroom_bytes": 892400,
+  "app_headroom_percent": 17.24,
+  "app_partition_bytes": 5177344,
+  "app_partition_label": "ota_0",
+  "assistant_app_bytes": 2907312,
+  "assistant_bin": "third_party/xiaozhi-esp32/build-m5stack-stopwatch/xiaozhi.bin",
+  "build_project_version": "4dd7737",
+  "combined_app_bytes": 7192256,
+  "diram_bytes": 160711,
+  "project_name": "StopWatch-UserDemo",
+  "schema_version": 1,
+  "source": "launcher-baseline",
+  "source_git_commit": "4dd7737bbedd7dc07f60793f137b011961ef9c50",
+  "target": "esp32s3"
+}
