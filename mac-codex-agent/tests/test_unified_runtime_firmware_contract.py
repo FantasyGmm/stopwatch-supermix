@@ -177,6 +177,72 @@ class UnifiedRuntimeFirmwareContractTest(unittest.TestCase):
         ]
         self.assertEqual(offenders, [])
 
+    def test_offline_validation_runner_covers_every_automated_gate_without_hardware(self):
+        runner = read("scripts/run_unified_offline_validation.sh")
+
+        required_commands = (
+            "mac-codex-agent/.venv/bin/python",
+            "-m unittest discover -s mac-codex-agent/tests -p 'test_*.py'",
+            "tests/assistant_state_machine_test.cpp",
+            "tests/assistant_event_mailbox_test.cpp",
+            "tests/resource_supervisor_test.cpp",
+            "tests/shared_wifi_policy_test.cpp",
+            "tests/runtime_diagnostics_test.cpp",
+            "./scripts/build_unified_candidate.sh --clean",
+            "git diff --check",
+        )
+        for command in required_commands:
+            self.assertIn(command, runner)
+
+        for forbidden in (
+            "esptool",
+            "read_flash",
+            "write_flash",
+            "erase_flash",
+            "/dev/cu.",
+            "/dev/tty",
+            "idf.py flash",
+            "idf.py monitor",
+        ):
+            self.assertNotIn(forbidden, runner)
+
+    def test_unified_validation_report_keeps_hardware_evidence_pending(self):
+        report = read(
+            "docs/superpowers/reports/unified-runtime-validation.md"
+        )
+        self.assertIn("## Automated evidence", report)
+        self.assertIn("## Hardware evidence", report)
+        for status in (
+            "Hardware compatibility: Pending hardware",
+            "Lifecycle coexistence: Pending hardware",
+            "100-cycle stress: Pending hardware",
+            "Full product regression: Pending hardware",
+        ):
+            self.assertIn(status, report)
+
+        hardware_section = report.split("## Hardware evidence", 1)[1]
+        self.assertNotRegex(hardware_section, r"\|\s*(Passed|Failed)\s*\|")
+        for evidence in (
+            "Local WakeStart event",
+            "Stopped within 2 seconds",
+            "Zero Agent session residue",
+            "paired before snapshot",
+            "BLE remains connected",
+        ):
+            self.assertIn(evidence, hardware_section)
+
+    def test_original_tasks_track_code_automated_and_hardware_separately(self):
+        plan = read(
+            "docs/superpowers/plans/2026-07-13-unified-runtime-assistant-merge.md"
+        )
+        for task in range(8, 13):
+            section = plan.split(f"### Task {task}:", 1)[1]
+            if task < 12:
+                section = section.split(f"### Task {task + 1}:", 1)[0]
+            self.assertIn("- Code status:", section)
+            self.assertIn("- Automated status:", section)
+            self.assertIn("- Hardware status: Pending hardware", section)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -668,6 +668,10 @@ git commit -m "Validate Brookesia Xiaozhi compatibility"
 
 ### Task 8: Implement The Assistant Runtime State Machine
 
+- Code status: Implemented
+- Automated status: Passed by the offline state, mailbox, source-contract, and unified-build gates
+- Hardware status: Pending hardware
+
 **Files:**
 - Create: `main/runtime/assistant/assistant_state.h`
 - Create: `main/runtime/assistant/assistant_state.cpp`
@@ -732,6 +736,10 @@ git commit -m "Add restart-free Assistant runtime"
 
 ### Task 9: Connect Assistant Runtime To Mooncake UI
 
+- Code status: Implemented
+- Automated status: Passed by the Mooncake source contracts and unified clean build
+- Hardware status: Pending hardware
+
 **Files:**
 - Create: `main/apps/app_assistant/view/assistant_view.h`
 - Create: `main/apps/app_assistant/view/assistant_view.cpp`
@@ -789,6 +797,10 @@ git commit -m "Run Assistant inside Mooncake"
 ## Milestone 4: Remove The Dual Image And Reclaim Flash
 
 ### Task 10: Convert To One Application Partition
+
+- Code status: Implemented for the shadow candidate and reversible dry-run tools; formal promotion and legacy-path deletion are not started
+- Automated status: Passed for the isolated candidate, capacity gates, and tool preflight tests
+- Hardware status: Pending hardware
 
 **Files:**
 - Modify: `partitions.csv`
@@ -866,6 +878,10 @@ git commit -m "Switch firmware to one application partition"
 
 ### Task 11: Add Runtime Diagnostics And Leak Gates
 
+- Code status: Implemented for passive snapshots and host-testable leak policy; hardware stress collection remains pending
+- Automated status: Passed by the diagnostics host test and unified clean build
+- Hardware status: Pending hardware
+
 **Files:**
 - Create: `main/runtime/runtime_diagnostics.h`
 - Create: `main/runtime/runtime_diagnostics.cpp`
@@ -928,6 +944,10 @@ git commit -m "Add unified runtime lifecycle diagnostics"
 ```
 
 ### Task 12: Run Full Regression And Produce The Release Candidate
+
+- Code status: Not started for release finalization and default-layout promotion
+- Automated status: Passed for the offline regression subset only; release hardware gates are excluded
+- Hardware status: Pending hardware
 
 **Files:**
 - Modify: `docs/superpowers/reports/unified-runtime-validation.md`
