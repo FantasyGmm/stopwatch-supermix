@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 #pragma once
+#include <apps/common/edge_control/edge_control_overlay.h>
 #include <apps/common/key_manager/key_manager.h>
 #include <mooncake.h>
 #include <lvgl.h>
@@ -29,6 +30,7 @@ public:
 
 private:
     std::unique_ptr<input::KeyManager> _key_manager;
+    std::unique_ptr<EdgeControlOverlay> _edge_controls;
 
     lv_obj_t* _panel             = nullptr;
     lv_obj_t* _model_value       = nullptr;

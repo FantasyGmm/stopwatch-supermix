@@ -8,7 +8,6 @@
 #include "codex_ble_transport.h"
 #include "codex_status_ui_layout.h"
 #include "codex_status_model.h"
-#include <apps/common/audio/audio.h>
 #include <assets/assets.h>
 #include <hal/hal.h>
 #include <hal/utils/settings/settings.h>
@@ -293,6 +292,9 @@ void AppCodexStatus::onRunning()
 
     {
         LvglLockGuard lock;
+        if (!_screen_off && _edge_controls) {
+            _edge_controls->update();
+        }
         if (_alert_carousel.update(now)) {
             render_alert();
         }
@@ -471,10 +473,18 @@ void AppCodexStatus::create_view()
     lv_obj_set_style_text_align(_battery_label, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(_battery_label, LV_ALIGN_TOP_MID, 0, kBatteryY);
     update_battery();
+
+    _edge_controls = std::make_unique<EdgeControlOverlay>();
+    _edge_controls->init(_panel);
 }
 
 void AppCodexStatus::destroy_view()
 {
+    if (_edge_controls) {
+        _edge_controls->shutdown();
+        _edge_controls.reset();
+    }
+
     if (_pet_timer != nullptr) {
         lv_timer_delete(_pet_timer);
         _pet_timer = nullptr;
@@ -657,7 +667,7 @@ bool AppCodexStatus::handle_status_json(const char* data, int length, const char
         return false;
     }
     if (kind == CodexMessageKind::Chime) {
-        audio::play_tone(660, 0.45f, 0.45f);
+        GetHAL().playBootSfx();
         return true;
     }
     if (kind == CodexMessageKind::TimeSync) {

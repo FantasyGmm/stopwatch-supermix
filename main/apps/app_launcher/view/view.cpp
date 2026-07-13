@@ -10,7 +10,6 @@
 #include <hal/hal.h>
 #include <algorithm>
 #include <cmath>
-#include <cstdio>
 #include <cstdint>
 #include <vector>
 
@@ -218,169 +217,23 @@ static int _last_clicked_icon_pos_x = -1;
 static std::unique_ptr<PageIndicator> _page_indicator;
 static std::unique_ptr<DynamicIconLabel> _dynamic_icon_label;
 
-namespace view {
-void launcher_control_overlay_draw_event_cb(lv_event_t* e);
-}
-
 namespace {
 
-static constexpr int _control_panel_size        = 466;
-static constexpr int _control_center            = _control_panel_size / 2;
-static constexpr int _control_arc_radius        = 197;
-static constexpr int _control_arc_width         = 8;
-static constexpr int _control_activate_distance = 24;
-static constexpr int _control_drag_range_px     = 210;
 static constexpr int _visible_icon_range        = 2;
 static constexpr int _fast_swipe_min_distance   = 36;
 static constexpr int _drag_swipe_min_distance   = 100;
 static constexpr uint32_t _fast_swipe_max_ms    = 260;
-static constexpr uint32_t _control_apply_period_ms = 40;
 static constexpr uint32_t _hold_scroll_initial_delay_ms = 300;
 static constexpr uint32_t _hold_scroll_repeat_period_ms = 170;
-static constexpr uint32_t _brightness_color     = 0x2F83FF;
-static constexpr uint32_t _volume_color         = 0x36DDE2;
-
-int clamp_int(int value, int min_value, int max_value)
-{
-    return std::max(min_value, std::min(value, max_value));
-}
-
-lv_point_t point_on_arc(int center_x, int center_y, int radius, float degrees)
-{
-    static constexpr float pi = 3.14159265358979323846f;
-    float radians             = degrees * pi / 180.0f;
-    return {
-        static_cast<lv_coord_t>(std::lround(center_x + std::cos(radians) * radius)),
-        static_cast<lv_coord_t>(std::lround(center_y + std::sin(radians) * radius)),
-    };
-}
-
-void draw_arc(lv_layer_t* layer, lv_point_t center, int radius, int start_deg, int end_deg, int width, uint32_t color,
-              lv_opa_t opa)
-{
-    lv_draw_arc_dsc_t dsc;
-    lv_draw_arc_dsc_init(&dsc);
-    dsc.center      = center;
-    dsc.radius      = radius;
-    dsc.start_angle = start_deg;
-    dsc.end_angle   = end_deg;
-    dsc.width       = width;
-    dsc.rounded     = 1;
-    dsc.color       = lv_color_hex(color);
-    dsc.opa         = opa;
-    lv_draw_arc(layer, &dsc);
-}
-
-void draw_circle(lv_layer_t* layer, lv_point_t center, int radius, uint32_t color, lv_opa_t opa)
-{
-    lv_draw_rect_dsc_t dsc;
-    lv_draw_rect_dsc_init(&dsc);
-    dsc.bg_color = lv_color_hex(color);
-    dsc.bg_opa   = opa;
-    dsc.radius   = LV_RADIUS_CIRCLE;
-
-    lv_area_t area = {
-        static_cast<lv_coord_t>(center.x - radius),
-        static_cast<lv_coord_t>(center.y - radius),
-        static_cast<lv_coord_t>(center.x + radius),
-        static_cast<lv_coord_t>(center.y + radius),
-    };
-    lv_draw_rect(layer, &dsc, &area);
-}
-
-void draw_line(lv_layer_t* layer, int x1, int y1, int x2, int y2, int width, uint32_t color, lv_opa_t opa)
-{
-    lv_draw_line_dsc_t dsc;
-    lv_draw_line_dsc_init(&dsc);
-    dsc.p1.x        = x1;
-    dsc.p1.y        = y1;
-    dsc.p2.x        = x2;
-    dsc.p2.y        = y2;
-    dsc.width       = width;
-    dsc.color       = lv_color_hex(color);
-    dsc.opa         = opa;
-    dsc.round_start = 1;
-    dsc.round_end   = 1;
-    lv_draw_line(layer, &dsc);
-}
-
-void draw_percent_label(lv_layer_t* layer, int x, int y, int value)
-{
-    static char text[8] = {};
-    std::snprintf(text, sizeof(text), "%d%%", value);
-
-    lv_draw_label_dsc_t dsc;
-    lv_draw_label_dsc_init(&dsc);
-    dsc.color = lv_color_hex(0xFFFFFF);
-    dsc.font  = &MontserratSemiBold26;
-    dsc.align = LV_TEXT_ALIGN_CENTER;
-    dsc.opa   = LV_OPA_COVER;
-    dsc.text  = text;
-
-    lv_area_t area = {
-        static_cast<lv_coord_t>(x - 54),
-        static_cast<lv_coord_t>(y - 20),
-        static_cast<lv_coord_t>(x + 54),
-        static_cast<lv_coord_t>(y + 28),
-    };
-    lv_draw_label(layer, &dsc, &area);
-}
-
-void draw_sun_icon(lv_layer_t* layer, int x_ofs, int y_ofs)
-{
-    lv_point_t center = {
-        static_cast<lv_coord_t>(x_ofs + 111),
-        static_cast<lv_coord_t>(y_ofs + 72),
-    };
-    draw_circle(layer, center, 5, 0xFFFFFF, LV_OPA_COVER);
-
-    for (int i = 0; i < 8; ++i) {
-        float deg       = static_cast<float>(i * 45);
-        lv_point_t from = point_on_arc(center.x, center.y, 9, deg);
-        lv_point_t to   = point_on_arc(center.x, center.y, 15, deg);
-        draw_line(layer, from.x, from.y, to.x, to.y, 2, 0xFFFFFF, LV_OPA_COVER);
-    }
-}
-
-void draw_speaker_icon(lv_layer_t* layer, int x_ofs, int y_ofs)
-{
-    lv_draw_rect_dsc_t rect_dsc;
-    lv_draw_rect_dsc_init(&rect_dsc);
-    rect_dsc.bg_color = lv_color_hex(0xFFFFFF);
-    rect_dsc.bg_opa   = LV_OPA_COVER;
-    rect_dsc.radius   = 1;
-
-    lv_area_t box = {
-        static_cast<lv_coord_t>(x_ofs + 341),
-        static_cast<lv_coord_t>(y_ofs + 67),
-        static_cast<lv_coord_t>(x_ofs + 349),
-        static_cast<lv_coord_t>(y_ofs + 77),
-    };
-    lv_draw_rect(layer, &rect_dsc, &box);
-
-    lv_draw_triangle_dsc_t tri_dsc;
-    lv_draw_triangle_dsc_init(&tri_dsc);
-    tri_dsc.color  = lv_color_hex(0xFFFFFF);
-    tri_dsc.opa    = LV_OPA_COVER;
-    tri_dsc.p[0].x = x_ofs + 349;
-    tri_dsc.p[0].y = y_ofs + 67;
-    tri_dsc.p[1].x = x_ofs + 361;
-    tri_dsc.p[1].y = y_ofs + 57;
-    tri_dsc.p[2].x = x_ofs + 361;
-    tri_dsc.p[2].y = y_ofs + 87;
-    lv_draw_triangle(layer, &tri_dsc);
-
-    draw_arc(layer, {static_cast<lv_coord_t>(x_ofs + 359), static_cast<lv_coord_t>(y_ofs + 72)}, 9, 318, 402, 2,
-             0xFFFFFF, LV_OPA_COVER);
-    draw_arc(layer, {static_cast<lv_coord_t>(x_ofs + 359), static_cast<lv_coord_t>(y_ofs + 72)}, 14, 318, 402, 2,
-             0xFFFFFF, LV_OPA_COVER);
-}
 
 }  // namespace
 
 LauncherView::~LauncherView()
 {
-    _control_overlay.reset();
+    if (_edge_controls) {
+        _edge_controls->shutdown();
+        _edge_controls.reset();
+    }
     _icon_images.clear();
     _icon_image_by_panel.clear();
     _icon_panels.clear();
@@ -519,7 +372,18 @@ void LauncherView::init(std::vector<mooncake::AppProps_t> appPorps)
     _dynamic_icon_label->init(icon_label_texts, _icon_gap, _panel->get());
 
     /* -------------------------- Quick control overlay ------------------------- */
-    init_control_overlay();
+    _edge_controls = std::make_unique<EdgeControlOverlay>();
+    _edge_controls->init(_panel->get(), [this](bool active) {
+        if (active) {
+            _panel->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
+            set_lr_indicators_hidden(true);
+            _suppress_click_until_ms = GetHAL().millis() + 350;
+        } else {
+            _panel->addFlag(LV_OBJ_FLAG_SCROLLABLE);
+            set_lr_indicators_hidden(false);
+            _suppress_click_until_ms = GetHAL().millis() + 350;
+        }
+    });
 
     /* ---------------------------------- Clock --------------------------------- */
     _clock = std::make_unique<view::ArcTopClock>(_panel->get());
@@ -696,7 +560,7 @@ void LauncherView::update_button_hold_scroll(input::KeyEvent keyEvent)
 
 void LauncherView::start_hold_scroll(int direction, HoldScrollSource source)
 {
-    if (_active_control != CONTROL_NONE) {
+    if (!lv_obj_has_flag(_panel->get(), LV_OBJ_FLAG_SCROLLABLE)) {
         return;
     }
 
@@ -721,7 +585,8 @@ void LauncherView::stop_hold_scroll(HoldScrollSource source)
 
 void LauncherView::update_hold_scroll()
 {
-    if (_hold_scroll_source == HOLD_SCROLL_NONE || _hold_scroll_direction == 0 || _active_control != CONTROL_NONE) {
+    if (_hold_scroll_source == HOLD_SCROLL_NONE || _hold_scroll_direction == 0 ||
+        !lv_obj_has_flag(_panel->get(), LV_OBJ_FLAG_SCROLLABLE)) {
         return;
     }
 
@@ -768,103 +633,6 @@ void LauncherView::normalize_hold_scroll_target()
     }
 }
 
-void LauncherView::init_control_overlay()
-{
-    _control_overlay = std::make_unique<Container>(_panel->get());
-    _control_overlay->align(LV_ALIGN_CENTER, 0, 0);
-    _control_overlay->setSize(_control_panel_size, _control_panel_size);
-    _control_overlay->setRadius(0);
-    _control_overlay->setBorderWidth(0);
-    _control_overlay->setPaddingAll(0);
-    _control_overlay->setBgOpa(LV_OPA_TRANSP);
-    _control_overlay->removeFlag(LV_OBJ_FLAG_CLICKABLE);
-    _control_overlay->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
-    _control_overlay->addFlag(LV_OBJ_FLAG_FLOATING);
-    _control_overlay->setHidden(true);
-    lv_obj_add_event_cb(_control_overlay->get(), view::launcher_control_overlay_draw_event_cb, LV_EVENT_ALL, this);
-    lv_obj_refresh_ext_draw_size(_control_overlay->get());
-}
-
-void LauncherView::update_control_gesture()
-{
-    lv_indev_t* indev = GetHAL().lvTouchpad;
-    if (indev == nullptr || _control_overlay == nullptr) {
-        return;
-    }
-
-    lv_indev_state_t state = lv_indev_get_state(indev);
-
-    if (state == LV_INDEV_STATE_REL) {
-        lv_point_t point;
-        lv_indev_get_point(indev, &point);
-
-        if (_last_touch_state == LV_INDEV_STATE_PR) {
-            if (_active_control != CONTROL_NONE) {
-                finish_active_control();
-            } else {
-                handle_horizontal_swipe_release(point);
-            }
-            _control_candidate = CONTROL_NONE;
-        }
-
-        if (_active_control == CONTROL_NONE && _control_hide_at_ms != 0 && GetHAL().millis() >= _control_hide_at_ms) {
-            _control_overlay->setHidden(true);
-            set_lr_indicators_hidden(false);
-            _visible_control   = CONTROL_NONE;
-            _control_hide_at_ms = 0;
-        }
-
-        _last_touch_state = state;
-        return;
-    }
-
-    if (_active_control == CONTROL_NONE && _control_candidate == CONTROL_NONE &&
-        lv_indev_get_scroll_obj(indev) == _panel->get() && lv_indev_get_scroll_dir(indev) == LV_DIR_HOR) {
-        _last_touch_state = state;
-        return;
-    }
-
-    lv_point_t point;
-    lv_indev_get_point(indev, &point);
-
-    if (state == LV_INDEV_STATE_PR && _last_touch_state == LV_INDEV_STATE_REL) {
-        _control_start_point = point;
-        _control_last_point  = point;
-        _swipe_start_point    = point;
-        _swipe_start_scroll_x = _panel->getScrollX();
-        _swipe_start_ms       = GetHAL().millis();
-
-        if (point.y > 30) {
-            _control_candidate = point.x < (_control_panel_size / 2) ? CONTROL_BRIGHTNESS : CONTROL_VOLUME;
-        } else {
-            _control_candidate = CONTROL_NONE;
-        }
-    } else if (state == LV_INDEV_STATE_PR) {
-        _control_last_point = point;
-
-        if (_active_control == CONTROL_NONE && _control_candidate != CONTROL_NONE) {
-            int delta_x = point.x - _control_start_point.x;
-            int delta_y = point.y - _control_start_point.y;
-            int abs_x   = std::abs(delta_x);
-            int abs_y   = std::abs(delta_y);
-
-            if (abs_y > _control_activate_distance && abs_y > abs_x) {
-                activate_control(_control_candidate, point);
-            } else if (abs_x > _control_activate_distance && abs_x > abs_y) {
-                _control_candidate = CONTROL_NONE;
-                _last_touch_state  = state;
-                return;
-            }
-        }
-
-        if (_active_control != CONTROL_NONE) {
-            update_active_control(point);
-        }
-    }
-
-    _last_touch_state = state;
-}
-
 bool LauncherView::handle_horizontal_swipe_release(const lv_point_t& point)
 {
     int dx     = point.x - _swipe_start_point.x;
@@ -884,86 +652,6 @@ bool LauncherView::handle_horizontal_swipe_release(const lv_point_t& point)
     int direction   = dx < 0 ? 1 : -1;
     scroll_to_icon_index(start_index + direction);
     return true;
-}
-
-void LauncherView::activate_control(ControlSide side, const lv_point_t& point)
-{
-    _active_control = side;
-    _visible_control = side;
-    _control_start_point = point;
-    _control_hide_at_ms = 0;
-
-    if (side == CONTROL_BRIGHTNESS) {
-        _control_start_value = GetHAL().getBackLightBrightness();
-    } else {
-        _control_start_value = GetHAL().getSpeakerVolume();
-    }
-    _control_current_value = _control_start_value;
-    _control_applied_value = _control_start_value;
-    _last_control_apply_ms = GetHAL().millis();
-
-    _suppress_click_until_ms = GetHAL().millis() + 350;
-    _panel->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
-    set_lr_indicators_hidden(true);
-    _control_overlay->setHidden(false);
-    _control_overlay->moveForeground();
-    refresh_control_overlay();
-}
-
-void LauncherView::update_active_control(const lv_point_t& point)
-{
-    int delta_y = _control_start_point.y - point.y;
-    int value_range = _active_control == CONTROL_BRIGHTNESS ? 90 : 100;
-    int raw_value = _control_start_value + (delta_y * value_range) / _control_drag_range_px;
-    int value = normalize_control_value(_active_control, raw_value);
-
-    if (value != _control_current_value) {
-        _control_current_value = value;
-        refresh_control_overlay();
-    }
-
-    uint32_t now = GetHAL().millis();
-    if (now - _last_control_apply_ms >= _control_apply_period_ms) {
-        apply_control_value(false);
-    }
-}
-
-void LauncherView::finish_active_control()
-{
-    apply_control_value(true);
-
-    _active_control = CONTROL_NONE;
-    _panel->addFlag(LV_OBJ_FLAG_SCROLLABLE);
-    _suppress_click_until_ms = GetHAL().millis() + 350;
-    _control_hide_at_ms = GetHAL().millis() + 700;
-    refresh_control_overlay();
-}
-
-void LauncherView::apply_control_value(bool saveToSettings)
-{
-    if (_active_control == CONTROL_NONE) {
-        return;
-    }
-
-    if (!saveToSettings && _control_current_value == _control_applied_value) {
-        return;
-    }
-
-    if (_active_control == CONTROL_BRIGHTNESS) {
-        GetHAL().setBackLightBrightness(_control_current_value, saveToSettings);
-    } else if (_active_control == CONTROL_VOLUME) {
-        GetHAL().setSpeakerVolume(_control_current_value, saveToSettings);
-    }
-
-    _control_applied_value = _control_current_value;
-    _last_control_apply_ms = GetHAL().millis();
-}
-
-void LauncherView::refresh_control_overlay()
-{
-    if (_control_overlay) {
-        lv_obj_invalidate(_control_overlay->get());
-    }
 }
 
 void LauncherView::set_lr_indicators_hidden(bool hidden)
@@ -988,16 +676,6 @@ void LauncherView::update_visible_icon_images(int scrollX)
     }
 }
 
-int LauncherView::normalize_control_value(ControlSide side, int value) const
-{
-    if (side == CONTROL_BRIGHTNESS) {
-        return clamp_int(value, 10, 100);
-    }
-
-    value = clamp_int(value, 0, 100);
-    return ((value + 2) / 5) * 5;
-}
-
 void LauncherView::handle_state_startup()
 {
     _state = STATE_NORMAL;
@@ -1005,7 +683,28 @@ void LauncherView::handle_state_startup()
 
 void LauncherView::handle_state_normal()
 {
-    update_control_gesture();
+    if (_edge_controls) {
+        _edge_controls->update();
+    }
+
+    lv_indev_t* indev = GetHAL().lvTouchpad;
+    if (indev != nullptr) {
+        const lv_indev_state_t state = lv_indev_get_state(indev);
+        if (state != _last_swipe_touch_state) {
+            lv_point_t point;
+            lv_indev_get_point(indev, &point);
+
+            if (state == LV_INDEV_STATE_PR) {
+                _swipe_start_point    = point;
+                _swipe_start_scroll_x = _panel->getScrollX();
+                _swipe_start_ms       = GetHAL().millis();
+            } else if (!_edge_controls || !_edge_controls->last_release_consumed()) {
+                handle_horizontal_swipe_release(point);
+            }
+        }
+        _last_swipe_touch_state = state;
+    }
+
     update_hold_scroll();
 
     if (_clicked_app_id != -1) {
@@ -1063,76 +762,5 @@ void LauncherView::handle_scroll_in_loop()
             _last_scroll_x = -1;
             update_visible_icon_images(_panel->getScrollX());
         }
-    }
-}
-
-void view::launcher_control_overlay_draw_event_cb(lv_event_t* e)
-{
-    auto* view = static_cast<LauncherView*>(lv_event_get_user_data(e));
-    if (view == nullptr) {
-        return;
-    }
-
-    lv_event_code_t code = lv_event_get_code(e);
-    if (code == LV_EVENT_REFR_EXT_DRAW_SIZE) {
-        lv_event_set_ext_draw_size(e, 16);
-        return;
-    }
-
-    if (code == LV_EVENT_COVER_CHECK) {
-        lv_event_set_cover_res(e, LV_COVER_RES_NOT_COVER);
-        return;
-    }
-
-    if (code != LV_EVENT_DRAW_MAIN_BEGIN || view->_visible_control == LauncherView::CONTROL_NONE) {
-        return;
-    }
-
-    lv_obj_t* obj     = lv_event_get_target_obj(e);
-    lv_layer_t* layer = lv_event_get_layer(e);
-
-    lv_area_t coords;
-    lv_obj_get_coords(obj, &coords);
-    lv_point_t center = {
-        static_cast<lv_coord_t>(coords.x1 + _control_center),
-        static_cast<lv_coord_t>(coords.y1 + _control_center),
-    };
-
-    if (view->_visible_control == LauncherView::CONTROL_BRIGHTNESS) {
-        const int start_angle = 135;
-        const int end_angle   = 225;
-        float ratio = static_cast<float>(view->_control_current_value - 10) / 90.0f;
-        ratio       = std::clamp(ratio, 0.0f, 1.0f);
-        int value_angle = start_angle + static_cast<int>(std::lround((end_angle - start_angle) * ratio));
-
-        draw_arc(layer, center, _control_arc_radius, start_angle, end_angle, _control_arc_width, _brightness_color,
-                 LV_OPA_40);
-        draw_arc(layer, center, _control_arc_radius, start_angle, value_angle, _control_arc_width, _brightness_color,
-                 LV_OPA_COVER);
-
-        lv_point_t knob = point_on_arc(center.x, center.y, _control_arc_radius, static_cast<float>(value_angle));
-        draw_circle(layer, knob, 9, _brightness_color, LV_OPA_COVER);
-        draw_circle(layer, knob, 4, 0xB7D7FF, LV_OPA_COVER);
-
-        draw_sun_icon(layer, coords.x1, coords.y1);
-        draw_percent_label(layer, coords.x1 + 116, coords.y1 + 235, view->_control_current_value);
-    } else if (view->_visible_control == LauncherView::CONTROL_VOLUME) {
-        const int track_start = 315;
-        const int track_end   = 405;
-        float ratio = static_cast<float>(view->_control_current_value) / 100.0f;
-        ratio       = std::clamp(ratio, 0.0f, 1.0f);
-        int value_angle = track_end - static_cast<int>(std::lround((track_end - track_start) * ratio));
-
-        draw_arc(layer, center, _control_arc_radius, track_start, track_end, _control_arc_width, _volume_color,
-                 LV_OPA_30);
-        draw_arc(layer, center, _control_arc_radius, value_angle, track_end, _control_arc_width, _volume_color,
-                 LV_OPA_COVER);
-
-        lv_point_t knob = point_on_arc(center.x, center.y, _control_arc_radius, static_cast<float>(value_angle));
-        draw_circle(layer, knob, 9, _volume_color, LV_OPA_COVER);
-        draw_circle(layer, knob, 4, 0xC6FFFF, LV_OPA_COVER);
-
-        draw_speaker_icon(layer, coords.x1, coords.y1);
-        draw_percent_label(layer, coords.x1 + 350, coords.y1 + 235, view->_control_current_value);
     }
 }

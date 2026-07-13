@@ -80,6 +80,10 @@ green. Only the latest current-day state of each conversation is displayed.
 The two upper arcs display the model and uppercased reasoning effort directly.
 They do not show separate `MODEL`, `EFFORT`, `auto`, or `reason` captions.
 
+Launcher and the Codex monitor share the same edge controls. Drag vertically on
+the left side for brightness or the right side for volume. Changes apply
+globally and persist across apps and reboots after release.
+
 If BLE has not connected after 15 seconds, `auto` mode starts the existing
 Wi-Fi/WebSocket fallback at:
 
@@ -119,7 +123,9 @@ Supported chime payload:
 }
 ```
 
-When the monitor receives the chime event, it plays a short tone on the device.
+When Pending triggers a chime event, the monitor plays the complete built-in
+startup sound at the global speaker volume. Setting volume to zero keeps
+Pending silent.
 
 ## Assistant Runtime
 
