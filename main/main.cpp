@@ -11,6 +11,7 @@
 #include <hal/hal.h>
 #include <lv_demos.h>
 #include <apps/common/audio/audio.h>
+#include <runtime/service_runtime.h>
 
 using namespace mooncake;
 using namespace smooth_ui_toolkit;
@@ -23,6 +24,12 @@ extern "C" void app_main(void)
 
     // HAL init
     GetHAL().init();
+
+    // Shared service runtime init
+    if (!GetServiceRuntime().start()) {
+        mclog::tagError("Main", "service runtime unavailable; application startup aborted");
+        return;
+    }
 
     // Setup ui hal
     ui_hal::on_delay([](uint32_t ms) { GetHAL().delay(ms); });

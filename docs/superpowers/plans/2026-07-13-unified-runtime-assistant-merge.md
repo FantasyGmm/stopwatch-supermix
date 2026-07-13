@@ -191,7 +191,7 @@ git commit -m "Add unified runtime firmware contract"
 - Modify: `main/CMakeLists.txt`
 - Create/Modify: `dependencies.lock`
 
-- [ ] **Step 1: Add the smallest dependency set**
+- [x] **Step 1: Add the smallest dependency set**
 
 Add direct dependencies with the same range:
 
@@ -206,7 +206,7 @@ Add direct dependencies with the same range:
 
 Do not add `brookesia_hal_adaptor` or `brookesia_hal_boards`.
 
-- [ ] **Step 2: Resolve and verify exact versions**
+- [x] **Step 2: Resolve and verify exact versions**
 
 ```bash
 . /Users/bytedance/esp/esp-idf-v5.5.4/export.sh
@@ -224,7 +224,7 @@ PY
 
 If a transitive dependency selects 0.8, pin the owning direct Brookesia component to a compatible 0.7 patch and rerun; do not continue with a mixed 0.7/0.8 graph.
 
-- [ ] **Step 3: Add the runtime bootstrap**
+- [x] **Step 3: Add the runtime bootstrap**
 
 Implement one-shot startup:
 
@@ -250,7 +250,7 @@ idf.py build
 
 Flash the existing dual-partition package, boot to Launcher, and verify Clock, Codex, Badge, IMU, FFT, and Setup still open and return normally. Capture boot logs proving the service manager starts exactly once.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add main/idf_component.yml dependencies.lock main/runtime/service_runtime.h main/runtime/service_runtime.cpp main/main.cpp main/CMakeLists.txt
