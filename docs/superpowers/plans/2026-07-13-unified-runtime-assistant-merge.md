@@ -51,9 +51,9 @@ Until that validation session:
 
 - keep the existing dual-image partition table, Assistant boot switching, and standalone Assistant flash path intact;
 - do not claim any microphone, speaker, Wi-Fi coexistence, heap-stability, or Assistant compatibility result;
-- do not pass the Task 7 compatibility gate or begin the destructive cleanup in Task 10;
-- permit Tasks 4–9 to reach a build-verified release-candidate state, with hardware-dependent checkboxes left open;
-- perform one concentrated hardware campaign covering the deferred checks from Tasks 2, 4, 5, 6, 7, 8, and 9 before Task 10.
+- Tasks 8, 9, 11, and Task 10 preparation may proceed in offline shadow mode.
+- The hardware status remains pending until the concentrated watch campaign passes.
+- Task 10 preparation includes candidate files and dry-run tooling only; promotion and deletion remain gated.
 
 This changes execution order only. The original hardware acceptance criteria remain mandatory.
 

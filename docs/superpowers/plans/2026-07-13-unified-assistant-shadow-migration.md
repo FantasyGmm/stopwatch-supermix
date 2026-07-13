@@ -69,7 +69,7 @@
 - Modify: `docs/superpowers/plans/2026-07-13-unified-runtime-assistant-merge.md`
 - Modify: `docs/superpowers/reports/brookesia-xiaozhi-compatibility.md`
 
-- [ ] **Step 1: Add the failing execution-order contract**
+- [x] **Step 1: Add the failing execution-order contract**
 
 Add this test without changing the documents first:
 
@@ -87,7 +87,7 @@ def test_shadow_mode_allows_offline_runtime_work_without_passing_hardware(self):
     self.assertIn("single-partition promotion remains gated", report)
 ```
 
-- [ ] **Step 2: Run the focused contract and confirm RED**
+- [x] **Step 2: Run the focused contract and confirm RED**
 
 Run:
 
@@ -98,7 +98,7 @@ PYTHONPATH=mac-codex-agent/tests python3 -m unittest \
 
 Expected: `FAIL` because the exact shadow-mode statements do not exist.
 
-- [ ] **Step 3: Make the documents unambiguous**
+- [x] **Step 3: Make the documents unambiguous**
 
 Replace the old execution-order restriction with these exact statements:
 
@@ -114,7 +114,7 @@ Append this sentence to the compatibility report:
 Task 8 may proceed in offline shadow mode; single-partition promotion remains gated by this hardware matrix and the complete regression campaign.
 ```
 
-- [ ] **Step 4: Run GREEN and commit**
+- [x] **Step 4: Run GREEN and commit**
 
 ```bash
 PYTHONPATH=mac-codex-agent/tests python3 -m unittest \

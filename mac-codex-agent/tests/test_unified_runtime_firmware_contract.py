@@ -43,6 +43,18 @@ def parse_partition_csv(relative_path):
 
 
 class UnifiedRuntimeFirmwareContractTest(unittest.TestCase):
+    def test_shadow_mode_allows_offline_runtime_work_without_passing_hardware(self):
+        plan = read(
+            "docs/superpowers/plans/2026-07-13-unified-runtime-assistant-merge.md"
+        )
+        report = read(
+            "docs/superpowers/reports/brookesia-xiaozhi-compatibility.md"
+        )
+        self.assertIn("Tasks 8, 9, 11, and Task 10 preparation", plan)
+        self.assertIn("hardware status remains pending", plan)
+        self.assertIn("Task 8 may proceed in offline shadow mode", report)
+        self.assertIn("single-partition promotion remains gated", report)
+
     def test_only_launcher_defines_app_main(self):
         definitions = find_definitions(r'extern\s+"C"\s+void\s+app_main\s*\(')
         self.assertEqual(definitions, ["main/main.cpp"])

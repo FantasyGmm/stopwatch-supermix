@@ -41,4 +41,4 @@ The linked application image is `0x5c22d0` bytes. The existing dual-OTA layout i
 | `Stop` while reconnecting | Pending hardware | `Stopped` within 2 seconds |
 | Post-stop tasks/connections | Pending hardware | Zero Agent session residue |
 
-Task 8 and Task 10 remain gated until every required row above passes on the watch.
+Task 8 may proceed in offline shadow mode; single-partition promotion remains gated by this hardware matrix and the complete regression campaign.
