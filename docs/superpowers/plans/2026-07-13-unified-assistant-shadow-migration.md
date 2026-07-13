@@ -593,7 +593,7 @@ git commit -m "Add production Assistant runtime lifecycle"
 - Create: `tests/runtime_diagnostics_test.cpp`
 - Modify: `main/main.cpp`
 
-- [ ] **Step 1: Write the failing diagnostic policy test**
+- [x] **Step 1: Write the failing diagnostic policy test**
 
 ```cpp
 #include "runtime/runtime_diagnostics.h"
@@ -614,7 +614,7 @@ int main()
 }
 ```
 
-- [ ] **Step 2: Add stable types and GREEN implementation**
+- [x] **Step 2: Add stable types and GREEN implementation**
 
 ```cpp
 struct RuntimeDiagnosticSnapshot {
@@ -660,7 +660,7 @@ bool PassesSingleSessionLeakGate(const RuntimeDiagnosticDelta& delta)
 
 `CaptureRuntimeDiagnosticSnapshot()` uses `heap_caps_get_free_size(MALLOC_CAP_INTERNAL)`, `heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL)`, `heap_caps_get_free_size(MALLOC_CAP_SPIRAM)`, `uxTaskGetNumberOfTasks()`, `GetResourceSupervisor().snapshot()`, and `GetAssistantRuntime()` counters. It is called only before start, after Running, after Stopped, or by an explicit diagnostic command.
 
-- [ ] **Step 3: Add the application facade**
+- [x] **Step 3: Add the application facade**
 
 ```cpp
 class RuntimeSupervisor {
@@ -679,7 +679,7 @@ RuntimeSupervisor& GetRuntimeSupervisor();
 
 `start()` requires `GetServiceRuntime().isStarted()`. `startAssistant()` captures the before snapshot, `update()` delegates to AssistantRuntime and captures the first Running and Stopped snapshots for each session, and all snapshots are logged once.
 
-- [ ] **Step 4: Initialize the facade and run tests**
+- [x] **Step 4: Initialize the facade and run tests**
 
 After `GetServiceRuntime().start()` succeeds in `main/main.cpp`, call:
 
@@ -698,12 +698,12 @@ c++ -std=c++17 -Imain tests/runtime_diagnostics_test.cpp \
   -o /tmp/runtime_diagnostics_test
 /tmp/runtime_diagnostics_test
 idf.py reconfigure
-ninja -C build StopWatch-UserDemo.bin generated_unified_assets
+ninja -C build gen_project_binary generated_unified_assets
 ```
 
 The `STOPWATCH_HOST_TEST` branch excludes ESP heap/task collection but keeps comparison functions identical.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add main/runtime/runtime_supervisor.h main/runtime/runtime_supervisor.cpp \

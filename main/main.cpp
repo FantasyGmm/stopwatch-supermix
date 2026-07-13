@@ -12,6 +12,7 @@
 #include <lv_demos.h>
 #include <apps/common/audio/audio.h>
 #include <runtime/service_runtime.h>
+#include <runtime/runtime_supervisor.h>
 
 using namespace mooncake;
 using namespace smooth_ui_toolkit;
@@ -28,6 +29,10 @@ extern "C" void app_main(void)
     // Shared service runtime init
     if (!GetServiceRuntime().start()) {
         mclog::tagError("Main", "service runtime unavailable; application startup aborted");
+        return;
+    }
+    if (!GetRuntimeSupervisor().start()) {
+        mclog::tagError("Main", "runtime supervisor unavailable; application startup aborted");
         return;
     }
 
