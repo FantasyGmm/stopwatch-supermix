@@ -226,6 +226,7 @@ public:
     /* ---------------------------------- Time ---------------------------------- */
     void syncRtcTimeToSystem();
     void syncSystemTimeToRtc();
+    bool syncUnixTime(int64_t unix_ms, int utc_offset_minutes);
     DateYmd getDateYmd();
     bool setDateYmd(const DateYmd& date);
     TimeHms getTimeHms();

@@ -63,6 +63,12 @@ pairs using BLE Just Works, reconnects automatically, and writes only rendered
 status fields. It does not send OAuth credentials, prompts, responses, or
 source code to the watch.
 
+After every successful BLE connection, the Mac agent first sends the current
+Unix time and effective UTC offset. The watch applies them to its global system
+clock, persists the fixed-offset timezone, and writes the RX8130 RTC, so the
+same time is used by Launcher, Clock, alarms, and other applications and is
+restored after reboot. A reconnect refreshes the offset for timezone changes.
+
 The monitor maps `task_started` to Running. A `task_complete` response that asks
 for confirmation, information, or another action becomes Pending; a normal
 completion becomes Completed. Only Pending triggers a chime. The watch shows

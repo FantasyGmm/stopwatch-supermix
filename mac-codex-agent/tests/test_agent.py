@@ -42,6 +42,32 @@ class FakeTransport:
 
 
 class CodexStatusAgentTests(unittest.TestCase):
+    def test_sync_time_sends_current_epoch_and_timezone_offset(self):
+        collector = FakeCollector()
+        transport = FakeTransport()
+        agent = CodexStatusAgent(
+            collector=collector,
+            transport=transport,
+            time_ms=lambda: 1_783_872_000_123,
+            utc_offset_minutes=lambda: 480,
+        )
+
+        asyncio.run(agent.sync_time())
+
+        self.assertEqual(
+            transport.messages,
+            [
+                (
+                    EVENT_MESSAGE,
+                    {
+                        "type": "time_sync",
+                        "unix_ms": 1_783_872_000_123,
+                        "utc_offset_minutes": 480,
+                    },
+                )
+            ],
+        )
+
     def test_pending_alert_backlog_chimes_once_and_marks_all_notified(self):
         collector = FakeCollector()
         transport = FakeTransport()

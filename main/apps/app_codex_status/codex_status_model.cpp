@@ -1,12 +1,29 @@
 #include "codex_status_model.h"
 
 #include <cJSON.h>
+#include <cmath>
 #include <cstring>
 
 
 namespace {
 
 constexpr size_t kMaxAlerts = 8;
+constexpr double kMaximumExactJsonInteger = 9007199254740991.0;
+constexpr int64_t kMinimumUnixMs = 1577836800000LL;
+constexpr int64_t kMaximumUnixMs = 4102444800000LL;
+constexpr int kMaximumUtcOffsetMinutes = 14 * 60;
+
+bool json_exact_int64(cJSON* root, const char* key, int64_t& value)
+{
+    cJSON* item = cJSON_GetObjectItemCaseSensitive(root, key);
+    if (!cJSON_IsNumber(item) || !std::isfinite(item->valuedouble) ||
+        std::floor(item->valuedouble) != item->valuedouble ||
+        std::abs(item->valuedouble) > kMaximumExactJsonInteger) {
+        return false;
+    }
+    value = static_cast<int64_t>(item->valuedouble);
+    return true;
+}
 
 int json_int_or(cJSON* root, const char* key, int fallback)
 {
@@ -95,6 +112,24 @@ CodexMessageKind parse_codex_message(const char* data, size_t length, CodexStatu
         const std::string agent = json_string_or_empty(root, "agent");
         cJSON_Delete(root);
         return agent == "codex" ? CodexMessageKind::Chime : CodexMessageKind::Invalid;
+    }
+
+    if (type == "time_sync") {
+        int64_t unix_time_ms = 0;
+        int64_t offset_minutes = 0;
+        if (!json_exact_int64(root, "unix_ms", unix_time_ms) ||
+            !json_exact_int64(root, "utc_offset_minutes", offset_minutes) ||
+            unix_time_ms < kMinimumUnixMs || unix_time_ms > kMaximumUnixMs ||
+            offset_minutes < -kMaximumUtcOffsetMinutes ||
+            offset_minutes > kMaximumUtcOffsetMinutes) {
+            cJSON_Delete(root);
+            return CodexMessageKind::Invalid;
+        }
+        snapshot = CodexStatusSnapshot{};
+        snapshot.unix_time_ms = unix_time_ms;
+        snapshot.utc_offset_minutes = static_cast<int>(offset_minutes);
+        cJSON_Delete(root);
+        return CodexMessageKind::TimeSync;
     }
 
     snapshot = CodexStatusSnapshot{};

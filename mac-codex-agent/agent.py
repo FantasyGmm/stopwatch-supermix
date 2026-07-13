@@ -2,7 +2,9 @@
 """Continuously deliver local Codex status to a StopWatch over BLE."""
 
 import asyncio
+import datetime
 import json
+import time
 from typing import Any, Callable, Optional
 
 from codex_adapter import CodexStateCollector
@@ -21,14 +23,37 @@ MAX_PROJECT_LENGTH = 32
 MAX_TITLE_LENGTH = 48
 
 
+def _unix_time_ms() -> int:
+    return time.time_ns() // 1_000_000
+
+
+def _utc_offset_minutes() -> int:
+    offset = datetime.datetime.now().astimezone().utcoffset()
+    return int(offset.total_seconds() // 60) if offset is not None else 0
+
+
 class CodexStatusAgent:
     def __init__(
         self,
         collector: CodexStateCollector,
         transport: Any,
+        time_ms: Callable[[], int] = _unix_time_ms,
+        utc_offset_minutes: Callable[[], int] = _utc_offset_minutes,
     ):
         self.collector = collector
         self.transport = transport
+        self._time_ms = time_ms
+        self._utc_offset_minutes = utc_offset_minutes
+
+    async def sync_time(self) -> None:
+        payload = {
+            "type": "time_sync",
+            "unix_ms": self._time_ms(),
+            "utc_offset_minutes": self._utc_offset_minutes(),
+        }
+        await self.transport.send_json(
+            json.dumps(payload, separators=(",", ":")), EVENT_MESSAGE
+        )
 
     async def tick(self, status=None):
         if status is None:

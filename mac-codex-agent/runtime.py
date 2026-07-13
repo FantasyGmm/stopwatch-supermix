@@ -231,6 +231,7 @@ class AgentRuntime:
                 return "not_found"
             self._transition(ConnectionState.CONNECTED)
             status_agent = CodexStatusAgent(self._collector, transport)
+            await status_agent.sync_time()
             if self._status_ready is not None:
                 await self._status_ready.wait()
             while transport.connected:

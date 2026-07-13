@@ -4,6 +4,12 @@ This menu bar agent reads the local Codex model, reasoning effort, quota, and
 conversation progress events, then sends a compact status snapshot to the
 StopWatch over BLE.
 
+After each successful BLE connection, it sends one time-sync event before the
+first status snapshot. The event contains the current Unix time and the Mac's
+effective UTC offset; the watch applies them globally and stores the result in
+its hardware RTC. The current version uses a fixed offset for that connection,
+so reconnecting refreshes daylight-saving or timezone changes.
+
 It does not send OAuth credentials, prompts, responses, or source code to the watch.
 
 ## Install

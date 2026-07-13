@@ -8,6 +8,7 @@ import unittest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from app_state import ConnectionState, MemoryPreferences
+from protocol import EVENT_MESSAGE, STATUS_MESSAGE
 from runtime import AgentCommand, AgentController, AgentRuntime
 
 
@@ -37,11 +38,13 @@ class FakeTransport:
         connect_error=None,
         block_connect=False,
         block_disconnect=False,
+        send_error=None,
     ):
         self.connect_result = connect_result
         self.connect_error = connect_error
         self.block_connect = block_connect
         self.block_disconnect = block_disconnect
+        self.send_error = send_error
         self.connect_started = asyncio.Event()
         self.connected_event = asyncio.Event()
         self.disconnected_event = asyncio.Event()
@@ -76,6 +79,8 @@ class FakeTransport:
             await asyncio.Event().wait()
 
     async def send_json(self, payload, message_type):
+        if self.send_error is not None:
+            raise self.send_error
         self.messages.append((message_type, payload))
 
 
@@ -223,10 +228,13 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         task = asyncio.create_task(runtime.run())
         await factory.wait_for_instances(1)
         transport = factory.instances[0]
-        await wait_for_messages(transport, 1)
+        await wait_for_messages(transport, 2)
 
         self.assertEqual(collector.calls, 1)
-        self.assertEqual(json.loads(transport.messages[0][1]), status)
+        self.assertEqual(transport.messages[0][0], EVENT_MESSAGE)
+        self.assertEqual(json.loads(transport.messages[0][1])["type"], "time_sync")
+        self.assertEqual(transport.messages[1][0], STATUS_MESSAGE)
+        self.assertEqual(json.loads(transport.messages[1][1]), status)
         runtime.submit(AgentCommand.STOP)
         await asyncio.wait_for(task, 1)
 
@@ -279,10 +287,43 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         task = asyncio.create_task(runtime.run())
         await factory.wait_for_instances(1)
         await factory.instances[0].connected_event.wait()
+        await wait_for_messages(factory.instances[0], 1)
         runtime.submit(AgentCommand.RECONNECT)
         await factory.wait_for_instances(2)
         await factory.instances[1].connected_event.wait()
+        await wait_for_messages(factory.instances[1], 1)
         self.assertEqual(factory.instances[0].disconnect_count, 1)
+        self.assertEqual(factory.instances[0].messages[0][0], EVENT_MESSAGE)
+        self.assertEqual(
+            json.loads(factory.instances[0].messages[0][1])["type"], "time_sync"
+        )
+        self.assertEqual(factory.instances[1].messages[0][0], EVENT_MESSAGE)
+        self.assertEqual(
+            json.loads(factory.instances[1].messages[0][1])["type"], "time_sync"
+        )
+        runtime.submit(AgentCommand.STOP)
+        await asyncio.wait_for(task, 1)
+
+    async def test_failed_time_sync_write_disconnects_and_retries(self):
+        factory = FakeTransportFactory(
+            [{"send_error": ConnectionError("time sync failed")}, {}]
+        )
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            transport_factory=factory,
+            status_interval=0.01,
+            retry_delays=(0.01,),
+        )
+
+        task = asyncio.create_task(runtime.run())
+        await factory.wait_for_instances(2)
+        await wait_for_messages(factory.instances[1], 1)
+
+        self.assertEqual(factory.instances[0].disconnect_count, 1)
+        self.assertEqual(factory.instances[1].messages[0][0], EVENT_MESSAGE)
+        self.assertEqual(
+            json.loads(factory.instances[1].messages[0][1])["type"], "time_sync"
+        )
         runtime.submit(AgentCommand.STOP)
         await asyncio.wait_for(task, 1)
 

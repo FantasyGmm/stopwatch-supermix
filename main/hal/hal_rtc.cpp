@@ -4,8 +4,10 @@
  * SPDX-License-Identifier: MIT
  */
 #include "hal.h"
+#include "timezone_offset.h"
 #include "utils/settings/settings.h"
 #include "drivers/rx8130/rx8130.h"
+#include <cstdint>
 #include <mooncake_log.h>
 #include <memory>
 #include <sys/time.h>
@@ -112,6 +114,27 @@ void Hal::syncSystemTimeToRtc()
     mclog::tagInfo(_tag, "system synced to rtc (UTC): {:04d}-{:02d}-{:02d} {:02d}:{:02d}:{:02d}",
                    tm_curr.tm_year + 1900, tm_curr.tm_mon + 1, tm_curr.tm_mday, tm_curr.tm_hour, tm_curr.tm_min,
                    tm_curr.tm_sec);
+}
+
+bool Hal::syncUnixTime(int64_t unix_ms, int utc_offset_minutes)
+{
+    const auto timezone = posix_timezone_for_utc_offset(utc_offset_minutes);
+    if (!timezone || unix_ms < 0) {
+        return false;
+    }
+
+    struct timeval tv = {
+        .tv_sec  = static_cast<time_t>(unix_ms / 1000),
+        .tv_usec = static_cast<suseconds_t>((unix_ms % 1000) * 1000),
+    };
+    if (settimeofday(&tv, nullptr) != 0) {
+        mclog::tagError(_tag, "failed to apply synchronized system time");
+        return false;
+    }
+
+    setTimezone(*timezone);
+    syncSystemTimeToRtc();
+    return true;
 }
 
 void Hal::setTimezone(std::string_view tz)

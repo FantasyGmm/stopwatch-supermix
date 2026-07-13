@@ -660,6 +660,16 @@ bool AppCodexStatus::handle_status_json(const char* data, int length, const char
         audio::play_tone(660, 0.45f, 0.45f);
         return true;
     }
+    if (kind == CodexMessageKind::TimeSync) {
+        const bool applied = GetHAL().syncUnixTime(
+            snapshot.unix_time_ms,
+            snapshot.utc_offset_minutes
+        );
+        if (!applied) {
+            mclog::tagError(getAppInfo().name, "time sync event rejected by HAL");
+        }
+        return applied;
+    }
 
     char model[18];
     char effort[12];

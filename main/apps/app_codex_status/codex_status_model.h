@@ -23,6 +23,8 @@ struct CodexTaskAlert {
 struct CodexStatusSnapshot {
     std::string model;
     std::string effort;
+    int64_t unix_time_ms = 0;
+    int utc_offset_minutes = 0;
     int five_hour_left_pct = -1;
     int week_left_pct = -1;
     int pending_count = 0;
@@ -38,6 +40,7 @@ enum class CodexMessageKind {
     Invalid,
     Status,
     Chime,
+    TimeSync,
 };
 
 
