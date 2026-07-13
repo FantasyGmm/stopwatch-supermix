@@ -136,11 +136,13 @@ class UnifiedRuntimeFirmwareContractTest(unittest.TestCase):
             self.assertNotIn(forbidden, view_header.lower())
             self.assertNotIn(forbidden, view_source.lower())
 
-    def test_partition_table_has_one_factory_application(self):
-        rows = parse_partition_csv("partitions.csv")
+    def test_unified_candidate_has_one_factory_application(self):
+        rows = parse_partition_csv("partitions_unified.csv")
         app_rows = [row for row in rows if len(row) >= 3 and row[1] == "app"]
-        self.assertEqual(len(app_rows), 1)
-        self.assertEqual(app_rows[0][2], "factory")
+        self.assertEqual(
+            [(row[0], row[2], row[3], row[4]) for row in app_rows],
+            [("app", "factory", "0x20000", "0x780000")],
+        )
 
     def test_brookesia_dependencies_are_pinned_to_zero_seven(self):
         manifest = read("main/idf_component.yml")
@@ -152,31 +154,27 @@ class UnifiedRuntimeFirmwareContractTest(unittest.TestCase):
             )
             self.assertRegex(manifest, version_pattern, component)
 
-    def test_standalone_assistant_flash_path_is_removed(self):
-        self.assertFalse(
-            (ROOT / "scripts" / "flash_assistant_runtime.sh").exists()
+    def test_legacy_layout_and_recovery_tools_remain_during_shadow_mode(self):
+        legacy = read("partitions.csv")
+        self.assertIn("ota_0", legacy)
+        self.assertIn("ota_1", legacy)
+        self.assertTrue(
+            (ROOT / "scripts" / "flash_assistant_runtime.sh").is_file()
         )
-        full_flash = read("scripts/flash_full_assistant_stack.sh")
-        self.assertNotIn("xiaozhi.bin", full_flash)
-        self.assertNotIn("ASSISTANT_APP", full_flash)
+        self.assertTrue(
+            (ROOT / "scripts" / "flash_full_assistant_stack.sh").is_file()
+        )
 
-    def test_supported_runtime_sources_do_not_depend_on_ota_slot_labels(self):
-        offenders = []
-        for root in (ROOT / "main", ROOT / "scripts"):
-            for path in root.rglob("*"):
-                if not path.is_file() or path.suffix not in {
-                    ".c",
-                    ".cc",
-                    ".cpp",
-                    ".h",
-                    ".hpp",
-                    ".py",
-                    ".sh",
-                }:
-                    continue
-                source = path.read_text(encoding="utf-8")
-                if re.search(r"\bota_[01]\b", source):
-                    offenders.append(path.relative_to(ROOT).as_posix())
+    def test_new_product_path_has_no_ota_slot_dependency(self):
+        paths = [
+            ROOT / "main" / "apps" / "app_assistant" / "app_assistant.cpp",
+            ROOT / "scripts" / "build_unified_candidate.sh",
+        ]
+        offenders = [
+            path.relative_to(ROOT).as_posix()
+            for path in paths
+            if re.search(r"\bota_[01]\b", path.read_text(encoding="utf-8"))
+        ]
         self.assertEqual(offenders, [])
 
 

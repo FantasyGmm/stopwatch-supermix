@@ -3,6 +3,7 @@
 
 import argparse
 import csv
+import hashlib
 import json
 import pathlib
 import re
@@ -21,6 +22,14 @@ def require_file(path):
     return path
 
 
+def sha256_file(path):
+    digest = hashlib.sha256()
+    with require_file(path).open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def parse_size(value):
     value = value.strip().lower()
     multipliers = {"k": 1024, "m": 1024 * 1024}
@@ -32,6 +41,18 @@ def parse_size(value):
         return int(value, 0) * multiplier
     except ValueError as error:
         raise MetricsError(f"invalid partition size: {value!r}") from error
+
+
+def parse_byte_limit(value):
+    try:
+        limit = int(value, 0)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(
+            f"invalid byte limit: {value!r}"
+        ) from error
+    if limit < 0:
+        raise argparse.ArgumentTypeError("byte limit must not be negative")
+    return limit
 
 
 def first_app_partition(partition_table):
@@ -113,6 +134,9 @@ def collect_metrics(
     build_dir,
     partition_table,
     assistant_bin=None,
+    assets_bin=None,
+    max_app_bytes=None,
+    max_assets_bytes=None,
     source="launcher-baseline",
 ):
     repo_root = pathlib.Path(repo_root).resolve()
@@ -127,9 +151,14 @@ def collect_metrics(
         raise MetricsError(
             f"application binary exceeds partition: {app_bytes} > {partition_bytes}"
         )
+    if max_app_bytes is not None and app_bytes > max_app_bytes:
+        raise MetricsError(
+            "application capacity gate failed: "
+            f"{app_bytes} > {max_app_bytes} bytes"
+        )
 
     metrics = {
-        "schema_version": 1,
+        "schema_version": 2,
         "source": source,
         "project_name": description["project_name"],
         "build_project_version": description["project_version"],
@@ -141,6 +170,8 @@ def collect_metrics(
         if app_bin.is_relative_to(repo_root)
         else str(app_bin),
         "app_bytes": app_bytes,
+        "app_sha256": sha256_file(app_bin),
+        "max_app_bytes": max_app_bytes,
         "app_partition_label": partition_label,
         "app_partition_bytes": partition_bytes,
         "app_headroom_bytes": partition_bytes - app_bytes,
@@ -148,7 +179,37 @@ def collect_metrics(
             (partition_bytes - app_bytes) * 100 / partition_bytes, 2
         ),
         "diram_bytes": parse_diram_bytes(map_path),
+        "assets_bin": None,
+        "assets_bytes": None,
+        "assets_sha256": None,
+        "max_assets_bytes": max_assets_bytes,
+        "capacity_gate_passed": (
+            (max_app_bytes is None or app_bytes <= max_app_bytes)
+        ),
     }
+
+    if assets_bin is not None:
+        assets_path = require_file(assets_bin)
+        assets_bytes = assets_path.stat().st_size
+        if max_assets_bytes is not None and assets_bytes > max_assets_bytes:
+            raise MetricsError(
+                "assets capacity gate failed: "
+                f"{assets_bytes} > {max_assets_bytes} bytes"
+            )
+        metrics.update(
+            {
+                "assets_bin": assets_path.relative_to(repo_root).as_posix()
+                if assets_path.is_relative_to(repo_root)
+                else str(assets_path),
+                "assets_bytes": assets_bytes,
+                "assets_sha256": sha256_file(assets_path),
+                "capacity_gate_passed": metrics["capacity_gate_passed"]
+                and (
+                    max_assets_bytes is None
+                    or assets_bytes <= max_assets_bytes
+                ),
+            }
+        )
 
     if assistant_bin is not None:
         assistant_path = require_file(assistant_bin)
@@ -176,6 +237,9 @@ def parse_args(argv):
     parser.add_argument("--build-dir", type=pathlib.Path)
     parser.add_argument("--partition-table", type=pathlib.Path)
     parser.add_argument("--assistant-bin", type=pathlib.Path)
+    parser.add_argument("--assets-bin", type=pathlib.Path)
+    parser.add_argument("--max-app-bytes", type=parse_byte_limit)
+    parser.add_argument("--max-assets-bytes", type=parse_byte_limit)
     parser.add_argument("--source", default="launcher-baseline")
     parser.add_argument("--output", type=pathlib.Path, required=True)
     return parser.parse_args(argv)
@@ -189,7 +253,7 @@ def main(argv=None):
         args.partition_table or repo_root / "partitions.csv"
     ).resolve()
     assistant_bin = args.assistant_bin
-    if assistant_bin is None:
+    if assistant_bin is None and args.source == "launcher-baseline":
         default_assistant = (
             repo_root
             / "third_party"
@@ -205,6 +269,9 @@ def main(argv=None):
             build_dir=build_dir,
             partition_table=partition_table,
             assistant_bin=assistant_bin,
+            assets_bin=args.assets_bin,
+            max_app_bytes=args.max_app_bytes,
+            max_assets_bytes=args.max_assets_bytes,
             source=args.source,
         )
         args.output.parent.mkdir(parents=True, exist_ok=True)
