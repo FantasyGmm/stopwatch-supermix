@@ -1,0 +1,16 @@
+menu "StopWatch Unified Assistant Compatibility"
+
+    config LANGUAGE_ZH_CN
+        bool "Use Simplified Chinese for the unified assistant"
+        default y
+        help
+            Preserve the language selected by the existing StopWatch Xiaozhi image.
+
+    config USE_AFE_WAKE_WORD
+        bool "Package the AFE wake-word model"
+        default y
+        help
+            Expose the upstream Xiaozhi asset-generator switch without importing
+            Xiaozhi's standalone application Kconfig.
+
+endmenu

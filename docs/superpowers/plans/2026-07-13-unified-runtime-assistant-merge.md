@@ -569,14 +569,19 @@ git commit -m "Centralize runtime Wi-Fi ownership"
 
 **Files:**
 - Modify: `main/idf_component.yml`
+- Create: `main/Kconfig.projbuild`
+- Modify: `sdkconfig`
 - Modify: `sdkconfig.defaults`
 - Modify: `dependencies.lock`
 - Create: `main/cmake/unified_assets.cmake`
+- Create: `main/cmake/check_binary_size.cmake`
 - Modify: `main/CMakeLists.txt`
 - Create: `docs/superpowers/reports/brookesia-xiaozhi-compatibility.md`
+- Create: `main/runtime/assistant/assistant_probe.h`
 - Create: `main/runtime/assistant/assistant_probe.cpp`
+- Create: `mac-codex-agent/tests/test_xiaozhi_probe_firmware_contract.py`
 
-- [ ] **Step 1: Add only the required Agent dependencies**
+- [x] **Step 1: Add only the required Agent dependencies**
 
 Add the stable 0.7 range for:
 
@@ -593,7 +598,7 @@ Add the stable 0.7 range for:
 
 If `brookesia_service_wifi` is a required transitive dependency, pin it explicitly to the same range but keep it behind the StopWatch Wi-Fi ownership adapter. Re-run the lockfile 0.8 exclusion.
 
-- [ ] **Step 2: Configure the existing product identity and audio model**
+- [x] **Step 2: Configure the existing product identity and audio model**
 
 Map the current Xiaozhi activation identity, server configuration, wake model partition, language, 16 kHz input, Opus settings, and volume to the Brookesia Agent configuration. Do not create a new user-visible device identity unless the server protocol requires reactivation and the user approves it.
 
@@ -616,7 +621,7 @@ add_custom_target(generated_unified_assets ALL DEPENDS "${UNIFIED_ASSETS_BIN}")
 
 Include this file from `main/CMakeLists.txt`. Configure exactly the wake model that passed the existing Assistant baseline; do not package Xiaozhi's alternate board fonts, emoji packs, or display assets that the Mooncake UI does not use. Assert `build/generated_assets.bin` is non-empty and at most 4 MiB.
 
-- [ ] **Step 3: Build a temporary probe outside Mooncake navigation**
+- [x] **Step 3: Build a temporary probe outside Mooncake navigation**
 
 The probe must:
 
@@ -628,6 +633,8 @@ The probe must:
 6. call `Stop`, wait for the `Stopped` event, disconnect subscriptions, and release bindings.
 
 Use the official helper APIs and event acknowledgement; do not infer stopped state from a fixed delay.
+
+Deferred-validation note (2026-07-13): the 0.7 dependency lock, identity/server/audio mapping, 291,198-byte wake-model assets, and temporary probe are build-verified. The linked candidate is `0x5c22d0` bytes and exceeds each unchanged `0x4f0000` OTA slot by `0xd22d0`, which remains deferred to the approved Task 10 partition migration. Steps 4 and 5 require the concentrated watch campaign; the gate is not passed and the dual-image fallback remains intact.
 
 - [ ] **Step 4: Execute the hardware compatibility matrix**
 

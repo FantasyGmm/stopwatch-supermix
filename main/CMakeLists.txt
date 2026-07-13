@@ -33,3 +33,5 @@ idf_component_register(
     EMBED_TXTFILES
         "hal/utils/config_ap/assets/badge_config_ap.html"
 )
+
+include(cmake/unified_assets.cmake)
