@@ -1,35 +1,35 @@
 # Unified Runtime Validation
 
-- Automated tests: Passed only when the offline runner succeeds
-- Unified clean build: Passed only when candidate build and capacity gates succeed
+- Automated tests: Passed (114 Python tests and 5 host C++ test binaries)
+- Unified clean build: Passed (isolated clean build and capacity gates)
 - Hardware compatibility: Pending hardware
 - Lifecycle coexistence: Pending hardware
 - 100-cycle stress: Pending hardware
 - Full product regression: Pending hardware
 
-This report deliberately separates reproducible offline evidence from evidence that can only be collected on the watch. Run `scripts/run_unified_offline_validation.sh` to reproduce the automated gates. A successful offline run does not change any hardware status.
+This report deliberately separates reproducible offline evidence from evidence that can only be collected on the watch. `scripts/run_unified_offline_validation.sh` completed successfully on 2026-07-14 from committed source `b3e8952e2a993fc3da78c882bcdce4a99dad4008`. The run passed 114 Python tests, all 5 host C++ test binaries, the isolated unified clean build, both image-size gates, and `git diff --check`. A successful offline run does not change any hardware status.
 
 ## Automated evidence
 
-The final handoff updates generated values from `build-unified/unified-runtime-metrics.json`; placeholders are not hardware claims.
+The values below are copied from the clean build's generated `build-unified/unified-runtime-metrics.json` (schema 2). They are reproducible build evidence, not hardware claims.
 
 | Evidence | Value | Source |
 |---|---|---|
-| Firmware Git SHA | Pending final handoff | `source_git_commit` |
-| Application image SHA256 | Pending final handoff | `app_sha256` |
-| Application bytes | Pending final handoff | `app_bytes` |
+| Firmware Git SHA | `b3e8952e2a993fc3da78c882bcdce4a99dad4008` | `source_git_commit` |
+| Application image SHA256 | `bfb0a6a8098c71aac11e916ba3e8507cee36014390c9591c4e70bd0d965c3a28` | `app_sha256` |
+| Application bytes | `6,005,520` (`0x5ba310`) | `app_bytes` |
 | Application partition bytes | `0x780000` (7,864,320) | `partitions_unified.csv` |
-| Application headroom | Pending final handoff | `app_headroom_bytes` and `app_headroom_percent` |
+| Application headroom | `1,858,800` bytes (`0x1c5cf0`, 23.64%) | `app_headroom_bytes` and `app_headroom_percent` |
 | Application hard gate | `0x660000` (6,684,672) | candidate build command |
-| Assets image SHA256 | Pending final handoff | `assets_sha256` |
-| Assets bytes | Pending final handoff | `assets_bytes` |
+| Assets image SHA256 | `93b87d059d1c2a31f1dd65bbdfa4d5b7275774f6f12e82eb84a1737acad3723f` | `assets_sha256` |
+| Assets bytes | `291,198` | `assets_bytes` |
 | Assets hard gate | `0x400000` (4,194,304) | candidate build command |
-| Static DIRAM bytes | Pending final handoff | `diram_bytes` |
-| Capacity gate | Pending final handoff | `capacity_gate_passed` |
+| Static DIRAM bytes | `200,931` | `diram_bytes` |
+| Capacity gate | Passed | `capacity_gate_passed: true` |
 
 ### Resolved Brookesia versions
 
-These versions are resolved by the checked-in `dependencies.lock`; the final handoff verifies that the clean candidate build used the same lock.
+These versions are resolved by the checked-in `dependencies.lock`; the clean candidate configuration processed the same locked versions.
 
 | Component | Resolved version |
 |---|---:|
@@ -45,6 +45,14 @@ These versions are resolved by the checked-in `dependencies.lock`; the final han
 | `espressif/brookesia_service_manager` | 0.7.8 |
 | `espressif/brookesia_service_nvs` | 0.7.4 |
 | `espressif/brookesia_service_sntp` | 0.7.2 |
+
+### Repository boundary and handoff
+
+- The Assistant product path contains no `esp_ota_set_boot_partition`, `esp_restart`, or `ota_1` reference.
+- The new backup, restore, and unified-candidate helpers contain no `erase_flash` command.
+- The checked-in legacy `partitions.csv` still contains both `ota_0` and `ota_1`, and the legacy Assistant flash path and complete-backup restore helper remain available. The dual-OTA recovery path has not been removed or promoted away.
+- No firmware was flashed, no serial port was accessed, and no device command was run while collecting this evidence.
+- After the offline validation is rerun with the watch available, the first hardware action in Stage 2 is to create and verify a complete 16 MiB Flash backup and its SHA256 sidecar. No candidate write may occur before that backup passes verification.
 
 ## Hardware evidence
 

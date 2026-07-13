@@ -1,8 +1,8 @@
 # Brookesia Xiaozhi Compatibility Gate
 
-Date: 2026-07-13
+Date: 2026-07-14
 
-Gate status: Pending hardware. This report records the build-ready probe only; it does not authorize removal of the dual-image fallback or entry into the destructive partition migration.
+Gate status: Pending hardware. The offline candidate is build-verified, but this report does not authorize removal of the dual-image fallback or a candidate write.
 
 ## Candidate configuration
 
@@ -20,9 +20,11 @@ Gate status: Pending hardware. This report records the build-ready probe only; i
 
 ## Non-hardware evidence
 
-The dependency lock excludes Brookesia 0.8. The unified build generates a 291,198-byte `generated_assets.bin` and enforces a 4 MiB ceiling. The temporary probe compiles and links against the resolved 0.7 APIs, starts `Activate` and `Start` asynchronously, and releases its subscriptions only after the `Stopped` lifecycle event.
+The 2026-07-14 offline runner completed from committed source `b3e8952e2a993fc3da78c882bcdce4a99dad4008`: 114 Python tests, all 5 host C++ test binaries, the isolated clean unified build, capacity gates, and `git diff --check` passed. The candidate links against the Brookesia 0.7 versions in `dependencies.lock`; Brookesia 0.8 is not selected. Its production lifecycle starts `Activate` and `Start` asynchronously and releases subscriptions only after the current session's `Stopped` event.
 
-The linked application image is `0x5c22d0` bytes. The existing dual-OTA layout intentionally remains unchanged, so its `0x4f0000` slots reject this candidate with an overflow of `0xd22d0`. This is the expected Task 10 capacity gap, not a Task 7 API or link failure; no partition or flash operation was performed.
+The generated application is 6,005,520 bytes (`0x5ba310`) with SHA256 `bfb0a6a8098c71aac11e916ba3e8507cee36014390c9591c4e70bd0d965c3a28`. It leaves 1,858,800 bytes (`0x1c5cf0`, 23.64%) in the unified `0x780000` application partition and passes the `0x660000` hard gate. Static DIRAM is 200,931 bytes. `generated_assets.bin` is 291,198 bytes with SHA256 `93b87d059d1c2a31f1dd65bbdfa4d5b7275774f6f12e82eb84a1737acad3723f` and passes its 4 MiB gate.
+
+The legacy dual-OTA `partitions.csv`, legacy Assistant recovery path, and complete-backup restore helper remain checked in. The Assistant product path contains no boot-partition switch, restart, or `ota_1` reference, and the new backup/restore/candidate helpers contain no `erase_flash`. No firmware was flashed, no serial port was accessed, and no device command was run. When hardware work begins, the offline gate is rerun first; the first hardware action in Stage 2 is a complete, size- and SHA256-verified 16 MiB Flash backup before any candidate write.
 
 ## Hardware matrix
 
@@ -41,4 +43,4 @@ The linked application image is `0x5c22d0` bytes. The existing dual-OTA layout i
 | `Stop` while reconnecting | Pending hardware | `Stopped` within 2 seconds |
 | Post-stop tasks/connections | Pending hardware | Zero Agent session residue |
 
-Task 8 may proceed in offline shadow mode; single-partition promotion remains gated by this hardware matrix and the complete regression campaign.
+Task 8 may proceed in offline shadow mode; single-partition promotion remains gated by this hardware matrix, the lifecycle/stress gates, and the complete regression campaign.
