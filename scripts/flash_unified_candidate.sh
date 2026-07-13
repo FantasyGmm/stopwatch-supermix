@@ -1,0 +1,151 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PORT=""
+BACKUP=""
+BUILD_DIR="$ROOT/build-unified"
+DRY_RUN=0
+PYTHON_BIN="${PYTHON:-python}"
+FLASH_BYTES=$((0x1000000))
+MAX_APP_BYTES=$((0x660000))
+MAX_ASSETS_BYTES=$((0x400000))
+
+usage() {
+    echo "Usage: $0 --port PORT --backup FILE [--build-dir DIR] [--dry-run]" >&2
+}
+
+file_size() {
+    wc -c < "$1" | tr -d '[:space:]'
+}
+
+require_file() {
+    if [[ ! -f "$1" ]]; then
+        echo "Required artifact is missing: $1" >&2
+        return 1
+    fi
+}
+
+check_max_size() {
+    local path="$1"
+    local max_size="$2"
+    local label="$3"
+    local size
+    size="$(file_size "$path")"
+    if (( size > max_size )); then
+        echo "$label exceeds capacity limit: $size > $max_size bytes" >&2
+        return 1
+    fi
+}
+
+verify_backup() {
+    local backup="$1"
+    local sidecar="${backup}.sha256"
+    local size expected_hash actual_hash
+
+    if [[ ! -f "$backup" ]]; then
+        echo "Backup file is missing: $backup" >&2
+        return 1
+    fi
+    if [[ ! -f "$sidecar" ]]; then
+        echo "Backup checksum sidecar is missing: $sidecar" >&2
+        return 1
+    fi
+
+    size="$(file_size "$backup")"
+    if [[ "$size" != "$FLASH_BYTES" ]]; then
+        echo "Backup size is invalid: $size != $FLASH_BYTES bytes" >&2
+        return 1
+    fi
+
+    expected_hash="$(awk 'NR == 1 { print $1 }' "$sidecar")"
+    if [[ ${#expected_hash} -ne 64 || "$expected_hash" =~ [^0-9a-fA-F] ]]; then
+        echo "Backup checksum sidecar is invalid: $sidecar" >&2
+        return 1
+    fi
+    actual_hash="$(shasum -a 256 -- "$backup" | awk '{ print $1 }')"
+    expected_hash="$(printf '%s' "$expected_hash" | tr 'A-F' 'a-f')"
+    if [[ "$actual_hash" != "$expected_hash" ]]; then
+        echo "Backup checksum mismatch: $backup" >&2
+        return 1
+    fi
+}
+
+while (( $# > 0 )); do
+    case "$1" in
+        --port)
+            [[ $# -ge 2 ]] || { usage; exit 2; }
+            PORT="$2"
+            shift 2
+            ;;
+        --backup)
+            [[ $# -ge 2 ]] || { usage; exit 2; }
+            BACKUP="$2"
+            shift 2
+            ;;
+        --build-dir)
+            [[ $# -ge 2 ]] || { usage; exit 2; }
+            BUILD_DIR="$2"
+            shift 2
+            ;;
+        --dry-run)
+            DRY_RUN=1
+            shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            echo "Unknown argument: $1" >&2
+            usage
+            exit 2
+            ;;
+    esac
+done
+
+if [[ -z "$PORT" || -z "$BACKUP" ]]; then
+    echo "Both --port and --backup are required" >&2
+    usage
+    exit 2
+fi
+
+verify_backup "$BACKUP"
+
+BOOTLOADER="$BUILD_DIR/bootloader/bootloader.bin"
+PARTITION_TABLE="$BUILD_DIR/partition_table/partition-table.bin"
+APP="$BUILD_DIR/StopWatch-UserDemo.bin"
+ASSETS="$BUILD_DIR/generated_assets.bin"
+
+require_file "$BOOTLOADER"
+require_file "$PARTITION_TABLE"
+require_file "$APP"
+require_file "$ASSETS"
+check_max_size "$APP" "$MAX_APP_BYTES" "Unified application"
+check_max_size "$ASSETS" "$MAX_ASSETS_BYTES" "Unified assets"
+
+command=(
+    "$PYTHON_BIN" -m esptool
+    --chip esp32s3
+    -p "$PORT"
+    -b 460800
+    --before default_reset
+    --after hard_reset
+    write_flash
+    --flash_mode dio
+    --flash_freq 80m
+    --flash_size 16MB
+    0x000000 "$BOOTLOADER"
+    0x008000 "$PARTITION_TABLE"
+    0x020000 "$APP"
+    0x8a0000 "$ASSETS"
+)
+
+if (( DRY_RUN )); then
+    printf 'DRY RUN:'
+    printf ' %q' "${command[@]}"
+    printf '\n'
+    exit 0
+fi
+
+"${command[@]}"
