@@ -43,6 +43,20 @@ It does not implement Recovery OTA, Codex-to-Mac audio transport, Mac STT, BLE c
 
 The critical path is Tasks 2 → 4 → 5 → 7 → 8 → 9 → 10 → 11 → 12. Allow 30–50 person-days including hardware-specific rework. The gate in Task 7 can deliberately stop the project before destructive dual-image cleanup if the official Agent does not meet product parity.
 
+## Deferred Hardware Validation Mode
+
+The watch is not currently available. Continue implementing the non-destructive unified-runtime path with host tests, source contracts, dependency resolution, and full firmware builds. Record hardware-only steps as pending and execute them together when the watch is available.
+
+Until that validation session:
+
+- keep the existing dual-image partition table, Assistant boot switching, and standalone Assistant flash path intact;
+- do not claim any microphone, speaker, Wi-Fi coexistence, heap-stability, or Assistant compatibility result;
+- do not pass the Task 7 compatibility gate or begin the destructive cleanup in Task 10;
+- permit Tasks 4–9 to reach a build-verified release-candidate state, with hardware-dependent checkboxes left open;
+- perform one concentrated hardware campaign covering the deferred checks from Tasks 2, 4, 5, 6, 7, 8, and 9 before Task 10.
+
+This changes execution order only. The original hardware acceptance criteria remain mandatory.
+
 ## Fixed Technical Decisions
 
 - Pin every Brookesia direct dependency to `>=0.7.0,<0.8.0`, then commit `dependencies.lock` to pin exact patch versions.
@@ -340,7 +354,7 @@ git commit -m "Add runtime resource ownership policy"
 - Modify: `main/CMakeLists.txt`
 - Create: `tests/audio_backend_lifecycle_test.cpp`
 
-- [ ] **Step 1: Extract the logical lifecycle contract**
+- [x] **Step 1: Extract the logical lifecycle contract**
 
 Define a hardware-independent state object used by the backend and test it first:
 
@@ -357,7 +371,7 @@ assert(state.closePlayer() == AudioCloseResult::Closed);
 
 Run the host test and confirm RED before implementing the state object.
 
-- [ ] **Step 2: Move physical audio ownership out of the file-local singleton**
+- [x] **Step 2: Move physical audio ownership out of the file-local singleton**
 
 Move the codec/I2S fields currently hidden in `main/hal/hal_audio.cpp` into `StopWatchAudioBackend`. Preserve one-time physical initialization, but add session-level methods:
 
@@ -374,7 +388,7 @@ bool setGeneralGain(float gain_db);
 
 Codec bus and I2S channel installation remain one-time. `open` and `close` only enable/disable the corresponding data path and session task. Do not create a permanent playback task when no playback session is active.
 
-- [ ] **Step 3: Preserve existing HAL behavior**
+- [x] **Step 3: Preserve existing HAL behavior**
 
 Keep `Hal::audioRecord`, `Hal::audioPlay`, and `Hal::getAudioSampleRate` as compatibility facades. Route them through a `System` session so Boot SFX and existing FFT behavior remain unchanged while applications migrate.
 
@@ -389,7 +403,7 @@ Add temporary diagnostic commands or a guarded boot test that executes 100 recor
 
 Remove the temporary automatic loop before committing; retain a callable diagnostic method.
 
-- [ ] **Step 5: Run regression and commit**
+- [x] **Step 5: Run regression and commit**
 
 ```bash
 c++ -std=c++17 -Imain tests/audio_backend_lifecycle_test.cpp main/hal/audio/audio_backend_lifecycle.cpp -o /tmp/audio_backend_lifecycle_test

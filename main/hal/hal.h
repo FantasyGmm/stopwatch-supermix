@@ -19,6 +19,8 @@
 #include <array>
 #include <M5GFX.h>
 
+class StopWatchAudioBackend;
+
 /**
  * @brief
  *
@@ -188,6 +190,7 @@ public:
     void setSpeakerVolume(int volume, bool saveToSettings = false);
     int getSpeakerVolume(bool loadFromSettings = false);
     int getAudioSampleRate();
+    StopWatchAudioBackend& getAudioBackend();
     void audioRecord(std::vector<int16_t>& data, uint16_t durationMs, float gain = 30.0f);
     void audioPlay(std::vector<int16_t>& data, bool async = true);
 

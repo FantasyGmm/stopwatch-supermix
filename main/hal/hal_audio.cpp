@@ -4,31 +4,22 @@
  * SPDX-License-Identifier: MIT
  */
 #include "hal.h"
+#include "audio/stopwatch_audio_backend.h"
 #include "utils/settings/settings.h"
 #include <algorithm>
 #include <cmath>
 #include <memory>
 #include <mooncake_log.h>
-#include <driver/i2s_std.h>
 #include <esp_dsp.h>
-#include <esp_codec_dev.h>
-#include <esp_codec_dev_defaults.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <mutex>
 
 static const std::string_view _tag = "HAL-Audio";
 
-#define I2S_PORT         I2S_NUM_0
-#define I2S_MCLK_PIN     (gpio_num_t)18
-#define I2S_BCLK_PIN     (gpio_num_t)17
-#define I2S_DADC_IN_PIN  (gpio_num_t)16
-#define I2S_LRCK_PIN     (gpio_num_t)15
-#define I2S_DDAC_OUT_PIN (gpio_num_t)21
-
 static class AudioCodec {
 public:
-    static constexpr int sample_rate       = 44100;
+    static constexpr int sample_rate       = StopWatchAudioBackend::sampleRate;
     static constexpr int spectrum_fft_size = 512;
     static constexpr int spectrum_hop_size = 256;
 
@@ -37,47 +28,9 @@ public:
         _silence_buffer.resize(sample_rate * 0.1);
         _silence_buffer.assign(_silence_buffer.size(), 0);
         _spectrum_init();
-        xTaskCreate([](void* obj) { static_cast<AudioCodec*>(obj)->_task_entry(); }, "audio_task", 4 * 1024, this, 5,
-                    &_task_handle);
-
-        _i2s_init();
-
-        audio_codec_i2s_cfg_t i2s_cfg = {
-            .rx_handle = _rx_handle,
-            .tx_handle = _tx_handle,
-        };
-        _data_if = audio_codec_new_i2s_data(&i2s_cfg);
-
-        audio_codec_i2c_cfg_t i2c_cfg = {.addr = ES8311_CODEC_DEFAULT_ADDR, .bus_handle = i2c_bus};
-        _ctrl_if                      = audio_codec_new_i2c_ctrl(&i2c_cfg);
-
-        _gpio_if = audio_codec_new_gpio();
-
-        es8311_codec_cfg_t es8311_cfg = {
-            .ctrl_if     = _ctrl_if,
-            .gpio_if     = _gpio_if,
-            .codec_mode  = ESP_CODEC_DEV_WORK_MODE_BOTH,
-            .pa_pin      = GPIO_NUM_NC,
-            .pa_reverted = false,
-            .use_mclk    = true,
-        };
-        _codec_if = es8311_codec_new(&es8311_cfg);
-
-        esp_codec_dev_cfg_t dev_cfg = {
-            .dev_type = ESP_CODEC_DEV_TYPE_IN_OUT,
-            .codec_if = _codec_if,
-            .data_if  = _data_if,
-        };
-        _codec_dev = esp_codec_dev_new(&dev_cfg);
-
-        esp_codec_dev_set_in_gain(_codec_dev, 30.0);
-
-        esp_codec_dev_sample_info_t fs = {
-            .bits_per_sample = 16,
-            .channel         = 1,
-            .sample_rate     = sample_rate,
-        };
-        esp_codec_dev_open(_codec_dev, &fs);
+        if (!_backend.initialize(i2c_bus)) {
+            mclog::tagError(_tag, "audio backend initialization failed");
+        }
     }
 
     void updateSpectrum(Hal::AudioSpectrumFrame& frame)
@@ -99,31 +52,41 @@ public:
 
     void setVolume(int volume)
     {
-        std::lock_guard<std::mutex> lock(_mutex);
-        esp_codec_dev_set_out_vol(_codec_dev, volume);
+        _backend.setVolume(static_cast<uint8_t>(std::clamp(volume, 0, 100)));
     }
 
     int getVolume()
     {
-        std::lock_guard<std::mutex> lock(_mutex);
-        int volume = 0;
-        esp_codec_dev_get_out_vol(_codec_dev, &volume);
-        return volume;
+        return _backend.getVolume();
     }
 
     void setMicGain(float gain)
     {
-        std::lock_guard<std::mutex> lock(_mutex);
-        esp_codec_dev_set_in_gain(_codec_dev, gain);
+        _backend.setGeneralGain(gain);
     }
 
     void play(std::vector<int16_t>& data, bool async)
     {
         std::lock_guard<std::mutex> lock(_mutex);
+        if (!_backend.openPlayer()) {
+            mclog::tagError(_tag, "player open failed");
+            return;
+        }
         if (async) {
             // Support interruption: overwrite data and notify task
             _audio_data = data;
             _is_playing = true;
+            if (_task_handle == nullptr) {
+                if (xTaskCreate([](void* obj) { static_cast<AudioCodec*>(obj)->_task_entry(); }, "audio_task",
+                                4 * 1024, this, 5, &_task_handle) != pdPASS) {
+                    _task_handle = nullptr;
+                    _is_playing  = false;
+                    _audio_data.clear();
+                    _backend.closePlayer();
+                    mclog::tagError(_tag, "audio play task creation failed");
+                    return;
+                }
+            }
             xTaskNotifyGive(_task_handle);
         } else {
             if (_is_playing) {
@@ -131,6 +94,7 @@ public:
                 return;
             }
             _write(data);
+            _backend.closePlayer();
         }
     }
 
@@ -138,18 +102,23 @@ public:
     {
         std::lock_guard<std::mutex> lock(_mutex);
 
-        esp_codec_dev_set_in_gain(_codec_dev, gain);
+        if (!_backend.openRecorder()) {
+            mclog::tagError(_tag, "recorder open failed");
+            data.clear();
+            return;
+        }
+        _backend.setGeneralGain(gain);
 
         size_t sample_count = (size_t)(sample_rate * durationMs / 1000);
         size_t byte_size    = sample_count * sizeof(int16_t);
 
         data.resize(sample_count);
 
-        esp_err_t ret = esp_codec_dev_read(_codec_dev, data.data(), byte_size);
-        if (ret != ESP_OK) {
-            mclog::tagError(_tag, "record failed: {}", ret);
+        if (_backend.read(data.data(), byte_size) != byte_size) {
+            mclog::tagError(_tag, "record failed");
             data.clear();
         }
+        _backend.closeRecorder();
     }
 
 private:
@@ -158,7 +127,7 @@ private:
         mclog::tagInfo(_tag, "start audio play task");
         std::vector<int16_t> current_data;
 
-        while (1) {
+        while (true) {
             // Wait for play request
             ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
@@ -196,53 +165,38 @@ private:
                     size_t remain        = total_samples - offset;
                     size_t write_samples = (remain > CHUNK_SAMPLES) ? CHUNK_SAMPLES : remain;
 
-                    esp_codec_dev_write(_codec_dev, (void*)&current_data[offset], write_samples * sizeof(int16_t));
+                    _backend.write(&current_data[offset], write_samples * sizeof(int16_t));
                     offset += write_samples;
                 }
 
                 if (interrupted) {
                     // Stop current playback immediately and flush DMA
-                    i2s_channel_disable(_tx_handle);
-                    i2s_channel_enable(_tx_handle);
+                    _backend.resetPlayerPath();
                     continue;
                 }
 
                 // Normal finish, play silence to avoid pop/waiting
-                esp_codec_dev_write(_codec_dev, (void*)_silence_buffer.data(),
-                                    _silence_buffer.size() * sizeof(int16_t));
+                _backend.write(_silence_buffer.data(), _silence_buffer.size() * sizeof(int16_t));
             }
+
+            std::lock_guard<std::mutex> lock(_mutex);
+            if (!_audio_data.empty()) {
+                continue;
+            }
+            _backend.closePlayer();
+            _is_playing = false;
+            _task_handle = nullptr;
+            break;
         }
+
+        mclog::tagInfo(_tag, "stop audio play task");
+        vTaskDelete(nullptr);
     }
 
     void _write(const std::vector<int16_t>& data)
     {
-        esp_codec_dev_write(_codec_dev, (void*)data.data(), data.size() * sizeof(int16_t));
-        esp_codec_dev_write(_codec_dev, (void*)_silence_buffer.data(), _silence_buffer.size() * sizeof(int16_t));
-    }
-
-    void _i2s_init()
-    {
-        mclog::tagInfo(_tag, "i2s init");
-
-        i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_PORT, I2S_ROLE_MASTER);
-        i2s_std_config_t std_cfg   = {
-            .clk_cfg  = I2S_STD_CLK_DEFAULT_CONFIG(sample_rate),
-            .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO),
-            .gpio_cfg =
-                {
-                    .mclk = I2S_MCLK_PIN,
-                    .bclk = I2S_BCLK_PIN,
-                    .ws   = I2S_LRCK_PIN,
-                    .dout = I2S_DDAC_OUT_PIN,
-                    .din  = I2S_DADC_IN_PIN,
-                },
-        };
-
-        ESP_ERROR_CHECK(i2s_new_channel(&chan_cfg, &_tx_handle, &_rx_handle));
-        ESP_ERROR_CHECK(i2s_channel_init_std_mode(_tx_handle, &std_cfg));
-        ESP_ERROR_CHECK(i2s_channel_init_std_mode(_rx_handle, &std_cfg));
-        ESP_ERROR_CHECK(i2s_channel_enable(_tx_handle));
-        ESP_ERROR_CHECK(i2s_channel_enable(_rx_handle));
+        _backend.write(data.data(), data.size() * sizeof(int16_t));
+        _backend.write(_silence_buffer.data(), _silence_buffer.size() * sizeof(int16_t));
     }
 
     void _spectrum_init()
@@ -281,10 +235,15 @@ private:
             return false;
         }
 
-        esp_err_t ret = esp_codec_dev_read(_codec_dev, _spectrum_pcm_hop.data(), sizeof(int16_t) * spectrum_hop_size);
-        if (ret != ESP_OK) {
+        if (!_backend.openRecorder()) {
             return false;
         }
+        const std::size_t bytes = sizeof(int16_t) * spectrum_hop_size;
+        if (_backend.read(_spectrum_pcm_hop.data(), bytes) != bytes) {
+            _backend.closeRecorder();
+            return false;
+        }
+        _backend.closeRecorder();
 
         std::move(_spectrum_time_domain.begin() + spectrum_hop_size, _spectrum_time_domain.end(),
                   _spectrum_time_domain.begin());
@@ -409,15 +368,8 @@ private:
         }
     }
 
-    i2s_chan_handle_t _tx_handle          = NULL;
-    i2s_chan_handle_t _rx_handle          = NULL;
-    esp_codec_dev_handle_t _codec_dev     = NULL;
-    const audio_codec_data_if_t* _data_if = NULL;
-    const audio_codec_ctrl_if_t* _ctrl_if = NULL;
-    const audio_codec_gpio_if_t* _gpio_if = NULL;
-    const audio_codec_if_t* _codec_if     = NULL;
-
-    TaskHandle_t _task_handle;
+    StopWatchAudioBackend& _backend = GetStopWatchAudioBackend();
+    TaskHandle_t _task_handle       = nullptr;
     std::mutex _mutex;
     std::vector<int16_t> _audio_data;
     std::vector<int16_t> _silence_buffer;
@@ -489,6 +441,11 @@ void Hal::audioPlay(std::vector<int16_t>& data, bool async)
 int Hal::getAudioSampleRate()
 {
     return _audio_codec.sample_rate;
+}
+
+StopWatchAudioBackend& Hal::getAudioBackend()
+{
+    return GetStopWatchAudioBackend();
 }
 
 void Hal::updateAudioSpectrum()
