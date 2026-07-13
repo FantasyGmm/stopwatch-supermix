@@ -293,7 +293,7 @@ Expected: executable exits with status 0.
 - Create: `main/runtime/assistant/assistant_event_mailbox.cpp`
 - Create: `tests/assistant_event_mailbox_test.cpp`
 
-- [ ] **Step 1: Write the failing mailbox test**
+- [x] **Step 1: Write the failing mailbox test**
 
 ```cpp
 #include "runtime/assistant/assistant_event_mailbox.h"
@@ -328,7 +328,7 @@ int main()
 }
 ```
 
-- [ ] **Step 2: Compile and confirm RED**
+- [x] **Step 2: Compile and confirm RED**
 
 ```bash
 c++ -std=c++17 -pthread -Imain tests/assistant_event_mailbox_test.cpp \
@@ -338,7 +338,7 @@ c++ -std=c++17 -pthread -Imain tests/assistant_event_mailbox_test.cpp \
 
 Expected: compilation fails because the mailbox does not exist.
 
-- [ ] **Step 3: Implement persistent and transient storage**
+- [x] **Step 3: Implement persistent and transient storage**
 
 Use this public interface:
 
@@ -389,7 +389,7 @@ private:
 
 `publish()` replaces the persistent slot for State, ActivationCode, or Error. For transient events, it removes the oldest transient item when `_capacity` is full and increments `_dropped`. `poll()` returns the lowest sequence across occupied persistent slots and the transient front. `discardSessionsBefore()` removes every envelope whose session is older than the supplied session.
 
-- [ ] **Step 4: Run GREEN and commit**
+- [x] **Step 4: Run GREEN and commit**
 
 ```bash
 c++ -std=c++17 -pthread -Imain tests/assistant_event_mailbox_test.cpp \
