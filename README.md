@@ -7,7 +7,7 @@ This project is based on the M5Stack StopWatch user demo and extends it with:
 - a launcher-first app shell built on Mooncake/LVGL;
 - a Codex status monitor app added as the first launcher app;
 - an Assistant entry that switches into the Xiaozhi runtime stored in the second OTA slot;
-- full-screen utility apps for clock, stopwatch, alarm, badge, IMU, FFT, and setup;
+- full-screen utility apps for clock, badge, IMU, FFT, and setup;
 - helper scripts for flashing both the launcher firmware and the assistant runtime.
 
 ## Hardware Target
@@ -24,15 +24,18 @@ The launcher installs apps in this order:
 
 1. Codex status monitor
 2. Assistant
-3. Alarm clock
-4. Watch face
-5. Stopwatch
-6. Badge
-7. IMU
-8. FFT
-9. Setup
+3. Clock
+4. Badge
+5. IMU
+6. FFT
+7. Setup
 
 The Codex app is intentionally placed first so the device can boot into the launcher and quickly open the monitoring dashboard.
+
+Clock opens a three-button selection page for Alarm, Watch Face, and Stopwatch.
+Each feature retains its original display and controls. Hold the upper-left button
+to return from a Clock feature to the selection page; hold both buttons to return
+directly to the launcher.
 
 ## Codex Status Monitor
 
