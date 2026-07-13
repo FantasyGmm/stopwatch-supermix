@@ -834,7 +834,7 @@ git commit -m "Run Assistant inside Mooncake"
 - Modify: `mac-codex-agent/tests/test_unified_runtime_firmware_contract.py`
 - Modify: `mac-codex-agent/tests/test_report_firmware_metrics.py`
 
-- [ ] **Step 1: Add failing partition and metrics tests**
+- [x] **Step 1: Add failing partition and metrics tests**
 
 The partition contract must parse `partitions_unified.csv` and assert this exact table while also asserting that `partitions.csv` still contains `ota_0` and `ota_1`:
 
@@ -888,7 +888,7 @@ self.assertTrue(metrics["capacity_gate_passed"])
 
 Run both files and expect failures because the candidate layout and schema do not exist.
 
-- [ ] **Step 2: Add candidate configuration**
+- [x] **Step 2: Add candidate configuration**
 
 Create the exact partition CSV above. Create `sdkconfig.unified.defaults`:
 
@@ -906,11 +906,11 @@ Add these ignores:
 /backups/
 ```
 
-- [ ] **Step 3: Extend metrics with hard gates**
+- [x] **Step 3: Extend metrics with hard gates**
 
 Add `sha256_file(path)`, `--assets-bin`, `--max-app-bytes`, and `--max-assets-bytes`. Schema 2 includes app/assets SHA256, sizes, both maxima, and `capacity_gate_passed`. Raise `MetricsError` if either maximum is exceeded; do not merely report a warning.
 
-- [ ] **Step 4: Add the isolated candidate build script**
+- [x] **Step 4: Add the isolated candidate build script**
 
 ```bash
 #!/usr/bin/env bash
@@ -941,7 +941,7 @@ python3 "$ROOT/scripts/report_firmware_metrics.py" \
     --output "$BUILD_DIR/unified-runtime-metrics.json"
 ```
 
-- [ ] **Step 5: Run GREEN and build the candidate**
+- [x] **Step 5: Run GREEN and build the candidate**
 
 ```bash
 python3 -m unittest \
@@ -953,7 +953,7 @@ chmod +x scripts/build_unified_candidate.sh
 
 Expected: tests pass; the build completes its partition size check; metrics report `capacity_gate_passed: true`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add .gitignore partitions_unified.csv sdkconfig.unified.defaults \
@@ -973,7 +973,7 @@ git commit -m "Add isolated unified firmware candidate build"
 - Create: `scripts/flash_unified_candidate.sh`
 - Create: `mac-codex-agent/tests/test_unified_flash_tools.py`
 
-- [ ] **Step 1: Write dry-run and preflight tests**
+- [x] **Step 1: Write dry-run and preflight tests**
 
 The Python test creates temporary app/assets/bootloader/partition files plus a 16 MiB backup and `.sha256` sidecar. Assert:
 
@@ -995,7 +995,7 @@ self.assertIn("0x8a0000", flash.stdout)
 
 Also assert nonzero exit for a backup of 16 MiB minus one byte, a mismatched SHA256 sidecar, an app larger than `0x660000`, or assets larger than `0x400000`.
 
-- [ ] **Step 2: Implement backup with no erase operation**
+- [x] **Step 2: Implement backup with no erase operation**
 
 The script accepts `--port`, optional `--output`, and `--dry-run`. Its real command is:
 
@@ -1007,7 +1007,7 @@ python -m esptool --chip esp32s3 -p "$PORT" -b 460800 \
 
 After the read, require exactly 16,777,216 bytes and write `shasum -a 256 "$OUTPUT" > "$OUTPUT.sha256"`.
 
-- [ ] **Step 3: Implement verified restore**
+- [x] **Step 3: Implement verified restore**
 
 Before printing or executing esptool, require the backup file, sidecar, exact 16 MiB size, and matching SHA256. The only write command is:
 
@@ -1018,7 +1018,7 @@ python -m esptool --chip esp32s3 -p "$PORT" -b 460800 \
   0x0 "$BACKUP"
 ```
 
-- [ ] **Step 4: Implement candidate flash with mandatory backup evidence**
+- [x] **Step 4: Implement candidate flash with mandatory backup evidence**
 
 Require a verified complete backup even in real mode. Validate these files and limits before esptool:
 
@@ -1040,7 +1040,7 @@ The only candidate write map is:
 
 `--dry-run` performs every validation and prints the exact command without invoking esptool.
 
-- [ ] **Step 5: Run GREEN and commit without connecting hardware**
+- [x] **Step 5: Run GREEN and commit without connecting hardware**
 
 ```bash
 chmod +x scripts/backup_watch_flash.sh scripts/restore_watch_flash.sh \
@@ -1063,7 +1063,7 @@ Expected: all tests use `--dry-run`; no serial device is opened.
 - Create: `docs/superpowers/reports/unified-runtime-validation.md`
 - Modify: `docs/superpowers/plans/2026-07-13-unified-runtime-assistant-merge.md`
 
-- [ ] **Step 1: Add one deterministic validation command**
+- [x] **Step 1: Add one deterministic validation command**
 
 ```bash
 #!/usr/bin/env bash
@@ -1090,7 +1090,7 @@ c++ -std=c++17 -pthread -Imain tests/shared_wifi_policy_test.cpp \
 git diff --check
 ```
 
-- [ ] **Step 2: Create a report that separates evidence classes**
+- [x] **Step 2: Create a report that separates evidence classes**
 
 The report starts with these statuses:
 
@@ -1107,7 +1107,7 @@ The report starts with these statuses:
 
 Include tables for firmware Git SHA, image SHA256, app/assets bytes, partition headroom, resolved Brookesia versions, hardware matrix, 10-cycle targeted test, 100-cycle stress, and application regression. Hardware cells remain `Pending hardware` and contain the required evidence text from the approved design.
 
-- [ ] **Step 3: Update plan tracking semantics**
+- [x] **Step 3: Update plan tracking semantics**
 
 For Tasks 8–12 in the original plan, split status notes into:
 
@@ -1119,7 +1119,7 @@ For Tasks 8–12 in the original plan, split status notes into:
 
 Do not check hardware steps based on offline output.
 
-- [ ] **Step 4: Run the offline command and commit**
+- [x] **Step 4: Run the offline command and commit**
 
 ```bash
 chmod +x scripts/run_unified_offline_validation.sh
@@ -1140,7 +1140,7 @@ Expected: all automated tests pass, unified clean build passes, report retains e
 - Modify: `docs/superpowers/reports/unified-runtime-validation.md`
 - Modify: `docs/superpowers/reports/brookesia-xiaozhi-compatibility.md`
 
-- [ ] **Step 1: Run final offline verification from a clean candidate build**
+- [x] **Step 1: Run final offline verification from a clean candidate build**
 
 ```bash
 ./scripts/run_unified_offline_validation.sh
@@ -1155,11 +1155,11 @@ print(json.dumps(m, indent=2, sort_keys=True))
 PY
 ```
 
-- [ ] **Step 2: Record exact generated evidence**
+- [x] **Step 2: Record exact generated evidence**
 
 Copy the exact Git SHA, app/assets sizes, hashes, partition headroom, DIRAM bytes, and locked Brookesia versions from generated artifacts into the automated-evidence section. Keep all hardware tables unchanged at `Pending hardware`.
 
-- [ ] **Step 3: Verify the repository boundary**
+- [x] **Step 3: Verify the repository boundary**
 
 ```bash
 git diff --check
@@ -1171,7 +1171,7 @@ rg -n "erase_flash" scripts/backup_watch_flash.sh \
 
 Expected: no Assistant product-path partition switch or restart; no flash helper invokes `erase_flash`; only the two report files may remain modified before the handoff commit.
 
-- [ ] **Step 4: Commit the build-verified handoff**
+- [x] **Step 4: Commit the build-verified handoff**
 
 ```bash
 git add docs/superpowers/reports/unified-runtime-validation.md \
