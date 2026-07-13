@@ -423,7 +423,7 @@ git commit -m "Make StopWatch audio lifecycle reusable"
 - Modify: `main/CMakeLists.txt`
 - Modify: `dependencies.lock`
 
-- [ ] **Step 1: Add the audio service dependencies**
+- [x] **Step 1: Add the audio service dependencies**
 
 ```yaml
   espressif/brookesia_service_device:
@@ -434,7 +434,7 @@ git commit -m "Make StopWatch audio lifecycle reusable"
 
 Reconfigure and re-run the dependency assertions from Task 2.
 
-- [ ] **Step 2: Implement the exact Brookesia HAL interfaces**
+- [x] **Step 2: Implement the exact Brookesia HAL interfaces**
 
 Wrap `StopWatchAudioBackend` in:
 
@@ -462,7 +462,7 @@ public:
 
 Register both from a StopWatch `hal::Device` plugin. Do not depend on `brookesia_hal_adaptor` merely to obtain board discovery.
 
-- [ ] **Step 3: Initialize the device before binding audio**
+- [x] **Step 3: Initialize the device before binding audio**
 
 In `ServiceRuntime::start()`, initialize the StopWatch audio device once, then start the service manager. Assert both audio interfaces exist before accepting Assistant startup.
 
@@ -479,7 +479,9 @@ binding = {};
 
 After each release, assert recorder/player logical sessions are closed. At the end, compare heap and task snapshots with the pre-test baseline.
 
-- [ ] **Step 5: Commit**
+Deferred-validation note (2026-07-13): the complete Audio service integration compiles and produces `StopWatch-UserDemo.bin`. With only Opus, PCM, and WAV support retained, the candidate image is `0x539ed0` bytes and exceeds each existing `0x4f0000` OTA slot by `0x49ed0` bytes. Keep the dual-image fallback unchanged until the Task 7 hardware gate; resolve the expected capacity gap when Task 10 switches to the approved single application partition. Step 4 remains pending the concentrated watch test campaign.
+
+- [x] **Step 5: Commit**
 
 ```bash
 git add main/idf_component.yml dependencies.lock main/runtime/services/stopwatch_audio_device.h main/runtime/services/stopwatch_audio_device.cpp main/runtime/service_runtime.cpp main/CMakeLists.txt

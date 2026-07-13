@@ -25,3 +25,7 @@ dependencies:
     version: ">=0.7.0,<0.8.0"
   espressif/brookesia_hal_interface:
     version: ">=0.7.0,<0.8.0"
+  espressif/brookesia_service_device:
+    version: ">=0.7.0,<0.8.0"
+  espressif/brookesia_service_audio:
+    version: ">=0.7.0,<0.8.0"

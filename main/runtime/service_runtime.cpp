@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 #include "service_runtime.h"
+#include "services/stopwatch_audio_device.h"
 #include <brookesia/service_manager.hpp>
 #include <mooncake_log.h>
 
@@ -21,6 +22,11 @@ bool ServiceRuntime::start()
 {
     if (_started) {
         return true;
+    }
+
+    if (!InitializeStopWatchAudioDevice() || !StopWatchAudioInterfacesReady()) {
+        mclog::tagError(tag, "failed to initialize StopWatch audio device");
+        return false;
     }
 
     auto& manager = esp_brookesia::service::ServiceManager::get_instance();
