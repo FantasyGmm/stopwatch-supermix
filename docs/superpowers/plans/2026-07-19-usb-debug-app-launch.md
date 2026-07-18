@@ -15,6 +15,7 @@
 - `main/debug/debug_command_parser.h/.cpp`: allocation-free command grammar and error classification.
 - `main/debug/debug_app_control.h/.cpp`: one registered Launcher target and stable `OK`/`BUSY`/`NOT_FOUND` results.
 - `main/debug/debug_command_service.h/.cpp`: fixed line buffer, ESP USB reads, response logging, compile-time no-op implementation.
+- `main/CMakeLists.txt`: include the focused `debug/` sources in the main component.
 - `main/apps/app_launcher/app_launcher.h/.cpp`: name-to-ID resolution and registration only while Launcher is open.
 - `main/main.cpp`: one non-blocking debug update per existing main-loop iteration.
 - `main/Kconfig.projbuild`, `sdkconfig.unified.defaults`: debug-only build gate.
@@ -175,13 +176,14 @@ Expected: all tests pass.
 - Create: `main/debug/debug_command_service.h`
 - Create: `main/debug/debug_command_service.cpp`
 - Create: `mac-codex-agent/tests/test_debug_command_firmware_contract.py`
+- Modify: `main/CMakeLists.txt`
 - Modify: `main/main.cpp`
 - Modify: `main/Kconfig.projbuild`
 - Modify: `sdkconfig.unified.defaults`
 
 - [ ] **Step 1: Write the failing firmware contract**
 
-Assert that the configuration gate exists and is enabled only in the unified debug defaults, the main loop calls `GetDebugCommandService().update()`, the implementation calls `usb_serial_jtag_read_bytes(..., 0)`, and it contains none of `xTaskCreate`, `std::thread`, or a polling `while (1)`.
+Assert that the configuration gate exists and is enabled only in the unified debug defaults, `main/CMakeLists.txt` includes `debug/*.cpp`, the main loop calls `GetDebugCommandService().update()`, the implementation opens `/dev/secondary` with `O_NONBLOCK`, and it contains none of `usb_serial_jtag_driver_install`, `xTaskCreate`, `std::thread`, or a polling `while (1)`.
 
 - [ ] **Step 2: Run the contract and verify RED**
 
@@ -209,7 +211,7 @@ Add `CONFIG_STOPWATCH_DEBUG_COMMANDS=y` only to `sdkconfig.unified.defaults`.
 
 - [ ] **Step 4: Implement the non-blocking service**
 
-The enabled implementation owns `std::array<char, 65> _line`, a current length, and an overflow flag. Each `update()` performs one zero-timeout USB read into a small stack buffer, feeds bytes, parses complete lines, calls `RequestDebugAppList()` or `RequestDebugAppOpen()`, and logs exactly one stable response. The disabled implementation is an inline no-op selected with `#if CONFIG_STOPWATCH_DEBUG_COMMANDS`.
+Add `"debug/*.cpp"` to `MY_SRCS`. The enabled implementation owns `std::array<char, 65> _line`, a current length, an overflow flag, and a lazily opened file descriptor. It opens ESP-IDF's already registered USB secondary-console VFS at `/dev/secondary` with `O_RDONLY | O_NONBLOCK`; it does not install the USB Serial/JTAG driver or allocate driver ring buffers. Each `update()` performs one non-blocking `read()` into a small stack buffer, feeds bytes, parses complete lines, calls `RequestDebugAppList()` or `RequestDebugAppOpen()`, and logs exactly one stable response. The disabled implementation is an inline no-op selected with `#if CONFIG_STOPWATCH_DEBUG_COMMANDS`.
 
 - [ ] **Step 5: Wire the existing main loop**
 
