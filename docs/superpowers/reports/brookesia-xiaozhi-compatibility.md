@@ -20,7 +20,7 @@ Gate status: Targeted startup and lifecycle passed. Audible conversation, spoken
 
 ## Automated evidence
 
-The 2026-07-19 offline runner passed 133 Python tests, 6 host C++ test binaries, a clean 2,332-unit unified build, both capacity gates, and the whitespace gate. The final application is 5,998,336 bytes (`0x5b8700`) with SHA256 `10f1c267ba95a34fa01863fff3963018d185589d0d1d2c2bf88ce051dba62b36`. It leaves 1,865,984 bytes (23.73%) in the unified `0x780000` application partition. Static DIRAM is 185,415 bytes. `generated_assets.bin` is 291,198 bytes with SHA256 `93b87d059d1c2a31f1dd65bbdfa4d5b7275774f6f12e82eb84a1737acad3723f`.
+The 2026-07-19 validation passed 133 Python tests, 6 host C++ test binaries, the unified firmware build, both capacity gates, and the whitespace gate. The final application built from committed runtime source `435f5919a2c8c42293df4e4e3dbc6929beaa997b` is 5,998,336 bytes (`0x5b8700`) with SHA256 `881be58f332985cfc2601e870e13984a967fd6c674b264841c434e7361dfcede`. It leaves 1,865,984 bytes (23.73%) in the unified `0x780000` application partition. Static DIRAM is 185,415 bytes. `generated_assets.bin` is 291,198 bytes with SHA256 `93b87d059d1c2a31f1dd65bbdfa4d5b7275774f6f12e82eb84a1737acad3723f`.
 
 The legacy dual-OTA table and complete-backup restore path remain checked in. The merged Assistant path contains no boot-partition switch, restart, or `ota_1` dependency.
 
@@ -28,7 +28,7 @@ The legacy dual-OTA table and complete-backup restore path remain checked in. Th
 
 The tested watch (`44:1b:f6:c1:86:5c`) had a verified 16 MiB backup before candidate writes. USB debug control opened Assistant without user interaction. Wi-Fi obtained `192.168.50.238`; activation succeeded; Decoder, Encoder, WakeNet, the agent session, MCP initialization, the server audio channel, and continuous microphone packets all became active without a reboot. Automated Home then stopped the complete service graph and released all bindings, subscriptions, Wi-Fi, capture, and playback owners. A second open succeeded and its stop boundary reported `task_delta=0` and `gate=true`.
 
-The exact final application image SHA above was flashed after all address ranges passed esptool write-hash verification. Two automated open/run/Home lifecycles then completed against that image; the steady-state second stop reported `internal_loss=2560`, `psram_loss=39564`, `task_delta=0`, and `gate=true`.
+The exact final application image SHA above was flashed after all address ranges passed esptool write-hash verification. Two automated open/run/Home lifecycles then completed against that image; the steady-state second stop reported `internal_loss=3984`, `psram_loss=39404`, `task_delta=0`, and `gate=true`.
 
 ## Compatibility matrix
 

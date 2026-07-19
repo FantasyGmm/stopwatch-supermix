@@ -12,13 +12,13 @@ This report separates automated build evidence, targeted hardware evidence, and 
 
 ## Automated evidence
 
-`scripts/run_unified_offline_validation.sh` completed successfully on 2026-07-19 from working source based on `1c2244d88747fe7d5d91431a5a04c07eff9d01a7`. The run passed 133 Python tests, all 6 host C++ test binaries, a clean 2,332-unit firmware build, both image-size gates, and `git diff --check`.
+`scripts/run_unified_offline_validation.sh` completed successfully on 2026-07-19. The final firmware was rebuilt from committed runtime source `435f5919a2c8c42293df4e4e3dbc6929beaa997b`, then passed the test, build, capacity, flash, and hardware gates described below.
 
 The values below come from `build-unified/unified-runtime-metrics.json` (schema 2).
 
 | Evidence | Value |
 |---|---:|
-| Application image SHA256 | `10f1c267ba95a34fa01863fff3963018d185589d0d1d2c2bf88ce051dba62b36` |
+| Application image SHA256 | `881be58f332985cfc2601e870e13984a967fd6c674b264841c434e7361dfcede` |
 | Application bytes | `5,998,336` (`0x5b8700`) |
 | Application partition bytes | `7,864,320` (`0x780000`) |
 | Application headroom | `1,865,984` bytes (`23.73%`) |
@@ -49,7 +49,7 @@ The candidate keeps the locked Brookesia 0.7 component family. The Assistant pro
 | Running resources | 2 bindings, 5 subscriptions, Wi-Fi/capture/playback owned as expected |
 | Stop/Home | Agent, Encoder, Decoder, NVS, AgentXiaoZhi, AgentManager, Audio, Device, SNTP, and Wi-Fi stopped |
 | Stopped resources | Bindings/subscriptions/Wi-Fi/capture/playback all zero |
-| Second lifecycle | Reopen succeeded; second stop gate passed with `internal_loss=2560`, `psram_loss=39564`, `task_delta=0`, `gate=true` |
+| Second lifecycle | Reopen succeeded; second stop gate passed with `internal_loss=3984`, `psram_loss=39404`, `task_delta=0`, `gate=true` |
 
 The first stopped snapshot included one-time persistent Wi-Fi/service initialization and therefore did not satisfy the paired leak gate. The second complete open/close session did satisfy it. A GMF `Got NULL Pointer` diagnostic occurs during Audio deinitialization, but the stop sequence completes, no reset follows, and the second-cycle resource gate passes. Downlink logs also contain occasional wrong-sequence warnings; neither warning blocked startup, audio-channel establishment, or cleanup.
 
