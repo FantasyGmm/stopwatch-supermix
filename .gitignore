@@ -39,8 +39,8 @@ build/
 /build-unified/
 cmake-build-*/
 /components/
-managed_components/
-third_party/xiaozhi-esp32/
+/managed_components
+/third_party/xiaozhi-esp32
 
 # PlatformIO
 .pio/
@@ -53,8 +53,8 @@ third_party/xiaozhi-esp32/
 .venv/
 
 # Debug / Release files
-Debug/
-debug/
+/Debug/
+/debug/
 Release/
 release/
 out/
