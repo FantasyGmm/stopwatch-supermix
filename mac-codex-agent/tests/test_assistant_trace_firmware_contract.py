@@ -30,6 +30,17 @@ class AssistantTraceFirmwareContractTests(unittest.TestCase):
         self.assertIn("AssistantTraceComponent::Button", button)
         self.assertIn("AssistantTraceResult::Suppressed", button)
 
+    def test_status_remains_available_after_assistant_app_closes(self):
+        service = (ROOT / "main/debug/debug_command_service.cpp").read_text(
+            encoding="utf-8"
+        )
+        status_branch = service.split(
+            "if (command.kind == DebugCommandKind::AssistantStatus)", 1
+        )[1].split("if (command.kind", 1)[0]
+        self.assertIn("log_assistant_status()", status_branch)
+        self.assertIn("DEBUG ASSISTANT STATUS OK", status_branch)
+        self.assertNotIn("RequestDebugAssistantStatus", status_branch)
+
 
 if __name__ == "__main__":
     unittest.main()

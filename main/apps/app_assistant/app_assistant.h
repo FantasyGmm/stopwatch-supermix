@@ -30,7 +30,6 @@ public:
     void onClose() override;
 #if CONFIG_STOPWATCH_DEBUG_COMMANDS
     bool requestDebugGracefulHome() override;
-    void logDebugAssistantStatus() override;
 #endif
 
 private:

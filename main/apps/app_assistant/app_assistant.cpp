@@ -16,7 +16,6 @@
 
 #include <utility>
 #include <vector>
-#include <cinttypes>
 
 using namespace mooncake;
 
@@ -196,24 +195,6 @@ bool AppAssistant::requestDebugGracefulHome()
     return true;
 }
 
-void AppAssistant::logDebugAssistantStatus()
-{
-    const auto snapshot = GetRuntimeSupervisor().diagnostics();
-    ESP_LOGI("DebugCommand",
-             "ASTATUS sid=%" PRIu64 " state=%s bindings=%u subscriptions=%u wifi=%u capture=%u "
-             "playback=%u ap=%u blocked=%u internal=%u psram=%u tasks=%u",
-             GetAssistantRuntime().sessionId(), AssistantTraceName(snapshot.assistant_state),
-             static_cast<unsigned>(snapshot.assistant_bindings),
-             static_cast<unsigned>(snapshot.assistant_subscriptions),
-             static_cast<unsigned>(snapshot.resources.wifi_lease_count),
-             static_cast<unsigned>(snapshot.resources.capture_owner),
-             static_cast<unsigned>(snapshot.resources.playback_owner),
-             static_cast<unsigned>(snapshot.resources.wifi_ap_active),
-             static_cast<unsigned>(snapshot.resources.blocked),
-             static_cast<unsigned>(snapshot.internal_free_heap),
-             static_cast<unsigned>(snapshot.psram_free),
-             static_cast<unsigned>(snapshot.task_count));
-}
 #endif
 
 void AppAssistant::drainRuntimeEvents()

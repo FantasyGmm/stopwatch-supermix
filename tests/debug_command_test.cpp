@@ -41,13 +41,7 @@ public:
         return home_result;
     }
 
-    void logDebugAssistantStatus() override
-    {
-        ++status_calls;
-    }
-
     int home_calls = 0;
-    int status_calls = 0;
     bool home_result = true;
 };
 } // namespace
@@ -108,15 +102,11 @@ int main()
 
     FakeDebugAssistantTarget assistant;
     assert(!RequestDebugAssistantHome());
-    assert(!RequestDebugAssistantStatus());
     assert(RegisterDebugAssistantTarget(&assistant));
     assert(!RegisterDebugAssistantTarget(&assistant));
     assert(RequestDebugAssistantHome());
     assert(assistant.home_calls == 1);
-    assert(RequestDebugAssistantStatus());
-    assert(assistant.status_calls == 1);
     UnregisterDebugAssistantTarget(&assistant);
     assert(!RequestDebugAssistantHome());
-    assert(!RequestDebugAssistantStatus());
     return 0;
 }

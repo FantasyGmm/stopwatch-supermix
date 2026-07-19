@@ -6,7 +6,9 @@
 #include <hal/hal.h>
 #include <runtime/assistant/assistant_runtime.h>
 #include <runtime/assistant/assistant_trace.h>
+#include <runtime/runtime_supervisor.h>
 
+#include <cinttypes>
 #include <string_view>
 
 #include <esp_log.h>
@@ -27,6 +29,25 @@ const char* result_name(DebugAppOpenResult result)
             return "NOT_FOUND";
     }
     return "BUSY";
+}
+
+void log_assistant_status()
+{
+    const auto snapshot = GetRuntimeSupervisor().diagnostics();
+    ESP_LOGI(tag,
+             "ASTATUS sid=%" PRIu64 " state=%s bindings=%u subscriptions=%u wifi=%u capture=%u "
+             "playback=%u ap=%u blocked=%u internal=%u psram=%u tasks=%u",
+             GetAssistantRuntime().sessionId(), AssistantTraceName(snapshot.assistant_state),
+             static_cast<unsigned>(snapshot.assistant_bindings),
+             static_cast<unsigned>(snapshot.assistant_subscriptions),
+             static_cast<unsigned>(snapshot.resources.wifi_lease_count),
+             static_cast<unsigned>(snapshot.resources.capture_owner),
+             static_cast<unsigned>(snapshot.resources.playback_owner),
+             static_cast<unsigned>(snapshot.resources.wifi_ap_active),
+             static_cast<unsigned>(snapshot.resources.blocked),
+             static_cast<unsigned>(snapshot.internal_free_heap),
+             static_cast<unsigned>(snapshot.psram_free),
+             static_cast<unsigned>(snapshot.task_count));
 }
 } // namespace
 
@@ -110,8 +131,8 @@ void DebugCommandService::dispatchLine()
         return;
     }
     if (command.kind == DebugCommandKind::AssistantStatus) {
-        ESP_LOGI(tag, "DEBUG ASSISTANT STATUS %s",
-                 RequestDebugAssistantStatus() ? "OK" : "BUSY");
+        log_assistant_status();
+        ESP_LOGI(tag, "DEBUG ASSISTANT STATUS OK");
         return;
     }
     if (command.kind == DebugCommandKind::AssistantTrace) {

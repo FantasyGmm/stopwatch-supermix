@@ -24,12 +24,3 @@ bool RequestDebugAssistantHome()
 {
     return active_target != nullptr && active_target->requestDebugGracefulHome();
 }
-
-bool RequestDebugAssistantStatus()
-{
-    if (active_target == nullptr) {
-        return false;
-    }
-    active_target->logDebugAssistantStatus();
-    return true;
-}
