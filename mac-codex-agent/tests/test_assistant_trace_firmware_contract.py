@@ -48,6 +48,18 @@ class AssistantTraceFirmwareContractTests(unittest.TestCase):
         self.assertIn("DEBUG ASSISTANT STATUS OK", status_branch)
         self.assertNotIn("RequestDebugAssistantStatus", status_branch)
 
+    def test_close_intent_is_traced_before_runtime_enters_stopping(self):
+        app = (ROOT / "main/apps/app_assistant/app_assistant.cpp").read_text(
+            encoding="utf-8"
+        )
+        accepted_path = app.split(
+            "_view->setState(AssistantViewState::Closing);", 1
+        )[1].split("void AppAssistant::onClose", 1)[0]
+        self.assertLess(
+            accepted_path.index("AssistantTraceEvent::CloseRequest"),
+            accepted_path.index("runtime.requestStopAssistant()"),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

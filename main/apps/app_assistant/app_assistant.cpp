@@ -131,7 +131,11 @@ bool AppAssistant::requestGracefulClose(AssistantCloseTrigger trigger)
         LvglLockGuard lock;
         _view->setState(AssistantViewState::Closing);
     }
-    const bool accepted = runtime.requestStopAssistant();
+
+    // Record the user-visible close intent before requestStopAssistant() can
+    // synchronously emit the Stopping transition. This keeps the trace in
+    // causal order and distinguishes app-level de-duplication from a runtime
+    // rejection.
     GetAssistantTrace().record({
         .session_id = session_id,
         .timestamp_ms = GetHAL().millis(),
@@ -141,8 +145,21 @@ bool AppAssistant::requestGracefulClose(AssistantCloseTrigger trigger)
         .detail = trigger == AssistantCloseTrigger::PhysicalHome
                       ? AssistantTraceDetail::PhysicalHome
                       : AssistantTraceDetail::DebugHome,
-        .result = accepted ? AssistantTraceResult::Accepted : AssistantTraceResult::Rejected,
+        .result = AssistantTraceResult::Accepted,
     });
+
+    const bool accepted = runtime.requestStopAssistant();
+    if (!accepted) {
+        GetAssistantTrace().record({
+            .session_id = session_id,
+            .timestamp_ms = GetHAL().millis(),
+            .component = AssistantTraceComponent::App,
+            .event = AssistantTraceEvent::Error,
+            .state = runtime.assistantState(),
+            .detail = AssistantTraceDetail::Stop,
+            .result = AssistantTraceResult::Rejected,
+        });
+    }
     return accepted;
 }
 
