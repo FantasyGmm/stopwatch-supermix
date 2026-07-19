@@ -27,45 +27,52 @@ if ! command -v idf.py >/dev/null 2>&1; then
     source "$IDF_EXPORT"
 fi
 
-echo "[1/11] Python contract and tooling tests"
+echo "[1/12] Python contract and tooling tests"
 "$PYTHON" -m unittest discover -s mac-codex-agent/tests -p 'test_*.py'
 
-echo "[2/11] Assistant state machine host test"
+echo "[2/12] Assistant state machine host test"
 "$CXX" -std=c++17 -Wall -Wextra -Werror -Imain \
     tests/assistant_state_machine_test.cpp \
     main/runtime/assistant/assistant_state.cpp \
     -o "$HOST_TEST_DIR/assistant_state_machine_test"
 "$HOST_TEST_DIR/assistant_state_machine_test"
 
-echo "[3/11] Assistant event mailbox host test"
+echo "[3/12] Assistant close controller host test"
+"$CXX" -std=c++17 -Wall -Wextra -Werror -Imain \
+    tests/assistant_close_controller_test.cpp \
+    main/apps/app_assistant/assistant_close_controller.cpp \
+    -o "$HOST_TEST_DIR/assistant_close_controller_test"
+"$HOST_TEST_DIR/assistant_close_controller_test"
+
+echo "[4/12] Assistant event mailbox host test"
 "$CXX" -std=c++17 -Wall -Wextra -Werror -pthread -Imain \
     tests/assistant_event_mailbox_test.cpp \
     main/runtime/assistant/assistant_event_mailbox.cpp \
     -o "$HOST_TEST_DIR/assistant_event_mailbox_test"
 "$HOST_TEST_DIR/assistant_event_mailbox_test"
 
-echo "[4/11] Assistant trace host test"
+echo "[5/12] Assistant trace host test"
 "$CXX" -std=c++17 -Wall -Wextra -Werror -Imain \
     tests/assistant_trace_test.cpp \
     main/runtime/assistant/assistant_trace.cpp \
     -o "$HOST_TEST_DIR/assistant_trace_test"
 "$HOST_TEST_DIR/assistant_trace_test"
 
-echo "[5/11] Resource supervisor host test"
+echo "[6/12] Resource supervisor host test"
 "$CXX" -std=c++17 -Wall -Wextra -Werror -Imain \
     tests/resource_supervisor_test.cpp \
     main/runtime/resource_supervisor.cpp \
     -o "$HOST_TEST_DIR/resource_supervisor_test"
 "$HOST_TEST_DIR/resource_supervisor_test"
 
-echo "[6/11] Button feedback policy host test"
+echo "[7/12] Button feedback policy host test"
 "$CXX" -std=c++17 -Wall -Wextra -Werror -Imain \
     tests/button_feedback_policy_test.cpp \
     main/hal/button_feedback_policy.cpp \
     -o "$HOST_TEST_DIR/button_feedback_policy_test"
 "$HOST_TEST_DIR/button_feedback_policy_test"
 
-echo "[7/11] Shared Wi-Fi policy host test"
+echo "[8/12] Shared Wi-Fi policy host test"
 "$CXX" -std=c++17 -Wall -Wextra -Werror -pthread -Imain \
     tests/shared_wifi_policy_test.cpp \
     main/runtime/resource_supervisor.cpp \
@@ -74,7 +81,7 @@ echo "[7/11] Shared Wi-Fi policy host test"
     -o "$HOST_TEST_DIR/shared_wifi_policy_test"
 "$HOST_TEST_DIR/shared_wifi_policy_test"
 
-echo "[8/11] USB debug command host test"
+echo "[9/12] USB debug command host test"
 "$CXX" -std=c++17 -Wall -Wextra -Werror -Imain \
     tests/debug_command_test.cpp \
     main/debug/debug_command_parser.cpp \
@@ -82,17 +89,17 @@ echo "[8/11] USB debug command host test"
     -o "$HOST_TEST_DIR/debug_command_test"
 "$HOST_TEST_DIR/debug_command_test"
 
-echo "[9/11] Runtime diagnostics host test"
+echo "[10/12] Runtime diagnostics host test"
 "$CXX" -std=c++17 -Wall -Wextra -Werror -DSTOPWATCH_HOST_TEST -Imain \
     tests/runtime_diagnostics_test.cpp \
     main/runtime/runtime_diagnostics.cpp \
     -o "$HOST_TEST_DIR/runtime_diagnostics_test"
 "$HOST_TEST_DIR/runtime_diagnostics_test"
 
-echo "[10/11] Isolated unified candidate clean build and capacity gates"
+echo "[11/12] Isolated unified candidate clean build and capacity gates"
 ./scripts/build_unified_candidate.sh --clean
 
-echo "[11/11] Whitespace error check"
+echo "[12/12] Whitespace error check"
 git diff --check
 
 echo "Unified offline validation passed. Hardware status is tracked separately in the validation reports."

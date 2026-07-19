@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 #pragma once
+#include "assistant_close_controller.h"
 #include "view/assistant_view.h"
 #include <apps/common/key_manager/key_manager.h>
 #include <mooncake.h>
@@ -23,9 +24,10 @@ public:
 private:
     std::unique_ptr<input::KeyManager> _key_manager;
     std::unique_ptr<AssistantView> _view;
-    bool _close_requested = false;
+    AssistantCloseController _close_controller;
     bool _retry_available = false;
 
+    bool requestGracefulClose(AssistantCloseTrigger trigger);
     void drainRuntimeEvents();
     void applyRuntimeEvent(const AssistantEvent& event, AssistantRuntimeState runtime_state);
 };

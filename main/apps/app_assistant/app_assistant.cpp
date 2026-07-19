@@ -7,6 +7,8 @@
 #include <assets/assets.h>
 #include <hal/hal.h>
 #include <mooncake_log.h>
+#include <runtime/assistant/assistant_runtime.h>
+#include <runtime/assistant/assistant_trace.h>
 #include <runtime/runtime_supervisor.h>
 
 #include <utility>
@@ -40,7 +42,7 @@ void AppAssistant::onOpen()
     mclog::tagInfo(getAppInfo().name, "on open");
 
     _key_manager = std::make_unique<input::KeyManager>();
-    _close_requested = false;
+    _close_controller.reset();
     _retry_available = false;
 
     {
@@ -49,7 +51,16 @@ void AppAssistant::onOpen()
         _view->init(lv_screen_active());
     }
 
-    GetRuntimeSupervisor().startAssistant();
+    auto& runtime = GetRuntimeSupervisor();
+    GetAssistantTrace().record({
+        .session_id = GetAssistantRuntime().sessionId() + 1,
+        .timestamp_ms = GetHAL().millis(),
+        .component = AssistantTraceComponent::App,
+        .event = AssistantTraceEvent::Open,
+        .state = runtime.assistantState(),
+        .result = AssistantTraceResult::Accepted,
+    });
+    runtime.startAssistant();
 }
 
 void AppAssistant::onRunning()
@@ -58,16 +69,11 @@ void AppAssistant::onRunning()
     drainRuntimeEvents();
     const auto key = _key_manager ? _key_manager->update() : input::KeyEvent::None;
 
-    if (key == input::KeyEvent::GoHome && !_close_requested) {
-        _close_requested = true;
-        {
-            LvglLockGuard lock;
-            _view->setState(AssistantViewState::Closing);
-        }
-        GetRuntimeSupervisor().requestStopAssistant();
+    if (key == input::KeyEvent::GoHome) {
+        requestGracefulClose(AssistantCloseTrigger::PhysicalHome);
     }
 
-    if (key == input::KeyEvent::GoNext && _retry_available && !_close_requested &&
+    if (key == input::KeyEvent::GoNext && _retry_available && !_close_controller.requested() &&
         runtime.assistantState() == AssistantRuntimeState::Stopped) {
         _retry_available = false;
         {
@@ -82,14 +88,64 @@ void AppAssistant::onRunning()
         GetRuntimeSupervisor().requestStopAssistant();
     }
 
-    if (_close_requested && runtime.assistantState() == AssistantRuntimeState::Stopped) {
+    if (_close_controller.requested() && runtime.assistantState() == AssistantRuntimeState::Stopped) {
         close();
     }
+}
+
+bool AppAssistant::requestGracefulClose(AssistantCloseTrigger trigger)
+{
+    auto& runtime = GetRuntimeSupervisor();
+    const uint64_t session_id = GetAssistantRuntime().sessionId();
+    if (!_close_controller.request(trigger)) {
+        GetAssistantTrace().record({
+            .session_id = session_id,
+            .timestamp_ms = GetHAL().millis(),
+            .component = AssistantTraceComponent::App,
+            .event = AssistantTraceEvent::CloseRequest,
+            .state = runtime.assistantState(),
+            .detail = trigger == AssistantCloseTrigger::PhysicalHome
+                          ? AssistantTraceDetail::PhysicalHome
+                          : AssistantTraceDetail::DebugHome,
+            .result = AssistantTraceResult::Duplicate,
+        });
+        return false;
+    }
+
+    {
+        LvglLockGuard lock;
+        _view->setState(AssistantViewState::Closing);
+    }
+    const bool accepted = runtime.requestStopAssistant();
+    GetAssistantTrace().record({
+        .session_id = session_id,
+        .timestamp_ms = GetHAL().millis(),
+        .component = AssistantTraceComponent::App,
+        .event = AssistantTraceEvent::CloseRequest,
+        .state = runtime.assistantState(),
+        .detail = trigger == AssistantCloseTrigger::PhysicalHome
+                      ? AssistantTraceDetail::PhysicalHome
+                      : AssistantTraceDetail::DebugHome,
+        .result = accepted ? AssistantTraceResult::Accepted : AssistantTraceResult::Rejected,
+    });
+    return accepted;
 }
 
 void AppAssistant::onClose()
 {
     mclog::tagInfo(getAppInfo().name, "on close");
+
+    GetAssistantTrace().record({
+        .session_id = GetAssistantRuntime().sessionId(),
+        .timestamp_ms = GetHAL().millis(),
+        .component = AssistantTraceComponent::App,
+        .event = AssistantTraceEvent::Closed,
+        .state = GetRuntimeSupervisor().assistantState(),
+        .detail = _close_controller.trigger() == AssistantCloseTrigger::PhysicalHome
+                      ? AssistantTraceDetail::PhysicalHome
+                      : AssistantTraceDetail::DebugHome,
+        .result = AssistantTraceResult::Ok,
+    });
 
     // Mooncake can close the app without going through the physical-key path
     // (for example, the USB debug launcher). Keep shutdown idempotent and let
@@ -130,18 +186,18 @@ void AppAssistant::applyRuntimeEvent(const AssistantEvent& event,
     if (!_view) {
         return;
     }
-    if (isConversationEvent(event.kind) && _close_requested) {
+    if (isConversationEvent(event.kind) && _close_controller.requested()) {
         return;
     }
 
     switch (event.kind) {
         case AssistantEventKind::State:
-            if (event.text == "Stopped" && _retry_available && !_close_requested) {
+            if (event.text == "Stopped" && _retry_available && !_close_controller.requested()) {
                 // A synchronous start failure publishes Error followed by Stopped. Keep the
                 // actionable failure page visible instead of replacing it with a normal state.
                 return;
             }
-            if (_close_requested && event.text != "Stopping" && event.text != "Stopped") {
+            if (_close_controller.requested() && event.text != "Stopping" && event.text != "Stopped") {
                 return;
             }
             if (event.text == "Starting") {
@@ -162,7 +218,7 @@ void AppAssistant::applyRuntimeEvent(const AssistantEvent& event,
         case AssistantEventKind::Error:
             if (runtime_state == AssistantRuntimeState::StopTimedOut) {
                 _view->setState(AssistantViewState::StopTimedOut);
-            } else if (_close_requested) {
+            } else if (_close_controller.requested()) {
                 _view->setState(AssistantViewState::Closing);
                 _view->setSecondaryText(event.text.c_str());
             } else {
