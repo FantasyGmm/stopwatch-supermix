@@ -67,3 +67,4 @@ sdkconfig
 sdkconfig.old
 /sdkconfig.unified
 /backups/
+/.worktrees/
