@@ -2,6 +2,10 @@
 
 #include "assistant_state.h"
 
+#if !defined(STOPWATCH_HOST_TEST)
+#include <sdkconfig.h>
+#endif
+
 #include <array>
 #include <cstddef>
 #include <cstdint>

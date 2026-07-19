@@ -6,6 +6,13 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
 class AssistantTraceFirmwareContractTests(unittest.TestCase):
+    def test_trace_header_reads_firmware_debug_configuration(self):
+        header = (ROOT / "main/runtime/assistant/assistant_trace.h").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("#include <sdkconfig.h>", header)
+        self.assertIn("#if !defined(STOPWATCH_HOST_TEST)", header)
+
     def test_runtime_records_lifecycle_boundaries(self):
         runtime = (
             ROOT / "main/runtime/assistant/assistant_runtime.cpp"
