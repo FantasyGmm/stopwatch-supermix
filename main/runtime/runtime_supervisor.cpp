@@ -5,6 +5,7 @@
  */
 #include "runtime_supervisor.h"
 
+#include "assistant/assistant_trace.h"
 #include "service_runtime.h"
 
 #include <mooncake_log.h>
@@ -14,6 +15,25 @@
 namespace {
 RuntimeSupervisor runtime_supervisor;
 constexpr const char* tag = "RuntimeSupervisor";
+
+void trace_snapshot(uint64_t session_id, AssistantTraceDetail detail,
+                    const RuntimeDiagnosticSnapshot& snapshot,
+                    AssistantTraceResult result = AssistantTraceResult::Ok)
+{
+    GetAssistantTrace().record({
+        .session_id = session_id,
+        .timestamp_ms = snapshot.captured_at_ms,
+        .component = AssistantTraceComponent::Runtime,
+        .event = AssistantTraceEvent::Snapshot,
+        .state = snapshot.assistant_state,
+        .detail = detail,
+        .result = result,
+        .value0 = static_cast<int32_t>(snapshot.internal_free_heap),
+        .value1 = static_cast<int32_t>(snapshot.psram_free),
+        .value2 = static_cast<int32_t>(snapshot.task_count),
+        .value3 = static_cast<int32_t>(snapshot.resources.playback_owner),
+    });
+}
 } // namespace
 
 RuntimeSupervisor& GetRuntimeSupervisor()
@@ -51,8 +71,22 @@ AssistantStartResult RuntimeSupervisor::startAssistant()
     _before_snapshot = CaptureRuntimeDiagnosticSnapshot();
     logSnapshot("before-start", _before_snapshot);
     const uint64_t previous_session_id = assistant.sessionId();
+    trace_snapshot(previous_session_id + 1, AssistantTraceDetail::BeforeStart,
+                   _before_snapshot);
     const AssistantStartResult result = assistant.start();
     _last_assistant_state = assistant.state();
+    GetAssistantTrace().record({
+        .session_id = assistant.sessionId(),
+        .timestamp_ms = _before_snapshot.captured_at_ms,
+        .component = AssistantTraceComponent::Runtime,
+        .event = AssistantTraceEvent::StartRequest,
+        .state = _last_assistant_state,
+        .detail = AssistantTraceDetail::Start,
+        .result = result == AssistantStartResult::Submitted
+                      ? AssistantTraceResult::Accepted
+                      : AssistantTraceResult::Rejected,
+        .value0 = static_cast<int32_t>(result),
+    });
 
     if (assistant.sessionId() != previous_session_id) {
         _tracked_session_id = assistant.sessionId();
@@ -86,6 +120,8 @@ void RuntimeSupervisor::update(uint32_t now_ms)
             _running_snapshot = CaptureRuntimeDiagnosticSnapshot();
             _running_captured = true;
             logSnapshot("first-running", _running_snapshot);
+            trace_snapshot(_tracked_session_id, AssistantTraceDetail::FirstRunning,
+                           _running_snapshot);
         }
         if (current == AssistantRuntimeState::Stopped &&
             _last_assistant_state != AssistantRuntimeState::Stopped) {
@@ -93,6 +129,7 @@ void RuntimeSupervisor::update(uint32_t now_ms)
         }
     }
     _last_assistant_state = current;
+    GetAssistantTrace().flush();
 }
 
 AssistantRuntimeState RuntimeSupervisor::assistantState() const
@@ -146,6 +183,21 @@ void RuntimeSupervisor::finishStoppedBoundary()
     _stopped_captured = true;
     logSnapshot("stopped", _stopped_snapshot);
     const RuntimeDiagnosticDelta delta = CompareRuntimeSnapshots(_before_snapshot, _stopped_snapshot);
+    GetAssistantTrace().record({
+        .session_id = _tracked_session_id,
+        .timestamp_ms = _stopped_snapshot.captured_at_ms,
+        .component = AssistantTraceComponent::Runtime,
+        .event = AssistantTraceEvent::Snapshot,
+        .state = _stopped_snapshot.assistant_state,
+        .detail = AssistantTraceDetail::StopBoundary,
+        .result = PassesSingleSessionLeakGate(delta)
+                      ? AssistantTraceResult::Ok
+                      : AssistantTraceResult::Failed,
+        .value0 = static_cast<int32_t>(delta.internal_heap_loss),
+        .value1 = static_cast<int32_t>(delta.psram_loss),
+        .value2 = static_cast<int32_t>(delta.task_delta),
+        .value3 = static_cast<int32_t>(_stopped_snapshot.resources.playback_owner),
+    });
     mclog::tagInfo(tag, "session {} stopped: internal_loss={} psram_loss={} task_delta={} gate={}",
                    _tracked_session_id, delta.internal_heap_loss, delta.psram_loss,
                    delta.task_delta, PassesSingleSessionLeakGate(delta));

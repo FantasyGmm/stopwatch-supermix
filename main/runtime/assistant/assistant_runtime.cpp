@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 #include "assistant_runtime.h"
+#include "assistant_trace.h"
 
 #include "hal/hal.h"
 #include "runtime/resource_supervisor.h"
@@ -145,6 +146,42 @@ std::string action_name(ManagerHelper::GeneralAction action)
     return BROOKESIA_DESCRIBE_TO_STR(action);
 }
 
+AssistantTraceDetail action_detail(ManagerHelper::GeneralAction action)
+{
+    switch (action) {
+        case ManagerHelper::GeneralAction::Activate:
+            return AssistantTraceDetail::Activate;
+        case ManagerHelper::GeneralAction::Start:
+            return AssistantTraceDetail::Start;
+        case ManagerHelper::GeneralAction::Stop:
+            return AssistantTraceDetail::Stop;
+        default:
+            return AssistantTraceDetail::Unexpected;
+    }
+}
+
+void record_trace(uint64_t session_id, AssistantTraceComponent component,
+                  AssistantTraceEvent event, AssistantRuntimeState state,
+                  AssistantTraceDetail detail = AssistantTraceDetail::None,
+                  AssistantTraceResult result = AssistantTraceResult::None,
+                  int32_t value0 = 0, int32_t value1 = 0,
+                  int32_t value2 = 0, int32_t value3 = 0)
+{
+    GetAssistantTrace().record({
+        .session_id = session_id,
+        .timestamp_ms = GetHAL().millis(),
+        .component = component,
+        .event = event,
+        .state = state,
+        .detail = detail,
+        .result = result,
+        .value0 = value0,
+        .value1 = value1,
+        .value2 = value2,
+        .value3 = value3,
+    });
+}
+
 std::string event_name(ManagerHelper::GeneralEvent event)
 {
     return BROOKESIA_DESCRIBE_TO_STR(event);
@@ -235,6 +272,9 @@ private:
 AssistantStartResult AssistantRuntime::Impl::start()
 {
     if (state.state() != AssistantRuntimeState::Stopped) {
+        record_trace(state.sessionId(), AssistantTraceComponent::Runtime,
+                     AssistantTraceEvent::StartRequest, state.state(),
+                     AssistantTraceDetail::Start, AssistantTraceResult::Busy);
         return AssistantStartResult::AlreadyActive;
     }
     if (!claimRuntimeThread()) {
@@ -246,6 +286,9 @@ AssistantStartResult AssistantRuntime::Impl::start()
     }
 
     const uint64_t session = state.sessionId();
+    record_trace(session, AssistantTraceComponent::Runtime,
+                 AssistantTraceEvent::StartRequest, state.state(),
+                 AssistantTraceDetail::Start, AssistantTraceResult::Accepted);
     callback_session.store(session);
     callback_xiaozhi_selected.store(false);
     control_bits.store(0);
@@ -260,6 +303,11 @@ AssistantStartResult AssistantRuntime::Impl::start()
                                  "Service runtime unavailable");
         }
         wifi = GetSharedWifiService().acquireSta(RuntimeOwner::Assistant);
+        record_trace(session, AssistantTraceComponent::Resource,
+                     AssistantTraceEvent::ResourceDecision, state.state(),
+                     AssistantTraceDetail::Wifi,
+                     wifi.valid() ? AssistantTraceResult::Accepted : AssistantTraceResult::Busy,
+                     static_cast<int32_t>(GetResourceSupervisor().wifiLeaseCount()));
         if (!wifi.valid()) {
             return failAndReturn(session, AssistantStartResult::ResourceBusy, "Wi-Fi busy");
         }
@@ -281,6 +329,9 @@ AssistantStartResult AssistantRuntime::Impl::start()
 bool AssistantRuntime::Impl::requestStop()
 {
     if (state.state() == AssistantRuntimeState::Stopped) {
+        record_trace(state.sessionId(), AssistantTraceComponent::Runtime,
+                     AssistantTraceEvent::StateTransition, state.state(),
+                     AssistantTraceDetail::Stop, AssistantTraceResult::Duplicate);
         return true;
     }
     if (!onRuntimeThread()) {
@@ -290,10 +341,19 @@ bool AssistantRuntime::Impl::requestStop()
 
     const auto transition = state.requestStop();
     if (transition == TransitionResult::Rejected) {
+        record_trace(state.sessionId(), AssistantTraceComponent::Runtime,
+                     AssistantTraceEvent::StateTransition, state.state(),
+                     AssistantTraceDetail::Stop, AssistantTraceResult::Rejected);
         return false;
     }
 
     const uint64_t session = state.sessionId();
+    record_trace(session, AssistantTraceComponent::Runtime,
+                 AssistantTraceEvent::StateTransition, state.state(),
+                 AssistantTraceDetail::Stop,
+                 transition == TransitionResult::Accepted
+                     ? AssistantTraceResult::Accepted
+                     : AssistantTraceResult::Duplicate);
     if (transition == TransitionResult::Accepted) {
         stop_started_ms = GetHAL().millis();
         mailbox.publish({session, AssistantEventKind::State, "Stopping"});
@@ -303,6 +363,9 @@ bool AssistantRuntime::Impl::requestStop()
         return true;
     }
     if (stop_submitted.exchange(true)) {
+        record_trace(session, AssistantTraceComponent::Runtime,
+                     AssistantTraceEvent::ActionSubmit, state.state(),
+                     AssistantTraceDetail::Stop, AssistantTraceResult::Duplicate);
         return true;
     }
     if (!submitStop(session)) {
@@ -363,6 +426,14 @@ void AssistantRuntime::Impl::update(uint32_t now_ms)
         if (state.markStopTimedOut(session) == TransitionResult::Accepted) {
             GetResourceSupervisor().block();
             stop_submitted.store(false);
+            const auto resources = GetResourceSupervisor().snapshot();
+            record_trace(session, AssistantTraceComponent::Runtime,
+                         AssistantTraceEvent::StopTimeout, state.state(),
+                         AssistantTraceDetail::Stop, AssistantTraceResult::TimedOut,
+                         static_cast<int32_t>(now_ms - stop_started_ms),
+                         static_cast<int32_t>(bindings.size()),
+                         static_cast<int32_t>(subscriptionCount()),
+                         static_cast<int32_t>(resources.playback_owner));
             mailbox.publish({session, AssistantEventKind::Error,
                              "Stop timed out; resources remain blocked"});
         }
@@ -378,14 +449,28 @@ bool AssistantRuntime::Impl::finishStart(uint64_t session_id)
             failStart(session_id, "Wake model unavailable");
             return false;
         }
-        if (GetResourceSupervisor().acquireCapture(RuntimeOwner::Assistant) !=
-            AcquireResult::Granted) {
+        const auto capture_result =
+            GetResourceSupervisor().acquireCapture(RuntimeOwner::Assistant);
+        record_trace(session_id, AssistantTraceComponent::Resource,
+                     AssistantTraceEvent::ResourceDecision, state.state(),
+                     AssistantTraceDetail::Capture,
+                     capture_result == AcquireResult::Granted
+                         ? AssistantTraceResult::Accepted
+                         : AssistantTraceResult::Busy);
+        if (capture_result != AcquireResult::Granted) {
             failStart(session_id, "Microphone busy");
             return false;
         }
         capture_owned = true;
-        if (GetResourceSupervisor().acquirePlayback(RuntimeOwner::Assistant) !=
-            AcquireResult::Granted) {
+        const auto playback_result =
+            GetResourceSupervisor().acquirePlayback(RuntimeOwner::Assistant);
+        record_trace(session_id, AssistantTraceComponent::Resource,
+                     AssistantTraceEvent::ResourceDecision, state.state(),
+                     AssistantTraceDetail::Playback,
+                     playback_result == AcquireResult::Granted
+                         ? AssistantTraceResult::Accepted
+                         : AssistantTraceResult::Busy);
+        if (playback_result != AcquireResult::Granted) {
             failStart(session_id, "Speaker busy");
             return false;
         }
@@ -514,17 +599,29 @@ bool AssistantRuntime::Impl::subscribe(uint64_t session_id)
             if (!callbackIsCurrentXiaozhi(
                     session_id, source,
                     manager_event_name(ManagerHelper::EventId::GeneralEventHappened))) {
+                record_trace(session_id, AssistantTraceComponent::Callback,
+                             AssistantTraceEvent::Callback, state.state(),
+                             AssistantTraceDetail::StaleSession,
+                             AssistantTraceResult::Rejected);
                 return;
             }
             uint32_t bits = unexpected ? static_cast<uint32_t>(UnexpectedLifecycle) : 0U;
+            AssistantTraceDetail detail = AssistantTraceDetail::Unexpected;
             if (event == event_name(ManagerHelper::GeneralEvent::Activated)) {
                 bits |= Activated;
+                detail = AssistantTraceDetail::Activate;
             } else if (event == event_name(ManagerHelper::GeneralEvent::Started)) {
                 bits |= Started;
+                detail = AssistantTraceDetail::Running;
             } else if (event == event_name(ManagerHelper::GeneralEvent::Stopped)) {
                 bits |= Stopped;
+                detail = AssistantTraceDetail::Stopped;
             }
             if (bits != 0) {
+                record_trace(session_id, AssistantTraceComponent::Callback,
+                             AssistantTraceEvent::Callback, state.state(), detail,
+                             unexpected ? AssistantTraceResult::Rejected
+                                        : AssistantTraceResult::Accepted);
                 control_bits.fetch_or(bits);
             }
         });
@@ -534,6 +631,10 @@ bool AssistantRuntime::Impl::subscribe(uint64_t session_id)
             if (callbackIsCurrentXiaozhi(
                     session_id, source,
                     xiaozhi_event_name(XiaozhiHelper::EventId::ActivationCodeReceived))) {
+                record_trace(session_id, AssistantTraceComponent::Callback,
+                             AssistantTraceEvent::Conversation, state.state(),
+                             AssistantTraceDetail::Activate, AssistantTraceResult::Accepted,
+                             static_cast<int32_t>(code.size()));
                 mailbox.publish({session_id, AssistantEventKind::ActivationCode, code});
             }
         });
@@ -543,6 +644,10 @@ bool AssistantRuntime::Impl::subscribe(uint64_t session_id)
             if (callbackIsCurrentXiaozhi(
                     session_id, source,
                     manager_event_name(ManagerHelper::EventId::UserSpeakingTextGot))) {
+                record_trace(session_id, AssistantTraceComponent::Callback,
+                             AssistantTraceEvent::Conversation, state.state(),
+                             AssistantTraceDetail::Start, AssistantTraceResult::Accepted,
+                             static_cast<int32_t>(text.size()));
                 mailbox.publish({session_id, AssistantEventKind::UserText, text});
             }
         });
@@ -552,6 +657,10 @@ bool AssistantRuntime::Impl::subscribe(uint64_t session_id)
             if (callbackIsCurrentXiaozhi(
                     session_id, source,
                     manager_event_name(ManagerHelper::EventId::AgentSpeakingTextGot))) {
+                record_trace(session_id, AssistantTraceComponent::Callback,
+                             AssistantTraceEvent::Conversation, state.state(),
+                             AssistantTraceDetail::Running, AssistantTraceResult::Accepted,
+                             static_cast<int32_t>(text.size()));
                 mailbox.publish({session_id, AssistantEventKind::AgentText, text});
             }
         });
@@ -574,15 +683,23 @@ bool AssistantRuntime::Impl::submitAction(uint64_t session_id,
                                           uint32_t failure_bit)
 {
     const std::string name = action_name(action);
+    const AssistantTraceDetail detail = action_detail(action);
     try {
         const bool submitted = ManagerHelper::call_function_async(
             ManagerHelper::FunctionId::TriggerGeneralAction, name,
-            [this, session_id, failure_bit](FunctionResult&& result) {
+            [this, session_id, failure_bit, detail](FunctionResult&& result) {
                 if (callback_session.load() != session_id || result.success) {
                     return;
                 }
+                record_trace(session_id, AssistantTraceComponent::Callback,
+                             AssistantTraceEvent::ActionSubmit, state.state(), detail,
+                             AssistantTraceResult::Failed);
                 control_bits.fetch_or(failure_bit);
             });
+        record_trace(session_id, AssistantTraceComponent::Runtime,
+                     AssistantTraceEvent::ActionSubmit, state.state(), detail,
+                     submitted ? AssistantTraceResult::Accepted
+                               : AssistantTraceResult::Rejected);
         if (!submitted) {
             ESP_LOGE(tag, "failed to submit %s request", name.c_str());
         }
@@ -642,6 +759,9 @@ void AssistantRuntime::Impl::disconnectSubscriptions()
 void AssistantRuntime::Impl::releaseSession(uint64_t session_id)
 {
     if (session_id != state.sessionId()) {
+        record_trace(session_id, AssistantTraceComponent::Runtime,
+                     AssistantTraceEvent::Release, state.state(),
+                     AssistantTraceDetail::StaleSession, AssistantTraceResult::Rejected);
         return;
     }
     if (state.state() == AssistantRuntimeState::Starting ||
@@ -649,6 +769,13 @@ void AssistantRuntime::Impl::releaseSession(uint64_t session_id)
         state.state() == AssistantRuntimeState::Failed) {
         state.requestStop();
     }
+
+    record_trace(session_id, AssistantTraceComponent::Runtime,
+                 AssistantTraceEvent::Release, state.state(),
+                 AssistantTraceDetail::AllResources, AssistantTraceResult::Accepted,
+                 static_cast<int32_t>(bindings.size()),
+                 static_cast<int32_t>(subscriptionCount()),
+                 playback_owned ? 1 : 0, capture_owned ? 1 : 0);
 
     disconnectSubscriptions();
     service_setup_pending = false;
@@ -667,6 +794,14 @@ void AssistantRuntime::Impl::releaseSession(uint64_t session_id)
     control_bits.store(0);
     state.markStopped(session_id);
     mailbox.publish({session_id, AssistantEventKind::State, "Stopped"});
+    const auto resources = GetResourceSupervisor().snapshot();
+    record_trace(session_id, AssistantTraceComponent::Runtime,
+                 AssistantTraceEvent::Release, state.state(),
+                 AssistantTraceDetail::AllResources, AssistantTraceResult::Ok,
+                 static_cast<int32_t>(bindings.size()),
+                 static_cast<int32_t>(subscriptionCount()),
+                 static_cast<int32_t>(resources.capture_owner),
+                 static_cast<int32_t>(resources.playback_owner));
     runtime_task = nullptr;
 }
 

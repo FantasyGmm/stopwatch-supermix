@@ -8,10 +8,29 @@
 #include "utils/settings/settings.h"
 #include <apps/common/audio/audio.h>
 #include <mooncake_log.h>
+#include <runtime/assistant/assistant_runtime.h>
+#include <runtime/assistant/assistant_trace.h>
 #include <driver/gpio.h>
 #include <memory>
 
 static const std::string_view _tag = "HAL-BTN";
+
+namespace {
+void trace_suppressed_sfx(RuntimeOwner playback_owner)
+{
+    auto& assistant = GetAssistantRuntime();
+    GetAssistantTrace().record({
+        .session_id = assistant.sessionId(),
+        .timestamp_ms = GetHAL().millis(),
+        .component = AssistantTraceComponent::Button,
+        .event = AssistantTraceEvent::ResourceDecision,
+        .state = assistant.state(),
+        .detail = AssistantTraceDetail::Playback,
+        .result = AssistantTraceResult::Suppressed,
+        .value0 = static_cast<int32_t>(playback_owner),
+    });
+}
+} // namespace
 
 // USER BUTTON
 #define USER_BUTTONA_PIN (gpio_num_t)2
@@ -45,6 +64,7 @@ void Hal::updateButtonStates()
         if (ShouldPlayButtonSfx(config.sfxEnabled, playback_owner)) {
             audio::play_tone_from_midi(62 + 32, 0.02);
         } else if (config.sfxEnabled) {
+            trace_suppressed_sfx(playback_owner);
             mclog::tagInfo(_tag, "button sfx suppressed: playback owner={}",
                            static_cast<unsigned>(playback_owner));
         }
@@ -56,6 +76,7 @@ void Hal::updateButtonStates()
         if (ShouldPlayButtonSfx(config.sfxEnabled, playback_owner)) {
             audio::play_tone_from_midi(64 + 32, 0.02);
         } else if (config.sfxEnabled) {
+            trace_suppressed_sfx(playback_owner);
             mclog::tagInfo(_tag, "button sfx suppressed: playback owner={}",
                            static_cast<unsigned>(playback_owner));
         }
