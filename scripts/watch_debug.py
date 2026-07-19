@@ -51,6 +51,14 @@ def build_command(action, name=None):
         return b"debug app home\n"
     if action == "open" and name is not None:
         return f"debug app open {normalize_app_name(name)}\n".encode("ascii")
+    assistant_commands = {
+        "assistant-home": b"debug assistant home\n",
+        "assistant-status": b"debug assistant status\n",
+        "assistant-trace": b"debug assistant trace\n",
+        "assistant-trace-clear": b"debug assistant trace clear\n",
+    }
+    if action in assistant_commands:
+        return assistant_commands[action]
     raise DebugCommandError("unsupported debug command")
 
 
@@ -77,6 +85,19 @@ def classify_response(action, name, line):
             return ResponseStatus.SUCCESS
         if f"{prefix}BUSY" in line or f"{prefix}NOT_FOUND" in line:
             return ResponseStatus.REJECTED
+    assistant_responses = {
+        "assistant-home": "DEBUG ASSISTANT HOME ",
+        "assistant-status": "DEBUG ASSISTANT STATUS ",
+        "assistant-trace": "DEBUG ASSISTANT TRACE ",
+        "assistant-trace-clear": "DEBUG ASSISTANT TRACE CLEAR ",
+    }
+    prefix = assistant_responses.get(action)
+    if prefix is not None and prefix in line:
+        return (
+            ResponseStatus.SUCCESS
+            if f"{prefix}OK" in line
+            else ResponseStatus.REJECTED
+        )
     return ResponseStatus.PENDING
 
 
@@ -114,7 +135,7 @@ class SerialTransport:
         return os.read(self.fd, 4096)
 
 
-def execute_command(transport, action, name, timeout, follow, output):
+def execute_command(transport, action, name, timeout, follow, output, observer=None):
     payload = build_command(action, name)
     deadline = time.monotonic() + timeout
     next_send = 0.0
@@ -139,6 +160,8 @@ def execute_command(transport, action, name, timeout, follow, output):
         lines = pending.split("\n")
         pending = lines.pop()
         for line in lines:
+            if observer is not None:
+                observer(line)
             status = classify_response(action, name, line)
             if status == ResponseStatus.REJECTED:
                 raise DebugCommandError(line.strip())
@@ -153,12 +176,19 @@ def build_parser():
     parser.add_argument("--port", help="watch serial port; auto-detected when omitted")
     parser.add_argument("--timeout", type=float, default=20.0)
     parser.add_argument("--follow", action="store_true", help="stream logs after acknowledgement")
-    app = parser.add_subparsers(dest="scope", required=True).add_parser("app")
+    scopes = parser.add_subparsers(dest="scope", required=True)
+    app = scopes.add_parser("app")
     command = app.add_subparsers(dest="action", required=True)
     command.add_parser("list")
     command.add_parser("home")
     open_parser = command.add_parser("open")
     open_parser.add_argument("name")
+    assistant = scopes.add_parser("assistant")
+    assistant_command = assistant.add_subparsers(dest="action", required=True)
+    assistant_command.add_parser("home")
+    assistant_command.add_parser("status")
+    assistant_command.add_parser("trace")
+    assistant_command.add_parser("trace-clear")
     return parser
 
 
@@ -167,10 +197,15 @@ def main(argv=None):
     try:
         path = args.port or discover_port()
         name = getattr(args, "name", None)
+        action = (
+            args.action
+            if args.scope == "app"
+            else f"assistant-{args.action}"
+        )
         with SerialTransport(path) as transport:
             execute_command(
                 transport,
-                action=args.action,
+                action=action,
                 name=name,
                 timeout=args.timeout,
                 follow=args.follow,

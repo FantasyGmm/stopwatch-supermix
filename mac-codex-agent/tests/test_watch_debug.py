@@ -40,6 +40,19 @@ class WatchDebugTests(unittest.TestCase):
             module.build_command("open", "Audio.FFT"),
             b"debug app open audio-fft\n",
         )
+        self.assertEqual(
+            module.build_command("assistant-home"), b"debug assistant home\n"
+        )
+        self.assertEqual(
+            module.build_command("assistant-status"), b"debug assistant status\n"
+        )
+        self.assertEqual(
+            module.build_command("assistant-trace"), b"debug assistant trace\n"
+        )
+        self.assertEqual(
+            module.build_command("assistant-trace-clear"),
+            b"debug assistant trace clear\n",
+        )
 
     def test_classifies_matching_responses_and_errors(self):
         module = load_module()
@@ -78,6 +91,24 @@ class WatchDebugTests(unittest.TestCase):
         self.assertEqual(
             module.classify_response("open", "assistant", "unrelated log"),
             module.ResponseStatus.PENDING,
+        )
+        self.assertEqual(
+            module.classify_response(
+                "assistant-home", None, "DEBUG ASSISTANT HOME OK"
+            ),
+            module.ResponseStatus.SUCCESS,
+        )
+        self.assertEqual(
+            module.classify_response(
+                "assistant-status", None, "DEBUG ASSISTANT STATUS BUSY"
+            ),
+            module.ResponseStatus.REJECTED,
+        )
+        self.assertEqual(
+            module.classify_response(
+                "assistant-trace-clear", None, "DEBUG ASSISTANT TRACE CLEAR OK"
+            ),
+            module.ResponseStatus.SUCCESS,
         )
 
 

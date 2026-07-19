@@ -68,8 +68,8 @@ class UnifiedRuntimeFirmwareContractTest(unittest.TestCase):
     def test_assistant_uses_runtime_supervisor_and_never_switches_boot_slot(self):
         source = read("main/apps/app_assistant/app_assistant.cpp")
         main = read("main/main.cpp")
-        self.assertIn("GetRuntimeSupervisor().startAssistant()", source)
-        self.assertIn("GetRuntimeSupervisor().requestStopAssistant()", source)
+        self.assertIn("runtime.startAssistant()", source)
+        self.assertIn("runtime.requestStopAssistant()", source)
         self.assertNotIn("runtime.update(GetHAL().millis())", source)
         self.assertIn("GetRuntimeSupervisor().update(GetHAL().millis())", main)
         for forbidden in (
@@ -118,14 +118,17 @@ class UnifiedRuntimeFirmwareContractTest(unittest.TestCase):
         key_at = source.index("_key_manager->update()", drain_at)
         self.assertLess(drain_at, key_at)
 
-        self.assertIn("isConversationEvent(event.kind) && _close_requested", source)
         self.assertIn(
-            'event.text == "Stopped" && _retry_available && !_close_requested',
+            "isConversationEvent(event.kind) && _close_controller.requested()",
+            source,
+        )
+        self.assertIn(
+            'event.text == "Stopped" && _retry_available && !_close_controller.requested()',
             source,
         )
         self.assertRegex(
             source,
-            r"_retry_available\s*&&\s*!_close_requested\s*&&\s*"
+            r"_retry_available\s*&&\s*!_close_controller\.requested\(\)\s*&&\s*"
             r"runtime\.assistantState\(\)\s*==\s*AssistantRuntimeState::Stopped",
         )
         self.assertNotIn("_switch_started", header)
