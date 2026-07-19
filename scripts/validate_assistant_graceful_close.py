@@ -55,16 +55,16 @@ class AssistantSessionValidator:
             if marker in line:
                 raise ValidationError(f"reset marker observed: {marker}")
 
-        if "ATRACE sid=" in line:
-            fields = self._fields(line, "ATRACE ")
+        if "ASTRACE sid=" in line:
+            fields = self._fields(line, "ASTRACE ")
             try:
                 session_id = int(fields["sid"])
                 fields["seq"] = int(fields["seq"])
             except (KeyError, ValueError) as error:
-                raise ValidationError(f"malformed ATRACE line: {line}") from error
+                raise ValidationError(f"malformed ASTRACE line: {line}") from error
             records = self.records.setdefault(session_id, [])
             if records and fields["seq"] <= records[-1]["seq"]:
-                raise ValidationError(f"out-of-order ATRACE sequence for sid={session_id}")
+                raise ValidationError(f"out-of-order ASTRACE sequence for sid={session_id}")
             records.append(fields)
             if (
                 fields.get("event") == "snapshot"

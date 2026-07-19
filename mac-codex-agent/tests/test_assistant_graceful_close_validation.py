@@ -17,13 +17,13 @@ def load_module():
 
 
 GOOD_TRANSCRIPT = """
-I AssistantTrace: ATRACE sid=4 seq=1 t=100 comp=app event=open state=stopped detail=none result=accepted v0=0 v1=0 v2=0 v3=0
-I AssistantTrace: ATRACE sid=4 seq=8 t=200 comp=runtime event=snapshot state=running detail=first-running result=ok v0=100 v1=200 v2=18 v3=1
-I AssistantTrace: ATRACE sid=4 seq=9 t=300 comp=app event=close-request state=stopping detail=debug-home result=accepted v0=0 v1=0 v2=0 v3=0
-I AssistantTrace: ATRACE sid=4 seq=10 t=301 comp=runtime event=state state=stopping detail=stop result=accepted v0=0 v1=0 v2=0 v3=0
-I AssistantTrace: ATRACE sid=4 seq=11 t=350 comp=callback event=callback state=stopping detail=stopped result=accepted v0=0 v1=0 v2=0 v3=0
-I AssistantTrace: ATRACE sid=4 seq=12 t=360 comp=runtime event=release state=stopped detail=all-resources result=ok v0=0 v1=0 v2=0 v3=0
-I AssistantTrace: ATRACE sid=4 seq=13 t=370 comp=app event=closed state=stopped detail=debug-home result=ok v0=0 v1=0 v2=0 v3=0
+I AssistantTrace: ASTRACE sid=4 seq=1 t=100 comp=app event=open state=stopped detail=none result=accepted v0=0 v1=0 v2=0 v3=0
+I AssistantTrace: ASTRACE sid=4 seq=8 t=200 comp=runtime event=snapshot state=running detail=first-running result=ok v0=100 v1=200 v2=18 v3=1
+I AssistantTrace: ASTRACE sid=4 seq=9 t=300 comp=app event=close-request state=stopping detail=debug-home result=accepted v0=0 v1=0 v2=0 v3=0
+I AssistantTrace: ASTRACE sid=4 seq=10 t=301 comp=runtime event=state state=stopping detail=stop result=accepted v0=0 v1=0 v2=0 v3=0
+I AssistantTrace: ASTRACE sid=4 seq=11 t=350 comp=callback event=callback state=stopping detail=stopped result=accepted v0=0 v1=0 v2=0 v3=0
+I AssistantTrace: ASTRACE sid=4 seq=12 t=360 comp=runtime event=release state=stopped detail=all-resources result=ok v0=0 v1=0 v2=0 v3=0
+I AssistantTrace: ASTRACE sid=4 seq=13 t=370 comp=app event=closed state=stopped detail=debug-home result=ok v0=0 v1=0 v2=0 v3=0
 I Launcher: on open
 I DebugCommand: ASTATUS sid=4 state=stopped bindings=0 subscriptions=0 wifi=0 capture=0 playback=0 ap=0 blocked=0 internal=100 psram=200 tasks=18
 """
