@@ -162,6 +162,12 @@ class UnifiedRuntimeFirmwareContractTest(unittest.TestCase):
             )
             self.assertRegex(manifest, version_pattern, component)
 
+    def test_audio_dependency_solver_is_pinned_to_verified_compatible_set(self):
+        manifest = read("main/idf_component.yml")
+        self.assertIn("espressif/esp_codec_dev: ~1.5.4", manifest)
+        self.assertIn("espressif/cmake_utilities: 0.5.3", manifest)
+        self.assertIn("jason-mao/av_processor: 0.6.6", manifest)
+
     def test_legacy_layout_and_recovery_tools_remain_during_shadow_mode(self):
         legacy = read("partitions.csv")
         self.assertIn("ota_0", legacy)

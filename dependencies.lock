@@ -522,7 +522,7 @@ dependencies:
       - if: $CONFIG{AUDIO_PROCESSOR_IMPL_GMF} == True
       version: ^0.9.0
     source:
-      registry_url: https://components.espressif.com
+      registry_url: https://components.espressif.com/
       type: service
     version: 0.6.6
 direct_dependencies:
@@ -542,6 +542,7 @@ direct_dependencies:
 - espressif/esp_websocket_client
 - espressif/i2c_bus
 - idf
-manifest_hash: 429fbc437c23c729af096b1aec7a8a0a26590cbb6cdc323aa3b0f5a875727644
+- jason-mao/av_processor
+manifest_hash: 6841b69f0c067d4344fb912cbb5720e42b2b47a5b7420f0a63265a02c315d609
 target: esp32s3
 version: 2.0.0
