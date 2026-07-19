@@ -1,126 +1,81 @@
 # Unified Runtime Validation
 
-- Automated tests: Passed (114 Python tests and 5 host C++ test binaries)
-- Unified clean build: Passed (isolated clean build and capacity gates)
-- Hardware compatibility: Pending hardware
-- Lifecycle coexistence: Pending hardware
-- 100-cycle stress: Pending hardware
-- Full product regression: Pending hardware
+Date: 2026-07-19
 
-This report deliberately separates reproducible offline evidence from evidence that can only be collected on the watch. `scripts/run_unified_offline_validation.sh` completed successfully on 2026-07-14 from committed source `b3e8952e2a993fc3da78c882bcdce4a99dad4008`. The run passed 114 Python tests, all 5 host C++ test binaries, the isolated unified clean build, both image-size gates, and `git diff --check`. A successful offline run does not change any hardware status.
+- Automated tests: Passed (133 Python tests and 6 host C++ test binaries)
+- Unified clean build: Passed (isolated build, capacity gates, and whitespace gate)
+- Targeted hardware startup/lifecycle: Passed
+- Audible and UI conversation checks: Pending manual observation
+- 10-cycle, 100-cycle, and full product regression: Pending campaign
+
+This report separates automated build evidence, targeted hardware evidence, and broader manual campaigns. The targeted run establishes that the merged Launcher/Assistant firmware can boot, activate Xiaozhi, start its audio path, exchange data with the server, and return Home without rebooting or retaining runtime owners. It does not substitute for audible TTS, spoken wake-word, display-content, stress, or full application regression testing.
 
 ## Automated evidence
 
-The values below are copied from the clean build's generated `build-unified/unified-runtime-metrics.json` (schema 2). They are reproducible build evidence, not hardware claims.
+`scripts/run_unified_offline_validation.sh` completed successfully on 2026-07-19 from working source based on `1c2244d88747fe7d5d91431a5a04c07eff9d01a7`. The run passed 133 Python tests, all 6 host C++ test binaries, a clean 2,332-unit firmware build, both image-size gates, and `git diff --check`.
 
-| Evidence | Value | Source |
-|---|---|---|
-| Firmware Git SHA | `b3e8952e2a993fc3da78c882bcdce4a99dad4008` | `source_git_commit` |
-| Application image SHA256 | `bfb0a6a8098c71aac11e916ba3e8507cee36014390c9591c4e70bd0d965c3a28` | `app_sha256` |
-| Application bytes | `6,005,520` (`0x5ba310`) | `app_bytes` |
-| Application partition bytes | `0x780000` (7,864,320) | `partitions_unified.csv` |
-| Application headroom | `1,858,800` bytes (`0x1c5cf0`, 23.64%) | `app_headroom_bytes` and `app_headroom_percent` |
-| Application hard gate | `0x660000` (6,684,672) | candidate build command |
-| Assets image SHA256 | `93b87d059d1c2a31f1dd65bbdfa4d5b7275774f6f12e82eb84a1737acad3723f` | `assets_sha256` |
-| Assets bytes | `291,198` | `assets_bytes` |
-| Assets hard gate | `0x400000` (4,194,304) | candidate build command |
-| Static DIRAM bytes | `200,931` | `diram_bytes` |
-| Capacity gate | Passed | `capacity_gate_passed: true` |
+The values below come from `build-unified/unified-runtime-metrics.json` (schema 2).
 
-### Resolved Brookesia versions
-
-These versions are resolved by the checked-in `dependencies.lock`; the clean candidate configuration processed the same locked versions.
-
-| Component | Resolved version |
+| Evidence | Value |
 |---|---:|
-| `espressif/brookesia_agent_helper` | 0.7.3 |
-| `espressif/brookesia_agent_manager` | 0.7.5 |
-| `espressif/brookesia_agent_xiaozhi` | 0.7.4 |
-| `espressif/brookesia_hal_interface` | 0.7.5 |
-| `espressif/brookesia_lib_utils` | 0.7.9 |
-| `espressif/brookesia_mcp_utils` | 0.7.1 |
-| `espressif/brookesia_service_audio` | 0.7.7 |
-| `espressif/brookesia_service_device` | 0.7.1 |
-| `espressif/brookesia_service_helper` | 0.7.10 |
-| `espressif/brookesia_service_manager` | 0.7.8 |
-| `espressif/brookesia_service_nvs` | 0.7.4 |
-| `espressif/brookesia_service_sntp` | 0.7.2 |
+| Application image SHA256 | `10f1c267ba95a34fa01863fff3963018d185589d0d1d2c2bf88ce051dba62b36` |
+| Application bytes | `5,998,336` (`0x5b8700`) |
+| Application partition bytes | `7,864,320` (`0x780000`) |
+| Application headroom | `1,865,984` bytes (`23.73%`) |
+| Application hard gate | `6,684,672` (`0x660000`) |
+| Assets image SHA256 | `93b87d059d1c2a31f1dd65bbdfa4d5b7275774f6f12e82eb84a1737acad3723f` |
+| Assets bytes | `291,198` |
+| Assets hard gate | `4,194,304` (`0x400000`) |
+| Static DIRAM bytes | `185,415` |
+| Capacity gate | Passed |
 
-### Repository boundary and handoff
+The candidate keeps the locked Brookesia 0.7 component family. The Assistant product path does not switch boot partitions, call `esp_restart`, or reference `ota_1`. The legacy dual-OTA partition table, recovery path, and complete-backup restore helper remain available; this work does not remove that fallback.
 
-- The Assistant product path contains no `esp_ota_set_boot_partition`, `esp_restart`, or `ota_1` reference.
-- The new backup, restore, and unified-candidate helpers contain no `erase_flash` command.
-- The checked-in legacy `partitions.csv` still contains both `ota_0` and `ota_1`, and the legacy Assistant flash path and complete-backup restore helper remain available. The dual-OTA recovery path has not been removed or promoted away.
-- No firmware was flashed, no serial port was accessed, and no device command was run while collecting this evidence.
-- After the offline validation is rerun with the watch available, the first hardware action in Stage 2 is to create and verify a complete 16 MiB Flash backup and its SHA256 sidecar. No candidate write may occur before that backup passes verification.
+## Targeted hardware evidence
 
-## Hardware evidence
+| Field | Result |
+|---|---|
+| Device | ESP32-S3 watch, MAC `44:1b:f6:c1:86:5c`, serial port `/dev/cu.usbmodem1101` during the run |
+| Complete Flash backup | 16 MiB `backups/watch-full-flash-20260718-173922.bin`; SHA256 `b6ecc3da8f0dbd41de9722a1956566ca3ce0f5506e6439fe5c4a57366c9000dc` |
+| Preserved assets | SHA256 `93b87d059d1c2a31f1dd65bbdfa4d5b7275774f6f12e82eb84a1737acad3723f` |
+| Automated control | `debug app list`, `debug app open assistant`, and `debug app home` acknowledged by the watch |
+| Wi-Fi | Acquired `192.168.50.238` before heavy service startup |
+| Xiaozhi activation | Passed; endpoint reported activation successful |
+| Audio startup | Decoder and Encoder started; light feeder/recorder opened |
+| Wake model | `wn9_nihaoxiaozhi_tts` loaded from the `assets` partition |
+| Server path | Agent connected; MCP initialize and tools/list received; audio channel opened |
+| Microphone path | Continuous 180-byte encoded packets emitted |
+| Runtime state | Reached `first-running`, state 2, without reset or reboot |
+| Running resources | 2 bindings, 5 subscriptions, Wi-Fi/capture/playback owned as expected |
+| Stop/Home | Agent, Encoder, Decoder, NVS, AgentXiaoZhi, AgentManager, Audio, Device, SNTP, and Wi-Fi stopped |
+| Stopped resources | Bindings/subscriptions/Wi-Fi/capture/playback all zero |
+| Second lifecycle | Reopen succeeded; second stop gate passed with `internal_loss=2560`, `psram_loss=39564`, `task_delta=0`, `gate=true` |
 
-No hardware evidence has been collected. Every row below stays `Pending hardware` until its described observation is recorded against the tested device, firmware Git SHA, and image SHA256.
+The first stopped snapshot included one-time persistent Wi-Fi/service initialization and therefore did not satisfy the paired leak gate. The second complete open/close session did satisfy it. A GMF `Got NULL Pointer` diagnostic occurs during Audio deinitialization, but the stop sequence completes, no reset follows, and the second-cycle resource gate passes. Downlink logs also contain occasional wrong-sequence warnings; neither warning blocked startup, audio-channel establishment, or cleanup.
 
-### Xiaozhi compatibility matrix
+The exact clean image listed above was flashed after all four address ranges passed esptool write-hash verification. The watch then completed two automated open/run/Home lifecycles against that image. The first stopped snapshot includes one-time persistent Wi-Fi/service initialization; the second is the steady-state leak gate quoted above.
 
-| Capability | Status | Required evidence |
+## Compatibility and lifecycle matrix
+
+| Capability | Status | Evidence or remaining check |
 |---|---|---|
-| Existing activation or approved reactivation | Pending hardware | Activation log and identity comparison |
-| Wake phrase `你好小智` | Pending hardware | Local WakeStart event |
-| Manual start/listen | Pending hardware | Listening event and server session |
-| User text | Pending hardware | UI callback log containing recognized user text |
-| Assistant text and emotion | Pending hardware | UI callback log containing text and emotion |
-| TTS audio | Pending hardware | Audible, stable playback observation |
-| Existing Xiaozhi/MCP product functions | Pending hardware | Function-by-function result |
-| Stop while idle | Pending hardware | Stopped within 2 seconds |
-| Stop while recording | Pending hardware | Stopped within 2 seconds |
-| Stop while playing | Pending hardware | Stopped within 2 seconds |
-| Stop while reconnecting | Pending hardware | Stopped within 2 seconds |
-| Post-stop tasks and connections | Pending hardware | Zero Agent session residue |
+| Existing activation | Passed | Activation completed without generating a new user-visible identity |
+| Manual/listen startup | Passed | Agent session and server audio channel opened |
+| Microphone upload | Passed | Continuous encoded audio packets observed |
+| MCP initialization | Passed | Initialize and tools/list received |
+| Wake phrase `你好小智` | Pending manual | Speak phrase and observe WakeStart |
+| User text | Pending manual | Observe recognized text on UI/log |
+| Assistant text/emotion | Pending manual | Observe UI callbacks |
+| TTS audio | Pending manual | Confirm audible, stable playback |
+| Stop while active recording | Passed | Automated Home stopped encoder/recorder and released capture |
+| Stop while idle/playing/reconnecting | Pending campaign | Exercise each timing window explicitly |
+| Successful second entry | Passed | Second automated open reached running |
+| Post-stop runtime residue | Passed | Owners zero; `task_delta=0` on second cycle |
+| Reboot/crash during targeted run | Passed | None observed |
 
-### 10-cycle targeted lifecycle and coexistence test
+## Remaining campaigns
 
-| Scenario | Status | Required evidence |
-|---|---|---|
-| Exit while Starting | Pending hardware | Current-session Stopped acknowledgement and no delayed Start |
-| Exit while Listening | Pending hardware | Stop latency, owners released, and successful second entry |
-| Exit while recording | Pending hardware | Stop latency, capture owner `None`, and Clock opens immediately |
-| Exit during TTS playback | Pending hardware | Stop latency, playback owner `None`, and Codex remains functional |
-| Exit during Wi-Fi/Xiaozhi reconnect | Pending hardware | Stop latency, Assistant Wi-Fi lease absent, and Badge AP starts |
-| Ten mixed open/close cycles | Pending hardware | Per-cycle before/running/after diagnostics and zero reset-reason change |
-| BLE and Wi-Fi coexistence | Pending hardware | BLE remains connected while Assistant uses Wi-Fi |
-
-### 100-cycle stress and leak gates
-
-| Gate | Status | Required evidence |
-|---|---|---|
-| 20 idle/listening exits | Pending hardware | Cycle log and stop latency per exit |
-| 20 recording exits | Pending hardware | Cycle log and capture release per exit |
-| 20 TTS playback exits | Pending hardware | Cycle log and playback release per exit |
-| 20 reconnect exits | Pending hardware | Cycle log and Wi-Fi lease release per exit |
-| 20 completed conversations | Pending hardware | Cycle log and normal stopped acknowledgement |
-| Crash/watchdog/reset count | Pending hardware | Zero events in boot and serial logs |
-| Single-session internal heap | Pending hardware | After-stop loss at most 4 KiB from its paired before snapshot |
-| Cumulative internal heap | Pending hardware | Loss at most 8 KiB after 100 cycles |
-| Runtime residue | Pending hardware | Agent, Audio, activation tasks and subscriptions all zero |
-| Resource owners | Pending hardware | Capture and playback owners `None`; Assistant Wi-Fi lease absent |
-
-### Application regression
-
-| Product area | Status | Required evidence |
-|---|---|---|
-| Launcher and Home | Pending hardware | Boot, navigation, Home behavior, and unchanged reset reason |
-| Clock selector, Alarm, Watch Face, Stopwatch | Pending hardware | Function-by-function result |
-| Assistant | Pending hardware | Activation, wake, conversation, text, emotion, playback, retry, and return |
-| Codex | Pending hardware | BLE status plus Wi-Fi fallback before and after Assistant |
-| Badge | Pending hardware | Normal view and configuration AP before and after Assistant |
-| IMU, FFT, Setup, and boot sound | Pending hardware | Function-by-function result |
-| Display, buttons, and power | Pending hardware | Brightness, controls, sleep, wake, and power observations |
-| Cross-service coexistence | Pending hardware | BLE remains connected during Assistant and Codex monitoring resumes after exit |
-
-### Hardware campaign identity
-
-| Field | Status | Required evidence |
-|---|---|---|
-| Tested device | Pending hardware | Board identity and hardware revision |
-| Complete Flash backup | Pending hardware | Exact 16 MiB size and SHA256 sidecar |
-| Candidate write | Pending hardware | Four explicit address/artifact pairs and tool output |
-| Boot identity | Pending hardware | Reset reason, partition label, firmware Git SHA, and image SHA256 |
-| Recovery rehearsal if needed | Pending hardware | Verified full-backup restore result |
+- Run 10 mixed open/close cycles, including Starting, Listening, recording, TTS playback, and reconnect windows.
+- Run the planned 100-cycle stress/leak campaign and evaluate cumulative internal/PSRAM trends.
+- Manually validate spoken wake phrase, recognized text, assistant text/emotion, and audible TTS.
+- Run full Launcher, Clock, Codex, Badge, IMU, FFT, Setup, boot-sound, display, buttons, sleep/wake, power, BLE/Wi-Fi coexistence, and recovery regression.

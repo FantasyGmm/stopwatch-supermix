@@ -7,6 +7,7 @@
 
 #include "hal/hal.h"
 #include "runtime/resource_supervisor.h"
+#include "runtime/runtime_diagnostics.h"
 #include "runtime/service_runtime.h"
 #include "runtime/services/shared_wifi_service.h"
 
@@ -14,6 +15,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstring>
+#include <exception>
 #include <inttypes.h>
 #include <memory>
 #include <string>
@@ -26,6 +28,7 @@
 #include <brookesia/agent_helper/xiaozhi.hpp>
 #include <brookesia/lib_utils/describe_helpers.hpp>
 #include <brookesia/service_helper/audio.hpp>
+#include <brookesia/service_helper/nvs.hpp>
 #include <brookesia/service_manager.hpp>
 #include <esp_log.h>
 #include <esp_partition.h>
@@ -36,6 +39,7 @@
 namespace {
 using AudioHelper = esp_brookesia::service::helper::Audio;
 using ManagerHelper = esp_brookesia::agent::helper::Manager;
+using NVSHelper = esp_brookesia::service::helper::NVS;
 using XiaozhiHelper = esp_brookesia::agent::helper::XiaoZhi;
 using SignalConnection = esp_brookesia::service::EventRegistry::SignalConnection;
 using FunctionResult = esp_brookesia::service::FunctionResult;
@@ -155,6 +159,17 @@ std::string xiaozhi_event_name(XiaozhiHelper::EventId event)
 {
     return BROOKESIA_DESCRIBE_ENUM_TO_STR(event);
 }
+
+void log_memory_stage(const char* boundary)
+{
+    const RuntimeDiagnosticSnapshot snapshot = CaptureRuntimeDiagnosticSnapshot();
+    ESP_LOGI(tag, "memory %s internal=%u/%u largest=%u psram=%u tasks=%u", boundary,
+             static_cast<unsigned>(snapshot.internal_free_heap),
+             static_cast<unsigned>(snapshot.internal_min_free_heap),
+             static_cast<unsigned>(snapshot.internal_largest_free_block),
+             static_cast<unsigned>(snapshot.psram_free),
+             static_cast<unsigned>(snapshot.task_count));
+}
 } // namespace
 
 class AssistantRuntime::Impl {
@@ -169,7 +184,7 @@ public:
     WifiStaLease wifi;
     bool capture_owned = false;
     bool playback_owned = false;
-    std::vector<std::shared_ptr<esp_brookesia::service::ServiceBase>> bindings;
+    std::vector<esp_brookesia::service::ServiceBinding> bindings;
     SignalConnection general_event;
     SignalConnection activation_code;
     SignalConnection user_text;
@@ -182,7 +197,10 @@ public:
     std::atomic<bool> stop_submitted{false};
     uint32_t stop_started_ms = 0;
     TaskHandle_t runtime_task = nullptr;
+    bool service_setup_pending = false;
 
+    bool finishStart(uint64_t session_id);
+    bool configurePlaybackBeforeStart();
     bool bindServices(uint64_t session_id);
     bool configureAudioAndAgent();
     bool subscribe(uint64_t session_id);
@@ -235,39 +253,29 @@ AssistantStartResult AssistantRuntime::Impl::start()
     mailbox.discardSessionsBefore(session);
     mailbox.publish({session, AssistantEventKind::State, "Starting"});
 
-    if (!GetServiceRuntime().isStarted()) {
-        return failAndReturn(session, AssistantStartResult::ServiceUnavailable,
-                             "Service runtime unavailable");
+    try {
+        log_memory_stage("before-resources");
+        if (!GetServiceRuntime().isStarted()) {
+            return failAndReturn(session, AssistantStartResult::ServiceUnavailable,
+                                 "Service runtime unavailable");
+        }
+        wifi = GetSharedWifiService().acquireSta(RuntimeOwner::Assistant);
+        if (!wifi.valid()) {
+            return failAndReturn(session, AssistantStartResult::ResourceBusy, "Wi-Fi busy");
+        }
+        log_memory_stage("after-wifi");
+        service_setup_pending = true;
+        mailbox.publish({session, AssistantEventKind::State, "Connecting"});
+        return AssistantStartResult::Submitted;
+    } catch (const std::exception& error) {
+        ESP_LOGE(tag, "exception during Assistant setup: %s", error.what());
+        log_memory_stage("setup-exception");
+        return failAndReturn(session, AssistantStartResult::ConfigurationFailed, "Setup failed");
+    } catch (...) {
+        ESP_LOGE(tag, "unknown exception during Assistant setup");
+        log_memory_stage("setup-exception");
+        return failAndReturn(session, AssistantStartResult::ConfigurationFailed, "Setup failed");
     }
-    if (!load_unified_wake_models()) {
-        return failAndReturn(session, AssistantStartResult::ConfigurationFailed,
-                             "Wake model unavailable");
-    }
-
-    wifi = GetSharedWifiService().acquireSta(RuntimeOwner::Assistant);
-    if (!wifi.valid()) {
-        return failAndReturn(session, AssistantStartResult::ResourceBusy, "Wi-Fi busy");
-    }
-    if (GetResourceSupervisor().acquireCapture(RuntimeOwner::Assistant) !=
-        AcquireResult::Granted) {
-        return failAndReturn(session, AssistantStartResult::ResourceBusy, "Microphone busy");
-    }
-    capture_owned = true;
-    if (GetResourceSupervisor().acquirePlayback(RuntimeOwner::Assistant) !=
-        AcquireResult::Granted) {
-        return failAndReturn(session, AssistantStartResult::ResourceBusy, "Speaker busy");
-    }
-    playback_owned = true;
-    if (!bindServices(session) || !configureAudioAndAgent() || !subscribe(session)) {
-        return failAndReturn(session, AssistantStartResult::ConfigurationFailed,
-                             "Service setup failed");
-    }
-    if (!submitActivate(session)) {
-        return failAndReturn(session, AssistantStartResult::SubmitFailed,
-                             "Activate submission failed");
-    }
-    mailbox.publish({session, AssistantEventKind::State, "Activating"});
-    return AssistantStartResult::Submitted;
 }
 
 bool AssistantRuntime::Impl::requestStop()
@@ -290,6 +298,10 @@ bool AssistantRuntime::Impl::requestStop()
         stop_started_ms = GetHAL().millis();
         mailbox.publish({session, AssistantEventKind::State, "Stopping"});
     }
+    if (service_setup_pending) {
+        releaseSession(session);
+        return true;
+    }
     if (stop_submitted.exchange(true)) {
         return true;
     }
@@ -310,6 +322,13 @@ void AssistantRuntime::Impl::update(uint32_t now_ms)
         return;
     }
     const uint64_t session = state.sessionId();
+    if (service_setup_pending && state.state() == AssistantRuntimeState::Starting &&
+        GetSharedWifiService().staConnected()) {
+        finishStart(session);
+        if (state.state() == AssistantRuntimeState::Stopped) {
+            return;
+        }
+    }
     const uint32_t signals = control_bits.exchange(0);
 
     if ((signals & Stopped) != 0) {
@@ -350,24 +369,82 @@ void AssistantRuntime::Impl::update(uint32_t now_ms)
     }
 }
 
+bool AssistantRuntime::Impl::finishStart(uint64_t session_id)
+{
+    service_setup_pending = false;
+    try {
+        log_memory_stage("wifi-connected-before-service-setup");
+        if (!load_unified_wake_models()) {
+            failStart(session_id, "Wake model unavailable");
+            return false;
+        }
+        if (GetResourceSupervisor().acquireCapture(RuntimeOwner::Assistant) !=
+            AcquireResult::Granted) {
+            failStart(session_id, "Microphone busy");
+            return false;
+        }
+        capture_owned = true;
+        if (GetResourceSupervisor().acquirePlayback(RuntimeOwner::Assistant) !=
+            AcquireResult::Granted) {
+            failStart(session_id, "Speaker busy");
+            return false;
+        }
+        playback_owned = true;
+        if (!configurePlaybackBeforeStart() || !bindServices(session_id) ||
+            !configureAudioAndAgent() || !subscribe(session_id)) {
+            failStart(session_id, "Service setup failed");
+            return false;
+        }
+        log_memory_stage("after-service-setup");
+        if (!submitActivate(session_id)) {
+            failStart(session_id, "Activate submission failed");
+            return false;
+        }
+        mailbox.publish({session_id, AssistantEventKind::State, "Activating"});
+        return true;
+    } catch (const std::exception& error) {
+        ESP_LOGE(tag, "exception during deferred Assistant setup: %s", error.what());
+    } catch (...) {
+        ESP_LOGE(tag, "unknown exception during deferred Assistant setup");
+    }
+    log_memory_stage("setup-exception");
+    failStart(session_id, "Setup failed");
+    return false;
+}
+
+bool AssistantRuntime::Impl::configurePlaybackBeforeStart()
+{
+    AudioHelper::PlaybackConfig playback_config{};
+    playback_config.player_task.stack_in_ext = true;
+    auto result = AudioHelper::call_function_sync(
+        AudioHelper::FunctionId::SetPlaybackConfig,
+        BROOKESIA_DESCRIBE_TO_JSON(playback_config).as_object());
+    if (!result) {
+        ESP_LOGE(tag, "failed to configure playback task: %s", result.error().c_str());
+        return false;
+    }
+    ESP_LOGI(tag, "configured playback task stack in PSRAM");
+    return true;
+}
+
 bool AssistantRuntime::Impl::bindServices(uint64_t session_id)
 {
     if (callback_session.load() != session_id) {
         return false;
     }
     auto& manager = esp_brookesia::service::ServiceManager::get_instance();
-    const std::array<std::string_view, 3> names = {
-        AudioHelper::get_name(), ManagerHelper::get_name(), XiaozhiHelper::get_name()};
+    const std::array<std::string_view, 2> names = {
+        NVSHelper::get_name(), ManagerHelper::get_name()};
     bindings.clear();
     for (const auto name : names) {
-        auto service = manager.get_service(std::string(name));
-        if (service == nullptr) {
+        auto binding = manager.bind(std::string(name));
+        if (!binding.is_valid()) {
             ESP_LOGE(tag, "required service is unavailable: %.*s", static_cast<int>(name.size()),
                      name.data());
             bindings.clear();
             return false;
         }
-        bindings.push_back(std::move(service));
+        bindings.push_back(std::move(binding));
     }
     return true;
 }
@@ -497,18 +574,25 @@ bool AssistantRuntime::Impl::submitAction(uint64_t session_id,
                                           uint32_t failure_bit)
 {
     const std::string name = action_name(action);
-    const bool submitted = ManagerHelper::call_function_async(
-        ManagerHelper::FunctionId::TriggerGeneralAction, name,
-        [this, session_id, failure_bit](FunctionResult&& result) {
-            if (callback_session.load() != session_id || result.success) {
-                return;
-            }
-            control_bits.fetch_or(failure_bit);
-        });
-    if (!submitted) {
-        ESP_LOGE(tag, "failed to submit %s request", name.c_str());
+    try {
+        const bool submitted = ManagerHelper::call_function_async(
+            ManagerHelper::FunctionId::TriggerGeneralAction, name,
+            [this, session_id, failure_bit](FunctionResult&& result) {
+                if (callback_session.load() != session_id || result.success) {
+                    return;
+                }
+                control_bits.fetch_or(failure_bit);
+            });
+        if (!submitted) {
+            ESP_LOGE(tag, "failed to submit %s request", name.c_str());
+        }
+        return submitted;
+    } catch (const std::exception& error) {
+        ESP_LOGE(tag, "exception submitting %s request: %s", name.c_str(), error.what());
+    } catch (...) {
+        ESP_LOGE(tag, "unknown exception submitting %s request", name.c_str());
     }
-    return submitted;
+    return false;
 }
 
 bool AssistantRuntime::Impl::submitActivate(uint64_t session_id)
@@ -567,6 +651,7 @@ void AssistantRuntime::Impl::releaseSession(uint64_t session_id)
     }
 
     disconnectSubscriptions();
+    service_setup_pending = false;
     bindings.clear();
     if (playback_owned) {
         GetResourceSupervisor().releasePlayback(RuntimeOwner::Assistant);

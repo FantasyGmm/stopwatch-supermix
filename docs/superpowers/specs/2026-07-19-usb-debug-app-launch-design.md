@@ -6,12 +6,13 @@ Allow automated firmware debugging to open any installed watch application over 
 
 ## Scope
 
-The first version supports two commands:
+The first version supports three commands:
 
 - `app list`
 - `app open <name>`
+- `app home`
 
-Application names are matched case-insensitively against Mooncake's installed application metadata. The implementation must not hard-code Mooncake application IDs. Closing an application, simulating buttons, BLE transport, Wi-Fi transport, and production remote control are outside this version.
+Application names are matched case-insensitively against Mooncake's installed application metadata. The implementation must not hard-code Mooncake application IDs. `app home` closes the Launcher's currently tracked child through Mooncake's normal close lifecycle so unattended tests can repeat. Simulating arbitrary buttons, BLE transport, Wi-Fi transport, and production remote control are outside this version.
 
 ## Architecture
 
@@ -23,13 +24,13 @@ The parser uses a fixed-size ASCII line buffer. Newline submits a command; overf
 
 ### Launcher integration
 
-`AppLauncher` registers a same-thread debug-open handler while it is open and unregisters it before closing. `app open <name>` resolves the requested name from `getAppProps()` and calls the existing `AppLauncherBase::openApp(appID)` path. This preserves the established sequence:
+`AppLauncher` registers one same-thread debug handler for its lifetime. `app open <name>` is accepted only while Launcher has no running child, resolves the requested name from `getAppProps()`, and calls the existing `AppLauncherBase::openApp(appID)` path. This preserves the established sequence:
 
 1. Launcher schedules the target application.
 2. Launcher closes and releases its UI.
 3. Mooncake opens the target application.
 
-The command never calls `Mooncake::openApp()` behind Launcher's back. If Launcher is not currently open, the command returns `BUSY`. An unknown application returns `NOT_FOUND`. A successfully scheduled application returns `OK` and logs the resolved name and ID.
+The command never calls `Mooncake::openApp()` behind Launcher's back. If Launcher is not currently open, the command returns `BUSY`. `app home` calls `Mooncake::closeApp()` only for `AppLauncherBase::getRunningAppId()`, after which the existing sleeping-state logic reopens Launcher. An unknown application returns `NOT_FOUND`. A successfully scheduled application returns `OK` and logs the resolved name and ID.
 
 ### Host command
 
@@ -38,6 +39,7 @@ The command never calls `Mooncake::openApp()` behind Launcher's back. If Launche
 ```text
 python3 scripts/watch_debug.py app open assistant
 python3 scripts/watch_debug.py app list
+python3 scripts/watch_debug.py app home
 ```
 
 The script auto-discovers one `/dev/cu.usbmodem*` port, accepts `--port` when discovery is ambiguous, uses 115200 baud, sends one newline-terminated command, and waits for a matching firmware acknowledgement. A follow mode keeps the same serial handle open and streams subsequent firmware logs so automated tests can launch an app and observe its complete lifecycle without competing with a second serial monitor.
@@ -49,6 +51,7 @@ Requests are plain ASCII lines prefixed with `debug ` to avoid interpreting arbi
 ```text
 debug app list
 debug app open assistant
+debug app home
 ```
 
 Responses use a stable machine-readable prefix:
@@ -58,6 +61,8 @@ DEBUG APP LIST codex,assistant,clock,badge,imu,fft,setup
 DEBUG APP OPEN assistant OK
 DEBUG APP OPEN unknown NOT_FOUND
 DEBUG APP OPEN assistant BUSY
+DEBUG APP HOME OK
+DEBUG APP HOME BUSY
 DEBUG ERROR INVALID_COMMAND
 DEBUG ERROR LINE_TOO_LONG
 ```
@@ -69,7 +74,7 @@ The host command exits successfully only after the matching `OK` or list respons
 - No background task, queue, BLE service, Wi-Fi socket, heap-sized input buffer, or persistent setting is added.
 - Input is accepted only from the physical USB debug interface.
 - The maximum command line is 64 bytes, including arguments.
-- The service owns no application lifecycle. It delegates opening exclusively to Launcher.
+- The service owns no application lifecycle. It delegates open and Home requests exclusively to Launcher.
 - Disabling `CONFIG_STOPWATCH_DEBUG_COMMANDS` removes the parser, USB reads, and Launcher debug handler from the build.
 - Existing button, touch, Home, app-close, and Launcher behavior remain unchanged.
 
@@ -82,5 +87,5 @@ Hardware validation performs the following without touching the watch:
 1. Flash and reboot the unified candidate.
 2. Run `watch_debug.py app open assistant --follow`.
 3. Confirm the acknowledgement, Launcher close, Assistant open, Wi-Fi connection, activation, running state, and absence of a reset.
-4. Return to Launcher using the existing application behavior and repeat the command.
+4. Run `watch_debug.py app home`, confirm normal close and Launcher reopen, then repeat the command.
 5. Verify `NOT_FOUND` and `BUSY` do not disturb the running application.

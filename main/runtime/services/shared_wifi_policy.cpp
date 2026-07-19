@@ -56,3 +56,8 @@ void SharedWifiPolicy::releaseAp(RuntimeOwner owner)
         _driver.stopAp();
     }
 }
+
+bool SharedWifiPolicy::staConnected() const
+{
+    return _driver.staConnected();
+}

@@ -13,6 +13,15 @@ file(GLOB_RECURSE MY_SRCS
     "runtime/*.cpp"
 )
 
+if(CONFIG_STOPWATCH_DEBUG_COMMANDS)
+    file(GLOB_RECURSE DEBUG_SRCS
+        "debug/*.c"
+        "debug/*.cc"
+        "debug/*.cpp"
+    )
+    list(APPEND MY_SRCS ${DEBUG_SRCS})
+endif()
+
 set(MY_INCS
     "."
 )

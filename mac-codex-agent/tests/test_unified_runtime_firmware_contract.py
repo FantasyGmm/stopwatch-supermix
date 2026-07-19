@@ -43,7 +43,7 @@ def parse_partition_csv(relative_path):
 
 
 class UnifiedRuntimeFirmwareContractTest(unittest.TestCase):
-    def test_shadow_mode_allows_offline_runtime_work_without_passing_hardware(self):
+    def test_shadow_mode_does_not_bypass_remaining_promotion_gates(self):
         plan = read(
             "docs/superpowers/plans/2026-07-13-unified-runtime-assistant-merge.md"
         )
@@ -52,8 +52,8 @@ class UnifiedRuntimeFirmwareContractTest(unittest.TestCase):
         )
         self.assertIn("Tasks 8, 9, 11, and Task 10 preparation", plan)
         self.assertIn("hardware status remains pending", plan)
-        self.assertIn("Task 8 may proceed in offline shadow mode", report)
-        self.assertIn("single-partition promotion remains gated", report)
+        self.assertIn("Targeted startup and lifecycle passed", report)
+        self.assertIn("single-partition promotion remains gated", report.lower())
 
     def test_only_launcher_defines_app_main(self):
         definitions = find_definitions(r'extern\s+"C"\s+void\s+app_main\s*\(')
@@ -67,9 +67,11 @@ class UnifiedRuntimeFirmwareContractTest(unittest.TestCase):
 
     def test_assistant_uses_runtime_supervisor_and_never_switches_boot_slot(self):
         source = read("main/apps/app_assistant/app_assistant.cpp")
+        main = read("main/main.cpp")
         self.assertIn("GetRuntimeSupervisor().startAssistant()", source)
         self.assertIn("GetRuntimeSupervisor().requestStopAssistant()", source)
-        self.assertIn("runtime.update(GetHAL().millis())", source)
+        self.assertNotIn("runtime.update(GetHAL().millis())", source)
+        self.assertIn("GetRuntimeSupervisor().update(GetHAL().millis())", main)
         for forbidden in (
             "esp_ota_ops.h",
             "esp_partition.h",
@@ -82,6 +84,7 @@ class UnifiedRuntimeFirmwareContractTest(unittest.TestCase):
 
     def test_assistant_mooncake_view_preserves_async_lifecycle_behavior(self):
         source = read("main/apps/app_assistant/app_assistant.cpp")
+        main = read("main/main.cpp")
         header = read("main/apps/app_assistant/app_assistant.h")
         view_header = read("main/apps/app_assistant/view/assistant_view.h")
         view_source = read("main/apps/app_assistant/view/assistant_view.cpp")
@@ -107,10 +110,12 @@ class UnifiedRuntimeFirmwareContractTest(unittest.TestCase):
         ):
             self.assertIn(f"AssistantEventKind::{event_kind}", source)
 
-        update_at = source.index("runtime.update(GetHAL().millis())")
-        drain_at = source.index("drainRuntimeEvents()", update_at)
+        update_at = main.index("GetRuntimeSupervisor().update(GetHAL().millis())")
+        mooncake_at = main.index("GetMooncake().update()", update_at)
+        self.assertLess(update_at, mooncake_at)
+
+        drain_at = source.index("drainRuntimeEvents()")
         key_at = source.index("_key_manager->update()", drain_at)
-        self.assertLess(update_at, drain_at)
         self.assertLess(drain_at, key_at)
 
         self.assertIn("isConversationEvent(event.kind) && _close_requested", source)
@@ -206,28 +211,27 @@ class UnifiedRuntimeFirmwareContractTest(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, runner)
 
-    def test_unified_validation_report_keeps_hardware_evidence_pending(self):
+    def test_unified_validation_report_separates_targeted_and_campaign_evidence(self):
         report = read(
             "docs/superpowers/reports/unified-runtime-validation.md"
         )
         self.assertIn("## Automated evidence", report)
-        self.assertIn("## Hardware evidence", report)
+        self.assertIn("## Targeted hardware evidence", report)
         for status in (
-            "Hardware compatibility: Pending hardware",
-            "Lifecycle coexistence: Pending hardware",
-            "100-cycle stress: Pending hardware",
-            "Full product regression: Pending hardware",
+            "Targeted hardware startup/lifecycle: Passed",
+            "Audible and UI conversation checks: Pending manual observation",
+            "10-cycle, 100-cycle, and full product regression: Pending campaign",
         ):
             self.assertIn(status, report)
 
-        hardware_section = report.split("## Hardware evidence", 1)[1]
-        self.assertNotRegex(hardware_section, r"\|\s*(Passed|Failed)\s*\|")
+        hardware_section = report.split("## Targeted hardware evidence", 1)[1]
         for evidence in (
-            "Local WakeStart event",
-            "Stopped within 2 seconds",
-            "Zero Agent session residue",
-            "paired before snapshot",
-            "BLE remains connected",
+            "Complete Flash backup",
+            "Reached `first-running`",
+            "Bindings/subscriptions/Wi-Fi/capture/playback all zero",
+            "second stop gate passed",
+            "Pending manual",
+            "Pending campaign",
         ):
             self.assertIn(evidence, hardware_section)
 

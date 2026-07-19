@@ -14,6 +14,7 @@
 struct RuntimeDiagnosticSnapshot {
     std::size_t internal_free_heap = 0;
     std::size_t internal_min_free_heap = 0;
+    std::size_t internal_largest_free_block = 0;
     std::size_t psram_free = 0;
     std::size_t task_count = 0;
     ResourceSnapshot resources;

@@ -4,7 +4,7 @@
 
 **Goal:** Add a USB debug command that opens an installed Mooncake watch application without human interaction.
 
-**Architecture:** A host-testable fixed-buffer parser recognizes only `debug app list` and `debug app open <name>`. An ESP-only adapter reads USB Serial/JTAG without creating a task, then delegates to a Launcher-owned same-thread target so the existing Launcher close/open lifecycle remains authoritative. A dependency-free Python command discovers the watch port, sends the command, validates the acknowledgement, and can keep streaming logs.
+**Architecture:** A host-testable fixed-buffer parser recognizes `debug app list`, `debug app open <name>`, and the unattended-test companion `debug app home`. An ESP-only adapter reads USB Serial/JTAG without creating a task, then delegates to a Launcher-owned same-thread target so the existing Launcher close/open lifecycle remains authoritative. A dependency-free Python command discovers the watch port, sends the command, validates the acknowledgement, and can keep streaming logs.
 
 **Tech Stack:** C++17, Mooncake, ESP-IDF 5.5.4 USB Serial/JTAG driver, Python 3 standard library, `unittest`, native host tests.
 
@@ -16,7 +16,7 @@
 - `main/debug/debug_app_control.h/.cpp`: one registered Launcher target and stable `OK`/`BUSY`/`NOT_FOUND` results.
 - `main/debug/debug_command_service.h/.cpp`: fixed line buffer, ESP USB reads, response logging, compile-time no-op implementation.
 - `main/CMakeLists.txt`: include the focused `debug/` sources in the main component.
-- `main/apps/app_launcher/app_launcher.h/.cpp`: name-to-ID resolution and registration only while Launcher is open.
+- `main/apps/app_launcher/app_launcher.h/.cpp`: lifetime registration, name-to-ID resolution while Launcher is open, and normal child close for Home.
 - `main/main.cpp`: one non-blocking debug update per existing main-loop iteration.
 - `main/Kconfig.projbuild`, `sdkconfig.unified.defaults`: debug-only build gate.
 - `tests/debug_command_test.cpp`: parser and target-registry host tests.
@@ -183,7 +183,7 @@ Expected: all tests pass.
 
 - [ ] **Step 1: Write the failing firmware contract**
 
-Assert that the configuration gate exists and is enabled only in the unified debug defaults, `main/CMakeLists.txt` includes `debug/*.cpp`, the main loop calls `GetDebugCommandService().update()`, the implementation opens `/dev/secondary` with `O_NONBLOCK`, and it contains none of `usb_serial_jtag_driver_install`, `xTaskCreate`, `std::thread`, or a polling `while (1)`.
+Assert that the configuration gate exists and is enabled only in the unified debug defaults, USB Serial/JTAG is the primary console, `main/CMakeLists.txt` includes `debug/*.cpp`, the main loop calls `GetDebugCommandService().update()`, and the implementation performs one bounded read from the USB Serial/JTAG hardware RX FIFO. It contains none of `usb_serial_jtag_driver_install`, a standard-input read, `xTaskCreate`, `std::thread`, or a polling `while (1)`.
 
 - [ ] **Step 2: Run the contract and verify RED**
 
@@ -211,7 +211,7 @@ Add `CONFIG_STOPWATCH_DEBUG_COMMANDS=y` only to `sdkconfig.unified.defaults`.
 
 - [ ] **Step 4: Implement the non-blocking service**
 
-Add `"debug/*.cpp"` to `MY_SRCS`. The enabled implementation owns `std::array<char, 65> _line`, a current length, an overflow flag, and a lazily opened file descriptor. It opens ESP-IDF's already registered USB secondary-console VFS at `/dev/secondary` with `O_RDONLY | O_NONBLOCK`; it does not install the USB Serial/JTAG driver or allocate driver ring buffers. Each `update()` performs one non-blocking `read()` into a small stack buffer, feeds bytes, parses complete lines, calls `RequestDebugAppList()` or `RequestDebugAppOpen()`, and logs exactly one stable response. The disabled implementation is an inline no-op selected with `#if CONFIG_STOPWATCH_DEBUG_COMMANDS`.
+Add `"debug/*.cpp"` to `MY_SRCS`. The enabled implementation owns `std::array<char, 65> _line`, a current length, and an overflow flag. The unified debug defaults select USB Serial/JTAG as the primary ESP-IDF console, because ESP-IDF's secondary console is output-only. Runtime testing also showed that the shared console standard-input path does not deliver host bytes in this firmware, so each `update()` performs one bounded `usb_serial_jtag_ll_read_rxfifo()` call into a small stack buffer. This is the same no-driver hardware primitive ESP-IDF's own USB VFS uses; it installs no driver, creates no ring buffer, and never waits. Parsed complete lines call `RequestDebugAppList()` or `RequestDebugAppOpen()` and log exactly one stable response. The disabled implementation is an inline no-op selected with `#if CONFIG_STOPWATCH_DEBUG_COMMANDS`.
 
 - [ ] **Step 5: Wire the existing main loop**
 
@@ -275,6 +275,7 @@ Support:
 ```text
 watch_debug.py [--port PATH] [--timeout SECONDS] [--follow] app list
 watch_debug.py [--port PATH] [--timeout SECONDS] [--follow] app open NAME
+watch_debug.py [--port PATH] [--timeout SECONDS] [--follow] app home
 ```
 
 Normalize the name before sending. Exit 0 only for the matching list or `OK`; exit 2 for local argument/port errors and exit 3 for firmware rejection or timeout.
@@ -323,7 +324,7 @@ Expected: `DEBUG APP OPEN assistant OK`, Launcher close, Assistant open, Wi-Fi I
 
 - [ ] **Step 4: Validate lifecycle and error responses**
 
-Return through the existing app behavior, run the open command a second time, and verify stable stopped-boundary diagnostics. While Assistant is open, send another open request and verify `BUSY`; send an unknown name from Launcher and verify `NOT_FOUND`. Neither response may reset or change the running application.
+Run `app home`, verify the existing app close and Launcher reopen lifecycle, then run the open command a second time and verify stable stopped-boundary diagnostics. While Assistant is open, send another open request and verify `BUSY`; send an unknown name from Launcher and verify `NOT_FOUND`. Neither response may reset or change the running application.
 
 - [ ] **Step 5: Update hardware reports**
 

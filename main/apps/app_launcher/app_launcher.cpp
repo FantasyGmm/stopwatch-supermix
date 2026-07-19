@@ -8,6 +8,13 @@
 #include <hal/hal.h>
 #include <mooncake.h>
 #include <mooncake_log.h>
+#include <sdkconfig.h>
+#if CONFIG_STOPWATCH_DEBUG_COMMANDS
+#include <debug/debug_command_parser.h>
+#include <esp_log.h>
+#include <array>
+#include <cctype>
+#endif
 #include <cstdint>
 
 using namespace mooncake;
@@ -17,6 +24,11 @@ void AppLauncher::onLauncherCreate()
     mclog::tagInfo(getAppInfo().name, "on create");
 
     open();
+#if CONFIG_STOPWATCH_DEBUG_COMMANDS
+    if (!RegisterDebugAppTarget(this)) {
+        ESP_LOGE("DebugCommand", "failed to register Launcher debug target");
+    }
+#endif
 }
 
 void AppLauncher::onLauncherOpen()
@@ -93,6 +105,9 @@ void AppLauncher::onLauncherClose()
 void AppLauncher::onLauncherDestroy()
 {
     mclog::tagInfo(getAppInfo().name, "on close");
+#if CONFIG_STOPWATCH_DEBUG_COMMANDS
+    UnregisterDebugAppTarget(this);
+#endif
 }
 
 void AppLauncher::create_launcher_view()
@@ -104,6 +119,46 @@ void AppLauncher::create_launcher_view()
         openApp(appID);
     };
 }
+
+#if CONFIG_STOPWATCH_DEBUG_COMMANDS
+DebugAppOpenResult AppLauncher::openDebugApp(std::string_view name)
+{
+    if (isAppRunning()) {
+        return DebugAppOpenResult::Busy;
+    }
+    for (const auto& props : getAppProps()) {
+        if (!DebugAppNameEquals(props.info.name, name)) {
+            continue;
+        }
+        return openApp(props.appID) ? DebugAppOpenResult::Ok : DebugAppOpenResult::Busy;
+    }
+    return DebugAppOpenResult::NotFound;
+}
+
+void AppLauncher::logDebugAppList()
+{
+    std::array<char, 192> list{};
+    std::size_t length = 0;
+    for (const auto& props : getAppProps()) {
+        if (length != 0 && length + 1 < list.size()) {
+            list[length++] = ',';
+        }
+        for (const char value : props.info.name) {
+            if (length + 1 >= list.size()) {
+                break;
+            }
+            const auto byte = static_cast<unsigned char>(value);
+            list[length++] = std::isalnum(byte) ? static_cast<char>(std::tolower(byte)) : '-';
+        }
+    }
+    ESP_LOGI("DebugCommand", "DEBUG APP LIST %s", list.data());
+}
+
+bool AppLauncher::goDebugHome()
+{
+    return isAppRunning() && GetMooncake().closeApp(getRunningAppId());
+}
+#endif
 
 void AppLauncher::show_guide_page()
 {

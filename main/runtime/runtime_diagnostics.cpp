@@ -41,6 +41,8 @@ RuntimeDiagnosticSnapshot CaptureRuntimeDiagnosticSnapshot()
     return {
         .internal_free_heap = heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
         .internal_min_free_heap = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
+        .internal_largest_free_block =
+            heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
         .psram_free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
         .task_count = static_cast<std::size_t>(uxTaskGetNumberOfTasks()),
         .resources = GetResourceSupervisor().snapshot(),

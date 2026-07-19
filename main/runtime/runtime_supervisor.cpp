@@ -124,10 +124,11 @@ void RuntimeSupervisor::logSnapshot(const char* boundary,
                                     const RuntimeDiagnosticSnapshot& snapshot)
 {
     mclog::tagInfo(tag,
-                   "diagnostic {} t={} internal={}/{} psram={} tasks={} state={} bindings={} "
+                   "diagnostic {} t={} internal={}/{} largest={} psram={} tasks={} state={} bindings={} "
                    "subscriptions={} wifi={} capture={} playback={} ap={} blocked={}",
                    boundary, snapshot.captured_at_ms, snapshot.internal_free_heap,
-                   snapshot.internal_min_free_heap, snapshot.psram_free, snapshot.task_count,
+                   snapshot.internal_min_free_heap, snapshot.internal_largest_free_block,
+                   snapshot.psram_free, snapshot.task_count,
                    static_cast<unsigned>(snapshot.assistant_state), snapshot.assistant_bindings,
                    snapshot.assistant_subscriptions, snapshot.resources.wifi_lease_count,
                    static_cast<unsigned>(snapshot.resources.capture_owner),

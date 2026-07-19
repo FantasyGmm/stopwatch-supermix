@@ -13,4 +13,10 @@ menu "StopWatch Unified Assistant Compatibility"
             Expose the upstream Xiaozhi asset-generator switch without importing
             Xiaozhi's standalone application Kconfig.
 
+    config STOPWATCH_DEBUG_COMMANDS
+        bool "Enable physical USB debug commands"
+        default n
+        help
+            Accept fixed, local-only debug commands from USB Serial/JTAG.
+
 endmenu

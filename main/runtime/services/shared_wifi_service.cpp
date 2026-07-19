@@ -101,6 +101,11 @@ WifiApSession SharedWifiService::acquireAp(RuntimeOwner owner)
     return _policy.acquireAp(owner) ? WifiApSession(*this, owner) : WifiApSession();
 }
 
+bool SharedWifiService::staConnected() const
+{
+    return _policy.staConnected();
+}
+
 void SharedWifiService::releaseSta(RuntimeOwner owner)
 {
     _policy.releaseSta(owner);

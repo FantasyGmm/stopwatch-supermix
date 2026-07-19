@@ -55,7 +55,6 @@ void AppAssistant::onOpen()
 void AppAssistant::onRunning()
 {
     auto& runtime = GetRuntimeSupervisor();
-    runtime.update(GetHAL().millis());
     drainRuntimeEvents();
     const auto key = _key_manager ? _key_manager->update() : input::KeyEvent::None;
 
@@ -91,6 +90,11 @@ void AppAssistant::onRunning()
 void AppAssistant::onClose()
 {
     mclog::tagInfo(getAppInfo().name, "on close");
+
+    // Mooncake can close the app without going through the physical-key path
+    // (for example, the USB debug launcher). Keep shutdown idempotent and let
+    // the global runtime pump finish the asynchronous stop after the UI is gone.
+    GetRuntimeSupervisor().requestStopAssistant();
 
     _key_manager.reset();
 

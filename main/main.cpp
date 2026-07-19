@@ -13,6 +13,10 @@
 #include <apps/common/audio/audio.h>
 #include <runtime/service_runtime.h>
 #include <runtime/runtime_supervisor.h>
+#include <sdkconfig.h>
+#if CONFIG_STOPWATCH_DEBUG_COMMANDS
+#include <debug/debug_command_service.h>
+#endif
 
 using namespace mooncake;
 using namespace smooth_ui_toolkit;
@@ -54,6 +58,10 @@ extern "C" void app_main(void)
     // Main loop
     while (1) {
         GetHAL().feedTheDog();
+#if CONFIG_STOPWATCH_DEBUG_COMMANDS
+        GetDebugCommandService().update();
+#endif
+        GetRuntimeSupervisor().update(GetHAL().millis());
         GetMooncake().update();
     }
 }

@@ -55,6 +55,7 @@ public:
 
     WifiStaLease acquireSta(RuntimeOwner owner);
     WifiApSession acquireAp(RuntimeOwner owner);
+    bool staConnected() const;
 
 private:
     friend class WifiStaLease;

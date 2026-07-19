@@ -5,6 +5,18 @@ cmake_minimum_required(VERSION 3.16)
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(StopWatch-UserDemo)
 
+include(${CMAKE_SOURCE_DIR}/main/cmake/brookesia_task_scheduler_overlay.cmake)
+apply_brookesia_task_scheduler_overlay()
+
+include(${CMAKE_SOURCE_DIR}/main/cmake/brookesia_agent_manager_overlay.cmake)
+apply_brookesia_agent_manager_overlay()
+
+include(${CMAKE_SOURCE_DIR}/main/cmake/audio_processor_light_overlay.cmake)
+apply_audio_processor_light_overlay()
+
+include(${CMAKE_SOURCE_DIR}/main/cmake/brookesia_audio_light_overlay.cmake)
+apply_brookesia_audio_light_overlay()
+
 idf_component_get_property(bt_lib bt COMPONENT_LIB)
 if(bt_lib)
     target_compile_options(${bt_lib} PRIVATE -Wno-error=array-bounds)

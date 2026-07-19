@@ -18,6 +18,7 @@ public:
     virtual bool startAp() = 0;
     virtual void stopAp() = 0;
     virtual bool staRequiredBySystem() const = 0;
+    virtual bool staConnected() const = 0;
 };
 
 class SharedWifiPolicy {
@@ -28,6 +29,7 @@ public:
     void releaseSta(RuntimeOwner owner);
     bool acquireAp(RuntimeOwner owner);
     void releaseAp(RuntimeOwner owner);
+    bool staConnected() const;
 
 private:
     ResourceSupervisor& _resources;

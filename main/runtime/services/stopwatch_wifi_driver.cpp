@@ -56,6 +56,11 @@ public:
         return false;
     }
 
+    bool staConnected() const override
+    {
+        return WifiManager::GetInstance().IsConnected();
+    }
+
 private:
     static bool initialize(WifiManager& wifi)
     {

@@ -35,9 +35,15 @@ public:
         return system_requires_sta;
     }
 
+    bool staConnected() const override
+    {
+        return sta_connected;
+    }
+
     bool sta_start_succeeds = true;
     bool ap_start_succeeds  = true;
     bool system_requires_sta = false;
+    bool sta_connected = false;
     int sta_starts = 0;
     int sta_stops  = 0;
     int ap_starts  = 0;
@@ -57,6 +63,10 @@ int main()
         assert(assistant.valid());
         assert(driver.sta_starts == 1);
         assert(resources.wifiLeaseCount() == 1);
+        assert(!wifi.staConnected());
+
+        driver.sta_connected = true;
+        assert(wifi.staConnected());
 
         auto duplicate = wifi.acquireSta(RuntimeOwner::Assistant);
         assert(!duplicate.valid());

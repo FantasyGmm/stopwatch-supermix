@@ -5,18 +5,31 @@
  */
 #pragma once
 #include "view/view.h"
+#include <sdkconfig.h>
+#if CONFIG_STOPWATCH_DEBUG_COMMANDS
+#include <debug/debug_app_control.h>
+#endif
 #include <mooncake.h>
 #include <mooncake_templates.h>
 #include <cstdint>
 #include <memory>
 
-class AppLauncher : public mooncake::templates::AppLauncherBase {
+class AppLauncher : public mooncake::templates::AppLauncherBase
+#if CONFIG_STOPWATCH_DEBUG_COMMANDS
+                  , public DebugAppTarget
+#endif
+{
 public:
     void onLauncherCreate() override;
     void onLauncherOpen() override;
     void onLauncherRunning() override;
     void onLauncherClose() override;
     void onLauncherDestroy() override;
+#if CONFIG_STOPWATCH_DEBUG_COMMANDS
+    DebugAppOpenResult openDebugApp(std::string_view name) override;
+    void logDebugAppList() override;
+    bool goDebugHome() override;
+#endif
 
 private:
     std::unique_ptr<view::LauncherView> _view;
