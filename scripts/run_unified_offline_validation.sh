@@ -86,6 +86,7 @@ echo "[9/12] USB debug command host test"
     tests/debug_command_test.cpp \
     main/debug/debug_command_parser.cpp \
     main/debug/debug_app_control.cpp \
+    main/debug/debug_assistant_control.cpp \
     -o "$HOST_TEST_DIR/debug_command_test"
 "$HOST_TEST_DIR/debug_command_test"
 

@@ -1,5 +1,6 @@
 #include "debug/debug_command_parser.h"
 #include "debug/debug_app_control.h"
+#include "debug/debug_assistant_control.h"
 
 #include <cassert>
 #include <string>
@@ -31,6 +32,24 @@ public:
     int home_calls = 0;
     bool home_result = true;
 };
+
+class FakeDebugAssistantTarget final : public DebugAssistantTarget {
+public:
+    bool requestDebugGracefulHome() override
+    {
+        ++home_calls;
+        return home_result;
+    }
+
+    void logDebugAssistantStatus() override
+    {
+        ++status_calls;
+    }
+
+    int home_calls = 0;
+    int status_calls = 0;
+    bool home_result = true;
+};
 } // namespace
 
 int main()
@@ -47,6 +66,15 @@ int main()
     const auto home = ParseDebugCommand("debug app home");
     assert(home.kind == DebugCommandKind::AppHome);
     assert(home.error == DebugCommandError::None);
+
+    assert(ParseDebugCommand("debug assistant home").kind ==
+           DebugCommandKind::AssistantHome);
+    assert(ParseDebugCommand("debug assistant status\r").kind ==
+           DebugCommandKind::AssistantStatus);
+    assert(ParseDebugCommand("debug assistant trace").kind ==
+           DebugCommandKind::AssistantTrace);
+    assert(ParseDebugCommand("debug assistant trace clear").kind ==
+           DebugCommandKind::AssistantTraceClear);
 
     assert(ParseDebugCommand("app open assistant").error ==
            DebugCommandError::InvalidCommand);
@@ -77,5 +105,18 @@ int main()
     UnregisterDebugAppTarget(&target);
     assert(RequestDebugAppOpen("assistant") == DebugAppOpenResult::Busy);
     assert(!RequestDebugAppHome());
+
+    FakeDebugAssistantTarget assistant;
+    assert(!RequestDebugAssistantHome());
+    assert(!RequestDebugAssistantStatus());
+    assert(RegisterDebugAssistantTarget(&assistant));
+    assert(!RegisterDebugAssistantTarget(&assistant));
+    assert(RequestDebugAssistantHome());
+    assert(assistant.home_calls == 1);
+    assert(RequestDebugAssistantStatus());
+    assert(assistant.status_calls == 1);
+    UnregisterDebugAssistantTarget(&assistant);
+    assert(!RequestDebugAssistantHome());
+    assert(!RequestDebugAssistantStatus());
     return 0;
 }

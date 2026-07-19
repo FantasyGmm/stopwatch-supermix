@@ -10,9 +10,17 @@
 #include <mooncake.h>
 #include <runtime/assistant/assistant_event_mailbox.h>
 #include <runtime/assistant/assistant_state.h>
+#include <sdkconfig.h>
+#if CONFIG_STOPWATCH_DEBUG_COMMANDS
+#include <debug/debug_assistant_control.h>
+#endif
 #include <memory>
 
-class AppAssistant : public mooncake::AppAbility {
+class AppAssistant : public mooncake::AppAbility
+#if CONFIG_STOPWATCH_DEBUG_COMMANDS
+                   , public DebugAssistantTarget
+#endif
+{
 public:
     AppAssistant();
 
@@ -20,12 +28,19 @@ public:
     void onOpen() override;
     void onRunning() override;
     void onClose() override;
+#if CONFIG_STOPWATCH_DEBUG_COMMANDS
+    bool requestDebugGracefulHome() override;
+    void logDebugAssistantStatus() override;
+#endif
 
 private:
     std::unique_ptr<input::KeyManager> _key_manager;
     std::unique_ptr<AssistantView> _view;
     AssistantCloseController _close_controller;
     bool _retry_available = false;
+#if CONFIG_STOPWATCH_DEBUG_COMMANDS
+    bool _debug_close_pending = false;
+#endif
 
     bool requestGracefulClose(AssistantCloseTrigger trigger);
     void drainRuntimeEvents();

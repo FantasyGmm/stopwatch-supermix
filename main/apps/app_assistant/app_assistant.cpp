@@ -10,9 +10,13 @@
 #include <runtime/assistant/assistant_runtime.h>
 #include <runtime/assistant/assistant_trace.h>
 #include <runtime/runtime_supervisor.h>
+#if CONFIG_STOPWATCH_DEBUG_COMMANDS
+#include <esp_log.h>
+#endif
 
 #include <utility>
 #include <vector>
+#include <cinttypes>
 
 using namespace mooncake;
 
@@ -44,6 +48,12 @@ void AppAssistant::onOpen()
     _key_manager = std::make_unique<input::KeyManager>();
     _close_controller.reset();
     _retry_available = false;
+#if CONFIG_STOPWATCH_DEBUG_COMMANDS
+    _debug_close_pending = false;
+    if (!RegisterDebugAssistantTarget(this)) {
+        ESP_LOGE("DebugCommand", "failed to register Assistant debug target");
+    }
+#endif
 
     {
         LvglLockGuard lock;
@@ -67,6 +77,12 @@ void AppAssistant::onRunning()
 {
     auto& runtime = GetRuntimeSupervisor();
     drainRuntimeEvents();
+#if CONFIG_STOPWATCH_DEBUG_COMMANDS
+    if (_debug_close_pending) {
+        _debug_close_pending = false;
+        requestGracefulClose(AssistantCloseTrigger::DebugHome);
+    }
+#endif
     const auto key = _key_manager ? _key_manager->update() : input::KeyEvent::None;
 
     if (key == input::KeyEvent::GoHome) {
@@ -134,6 +150,17 @@ bool AppAssistant::requestGracefulClose(AssistantCloseTrigger trigger)
 void AppAssistant::onClose()
 {
     mclog::tagInfo(getAppInfo().name, "on close");
+#if CONFIG_STOPWATCH_DEBUG_COMMANDS
+    UnregisterDebugAssistantTarget(this);
+    _debug_close_pending = false;
+#endif
+
+    AssistantTraceDetail close_detail = AssistantTraceDetail::ForceHome;
+    if (_close_controller.trigger() == AssistantCloseTrigger::PhysicalHome) {
+        close_detail = AssistantTraceDetail::PhysicalHome;
+    } else if (_close_controller.trigger() == AssistantCloseTrigger::DebugHome) {
+        close_detail = AssistantTraceDetail::DebugHome;
+    }
 
     GetAssistantTrace().record({
         .session_id = GetAssistantRuntime().sessionId(),
@@ -141,9 +168,7 @@ void AppAssistant::onClose()
         .component = AssistantTraceComponent::App,
         .event = AssistantTraceEvent::Closed,
         .state = GetRuntimeSupervisor().assistantState(),
-        .detail = _close_controller.trigger() == AssistantCloseTrigger::PhysicalHome
-                      ? AssistantTraceDetail::PhysicalHome
-                      : AssistantTraceDetail::DebugHome,
+        .detail = close_detail,
         .result = AssistantTraceResult::Ok,
     });
 
@@ -160,6 +185,36 @@ void AppAssistant::onClose()
         _view.reset();
     }
 }
+
+#if CONFIG_STOPWATCH_DEBUG_COMMANDS
+bool AppAssistant::requestDebugGracefulHome()
+{
+    if (_debug_close_pending || _close_controller.requested()) {
+        return false;
+    }
+    _debug_close_pending = true;
+    return true;
+}
+
+void AppAssistant::logDebugAssistantStatus()
+{
+    const auto snapshot = GetRuntimeSupervisor().diagnostics();
+    ESP_LOGI("DebugCommand",
+             "ASTATUS sid=%" PRIu64 " state=%s bindings=%u subscriptions=%u wifi=%u capture=%u "
+             "playback=%u ap=%u blocked=%u internal=%u psram=%u tasks=%u",
+             GetAssistantRuntime().sessionId(), AssistantTraceName(snapshot.assistant_state),
+             static_cast<unsigned>(snapshot.assistant_bindings),
+             static_cast<unsigned>(snapshot.assistant_subscriptions),
+             static_cast<unsigned>(snapshot.resources.wifi_lease_count),
+             static_cast<unsigned>(snapshot.resources.capture_owner),
+             static_cast<unsigned>(snapshot.resources.playback_owner),
+             static_cast<unsigned>(snapshot.resources.wifi_ap_active),
+             static_cast<unsigned>(snapshot.resources.blocked),
+             static_cast<unsigned>(snapshot.internal_free_heap),
+             static_cast<unsigned>(snapshot.psram_free),
+             static_cast<unsigned>(snapshot.task_count));
+}
+#endif
 
 void AppAssistant::drainRuntimeEvents()
 {

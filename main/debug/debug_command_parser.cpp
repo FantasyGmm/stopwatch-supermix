@@ -6,6 +6,10 @@ namespace {
 constexpr std::string_view list_command = "debug app list";
 constexpr std::string_view home_command = "debug app home";
 constexpr std::string_view open_prefix = "debug app open ";
+constexpr std::string_view assistant_home_command = "debug assistant home";
+constexpr std::string_view assistant_status_command = "debug assistant status";
+constexpr std::string_view assistant_trace_command = "debug assistant trace";
+constexpr std::string_view assistant_trace_clear_command = "debug assistant trace clear";
 
 char normalized_character(char value)
 {
@@ -33,6 +37,22 @@ DebugCommand ParseDebugCommand(std::string_view line)
     }
     if (line == home_command) {
         command.kind = DebugCommandKind::AppHome;
+        return command;
+    }
+    if (line == assistant_home_command) {
+        command.kind = DebugCommandKind::AssistantHome;
+        return command;
+    }
+    if (line == assistant_status_command) {
+        command.kind = DebugCommandKind::AssistantStatus;
+        return command;
+    }
+    if (line == assistant_trace_command) {
+        command.kind = DebugCommandKind::AssistantTrace;
+        return command;
+    }
+    if (line == assistant_trace_clear_command) {
+        command.kind = DebugCommandKind::AssistantTraceClear;
         return command;
     }
     if (line.size() <= open_prefix.size() || line.substr(0, open_prefix.size()) != open_prefix) {

@@ -1,6 +1,11 @@
 #include "debug_command_service.h"
 
 #include "debug_app_control.h"
+#include "debug_assistant_control.h"
+
+#include <hal/hal.h>
+#include <runtime/assistant/assistant_runtime.h>
+#include <runtime/assistant/assistant_trace.h>
 
 #include <string_view>
 
@@ -86,7 +91,37 @@ void DebugCommandService::dispatchLine()
         return;
     }
     if (command.kind == DebugCommandKind::AppHome) {
+        auto& assistant = GetAssistantRuntime();
+        GetAssistantTrace().record({
+            .session_id = assistant.sessionId(),
+            .timestamp_ms = GetHAL().millis(),
+            .component = AssistantTraceComponent::Debug,
+            .event = AssistantTraceEvent::ForceHome,
+            .state = assistant.state(),
+            .detail = AssistantTraceDetail::ForceHome,
+            .result = AssistantTraceResult::Accepted,
+        });
         ESP_LOGI(tag, "DEBUG APP HOME %s", RequestDebugAppHome() ? "OK" : "BUSY");
+        return;
+    }
+    if (command.kind == DebugCommandKind::AssistantHome) {
+        ESP_LOGI(tag, "DEBUG ASSISTANT HOME %s",
+                 RequestDebugAssistantHome() ? "OK" : "BUSY");
+        return;
+    }
+    if (command.kind == DebugCommandKind::AssistantStatus) {
+        ESP_LOGI(tag, "DEBUG ASSISTANT STATUS %s",
+                 RequestDebugAssistantStatus() ? "OK" : "BUSY");
+        return;
+    }
+    if (command.kind == DebugCommandKind::AssistantTrace) {
+        GetAssistantTrace().dump();
+        ESP_LOGI(tag, "DEBUG ASSISTANT TRACE OK");
+        return;
+    }
+    if (command.kind == DebugCommandKind::AssistantTraceClear) {
+        GetAssistantTrace().clear();
+        ESP_LOGI(tag, "DEBUG ASSISTANT TRACE CLEAR OK");
         return;
     }
     ESP_LOGE(tag, "DEBUG ERROR INVALID_COMMAND");

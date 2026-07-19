@@ -10,6 +10,10 @@ enum class DebugCommandKind : uint8_t {
     AppList,
     AppOpen,
     AppHome,
+    AssistantHome,
+    AssistantStatus,
+    AssistantTrace,
+    AssistantTraceClear,
 };
 
 enum class DebugCommandError : uint8_t {
