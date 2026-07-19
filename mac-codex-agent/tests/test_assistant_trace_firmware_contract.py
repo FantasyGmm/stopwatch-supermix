@@ -13,6 +13,15 @@ class AssistantTraceFirmwareContractTests(unittest.TestCase):
         self.assertIn("#include <sdkconfig.h>", header)
         self.assertIn("#if !defined(STOPWATCH_HOST_TEST)", header)
 
+    def test_trace_host_test_declares_host_configuration(self):
+        runner = (ROOT / "scripts/run_unified_offline_validation.sh").read_text(
+            encoding="utf-8"
+        )
+        trace_stage = runner.split(
+            'echo "[5/12] Assistant trace host test"', 1
+        )[1].split('echo "[6/12]', 1)[0]
+        self.assertIn("-DSTOPWATCH_HOST_TEST", trace_stage)
+
     def test_runtime_records_lifecycle_boundaries(self):
         runtime = (
             ROOT / "main/runtime/assistant/assistant_runtime.cpp"

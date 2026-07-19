@@ -52,7 +52,7 @@ echo "[4/12] Assistant event mailbox host test"
 "$HOST_TEST_DIR/assistant_event_mailbox_test"
 
 echo "[5/12] Assistant trace host test"
-"$CXX" -std=c++17 -Wall -Wextra -Werror -Imain \
+"$CXX" -std=c++17 -Wall -Wextra -Werror -DSTOPWATCH_HOST_TEST -Imain \
     tests/assistant_trace_test.cpp \
     main/runtime/assistant/assistant_trace.cpp \
     -o "$HOST_TEST_DIR/assistant_trace_test"
