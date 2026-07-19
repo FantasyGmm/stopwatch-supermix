@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 #include "hal.h"
+#include "button_feedback_policy.h"
 #include "utils/settings/settings.h"
 #include <apps/common/audio/audio.h>
 #include <mooncake_log.h>
@@ -40,15 +41,23 @@ void Hal::updateButtonStates()
 
     auto& config = getButtonConfig();
     if (btnA.wasPressed()) {
-        if (config.sfxEnabled) {
+        const RuntimeOwner playback_owner = GetResourceSupervisor().snapshot().playback_owner;
+        if (ShouldPlayButtonSfx(config.sfxEnabled, playback_owner)) {
             audio::play_tone_from_midi(62 + 32, 0.02);
+        } else if (config.sfxEnabled) {
+            mclog::tagInfo(_tag, "button sfx suppressed: playback owner={}",
+                           static_cast<unsigned>(playback_owner));
         }
         if (config.vibrateEnabled) {
             vibrate(20, 60);
         }
     } else if (btnB.wasPressed()) {
-        if (config.sfxEnabled) {
+        const RuntimeOwner playback_owner = GetResourceSupervisor().snapshot().playback_owner;
+        if (ShouldPlayButtonSfx(config.sfxEnabled, playback_owner)) {
             audio::play_tone_from_midi(64 + 32, 0.02);
+        } else if (config.sfxEnabled) {
+            mclog::tagInfo(_tag, "button sfx suppressed: playback owner={}",
+                           static_cast<unsigned>(playback_owner));
         }
         if (config.vibrateEnabled) {
             vibrate(20, 60);
