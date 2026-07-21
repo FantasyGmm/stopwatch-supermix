@@ -33,6 +33,7 @@ public:
     void releaseSta(RuntimeOwner owner);
     bool acquireAp(RuntimeOwner owner);
     void releaseAp(RuntimeOwner owner);
+    WifiConfigApAcquireResult acquireConfigApDetailed(RuntimeOwner owner);
     bool acquireConfigAp(RuntimeOwner owner);
     void releaseConfigAp(RuntimeOwner owner);
     bool reconnectSta(RuntimeOwner owner);
