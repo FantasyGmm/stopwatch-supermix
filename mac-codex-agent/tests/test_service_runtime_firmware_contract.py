@@ -75,6 +75,19 @@ class ServiceRuntimeFirmwareContractTests(unittest.TestCase):
             r"wifi\.StartConfigAp\(\);\s*return\s+wifi\.IsConfigMode\(\);",
         )
 
+    def test_wifi_driver_stops_config_ap_during_teardown(self):
+        source = (
+            ROOT / "main" / "runtime" / "services" / "stopwatch_wifi_driver.cpp"
+        ).read_text(encoding="utf-8")
+        stop_config_ap = source.split("void stopConfigAp() override", 1)[1].split(
+            "bool staRequiredBySystem() const override", 1
+        )[0]
+
+        self.assertRegex(
+            stop_config_ap,
+            r"WifiManager::GetInstance\(\)\.StopConfigAp\(\);",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
