@@ -256,6 +256,41 @@ class UnifiedRuntimeFirmwareContractTest(unittest.TestCase):
             self.assertIn("- Automated status:", section)
             self.assertIn("- Hardware status: Pending hardware", section)
 
+    def test_settings_wifi_page_uses_controller_owned_round_screen_ui(self):
+        app_setup = read("main/apps/app_setup/app_setup.cpp")
+        worker_header = read("main/apps/app_setup/workers/workers.h")
+        worker_path = ROOT / "main/apps/app_setup/workers/wifi.cpp"
+
+        self.assertTrue(worker_path.exists(), worker_path)
+        worker = worker_path.read_text(encoding="utf-8")
+
+        self.assertIn('"WiFi"', app_setup)
+        self.assertIn("std::make_unique<WifiSettingsWorker>()", app_setup)
+        self.assertLess(app_setup.index('"Time & Date"'), app_setup.index('"WiFi"'))
+        self.assertLess(app_setup.index('"WiFi"'), app_setup.index('"Firmware"'))
+
+        self.assertIn("class WifiSettingsWorker", worker_header)
+        self.assertIn("WifiSettingsController", worker_header)
+        self.assertIn("_next_poll_tick", worker_header)
+
+        for required in (
+            "WifiSettingsController",
+            "WifiSettingsSnapshot",
+            "Add WiFi",
+            "Stop Pairing",
+            "Done",
+            "kScreenSize = 466",
+            "setSize(350,",
+            "setScrollDir(LV_DIR_VER)",
+            "_controller.reset();",
+            "_view.reset();",
+            "_next_poll_tick = now + 500",
+        ):
+            self.assertIn(required, worker)
+
+        self.assertLess(worker.rindex("_controller.reset();"), worker.rindex("_view.reset();"))
+        self.assertNotIn("WifiManager", worker)
+        self.assertNotIn("SetEventCallback", worker)
 
 if __name__ == "__main__":
     unittest.main()

@@ -7,9 +7,12 @@
 #include <smooth_lvgl.hpp>
 #include <uitk/short_namespace.hpp>
 #include <hal/hal.h>
+#include "wifi_settings_model.h"
 #include <cstdint>
 #include <memory>
 #include <string_view>
+
+class WifiSettingsController;
 
 namespace setup_workers {
 
@@ -117,6 +120,22 @@ private:
 
     std::unique_ptr<DateAdjustView> _view;
     DateYmd _applied_date;
+};
+
+class WifiSettingsWorker : public WorkerBase {
+public:
+    WifiSettingsWorker();
+    ~WifiSettingsWorker();
+    void update() override;
+
+private:
+    class WifiSettingsView;
+
+    std::unique_ptr<WifiSettingsView> _view;
+    std::unique_ptr<WifiSettingsController> _controller;
+    uint32_t _next_poll_tick = 0;
+    bool _has_snapshot       = false;
+    WifiSettingsSnapshot _last_snapshot;
 };
 
 /**

@@ -69,6 +69,16 @@ void AppSetup::onOpen()
                  [&]() {
                      _destroy_menu = true;
                      _worker       = std::make_unique<SetDateWorker>();
+                }},
+            },
+        },
+        {
+            "WiFi",
+            {
+                {"WiFi",
+                 [&]() {
+                     _destroy_menu = true;
+                     _worker       = std::make_unique<WifiSettingsWorker>();
                  }},
             },
         },
