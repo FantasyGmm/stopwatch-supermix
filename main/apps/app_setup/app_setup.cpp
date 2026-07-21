@@ -110,23 +110,34 @@ void AppSetup::onRunning()
         return;
     }
 
-    LvglLockGuard lock;
-
-    if (_menu_page) {
-        _menu_page->update();
-    }
-
-    if (_destroy_menu) {
-        _menu_page.reset();
-        _destroy_menu = false;
-    }
-
+    bool worker_done = false;
     if (_worker) {
-        _worker->update();
-        if (_worker->isDone()) {
-            _worker.reset();
-            _menu_page = std::make_unique<view::SelectMenuPage>(_menu_sections);
+        _worker->updateRuntime();
+    }
+
+    {
+        LvglLockGuard lock;
+
+        if (_menu_page) {
+            _menu_page->update();
         }
+
+        if (_destroy_menu) {
+            _menu_page.reset();
+            _destroy_menu = false;
+        }
+
+        if (_worker) {
+            _worker->update();
+            worker_done = _worker->isDone();
+        }
+    }
+
+    if (worker_done) {
+        _worker->releaseRuntime();
+        LvglLockGuard lock;
+        _worker.reset();
+        _menu_page = std::make_unique<view::SelectMenuPage>(_menu_sections);
     }
 }
 
@@ -135,6 +146,10 @@ void AppSetup::onClose()
     mclog::tagInfo(getAppInfo().name, "on close");
 
     _key_manager.reset();
+
+    if (_worker) {
+        _worker->releaseRuntime();
+    }
 
     LvglLockGuard lock;
 

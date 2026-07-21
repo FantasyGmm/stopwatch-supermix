@@ -31,8 +31,10 @@ The firmware already includes these relevant pieces:
 - `78/esp-wifi-connect` provides `WifiManager`, `WifiStation`,
   `WifiConfigurationAp`, and `SsidManager`.
 - `SsidManager` persists credentials in the `wifi` NVS namespace.
-- `WifiStation` scans nearby APs, matches saved SSIDs, and connects according to
-  the saved order.
+- `WifiStation` scans nearby APs and matches saved SSIDs. Upstream 3.1.3 orders
+  candidates by RSSI, not by `SsidManager` order, so the firmware applies a
+  fail-closed generated-source overlay that gives saved-list position priority
+  and uses RSSI only between BSSIDs with the same saved priority.
 - `WifiConfigurationAp` exposes the existing captive portal flow, including
   `/scan`, `/saved/list`, `/saved/set_default`, `/saved/delete`, and save
   handling.
@@ -123,11 +125,22 @@ an immediate switch:
 This is intentionally immediate. The user should not have to wait for a later
 app launch or natural reconnect to know whether the selected network works.
 
+The reorder and restart are one exclusive shared-service transaction:
+
+1. verify Settings is the sole STA lease owner and no AP session is active;
+2. stop STA so its scan callback no longer reads the credential vector;
+3. move the selected saved item to the front;
+4. restart STA and let the saved-priority connection queue select it first.
+
+If another STA owner is present, no credential is changed and the page reports
+`WiFi busy`. Saved rows are hidden and cannot be selected while pairing, so the
+portal task and Settings never mutate `SsidManager` concurrently.
+
 ## Global Runtime Contract
 
 All networked apps use the same global saved WiFi credentials:
 
-- Assistant acquires STA through `SharedWifiService` and uses the saved list.
+- Assistant atomically acquires a configured STA through `SharedWifiService`.
 - Codex WiFi fallback acquires STA through the same shared service.
 - Badge/config AP paths continue to use AP ownership through the resource
   supervisor.
@@ -141,10 +154,18 @@ the desktop. Code-level arbitration remains in place for abnormal or debug
 states.
 
 Launching Assistant with no saved credentials must not start pairing. Its STA
-lease can start the station in a disconnected state while Assistant presents
-its existing network error; pairing is entered only from Settings. This removes
-the last Assistant-owned configuration behavior without introducing a hidden
-background AP.
+startup fails immediately with `Configure Wi-Fi in Settings`; pairing is
+entered only from Settings. Assistant also fails and releases its lease if STA
+does not connect within the bounded startup timeout. This removes the last
+Assistant-owned configuration behavior without introducing a hidden background
+AP or an indefinite `Connecting` state.
+
+The Assistant must not check `SsidManager` and then acquire STA as two separate
+operations. `acquireConfiguredSta` checks AP ownership before reading saved
+credentials, acquires the lease, and starts STA under one shared-policy lock.
+This prevents debug or abnormal Assistant startup from racing the config portal
+while it writes credentials. The result distinguishes no credentials, busy,
+and station-start failure.
 
 ## Components
 
@@ -188,7 +209,11 @@ Extend the shared service only as much as necessary to support Settings:
   resource and invokes config-portal driver methods;
 - expose current STA details or provide them via the settings adapter;
 - provide a reconnect operation that only succeeds while the caller holds a STA
-  lease and no AP session is active.
+  lease, is the sole STA owner, and no AP session is active;
+- provide an atomic configured-STA acquisition for Assistant that never reads
+  credentials while a config AP owns WiFi;
+- provide an exclusive stop-configure-start transaction for saved-network
+  selection.
 
 Avoid duplicating the WiFi scan/connect loop already present in `WifiStation`.
 Keep the existing Badge/raw-AP behavior unchanged.
@@ -201,6 +226,13 @@ destructor paths must:
 1. stop and release an active config-AP session;
 2. release the Settings STA lease;
 3. destroy the page only after callbacks can no longer target it.
+
+The worker uses a two-phase update. It consumes requests and renders snapshots
+under `LvglLockGuard`, while controller construction, pairing start/stop,
+network selection, polling, and runtime release run outside that lock. The view
+is destroyed only after runtime release completes and under the LVGL lock. This
+prevents a potentially blocking WiFi or `httpd_stop()` operation from holding
+the display lock while a portal request is finishing.
 
 Leaving Settings while pairing must stop the config AP. A portal-triggered
 config-mode exit follows the same release path before STA is reacquired. These
@@ -239,6 +271,11 @@ The WiFi page should show simple actionable states:
 - Connection failure after retries: show `Not connected` and keep `Add WiFi`
   available.
 
+The station overlay clears its attempted SSID after exhausting the current
+candidate queue. The next scan can return the page to `Connecting`; the wait
+between scans is represented as `Not connected` instead of an indefinite
+connection attempt.
+
 The implementation should not erase NVS or saved credentials as a recovery
 shortcut.
 
@@ -252,6 +289,8 @@ Host tests should cover:
 - WiFi settings model state transitions for no credentials, pairing, connecting,
   connected, and disconnected;
 - selecting a saved SSID moves it to the front and requests reconnect;
+- the actual station candidate queue respects saved-list order before RSSI;
+- another STA owner blocks selection before NVS or the saved list is changed;
 - start pairing requires AP ownership and does not bypass resource blocking;
 - opening Settings with no saved credentials does not implicitly start STA or
   config AP;
@@ -264,6 +303,8 @@ Host tests should cover:
 - saved list snapshots omit passwords;
 - Settings does not install or retain the process-wide WiFi event callback;
 - Settings owner does not conflict with released Assistant resources.
+- Assistant without saved credentials fails with a Settings action and a
+  bounded connection timeout.
 
 Firmware contract tests should cover:
 
@@ -282,7 +323,8 @@ Hardware validation should cover:
 3. Reboot: saved WiFi remains available and Assistant can connect without
    reconfiguration.
 4. Multiple saved networks: selecting a different network moves it to default
-   and reconnects immediately.
+   and reconnects immediately, including when the selected network has weaker
+   RSSI than another saved network.
 5. Saved network unavailable: page remains usable and `Add WiFi` still works.
 6. Assistant open/close after WiFi setup: Assistant releases resources when
    returning to desktop, and Settings WiFi can open afterward.
@@ -290,6 +332,22 @@ Hardware validation should cover:
    and reopening WiFi starts from a clean state.
 8. Open Assistant on a fresh device: it does not silently start the
    configuration AP; Settings remains the only pairing entry point.
+9. Submit portal credentials and immediately leave Settings: UI rendering stays
+   responsive while the portal stops, and reopening starts from a clean state.
+10. Leave the saved list scrolled while RSSI changes: rows, touch state, and
+    heap usage remain stable because RSSI-only updates do not rebuild the list.
+
+## Why This Architecture
+
+The preferred solution keeps credential storage, scanning, retry, captive
+portal, and application leases in their existing owners. A direct-connect
+implementation in Settings would duplicate station behavior and create a
+second connection state machine; a tracked fork of the managed component would
+increase upgrade cost. Exact-anchor generated overlays are the smallest
+reproducible correction for the two upstream defects required by this product:
+password logging and RSSI-first saved-network selection. Dependency upgrades
+fail at configure time until both corrections are reviewed against the new
+upstream source.
 
 ## Non-Goals
 

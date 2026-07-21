@@ -20,6 +20,9 @@ apply_brookesia_audio_light_overlay()
 include(${CMAKE_SOURCE_DIR}/main/cmake/esp_wifi_connect_security_overlay.cmake)
 apply_esp_wifi_connect_security_overlay()
 
+include(${CMAKE_SOURCE_DIR}/main/cmake/esp_wifi_connect_priority_overlay.cmake)
+apply_esp_wifi_connect_priority_overlay()
+
 idf_component_get_property(bt_lib bt COMPONENT_LIB)
 if(bt_lib)
     target_compile_options(${bt_lib} PRIVATE -Wno-error=array-bounds)

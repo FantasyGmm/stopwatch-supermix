@@ -136,6 +136,14 @@ WifiStaLease SharedWifiService::acquireSta(RuntimeOwner owner)
     return _policy.acquireSta(owner) ? WifiStaLease(*this, owner) : WifiStaLease();
 }
 
+WifiConfiguredStaAcquire SharedWifiService::acquireConfiguredStaDetailed(RuntimeOwner owner)
+{
+    const auto result = _policy.acquireConfiguredSta(owner);
+    return {result, result == WifiConfiguredStaAcquireResult::Acquired
+                        ? WifiStaLease(*this, owner)
+                        : WifiStaLease()};
+}
+
 WifiApSession SharedWifiService::acquireAp(RuntimeOwner owner)
 {
     return _policy.acquireAp(owner) ? WifiApSession(*this, owner) : WifiApSession();
@@ -156,6 +164,12 @@ WifiConfigApAcquire SharedWifiService::acquireConfigApDetailed(RuntimeOwner owne
 bool SharedWifiService::reconnectSta(RuntimeOwner owner)
 {
     return _policy.reconnectSta(owner);
+}
+
+StaReconfigureResult SharedWifiService::reconfigureSta(
+    RuntimeOwner owner, const std::function<void()>& configure)
+{
+    return _policy.reconfigureSta(owner, configure);
 }
 
 bool SharedWifiService::staConnected() const

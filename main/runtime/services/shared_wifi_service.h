@@ -74,15 +74,23 @@ struct WifiConfigApAcquire {
     WifiConfigApSession session;
 };
 
+struct WifiConfiguredStaAcquire {
+    WifiConfiguredStaAcquireResult result = WifiConfiguredStaAcquireResult::Busy;
+    WifiStaLease lease;
+};
+
 class SharedWifiService {
 public:
     explicit SharedWifiService(SharedWifiPolicy& policy);
 
     WifiStaLease acquireSta(RuntimeOwner owner);
+    WifiConfiguredStaAcquire acquireConfiguredStaDetailed(RuntimeOwner owner);
     WifiApSession acquireAp(RuntimeOwner owner);
     WifiConfigApAcquire acquireConfigApDetailed(RuntimeOwner owner);
     WifiConfigApSession acquireConfigAp(RuntimeOwner owner);
     bool reconnectSta(RuntimeOwner owner);
+    StaReconfigureResult reconfigureSta(RuntimeOwner owner,
+                                        const std::function<void()>& configure);
     bool staConnected() const;
 
 private:

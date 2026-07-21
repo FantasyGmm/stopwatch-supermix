@@ -24,20 +24,26 @@ public:
     std::string current_ap_ssid;
     std::string current_ap_url;
     int current_rssi = 0;
+    WifiSettingsSwitchResult switch_result = WifiSettingsSwitchResult::Applied;
 
     std::vector<std::string> copySavedSsids() const override
     {
         return saved_ssids;
     }
 
-    bool selectSavedSsid(std::size_t index) override
+    WifiSettingsSwitchResult selectSavedSsidAndReconnect(std::size_t index) override
     {
         if (index >= saved_ssids.size()) {
-            return false;
+            return WifiSettingsSwitchResult::Busy;
         }
         record("select:" + std::to_string(index));
-        current_ssid = saved_ssids[index];
-        return true;
+        if (switch_result != WifiSettingsSwitchResult::Busy) {
+            const std::string selected = saved_ssids[index];
+            saved_ssids.erase(saved_ssids.begin() + index);
+            saved_ssids.insert(saved_ssids.begin(), selected);
+            current_ssid = selected;
+        }
+        return switch_result;
     }
 
     bool acquireSta() override
@@ -55,12 +61,6 @@ public:
 
     bool staHeld() const override
     {
-        return sta_held;
-    }
-
-    bool reconnectSta() override
-    {
-        record("reconnect-sta");
         return sta_held;
     }
 
@@ -239,10 +239,11 @@ void testSelectionReconnects()
     backend->operations.clear();
 
     assert(controller.selectSaved(1));
-    assertOperations(*backend, {"select:1", "reconnect-sta"});
+    assertOperations(*backend, {"select:1"});
+    assert(controller.poll().saved_ssids == std::vector<std::string>({"Home", "Office"}));
 }
 
-void testSelectionDuringPairingAcquiresStaWithoutReconnect()
+void testSelectionDuringPairingIsRejectedWithoutCredentialMutation()
 {
     FakeWifiSettingsBackend* backend = nullptr;
     auto owned = makeBackend(backend);
@@ -251,22 +252,21 @@ void testSelectionDuringPairingAcquiresStaWithoutReconnect()
     assert(controller.startPairing());
     backend->operations.clear();
 
-    assert(controller.selectSaved(1));
-    assertOperations(*backend, {"select:1", "release-config-ap", "acquire-sta"});
+    assert(!controller.selectSaved(1));
+    assertOperations(*backend, {});
 }
 
-void testSelectionWithoutStaAcquiresOnceWithoutReconnect()
+void testSelectionWithoutStaIsRejectedWithoutCredentialMutation()
 {
     FakeWifiSettingsBackend* backend = nullptr;
     auto owned = makeBackend(backend);
     backend->saved_ssids = {"Office", "Home"};
     backend->allow_sta = false;
     WifiSettingsController controller(std::move(owned));
-    backend->allow_sta = true;
     backend->operations.clear();
 
-    assert(controller.selectSaved(1));
-    assertOperations(*backend, {"select:1", "acquire-sta"});
+    assert(!controller.selectSaved(1));
+    assertOperations(*backend, {});
 }
 
 void testInvalidSelectionDoesNothing()
@@ -310,8 +310,8 @@ int main()
     testPortalExitReleasesBeforeSta();
     testExplicitStop();
     testSelectionReconnects();
-    testSelectionDuringPairingAcquiresStaWithoutReconnect();
-    testSelectionWithoutStaAcquiresOnceWithoutReconnect();
+    testSelectionDuringPairingIsRejectedWithoutCredentialMutation();
+    testSelectionWithoutStaIsRejectedWithoutCredentialMutation();
     testInvalidSelectionDoesNothing();
     testDestructorReleasesAllOwnership();
     return 0;

@@ -13,18 +13,18 @@
 #include <vector>
 
 enum class WifiSettingsConfigApResult { Acquired, Busy, StartFailed };
+enum class WifiSettingsSwitchResult { Applied, Busy, StartFailed };
 
 class WifiSettingsBackend {
 public:
     virtual ~WifiSettingsBackend() = default;
 
     virtual std::vector<std::string> copySavedSsids() const = 0;
-    virtual bool selectSavedSsid(std::size_t index) = 0;
+    virtual WifiSettingsSwitchResult selectSavedSsidAndReconnect(std::size_t index) = 0;
 
     virtual bool acquireSta() = 0;
     virtual void releaseSta() = 0;
     virtual bool staHeld() const = 0;
-    virtual bool reconnectSta() = 0;
 
     virtual WifiSettingsConfigApResult acquireConfigAp() = 0;
     virtual void releaseConfigAp() = 0;
@@ -61,4 +61,5 @@ private:
     std::unique_ptr<WifiSettingsBackend> _backend;
     std::vector<std::string> _saved_ssids;
     WifiSettingsConfigApResult _pairing_result = WifiSettingsConfigApResult::Acquired;
+    WifiSettingsSwitchResult _switch_result = WifiSettingsSwitchResult::Applied;
 };

@@ -289,7 +289,12 @@ class UnifiedRuntimeFirmwareContractTest(unittest.TestCase):
         ):
             self.assertIn(required, worker)
 
-        self.assertLess(worker.rindex("_controller.reset();"), worker.rindex("_view.reset();"))
+        destructor = worker.index("WifiSettingsWorker::~WifiSettingsWorker")
+        release_runtime = worker.index("releaseRuntime();", destructor)
+        destroy_view = worker.index("_view.reset();", destructor)
+        release_implementation = worker.index("void WifiSettingsWorker::releaseRuntime")
+        self.assertLess(release_runtime, destroy_view)
+        self.assertIn("_controller.reset();", worker[release_implementation:])
         self.assertNotIn("WifiManager", worker)
         self.assertNotIn("SetEventCallback", worker)
 

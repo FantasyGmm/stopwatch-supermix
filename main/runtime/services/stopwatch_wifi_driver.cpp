@@ -5,6 +5,7 @@
  */
 #include "shared_wifi_service.h"
 
+#include <ssid_manager.h>
 #include <wifi_manager.h>
 
 namespace {
@@ -71,6 +72,11 @@ public:
     bool staConnected() const override
     {
         return WifiManager::GetInstance().IsConnected();
+    }
+
+    bool hasSavedCredentials() const override
+    {
+        return !SsidManager::GetInstance().GetSsidList().empty();
     }
 
 private:

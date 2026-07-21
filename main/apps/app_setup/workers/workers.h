@@ -8,8 +8,10 @@
 #include <uitk/short_namespace.hpp>
 #include <hal/hal.h>
 #include "wifi_settings_model.h"
+#include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string_view>
 
 class WifiSettingsController;
@@ -27,6 +29,14 @@ public:
     virtual ~WorkerBase() = default;
 
     virtual void update()
+    {
+    }
+
+    virtual void updateRuntime()
+    {
+    }
+
+    virtual void releaseRuntime()
     {
     }
 
@@ -126,14 +136,19 @@ class WifiSettingsWorker : public WorkerBase {
 public:
     WifiSettingsWorker();
     ~WifiSettingsWorker();
+    void updateRuntime() override;
     void update() override;
+    void releaseRuntime() override;
 
 private:
     class WifiSettingsView;
 
     std::unique_ptr<WifiSettingsView> _view;
     std::unique_ptr<WifiSettingsController> _controller;
+    std::optional<std::size_t> _pending_selected_network;
+    std::optional<WifiSettingsSnapshot> _pending_snapshot;
     uint32_t _next_poll_tick = 0;
+    bool _pending_pairing_action = false;
     bool _has_snapshot       = false;
     WifiSettingsSnapshot _last_snapshot;
 };

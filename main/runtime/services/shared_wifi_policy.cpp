@@ -25,6 +25,27 @@ bool SharedWifiPolicy::acquireSta(RuntimeOwner owner)
     return true;
 }
 
+WifiConfiguredStaAcquireResult SharedWifiPolicy::acquireConfiguredSta(RuntimeOwner owner)
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    if (_resources.snapshot().wifi_ap_active) {
+        return WifiConfiguredStaAcquireResult::Busy;
+    }
+    if (!_driver.hasSavedCredentials()) {
+        return WifiConfiguredStaAcquireResult::NoCredentials;
+    }
+
+    const AcquireResult result = _resources.acquireWifi(owner);
+    if (result != AcquireResult::Granted) {
+        return WifiConfiguredStaAcquireResult::Busy;
+    }
+    if (_resources.wifiLeaseCount() == 1 && !_driver.startSta()) {
+        _resources.releaseWifi(owner);
+        return WifiConfiguredStaAcquireResult::StartFailed;
+    }
+    return WifiConfiguredStaAcquireResult::Acquired;
+}
+
 void SharedWifiPolicy::releaseSta(RuntimeOwner owner)
 {
     std::lock_guard<std::mutex> lock(_mutex);
@@ -87,13 +108,23 @@ void SharedWifiPolicy::releaseConfigAp(RuntimeOwner owner)
 
 bool SharedWifiPolicy::reconnectSta(RuntimeOwner owner)
 {
+    return reconfigureSta(owner, []() {}) == StaReconfigureResult::Applied;
+}
+
+StaReconfigureResult SharedWifiPolicy::reconfigureSta(
+    RuntimeOwner owner, const std::function<void()>& configure)
+{
     std::lock_guard<std::mutex> lock(_mutex);
-    if (!_resources.ownsWifi(owner) || _resources.snapshot().wifi_ap_active) {
-        return false;
+    const auto snapshot = _resources.snapshot();
+    if (!_resources.ownsWifi(owner) || snapshot.wifi_ap_active ||
+        snapshot.wifi_lease_count != 1) {
+        return StaReconfigureResult::Busy;
     }
 
     _driver.stopSta();
-    return _driver.startSta();
+    configure();
+    return _driver.startSta() ? StaReconfigureResult::Applied
+                              : StaReconfigureResult::StartFailed;
 }
 
 bool SharedWifiPolicy::staConnected() const

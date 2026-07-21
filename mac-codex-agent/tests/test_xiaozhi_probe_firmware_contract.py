@@ -79,7 +79,7 @@ class XiaozhiProbeFirmwareContractTests(unittest.TestCase):
         self.assertIn("AssistantStateMachine", runtime)
         self.assertIn("AssistantEventMailbox", runtime)
         self.assertIn(
-            "GetSharedWifiService().acquireSta(RuntimeOwner::Assistant)", runtime
+            "acquireConfiguredStaDetailed(RuntimeOwner::Assistant)", runtime
         )
         self.assertIn("acquireCapture(RuntimeOwner::Assistant)", runtime)
         self.assertIn("acquirePlayback(RuntimeOwner::Assistant)", runtime)

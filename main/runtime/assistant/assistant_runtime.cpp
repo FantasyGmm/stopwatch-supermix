@@ -49,6 +49,7 @@ constexpr const char* tag = "AssistantRuntime";
 constexpr const char* assets_partition_label = "assets";
 constexpr const char* srmodels_asset_name = "srmodels.bin";
 constexpr uint32_t stop_timeout_ms = 2000;
+constexpr uint32_t wifi_connect_timeout_ms = 60000;
 
 struct __attribute__((packed)) AssetTableEntry {
     char name[32];
@@ -233,6 +234,7 @@ public:
     std::atomic<uint32_t> control_bits{0};
     std::atomic<bool> stop_submitted{false};
     uint32_t stop_started_ms = 0;
+    uint32_t wifi_connect_started_ms = 0;
     TaskHandle_t runtime_task = nullptr;
     bool service_setup_pending = false;
 
@@ -302,17 +304,33 @@ AssistantStartResult AssistantRuntime::Impl::start()
             return failAndReturn(session, AssistantStartResult::ServiceUnavailable,
                                  "Service runtime unavailable");
         }
-        wifi = GetSharedWifiService().acquireSta(RuntimeOwner::Assistant);
+        auto wifi_acquire =
+            GetSharedWifiService().acquireConfiguredStaDetailed(RuntimeOwner::Assistant);
+        const bool wifi_acquired =
+            wifi_acquire.result == WifiConfiguredStaAcquireResult::Acquired;
         record_trace(session, AssistantTraceComponent::Resource,
                      AssistantTraceEvent::ResourceDecision, state.state(),
                      AssistantTraceDetail::Wifi,
-                     wifi.valid() ? AssistantTraceResult::Accepted : AssistantTraceResult::Busy,
+                     wifi_acquired ? AssistantTraceResult::Accepted
+                                   : wifi_acquire.result == WifiConfiguredStaAcquireResult::Busy
+                                         ? AssistantTraceResult::Busy
+                                         : AssistantTraceResult::Failed,
                      static_cast<int32_t>(GetResourceSupervisor().wifiLeaseCount()));
-        if (!wifi.valid()) {
+        if (wifi_acquire.result == WifiConfiguredStaAcquireResult::NoCredentials) {
+            return failAndReturn(session, AssistantStartResult::ConfigurationFailed,
+                                 "Configure Wi-Fi in Settings");
+        }
+        if (wifi_acquire.result == WifiConfiguredStaAcquireResult::Busy) {
             return failAndReturn(session, AssistantStartResult::ResourceBusy, "Wi-Fi busy");
         }
+        if (wifi_acquire.result == WifiConfiguredStaAcquireResult::StartFailed) {
+            return failAndReturn(session, AssistantStartResult::ServiceUnavailable,
+                                 "Wi-Fi unavailable");
+        }
+        wifi = std::move(wifi_acquire.lease);
         log_memory_stage("after-wifi");
         service_setup_pending = true;
+        wifi_connect_started_ms = GetHAL().millis();
         mailbox.publish({session, AssistantEventKind::State, "Connecting"});
         return AssistantStartResult::Submitted;
     } catch (const std::exception& error) {
@@ -391,6 +409,11 @@ void AssistantRuntime::Impl::update(uint32_t now_ms)
         if (state.state() == AssistantRuntimeState::Stopped) {
             return;
         }
+    }
+    if (service_setup_pending && state.state() == AssistantRuntimeState::Starting &&
+        static_cast<uint32_t>(now_ms - wifi_connect_started_ms) >= wifi_connect_timeout_ms) {
+        failStart(session, "Wi-Fi connection timed out; check Settings");
+        return;
     }
     const uint32_t signals = control_bits.exchange(0);
 

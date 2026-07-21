@@ -198,38 +198,48 @@ public:
 
         _pairing_action->label().setText(pairing ? "Stop Pairing" : "Add WiFi");
 
-        _default_markers.clear();
-        _network_rows.clear();
+        _saved_list->setHidden(pairing);
         _empty_label->setHidden(!snapshot.saved_ssids.empty());
 
-        for (std::size_t index = 0; index < snapshot.saved_ssids.size(); ++index) {
-            auto row = std::make_unique<Button>(_saved_list->get());
-            row->setSize(kListWidth, kRowHeight);
-            row->align(LV_ALIGN_TOP_MID, 0, static_cast<int>(index) * (kRowHeight + kRowGap));
+        if (snapshot.saved_ssids != _rendered_saved_ssids) {
+            _default_markers.clear();
+            _network_rows.clear();
 
-            const bool connected = snapshot.state == WifiSettingsState::Connected &&
-                                   snapshot.ssid == snapshot.saved_ssids[index];
-            applyCompactButtonStyle(*row, connected ? lv_color_hex(0x1769AA) : lv_color_hex(0x252525));
-            row->setPaddingAll(0);
-            row->label().setText(snapshot.saved_ssids[index]);
-            row->label().setWidth(index == 0 ? kDefaultSsidLabelWidth : kNonDefaultSsidLabelWidth);
-            row->label().align(LV_ALIGN_LEFT_MID, kRowHorizontalInset, 0);
-            row->label().setTextAlign(LV_TEXT_ALIGN_LEFT);
-            lv_label_set_long_mode(row->label().get(), LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
-            row->onClick().connect([this, index]() { _selected_network_requested = index; });
+            for (std::size_t index = 0; index < snapshot.saved_ssids.size(); ++index) {
+                auto row = std::make_unique<Button>(_saved_list->get());
+                row->setSize(kListWidth, kRowHeight);
+                row->align(LV_ALIGN_TOP_MID, 0, static_cast<int>(index) * (kRowHeight + kRowGap));
+                applyCompactButtonStyle(*row, lv_color_hex(0x252525));
+                row->setPaddingAll(0);
+                row->label().setText(snapshot.saved_ssids[index]);
+                row->label().setWidth(index == 0 ? kDefaultSsidLabelWidth : kNonDefaultSsidLabelWidth);
+                row->label().align(LV_ALIGN_LEFT_MID, kRowHorizontalInset, 0);
+                row->label().setTextAlign(LV_TEXT_ALIGN_LEFT);
+                lv_label_set_long_mode(row->label().get(), LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
+                row->onClick().connect([this, index]() { _selected_network_requested = index; });
 
-            if (index == 0) {
-                auto marker = std::make_unique<Label>(row->get());
-                marker->setSize(kDefaultMarkerWidth, 20);
-                marker->align(LV_ALIGN_RIGHT_MID, -kDefaultMarkerRightInset, 0);
-                marker->setText("Default");
-                marker->setTextFont(&lv_font_montserrat_14);
-                marker->setTextColor(lv_color_hex(0xA8D2FF));
-                marker->setTextAlign(LV_TEXT_ALIGN_RIGHT);
-                _default_markers.push_back(std::move(marker));
+                if (index == 0) {
+                    auto marker = std::make_unique<Label>(row->get());
+                    marker->setSize(kDefaultMarkerWidth, 20);
+                    marker->align(LV_ALIGN_RIGHT_MID, -kDefaultMarkerRightInset, 0);
+                    marker->setText("Default");
+                    marker->setTextFont(&lv_font_montserrat_14);
+                    marker->setTextColor(lv_color_hex(0xA8D2FF));
+                    marker->setTextAlign(LV_TEXT_ALIGN_RIGHT);
+                    _default_markers.push_back(std::move(marker));
+                }
+
+                _network_rows.push_back(std::move(row));
             }
 
-            _network_rows.push_back(std::move(row));
+            _rendered_saved_ssids = snapshot.saved_ssids;
+        }
+
+        for (std::size_t index = 0; index < _network_rows.size(); ++index) {
+            const bool row_connected = snapshot.state == WifiSettingsState::Connected &&
+                                       snapshot.ssid == snapshot.saved_ssids[index];
+            _network_rows[index]->setBgColor(
+                row_connected ? lv_color_hex(0x1769AA) : lv_color_hex(0x252525));
         }
     }
 
@@ -267,6 +277,7 @@ private:
     std::unique_ptr<Button> _done_action;
     std::vector<std::unique_ptr<Button>> _network_rows;
     std::vector<std::unique_ptr<Label>> _default_markers;
+    std::vector<std::string> _rendered_saved_ssids;
     bool _pairing_action_requested = false;
     bool _done_requested = false;
     std::optional<std::size_t> _selected_network_requested;
@@ -274,40 +285,44 @@ private:
 
 WifiSettingsWorker::WifiSettingsWorker()
 {
-    _controller = std::make_unique<WifiSettingsController>();
     _view = std::make_unique<WifiSettingsView>();
     _next_poll_tick = 0;
 }
 
 WifiSettingsWorker::~WifiSettingsWorker()
 {
-    _controller.reset();
+    releaseRuntime();
     _view.reset();
 }
 
-void WifiSettingsWorker::update()
+void WifiSettingsWorker::releaseRuntime()
 {
-    if (!_view || !_controller) {
-        _is_done = true;
+    _controller.reset();
+}
+
+void WifiSettingsWorker::updateRuntime()
+{
+    if (_is_done) {
         return;
     }
 
-    if (_view->consumeDoneRequested()) {
-        _is_done = true;
-        return;
+    if (!_controller) {
+        _controller = std::make_unique<WifiSettingsController>();
     }
 
-    if (const auto selected = _view->consumeSelectedNetworkRequested()) {
-        _controller->selectSaved(*selected);
+    if (_pending_selected_network) {
+        _controller->selectSaved(*_pending_selected_network);
+        _pending_selected_network.reset();
         _next_poll_tick = 0;
     }
 
-    if (_view->consumePairingActionRequested()) {
+    if (_pending_pairing_action) {
         if (_has_snapshot && _last_snapshot.state == WifiSettingsState::Pairing) {
             _controller->stopPairing();
         } else {
             _controller->startPairing();
         }
+        _pending_pairing_action = false;
         _next_poll_tick = 0;
     }
 
@@ -319,8 +334,34 @@ void WifiSettingsWorker::update()
     _next_poll_tick = now + 500;
     const WifiSettingsSnapshot snapshot = _controller->poll();
     if (!_has_snapshot || snapshot != _last_snapshot) {
-        _view->render(snapshot);
-        _last_snapshot = snapshot;
+        _pending_snapshot = snapshot;
+    }
+}
+
+void WifiSettingsWorker::update()
+{
+    if (!_view) {
+        _is_done = true;
+        return;
+    }
+
+    if (_view->consumeDoneRequested()) {
+        _is_done = true;
+        return;
+    }
+
+    if (const auto selected = _view->consumeSelectedNetworkRequested()) {
+        _pending_selected_network = *selected;
+    }
+
+    if (_view->consumePairingActionRequested()) {
+        _pending_pairing_action = true;
+    }
+
+    if (_pending_snapshot) {
+        _view->render(*_pending_snapshot);
+        _last_snapshot = std::move(*_pending_snapshot);
+        _pending_snapshot.reset();
         _has_snapshot = true;
     }
 }

@@ -36,14 +36,25 @@ public:
         return ssids;
     }
 
-    bool selectSavedSsid(std::size_t index) override
+    WifiSettingsSwitchResult selectSavedSsidAndReconnect(std::size_t index) override
     {
         const auto& saved = _ssid_manager.GetSsidList();
         if (index >= saved.size()) {
-            return false;
+            return WifiSettingsSwitchResult::Busy;
         }
-        _ssid_manager.SetDefaultSsid(static_cast<int>(index));
-        return true;
+
+        const auto result = _wifi_service.reconfigureSta(
+            RuntimeOwner::Settings,
+            [this, index]() { _ssid_manager.SetDefaultSsid(static_cast<int>(index)); });
+        switch (result) {
+        case StaReconfigureResult::Applied:
+            return WifiSettingsSwitchResult::Applied;
+        case StaReconfigureResult::Busy:
+            return WifiSettingsSwitchResult::Busy;
+        case StaReconfigureResult::StartFailed:
+            return WifiSettingsSwitchResult::StartFailed;
+        }
+        return WifiSettingsSwitchResult::StartFailed;
     }
 
     bool acquireSta() override
@@ -62,11 +73,6 @@ public:
     bool staHeld() const override
     {
         return _sta_lease.valid();
-    }
-
-    bool reconnectSta() override
-    {
-        return _wifi_service.reconnectSta(RuntimeOwner::Settings);
     }
 
     WifiSettingsConfigApResult acquireConfigAp() override
@@ -144,11 +150,13 @@ private:
 class HostWifiSettingsBackend final : public WifiSettingsBackend {
 public:
     std::vector<std::string> copySavedSsids() const override { return {}; }
-    bool selectSavedSsid(std::size_t) override { return false; }
+    WifiSettingsSwitchResult selectSavedSsidAndReconnect(std::size_t) override
+    {
+        return WifiSettingsSwitchResult::Busy;
+    }
     bool acquireSta() override { return false; }
     void releaseSta() override {}
     bool staHeld() const override { return false; }
-    bool reconnectSta() override { return false; }
     WifiSettingsConfigApResult acquireConfigAp() override
     {
         return WifiSettingsConfigApResult::StartFailed;
@@ -197,6 +205,7 @@ WifiSettingsController::~WifiSettingsController()
 bool WifiSettingsController::startPairing()
 {
     _pairing_result = WifiSettingsConfigApResult::Acquired;
+    _switch_result = WifiSettingsSwitchResult::Applied;
     if (_backend->configApHeld()) {
         return true;
     }
@@ -219,6 +228,7 @@ void WifiSettingsController::stopPairing()
 {
     const bool had_config_ap = _backend->configApHeld();
     _pairing_result = WifiSettingsConfigApResult::Acquired;
+    _switch_result = WifiSettingsSwitchResult::Applied;
     if (had_config_ap) {
         _backend->releaseConfigAp();
         finishPairing();
@@ -231,21 +241,16 @@ bool WifiSettingsController::selectSaved(std::size_t index)
         return false;
     }
 
-    const bool sta_was_held = _backend->staHeld();
-    const bool pairing_was_active = _backend->configApHeld();
-    if (!_backend->selectSavedSsid(index)) {
+    if (_backend->configApHeld() || !_backend->staHeld()) {
         return false;
     }
 
-    refreshSavedSsids();
     _pairing_result = WifiSettingsConfigApResult::Acquired;
-    if (pairing_was_active) {
-        _backend->releaseConfigAp();
+    _switch_result = _backend->selectSavedSsidAndReconnect(index);
+    if (_switch_result != WifiSettingsSwitchResult::Busy) {
+        refreshSavedSsids();
     }
-    if (pairing_was_active || !sta_was_held) {
-        return _backend->acquireSta();
-    }
-    return _backend->reconnectSta();
+    return _switch_result == WifiSettingsSwitchResult::Applied;
 }
 
 WifiSettingsSnapshot WifiSettingsController::poll()
@@ -272,6 +277,16 @@ WifiSettingsSnapshot WifiSettingsController::poll()
 
     if (_pairing_result == WifiSettingsConfigApResult::StartFailed) {
         snapshot.state = WifiSettingsState::PairingFailed;
+        return snapshot;
+    }
+
+    if (_switch_result == WifiSettingsSwitchResult::Busy) {
+        snapshot.state = WifiSettingsState::Busy;
+        return snapshot;
+    }
+
+    if (_switch_result == WifiSettingsSwitchResult::StartFailed) {
+        snapshot.state = WifiSettingsState::NotConnected;
         return snapshot;
     }
 
@@ -312,6 +327,7 @@ void WifiSettingsController::acquireStaWhenSaved()
 
 void WifiSettingsController::finishPairing()
 {
+    _switch_result = WifiSettingsSwitchResult::Applied;
     refreshSavedSsids();
     acquireStaWhenSaved();
 }

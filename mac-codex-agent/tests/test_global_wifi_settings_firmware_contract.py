@@ -67,10 +67,16 @@ class GlobalWifiSettingsFirmwareContractTests(unittest.TestCase):
         teardown = method_body(
             worker,
             r"WifiSettingsWorker::~WifiSettingsWorker\s*\(\s*\)",
+            r"void\s+WifiSettingsWorker::releaseRuntime\s*\(\s*\)",
+        )
+        release_runtime = method_body(
+            worker,
+            r"void\s+WifiSettingsWorker::releaseRuntime\s*\(\s*\)",
             r"void\s+WifiSettingsWorker::update\s*\(\s*\)",
         )
 
-        self.assertLess(teardown.index("_controller.reset()"), teardown.index("_view.reset()"))
+        self.assertLess(teardown.index("releaseRuntime()"), teardown.index("_view.reset()"))
+        self.assertIn("_controller.reset()", release_runtime)
 
     def test_shared_driver_uses_existing_config_ap_start_stop_path(self):
         driver = read("main/runtime/services/stopwatch_wifi_driver.cpp")
@@ -126,6 +132,67 @@ class GlobalWifiSettingsFirmwareContractTests(unittest.TestCase):
         self.assertIn('list(REMOVE_ITEM wifi_connect_sources "${upstream_wifi_configuration}"', overlay)
         self.assertIn('set_property(TARGET ${wifi_connect_lib} PROPERTY SOURCES', overlay)
         self.assertIn('target_sources(${wifi_connect_lib} PRIVATE "${generated_wifi_configuration}")', overlay)
+
+    def test_saved_network_order_drives_station_connection_priority(self):
+        root_cmake = read("CMakeLists.txt")
+        overlay = read("main/cmake/esp_wifi_connect_priority_overlay.cmake")
+        priority = read("main/runtime/services/wifi_candidate_priority.h")
+
+        self.assertIn("esp_wifi_connect_priority_overlay.cmake", root_cmake)
+        self.assertIn("apply_esp_wifi_connect_priority_overlay()", root_cmake)
+        self.assertIn('"${wifi_connect_dir}/wifi_station.cc"', overlay)
+        self.assertIn("wifi_candidate_priority.h", overlay)
+        self.assertIn("savedCandidatePriorityLess", overlay)
+        self.assertIn("savedCandidatePriorityLess", priority)
+        self.assertIn("connect_queue_.clear();", overlay)
+        self.assertIn("this_->ssid_.clear();", overlay)
+
+    def test_assistant_fails_closed_when_global_wifi_is_not_configured(self):
+        service_header = read("main/runtime/services/shared_wifi_service.h")
+        assistant = read("main/runtime/assistant/assistant_runtime.cpp")
+
+        self.assertIn("acquireConfiguredStaDetailed", service_header)
+        self.assertIn("acquireConfiguredStaDetailed(RuntimeOwner::Assistant)", assistant)
+        self.assertIn("Configure Wi-Fi in Settings", assistant)
+        self.assertIn("wifi_connect_timeout_ms", assistant)
+        self.assertIn("Wi-Fi connection timed out", assistant)
+
+    def test_wifi_rows_are_stable_across_rssi_only_updates_and_hidden_during_pairing(self):
+        worker = read("main/apps/app_setup/workers/wifi.cpp")
+
+        self.assertIn("_rendered_saved_ssids", worker)
+        self.assertIn("snapshot.saved_ssids != _rendered_saved_ssids", worker)
+        self.assertIn("_saved_list->setHidden(pairing)", worker)
+
+    def test_wifi_runtime_cleanup_runs_outside_the_lvgl_lock(self):
+        workers = read("main/apps/app_setup/workers/workers.h")
+        app_setup = read("main/apps/app_setup/app_setup.cpp")
+        wifi_worker = read("main/apps/app_setup/workers/wifi.cpp")
+
+        on_running = method_body(
+            app_setup,
+            r"void\s+AppSetup::onRunning\s*\(\s*\)",
+            r"void\s+AppSetup::onClose\s*\(\s*\)",
+        )
+        runtime_update = method_body(
+            wifi_worker,
+            r"void\s+WifiSettingsWorker::updateRuntime\s*\(\s*\)",
+            r"void\s+WifiSettingsWorker::update\s*\(\s*\)",
+        )
+        ui_update = re.split(
+            r"void\s+WifiSettingsWorker::update\s*\(\s*\)", wifi_worker, maxsplit=1
+        )[1]
+
+        self.assertIn("virtual void updateRuntime()", workers)
+        self.assertIn("virtual void releaseRuntime()", workers)
+        self.assertIn("void updateRuntime() override;", workers)
+        self.assertIn("void releaseRuntime() override;", workers)
+        self.assertLess(on_running.index("_worker->updateRuntime();"), on_running.index("LvglLockGuard lock;"))
+        for runtime_operation in ("startPairing()", "stopPairing()", "selectSaved(", "poll()"):
+            self.assertIn(runtime_operation, runtime_update)
+            self.assertNotIn(runtime_operation, ui_update)
+        self.assertIn("WifiSettingsWorker::releaseRuntime", wifi_worker)
+        self.assertIn("_worker->releaseRuntime();", app_setup)
 
 
 if __name__ == "__main__":
