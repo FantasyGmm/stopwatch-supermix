@@ -69,12 +69,23 @@ public:
         return _wifi_service.reconnectSta(RuntimeOwner::Settings);
     }
 
-    bool acquireConfigAp() override
+    WifiSettingsConfigApResult acquireConfigAp() override
     {
-        if (!_config_ap_session.valid()) {
-            _config_ap_session = _wifi_service.acquireConfigAp(RuntimeOwner::Settings);
+        if (_config_ap_session.valid()) {
+            return WifiSettingsConfigApResult::Acquired;
         }
-        return _config_ap_session.valid();
+
+        auto acquired = _wifi_service.acquireConfigApDetailed(RuntimeOwner::Settings);
+        switch (acquired.result) {
+        case WifiConfigApAcquireResult::Acquired:
+            _config_ap_session = std::move(acquired.session);
+            return WifiSettingsConfigApResult::Acquired;
+        case WifiConfigApAcquireResult::Busy:
+            return WifiSettingsConfigApResult::Busy;
+        case WifiConfigApAcquireResult::StartFailed:
+            return WifiSettingsConfigApResult::StartFailed;
+        }
+        return WifiSettingsConfigApResult::StartFailed;
     }
 
     void releaseConfigAp() override
@@ -138,7 +149,10 @@ public:
     void releaseSta() override {}
     bool staHeld() const override { return false; }
     bool reconnectSta() override { return false; }
-    bool acquireConfigAp() override { return false; }
+    WifiSettingsConfigApResult acquireConfigAp() override
+    {
+        return WifiSettingsConfigApResult::StartFailed;
+    }
     void releaseConfigAp() override {}
     bool configApHeld() const override { return false; }
     bool configApMode() const override { return false; }
@@ -182,7 +196,7 @@ WifiSettingsController::~WifiSettingsController()
 
 bool WifiSettingsController::startPairing()
 {
-    _pairing_failed = false;
+    _pairing_result = WifiSettingsConfigApResult::Acquired;
     if (_backend->configApHeld()) {
         return true;
     }
@@ -191,11 +205,12 @@ bool WifiSettingsController::startPairing()
         _backend->releaseSta();
     }
 
-    if (_backend->acquireConfigAp()) {
+    const WifiSettingsConfigApResult result = _backend->acquireConfigAp();
+    if (result == WifiSettingsConfigApResult::Acquired) {
         return true;
     }
 
-    _pairing_failed = true;
+    _pairing_result = result;
     acquireStaWhenSaved();
     return false;
 }
@@ -203,7 +218,7 @@ bool WifiSettingsController::startPairing()
 void WifiSettingsController::stopPairing()
 {
     const bool had_config_ap = _backend->configApHeld();
-    _pairing_failed = false;
+    _pairing_result = WifiSettingsConfigApResult::Acquired;
     if (had_config_ap) {
         _backend->releaseConfigAp();
         finishPairing();
@@ -212,16 +227,25 @@ void WifiSettingsController::stopPairing()
 
 bool WifiSettingsController::selectSaved(std::size_t index)
 {
-    if (index >= _saved_ssids.size() || !_backend->selectSavedSsid(index)) {
+    if (index >= _saved_ssids.size()) {
+        return false;
+    }
+
+    const bool sta_was_held = _backend->staHeld();
+    const bool pairing_was_active = _backend->configApHeld();
+    if (!_backend->selectSavedSsid(index)) {
         return false;
     }
 
     refreshSavedSsids();
-    stopPairing();
-    if (!_backend->staHeld()) {
-        acquireStaWhenSaved();
+    _pairing_result = WifiSettingsConfigApResult::Acquired;
+    if (pairing_was_active) {
+        _backend->releaseConfigAp();
     }
-    return _backend->staHeld() && _backend->reconnectSta();
+    if (pairing_was_active || !sta_was_held) {
+        return _backend->acquireSta();
+    }
+    return _backend->reconnectSta();
 }
 
 WifiSettingsSnapshot WifiSettingsController::poll()
@@ -241,7 +265,12 @@ WifiSettingsSnapshot WifiSettingsController::poll()
         return snapshot;
     }
 
-    if (_pairing_failed) {
+    if (_pairing_result == WifiSettingsConfigApResult::Busy) {
+        snapshot.state = WifiSettingsState::Busy;
+        return snapshot;
+    }
+
+    if (_pairing_result == WifiSettingsConfigApResult::StartFailed) {
         snapshot.state = WifiSettingsState::PairingFailed;
         return snapshot;
     }

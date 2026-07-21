@@ -17,7 +17,7 @@ public:
     bool config_ap_held = false;
     bool config_ap_mode = false;
     bool allow_sta = true;
-    bool allow_config_ap = true;
+    WifiSettingsConfigApResult config_ap_result = WifiSettingsConfigApResult::Acquired;
     bool connected = false;
     std::string current_ssid;
     std::string current_ip_address;
@@ -64,12 +64,12 @@ public:
         return sta_held;
     }
 
-    bool acquireConfigAp() override
+    WifiSettingsConfigApResult acquireConfigAp() override
     {
         record("acquire-config-ap");
-        config_ap_held = allow_config_ap;
+        config_ap_held = config_ap_result == WifiSettingsConfigApResult::Acquired;
         config_ap_mode = config_ap_held;
-        return config_ap_held;
+        return config_ap_result;
     }
 
     void releaseConfigAp() override
@@ -179,12 +179,26 @@ void testStartPairingFailureRestoresSta()
     FakeWifiSettingsBackend* backend = nullptr;
     auto owned = makeBackend(backend);
     backend->saved_ssids = {"Office"};
-    backend->allow_config_ap = false;
+    backend->config_ap_result = WifiSettingsConfigApResult::StartFailed;
     WifiSettingsController controller(std::move(owned));
     backend->operations.clear();
 
     assert(!controller.startPairing());
     assert(controller.poll().state == WifiSettingsState::PairingFailed);
+    assertOperations(*backend, {"release-sta", "acquire-config-ap", "acquire-sta"});
+}
+
+void testStartPairingBusyRestoresSta()
+{
+    FakeWifiSettingsBackend* backend = nullptr;
+    auto owned = makeBackend(backend);
+    backend->saved_ssids = {"Office"};
+    backend->config_ap_result = WifiSettingsConfigApResult::Busy;
+    WifiSettingsController controller(std::move(owned));
+    backend->operations.clear();
+
+    assert(!controller.startPairing());
+    assert(controller.poll().state == WifiSettingsState::Busy);
     assertOperations(*backend, {"release-sta", "acquire-config-ap", "acquire-sta"});
 }
 
@@ -228,6 +242,33 @@ void testSelectionReconnects()
     assertOperations(*backend, {"select:1", "reconnect-sta"});
 }
 
+void testSelectionDuringPairingAcquiresStaWithoutReconnect()
+{
+    FakeWifiSettingsBackend* backend = nullptr;
+    auto owned = makeBackend(backend);
+    backend->saved_ssids = {"Office", "Home"};
+    WifiSettingsController controller(std::move(owned));
+    assert(controller.startPairing());
+    backend->operations.clear();
+
+    assert(controller.selectSaved(1));
+    assertOperations(*backend, {"select:1", "release-config-ap", "acquire-sta"});
+}
+
+void testSelectionWithoutStaAcquiresOnceWithoutReconnect()
+{
+    FakeWifiSettingsBackend* backend = nullptr;
+    auto owned = makeBackend(backend);
+    backend->saved_ssids = {"Office", "Home"};
+    backend->allow_sta = false;
+    WifiSettingsController controller(std::move(owned));
+    backend->allow_sta = true;
+    backend->operations.clear();
+
+    assert(controller.selectSaved(1));
+    assertOperations(*backend, {"select:1", "acquire-sta"});
+}
+
 void testInvalidSelectionDoesNothing()
 {
     FakeWifiSettingsBackend* backend = nullptr;
@@ -265,9 +306,12 @@ int main()
     testSavedStartup();
     testStartPairingOrder();
     testStartPairingFailureRestoresSta();
+    testStartPairingBusyRestoresSta();
     testPortalExitReleasesBeforeSta();
     testExplicitStop();
     testSelectionReconnects();
+    testSelectionDuringPairingAcquiresStaWithoutReconnect();
+    testSelectionWithoutStaAcquiresOnceWithoutReconnect();
     testInvalidSelectionDoesNothing();
     testDestructorReleasesAllOwnership();
     return 0;

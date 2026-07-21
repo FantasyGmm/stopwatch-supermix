@@ -143,7 +143,14 @@ WifiApSession SharedWifiService::acquireAp(RuntimeOwner owner)
 
 WifiConfigApSession SharedWifiService::acquireConfigAp(RuntimeOwner owner)
 {
-    return _policy.acquireConfigAp(owner) ? WifiConfigApSession(*this, owner) : WifiConfigApSession();
+    return std::move(acquireConfigApDetailed(owner).session);
+}
+
+WifiConfigApAcquire SharedWifiService::acquireConfigApDetailed(RuntimeOwner owner)
+{
+    const WifiConfigApAcquireResult result = _policy.acquireConfigApDetailed(owner);
+    return {result, result == WifiConfigApAcquireResult::Acquired ? WifiConfigApSession(*this, owner)
+                                                                   : WifiConfigApSession()};
 }
 
 bool SharedWifiService::reconnectSta(RuntimeOwner owner)

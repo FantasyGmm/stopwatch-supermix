@@ -23,6 +23,8 @@ public:
     virtual bool staConnected() const = 0;
 };
 
+enum class WifiConfigApAcquireResult { Acquired, Busy, StartFailed };
+
 class SharedWifiPolicy {
 public:
     SharedWifiPolicy(ResourceSupervisor& resources, SharedWifiDriver& driver);

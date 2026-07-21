@@ -155,16 +155,18 @@ int main()
         assert(wifi.reconnectSta(RuntimeOwner::Settings));
         assert(!wifi.reconnectSta(RuntimeOwner::Codex));
 
-        auto blocked_config_ap = wifi.acquireConfigAp(RuntimeOwner::Settings);
-        assert(!blocked_config_ap.valid());
+        auto blocked_config_ap = wifi.acquireConfigApDetailed(RuntimeOwner::Settings);
+        assert(blocked_config_ap.result == WifiConfigApAcquireResult::Busy);
+        assert(!blocked_config_ap.session.valid());
     }
     assert(!wifi.reconnectSta(RuntimeOwner::Settings));
 
     {
         auto raw_ap = wifi.acquireAp(RuntimeOwner::Badge);
         assert(raw_ap.valid());
-        auto blocked_config_ap = wifi.acquireConfigAp(RuntimeOwner::Settings);
-        assert(!blocked_config_ap.valid());
+        auto blocked_config_ap = wifi.acquireConfigApDetailed(RuntimeOwner::Settings);
+        assert(blocked_config_ap.result == WifiConfigApAcquireResult::Busy);
+        assert(!blocked_config_ap.session.valid());
     }
 
     {
@@ -182,8 +184,9 @@ int main()
     assert(!resources.snapshot().wifi_ap_active);
 
     driver.config_ap_start_succeeds = false;
-    auto failed_config_ap = wifi.acquireConfigAp(RuntimeOwner::Settings);
-    assert(!failed_config_ap.valid());
+    auto failed_config_ap = wifi.acquireConfigApDetailed(RuntimeOwner::Settings);
+    assert(failed_config_ap.result == WifiConfigApAcquireResult::StartFailed);
+    assert(!failed_config_ap.session.valid());
     assert(!resources.snapshot().wifi_ap_active);
 
     return 0;

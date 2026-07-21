@@ -57,19 +57,24 @@ void SharedWifiPolicy::releaseAp(RuntimeOwner owner)
     }
 }
 
-bool SharedWifiPolicy::acquireConfigAp(RuntimeOwner owner)
+WifiConfigApAcquireResult SharedWifiPolicy::acquireConfigApDetailed(RuntimeOwner owner)
 {
     std::lock_guard<std::mutex> lock(_mutex);
     const AcquireResult result = _resources.acquireWifiAp(owner);
     if (result != AcquireResult::Granted) {
-        return false;
+        return WifiConfigApAcquireResult::Busy;
     }
 
     if (!_driver.startConfigAp()) {
         _resources.releaseWifiAp(owner);
-        return false;
+        return WifiConfigApAcquireResult::StartFailed;
     }
-    return true;
+    return WifiConfigApAcquireResult::Acquired;
+}
+
+bool SharedWifiPolicy::acquireConfigAp(RuntimeOwner owner)
+{
+    return acquireConfigApDetailed(owner) == WifiConfigApAcquireResult::Acquired;
 }
 
 void SharedWifiPolicy::releaseConfigAp(RuntimeOwner owner)

@@ -12,6 +12,8 @@
 #include <string>
 #include <vector>
 
+enum class WifiSettingsConfigApResult { Acquired, Busy, StartFailed };
+
 class WifiSettingsBackend {
 public:
     virtual ~WifiSettingsBackend() = default;
@@ -24,7 +26,7 @@ public:
     virtual bool staHeld() const = 0;
     virtual bool reconnectSta() = 0;
 
-    virtual bool acquireConfigAp() = 0;
+    virtual WifiSettingsConfigApResult acquireConfigAp() = 0;
     virtual void releaseConfigAp() = 0;
     virtual bool configApHeld() const = 0;
     virtual bool configApMode() const = 0;
@@ -58,5 +60,5 @@ private:
 
     std::unique_ptr<WifiSettingsBackend> _backend;
     std::vector<std::string> _saved_ssids;
-    bool _pairing_failed = false;
+    WifiSettingsConfigApResult _pairing_result = WifiSettingsConfigApResult::Acquired;
 };

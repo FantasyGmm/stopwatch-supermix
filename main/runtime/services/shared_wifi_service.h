@@ -69,12 +69,18 @@ private:
     RuntimeOwner _owner = RuntimeOwner::None;
 };
 
+struct WifiConfigApAcquire {
+    WifiConfigApAcquireResult result = WifiConfigApAcquireResult::Busy;
+    WifiConfigApSession session;
+};
+
 class SharedWifiService {
 public:
     explicit SharedWifiService(SharedWifiPolicy& policy);
 
     WifiStaLease acquireSta(RuntimeOwner owner);
     WifiApSession acquireAp(RuntimeOwner owner);
+    WifiConfigApAcquire acquireConfigApDetailed(RuntimeOwner owner);
     WifiConfigApSession acquireConfigAp(RuntimeOwner owner);
     bool reconnectSta(RuntimeOwner owner);
     bool staConnected() const;
