@@ -51,6 +51,30 @@ class ServiceRuntimeFirmwareContractTests(unittest.TestCase):
         cmake = (ROOT / "main" / "CMakeLists.txt").read_text(encoding="utf-8")
         self.assertIn('"runtime/*.cpp"', cmake)
 
+    def test_wifi_driver_keeps_station_and_config_ap_startup_distinct(self):
+        source = (
+            ROOT / "main" / "runtime" / "services" / "stopwatch_wifi_driver.cpp"
+        ).read_text(encoding="utf-8")
+        start_sta = source.split("bool startSta() override", 1)[1].split(
+            "void stopSta() override", 1
+        )[0]
+        start_config_ap = source.split("bool startConfigAp() override", 1)[1].split(
+            "void stopConfigAp() override", 1
+        )[0]
+
+        self.assertIn("wifi.StartStation();", start_sta)
+        self.assertEqual(start_sta.count("wifi.StartStation();"), 1)
+        self.assertRegex(
+            start_sta,
+            r"return false;\s*}\s*wifi\.StartStation\(\);",
+        )
+        self.assertNotIn("SsidManager", start_sta)
+        self.assertNotIn("wifi.StartConfigAp();", start_sta)
+        self.assertRegex(
+            start_config_ap,
+            r"wifi\.StartConfigAp\(\);\s*return\s+wifi\.IsConfigMode\(\);",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

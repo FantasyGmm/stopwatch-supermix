@@ -5,7 +5,6 @@
  */
 #include "shared_wifi_service.h"
 
-#include <ssid_manager.h>
 #include <wifi_manager.h>
 
 namespace {
@@ -17,12 +16,8 @@ public:
         if (!initialize(wifi)) {
             return false;
         }
-        if (SsidManager::GetInstance().GetSsidList().empty()) {
-            wifi.StartConfigAp();
-        } else {
-            wifi.StartStation();
-            wifi.SetPowerSaveLevel(WifiPowerSaveLevel::PERFORMANCE);
-        }
+        wifi.StartStation();
+        wifi.SetPowerSaveLevel(WifiPowerSaveLevel::PERFORMANCE);
         return true;
     }
 
@@ -60,7 +55,7 @@ public:
         wifi.SetEventCallback(nullptr);
         wifi.StopStation();
         wifi.StartConfigAp();
-        return true;
+        return wifi.IsConfigMode();
     }
 
     void stopConfigAp() override
