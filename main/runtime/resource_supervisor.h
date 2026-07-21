@@ -8,7 +8,7 @@
 #include <array>
 #include <cstddef>
 
-enum class RuntimeOwner { None, Assistant, Codex, Badge, System };
+enum class RuntimeOwner { None, Assistant, Codex, Badge, System, Settings };
 enum class AcquireResult { Granted, AlreadyOwned, Busy, Blocked };
 enum class ReleaseResult { Released, LastOwnerReleased, NotOwned };
 
@@ -25,6 +25,7 @@ public:
     AcquireResult acquireWifi(RuntimeOwner owner);
     ReleaseResult releaseWifi(RuntimeOwner owner);
     std::size_t wifiLeaseCount() const;
+    bool ownsWifi(RuntimeOwner owner) const;
 
     AcquireResult acquireWifiAp(RuntimeOwner owner);
     ReleaseResult releaseWifiAp(RuntimeOwner owner);
@@ -41,7 +42,7 @@ public:
     ResourceSnapshot snapshot() const;
 
 private:
-    static constexpr std::size_t ownerCount = 5;
+    static constexpr std::size_t ownerCount = 6;
 
     static bool isValidOwner(RuntimeOwner owner);
     static std::size_t ownerIndex(RuntimeOwner owner);

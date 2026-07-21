@@ -51,6 +51,23 @@ public:
         // Badge owns the AP sockets and stops the raw AP before releasing its session.
     }
 
+    bool startConfigAp() override
+    {
+        auto& wifi = WifiManager::GetInstance();
+        if (!initialize(wifi)) {
+            return false;
+        }
+        wifi.SetEventCallback(nullptr);
+        wifi.StopStation();
+        wifi.StartConfigAp();
+        return true;
+    }
+
+    void stopConfigAp() override
+    {
+        WifiManager::GetInstance().StopConfigAp();
+    }
+
     bool staRequiredBySystem() const override
     {
         return false;

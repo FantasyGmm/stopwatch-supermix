@@ -17,6 +17,8 @@ public:
     virtual void stopSta() = 0;
     virtual bool startAp() = 0;
     virtual void stopAp() = 0;
+    virtual bool startConfigAp() = 0;
+    virtual void stopConfigAp() = 0;
     virtual bool staRequiredBySystem() const = 0;
     virtual bool staConnected() const = 0;
 };
@@ -29,6 +31,9 @@ public:
     void releaseSta(RuntimeOwner owner);
     bool acquireAp(RuntimeOwner owner);
     void releaseAp(RuntimeOwner owner);
+    bool acquireConfigAp(RuntimeOwner owner);
+    void releaseConfigAp(RuntimeOwner owner);
+    bool reconnectSta(RuntimeOwner owner);
     bool staConnected() const;
 
 private:

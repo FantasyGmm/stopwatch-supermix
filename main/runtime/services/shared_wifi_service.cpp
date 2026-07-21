@@ -87,6 +87,46 @@ void WifiApSession::reset()
     }
 }
 
+WifiConfigApSession::WifiConfigApSession(SharedWifiService& service, RuntimeOwner owner)
+    : _service(&service), _owner(owner)
+{
+}
+
+WifiConfigApSession::WifiConfigApSession(WifiConfigApSession&& other) noexcept
+    : _service(std::exchange(other._service, nullptr)),
+      _owner(std::exchange(other._owner, RuntimeOwner::None))
+{
+}
+
+WifiConfigApSession& WifiConfigApSession::operator=(WifiConfigApSession&& other) noexcept
+{
+    if (this != &other) {
+        reset();
+        _service = std::exchange(other._service, nullptr);
+        _owner = std::exchange(other._owner, RuntimeOwner::None);
+    }
+    return *this;
+}
+
+WifiConfigApSession::~WifiConfigApSession()
+{
+    reset();
+}
+
+bool WifiConfigApSession::valid() const
+{
+    return _service != nullptr;
+}
+
+void WifiConfigApSession::reset()
+{
+    if (_service != nullptr) {
+        auto* service = std::exchange(_service, nullptr);
+        const RuntimeOwner owner = std::exchange(_owner, RuntimeOwner::None);
+        service->releaseConfigAp(owner);
+    }
+}
+
 SharedWifiService::SharedWifiService(SharedWifiPolicy& policy) : _policy(policy)
 {
 }
@@ -99,6 +139,16 @@ WifiStaLease SharedWifiService::acquireSta(RuntimeOwner owner)
 WifiApSession SharedWifiService::acquireAp(RuntimeOwner owner)
 {
     return _policy.acquireAp(owner) ? WifiApSession(*this, owner) : WifiApSession();
+}
+
+WifiConfigApSession SharedWifiService::acquireConfigAp(RuntimeOwner owner)
+{
+    return _policy.acquireConfigAp(owner) ? WifiConfigApSession(*this, owner) : WifiConfigApSession();
+}
+
+bool SharedWifiService::reconnectSta(RuntimeOwner owner)
+{
+    return _policy.reconnectSta(owner);
 }
 
 bool SharedWifiService::staConnected() const
@@ -114,4 +164,9 @@ void SharedWifiService::releaseSta(RuntimeOwner owner)
 void SharedWifiService::releaseAp(RuntimeOwner owner)
 {
     _policy.releaseAp(owner);
+}
+
+void SharedWifiService::releaseConfigAp(RuntimeOwner owner)
+{
+    _policy.releaseConfigAp(owner);
 }

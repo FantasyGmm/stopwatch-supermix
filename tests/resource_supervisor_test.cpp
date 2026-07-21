@@ -9,6 +9,10 @@ int main()
     assert(resources.acquireWifi(RuntimeOwner::Codex) == AcquireResult::Granted);
     assert(resources.acquireWifi(RuntimeOwner::Codex) == AcquireResult::AlreadyOwned);
     assert(resources.wifiLeaseCount() == 2);
+    assert(!resources.ownsWifi(RuntimeOwner::Settings));
+    assert(resources.acquireWifi(RuntimeOwner::Settings) == AcquireResult::Granted);
+    assert(resources.ownsWifi(RuntimeOwner::Settings));
+    assert(resources.releaseWifi(RuntimeOwner::Settings) == ReleaseResult::Released);
 
     assert(resources.acquireCapture(RuntimeOwner::Assistant) == AcquireResult::Granted);
     assert(resources.acquireCapture(RuntimeOwner::Assistant) == AcquireResult::AlreadyOwned);

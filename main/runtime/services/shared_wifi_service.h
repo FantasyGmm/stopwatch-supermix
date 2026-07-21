@@ -49,20 +49,44 @@ private:
     RuntimeOwner _owner = RuntimeOwner::None;
 };
 
+class WifiConfigApSession {
+public:
+    WifiConfigApSession() = default;
+    WifiConfigApSession(const WifiConfigApSession&) = delete;
+    WifiConfigApSession& operator=(const WifiConfigApSession&) = delete;
+    WifiConfigApSession(WifiConfigApSession&& other) noexcept;
+    WifiConfigApSession& operator=(WifiConfigApSession&& other) noexcept;
+    ~WifiConfigApSession();
+
+    bool valid() const;
+    void reset();
+
+private:
+    friend class SharedWifiService;
+    WifiConfigApSession(SharedWifiService& service, RuntimeOwner owner);
+
+    SharedWifiService* _service = nullptr;
+    RuntimeOwner _owner = RuntimeOwner::None;
+};
+
 class SharedWifiService {
 public:
     explicit SharedWifiService(SharedWifiPolicy& policy);
 
     WifiStaLease acquireSta(RuntimeOwner owner);
     WifiApSession acquireAp(RuntimeOwner owner);
+    WifiConfigApSession acquireConfigAp(RuntimeOwner owner);
+    bool reconnectSta(RuntimeOwner owner);
     bool staConnected() const;
 
 private:
     friend class WifiStaLease;
     friend class WifiApSession;
     void releaseSta(RuntimeOwner owner);
+    friend class WifiConfigApSession;
     void releaseAp(RuntimeOwner owner);
 
+    void releaseConfigAp(RuntimeOwner owner);
     SharedWifiPolicy& _policy;
 };
 

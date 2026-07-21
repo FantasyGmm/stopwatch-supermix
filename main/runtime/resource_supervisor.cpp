@@ -66,6 +66,11 @@ std::size_t ResourceSupervisor::wifiLeaseCount() const
     return static_cast<std::size_t>(std::count(_wifi_owners.begin(), _wifi_owners.end(), true));
 }
 
+bool ResourceSupervisor::ownsWifi(RuntimeOwner owner) const
+{
+    return isValidOwner(owner) && _wifi_owners[ownerIndex(owner)];
+}
+
 AcquireResult ResourceSupervisor::acquireWifiAp(RuntimeOwner owner)
 {
     if (!isValidOwner(owner)) {
