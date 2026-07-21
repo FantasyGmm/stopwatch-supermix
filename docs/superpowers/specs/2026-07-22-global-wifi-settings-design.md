@@ -1,7 +1,7 @@
 # Global WiFi Settings Design
 
 Date: 2026-07-22
-Status: Approved for implementation planning
+Status: Approved for implementation
 
 ## Purpose
 
@@ -9,6 +9,15 @@ Move WiFi configuration out of the Assistant-only flow and make it a global
 Settings capability. A WiFi network configured once should be saved in the
 shared WiFi credential store and be available to Assistant, Codex, Badge, and
 future networked apps through the existing shared WiFi runtime.
+
+The global feature owns two separate responsibilities:
+
+- Settings owns credential management and the explicit pairing entry point.
+- `SharedWifiService` owns runtime STA/AP arbitration for every app.
+
+An app receives connectivity only while it holds a shared WiFi lease. Closing
+Assistant or any other networked app releases that app's lease; the saved
+credentials remain global, but the app's active connection ownership does not.
 
 The feature deliberately reuses the Xiaozhi WiFi configuration AP web flow for
 adding new networks. The watch will not implement an on-device password keyboard
@@ -33,6 +42,12 @@ The firmware already includes these relevant pieces:
 The design keeps that ownership model. Settings becomes another controlled
 consumer of the same WiFi service rather than bypassing it.
 
+The existing generic `SharedWifiService::acquireAp()` path is not the Xiaozhi
+configuration portal. It grants exclusive AP ownership to Badge, whose code
+starts and stops its own raw AP sockets. Settings therefore requires a distinct
+config-AP session that starts and stops `WifiManager::StartConfigAp()` and
+`WifiManager::StopConfigAp()` under the same resource arbitration.
+
 ## User Experience
 
 Settings gains a new top-level item:
@@ -56,29 +71,43 @@ page shows:
 - `Stop Pairing` only while the config AP is active.
 
 If no networks are saved, the page shows `No saved WiFi` and makes `Add WiFi`
-the primary action.
+the primary action. Merely opening this page must not start STA or config AP.
 
-If saved networks exist but none is connected, the page shows `Not connected`,
-keeps the saved list visible, and allows adding a new network. STA can continue
-its existing retry and scan behavior in the background.
+If saved networks exist but none is connected, opening the page acquires a
+Settings-owned STA lease. The page shows `Not connected`, keeps the saved list
+visible, and allows adding a new network while the existing station retry and
+scan behavior continues in the background.
 
 ## Add WiFi Flow
 
 `Add WiFi` starts the existing Xiaozhi-style configuration AP:
 
-1. Settings requests a WiFi AP session through the shared WiFi service.
-2. The WiFi driver stops STA if needed and starts config AP mode.
-3. The WiFi page displays the AP SSID and web URL returned by `WifiManager`.
-4. The user connects from a phone or computer and uses the captive portal to
+1. Settings releases its STA lease, if held.
+2. Settings requests a dedicated config-AP session through the shared WiFi
+   service. This is separate from the Badge/raw-AP session API.
+3. The WiFi driver starts config AP mode through
+   `WifiManager::StartConfigAp()` and verifies that config mode became active.
+4. The WiFi page displays the AP SSID and web URL returned by `WifiManager`.
+5. The user connects from a phone or computer and uses the captive portal to
    scan, choose SSID, and enter the password.
-5. The portal saves the credential through `SsidManager`, using the same global
+6. The portal validates the network and saves the credential through
+   `SsidManager`, using the same global
    NVS namespace.
-6. Config AP exits.
-7. Settings releases the AP session and starts or restarts STA.
-8. The new network is treated as the default because `SsidManager::AddSsid`
+7. The user finishes the portal flow, which exits config AP.
+8. Settings detects config-mode exit by polling the service snapshot, releases
+   the config-AP session, refreshes the saved list, and acquires STA if at least
+   one credential now exists.
+9. A newly added network is treated as the default because `SsidManager::AddSsid`
    inserts new credentials at the front of the list.
 
 The watch UI does not collect WiFi passwords.
+
+If the portal updates the password of an already saved SSID,
+`SsidManager::AddSsid()` preserves that SSID's current list position. The
+Settings page does not guess which credential the portal submitted. The user
+can select the saved row afterward to make it the default. This avoids changing
+the shared component's established overwrite semantics without reliable input
+about portal intent.
 
 ## Saved Network Switching
 
@@ -111,6 +140,12 @@ resources, including its WiFi lease. The Settings UI does not need a user-facing
 the desktop. Code-level arbitration remains in place for abnormal or debug
 states.
 
+Launching Assistant with no saved credentials must not start pairing. Its STA
+lease can start the station in a disconnected state while Assistant presents
+its existing network error; pairing is entered only from Settings. This removes
+the last Assistant-owned configuration behavior without introducing a hidden
+background AP.
+
 ## Components
 
 ### Settings UI
@@ -134,21 +169,43 @@ Add a small firmware-local adapter around `WifiManager`, `SsidManager`, and
 - stop pairing AP;
 - select saved network by index and reconnect;
 - start STA when saved credentials exist;
-- poll or receive WiFi events.
+- poll immutable WiFi state snapshots.
 
 This adapter keeps Settings UI code from directly mixing NVS, WiFi manager, and
 resource ownership calls.
+
+The adapter uses polling snapshots rather than installing a
+`WifiManager::SetEventCallback`. `WifiManager` has one process-wide callback
+slot, so Settings must not replace callbacks used by another runtime or leave a
+callback targeting a destroyed page.
 
 ### Shared WiFi Service
 
 Extend the shared service only as much as necessary to support Settings:
 
-- represent a `Settings` runtime owner or equivalent internal owner;
-- expose AP-session acquisition suitable for config pairing;
+- add an explicit `Settings` runtime owner for arbitration and diagnostics;
+- add a distinct RAII config-AP session that acquires the existing exclusive AP
+  resource and invokes config-portal driver methods;
 - expose current STA details or provide them via the settings adapter;
-- provide a restart/reconnect operation that respects resource ownership.
+- provide a reconnect operation that only succeeds while the caller holds a STA
+  lease and no AP session is active.
 
 Avoid duplicating the WiFi scan/connect loop already present in `WifiStation`.
+Keep the existing Badge/raw-AP behavior unchanged.
+
+### Lifecycle and Cleanup
+
+`WifiSettingsWorker` owns all Settings WiFi leases and sessions. Its close and
+destructor paths must:
+
+1. stop and release an active config-AP session;
+2. release the Settings STA lease;
+3. destroy the page only after callbacks can no longer target it.
+
+Leaving Settings while pairing must stop the config AP. A portal-triggered
+config-mode exit follows the same release path before STA is reacquired. These
+rules apply to normal back navigation, app close, and construction/start
+failure.
 
 ## Data Model
 
@@ -164,7 +221,9 @@ ssid9, password9
 The UI never displays passwords. The saved list displays only SSIDs.
 
 The selected default network is the first item in the `SsidManager` list. Adding
-a new SSID or selecting an existing SSID moves it to the front.
+a new SSID inserts it at the front. Selecting any saved SSID calls
+`SetDefaultSsid` and moves it to the front. Updating an existing SSID through the
+portal preserves its current position until the user selects it.
 
 ## Error Handling
 
@@ -172,6 +231,8 @@ The WiFi page should show simple actionable states:
 
 - AP session rejected: show `WiFi busy` and keep the user on the WiFi page.
 - Config AP failed to start: show `Pairing failed`.
+- Config AP exits without a saved credential: return to `No saved WiFi` or
+  `Not connected` without starting an empty STA session.
 - No saved networks: show `No saved WiFi`.
 - Selected network not found during scan: show `Searching <ssid>` or `Not found`
   while the underlying station retry continues.
@@ -181,6 +242,9 @@ The WiFi page should show simple actionable states:
 The implementation should not erase NVS or saved credentials as a recovery
 shortcut.
 
+The UI remains English to match the existing Settings app and avoid depending
+on CJK glyph coverage for core WiFi controls.
+
 ## Testing
 
 Host tests should cover:
@@ -189,7 +253,16 @@ Host tests should cover:
   connected, and disconnected;
 - selecting a saved SSID moves it to the front and requests reconnect;
 - start pairing requires AP ownership and does not bypass resource blocking;
+- opening Settings with no saved credentials does not implicitly start STA or
+  config AP;
+- the dedicated config-AP session starts and stops the Xiaozhi portal, while the
+  Badge/raw-AP session retains its current behavior;
+- leaving Settings during pairing stops the config AP and releases ownership;
+- portal-triggered config exit releases AP before reacquiring STA;
+- updating an existing SSID preserves its current position, while selecting it
+  explicitly moves it to the front;
 - saved list snapshots omit passwords;
+- Settings does not install or retain the process-wide WiFi event callback;
 - Settings owner does not conflict with released Assistant resources.
 
 Firmware contract tests should cover:
@@ -213,6 +286,10 @@ Hardware validation should cover:
 5. Saved network unavailable: page remains usable and `Add WiFi` still works.
 6. Assistant open/close after WiFi setup: Assistant releases resources when
    returning to desktop, and Settings WiFi can open afterward.
+7. Leave Settings while pairing: the `StopWatch-*` configuration AP disappears
+   and reopening WiFi starts from a clean state.
+8. Open Assistant on a fresh device: it does not silently start the
+   configuration AP; Settings remains the only pairing entry point.
 
 ## Non-Goals
 
@@ -223,6 +300,35 @@ Hardware validation should cover:
 - No automatic clearing or migration that risks deleting existing saved WiFi
   credentials.
 - No attempt to support Settings WiFi changes while Assistant is actively open.
+- No watch-side saved-network deletion in this iteration. The existing portal
+  endpoint remains unchanged, but the watch UI only lists, adds, and selects.
+- No always-on background WiFi service after all runtime leases are released.
+
+## Alternatives Considered
+
+### Reuse the Existing Generic AP Session
+
+Rejected. That session is intentionally only an ownership boundary for Badge;
+its driver does not own the raw AP lifecycle. Making it also start the Xiaozhi
+portal would couple two different AP implementations and risk leaving one
+running when the other releases the shared session.
+
+### Let Assistant Continue Starting Pairing When No Credentials Exist
+
+Rejected. It keeps configuration application-specific, creates an unexpected AP
+when any app requests STA, and contradicts the global Settings entry point.
+
+### Subscribe the Settings Page to WiFi Events
+
+Rejected for this iteration. `WifiManager` exposes one callback slot rather
+than a multi-subscriber API. A 500-1000 ms snapshot poll is sufficient for a
+human-operated settings page and has a smaller lifecycle and regression risk.
+
+### Replace the Portal with a Watch Keyboard
+
+Rejected. It adds a password-entry UI, round-screen keyboard complexity, and
+credential handling code without improving the global ownership model. Reusing
+the validated portal is smaller and preserves compatibility.
 
 ## Acceptance Criteria
 
@@ -230,7 +336,10 @@ Hardware validation should cover:
 - Current connection details are visible when connected.
 - No-saved-WiFi state guides the user to start pairing.
 - Add WiFi starts the existing AP web configuration flow.
+- Opening WiFi without saved credentials never starts pairing automatically.
 - Saved networks can be listed and selected.
 - Selecting a saved network immediately attempts to reconnect to that network.
 - Saved credentials are shared globally by all WiFi-using apps.
 - Assistant does not own or duplicate WiFi configuration after the merge.
+- Closing the WiFi page always releases Settings-owned STA/config-AP resources.
+- Existing Badge AP behavior and other runtime WiFi consumers remain unchanged.
