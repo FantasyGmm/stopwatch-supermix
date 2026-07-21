@@ -280,7 +280,8 @@ class UnifiedRuntimeFirmwareContractTest(unittest.TestCase):
             "Stop Pairing",
             "Done",
             "kScreenSize = 466",
-            "setSize(350,",
+            "kListWidth = 350",
+            "setSize(kListWidth,",
             "setScrollDir(LV_DIR_VER)",
             "_controller.reset();",
             "_view.reset();",
@@ -291,6 +292,33 @@ class UnifiedRuntimeFirmwareContractTest(unittest.TestCase):
         self.assertLess(worker.rindex("_controller.reset();"), worker.rindex("_view.reset();"))
         self.assertNotIn("WifiManager", worker)
         self.assertNotIn("SetEventCallback", worker)
+
+    def test_settings_wifi_page_renders_connection_and_pairing_snapshot_details(self):
+        worker = read("main/apps/app_setup/workers/wifi.cpp")
+
+        for required in (
+            "snapshot.ssid",
+            "snapshot.ip_address",
+            "snapshot.rssi",
+            '"IP: "',
+            '"  RSSI: "',
+            '" dBm"',
+            "_pairing_ap_ssid_detail",
+            "_pairing_portal_url_detail",
+            "snapshot.ap_ssid",
+            "snapshot.ap_url",
+            '"AP SSID: "',
+            '"Portal: "',
+            "kListTop = 150",
+            "kContentWidth",
+            "kDefaultSsidLabelWidth",
+            "kNonDefaultSsidLabelWidth",
+        ):
+            self.assertIn(required, worker)
+
+        self.assertNotIn("_pairing_detail", worker)
+        self.assertNotIn("LV_LABEL_LONG_MODE_DOTS", worker)
+
 
 if __name__ == "__main__":
     unittest.main()

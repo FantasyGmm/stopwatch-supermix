@@ -21,11 +21,18 @@ namespace {
 constexpr int kScreenSize = 466;
 constexpr int kEdgeInset = 40;
 constexpr int kContentWidth = kScreenSize - 2 * kEdgeInset;
-constexpr int kStatusWidth = 280;
 constexpr int kListTop = 150;
+constexpr int kListWidth = 350;
 constexpr int kListHeight = 140;
 constexpr int kRowHeight = 48;
 constexpr int kRowGap = 8;
+constexpr int kRowHorizontalInset = 20;
+constexpr int kDefaultMarkerWidth = 78;
+constexpr int kDefaultMarkerRightInset = 16;
+constexpr int kSsidMarkerGap = 12;
+constexpr int kDefaultSsidLabelWidth =
+    kListWidth - kRowHorizontalInset - kDefaultMarkerWidth - kDefaultMarkerRightInset - kSsidMarkerGap;
+constexpr int kNonDefaultSsidLabelWidth = kListWidth - 2 * kRowHorizontalInset;
 constexpr int kActionHeight = 42;
 constexpr int kPrimaryActionWidth = 300;
 constexpr int kDoneActionWidth = 200;
@@ -86,7 +93,7 @@ public:
         _panel->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
 
         _title = std::make_unique<Label>(_panel->get());
-        _title->setSize(kStatusWidth, 28);
+        _title->setSize(kContentWidth, 28);
         _title->align(LV_ALIGN_TOP_MID, 0, 44);
         _title->setText("WiFi");
         _title->setTextFont(&MontserratSemiBold26);
@@ -94,24 +101,41 @@ public:
         _title->setTextAlign(LV_TEXT_ALIGN_CENTER);
 
         _status = std::make_unique<Label>(_panel->get());
-        _status->setSize(kStatusWidth, 22);
+        _status->setSize(kContentWidth, 20);
         _status->align(LV_ALIGN_TOP_MID, 0, 78);
         _status->setTextFont(&lv_font_montserrat_16);
         _status->setTextColor(lv_color_hex(0xA8A8A8));
         _status->setTextAlign(LV_TEXT_ALIGN_CENTER);
-        lv_label_set_long_mode(_status->get(), LV_LABEL_LONG_MODE_DOTS);
+        lv_label_set_long_mode(_status->get(), LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
 
-        _pairing_detail = std::make_unique<Label>(_panel->get());
-        _pairing_detail->setSize(kStatusWidth, 20);
-        _pairing_detail->align(LV_ALIGN_TOP_MID, 0, 106);
-        _pairing_detail->setTextFont(&lv_font_montserrat_14);
-        _pairing_detail->setTextColor(lv_color_hex(0x70B7FF));
-        _pairing_detail->setTextAlign(LV_TEXT_ALIGN_CENTER);
-        _pairing_detail->setHidden(true);
-        lv_label_set_long_mode(_pairing_detail->get(), LV_LABEL_LONG_MODE_DOTS);
+        _connection_detail = std::make_unique<Label>(_panel->get());
+        _connection_detail->setSize(kContentWidth, 20);
+        _connection_detail->align(LV_ALIGN_TOP_MID, 0, 104);
+        _connection_detail->setTextFont(&lv_font_montserrat_14);
+        _connection_detail->setTextColor(lv_color_hex(0x70B7FF));
+        _connection_detail->setTextAlign(LV_TEXT_ALIGN_CENTER);
+        _connection_detail->setHidden(true);
+
+        _pairing_ap_ssid_detail = std::make_unique<Label>(_panel->get());
+        _pairing_ap_ssid_detail->setSize(kContentWidth, 20);
+        _pairing_ap_ssid_detail->align(LV_ALIGN_TOP_MID, 0, 104);
+        _pairing_ap_ssid_detail->setTextFont(&lv_font_montserrat_14);
+        _pairing_ap_ssid_detail->setTextColor(lv_color_hex(0x70B7FF));
+        _pairing_ap_ssid_detail->setTextAlign(LV_TEXT_ALIGN_CENTER);
+        _pairing_ap_ssid_detail->setHidden(true);
+        lv_label_set_long_mode(_pairing_ap_ssid_detail->get(), LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
+
+        _pairing_portal_url_detail = std::make_unique<Label>(_panel->get());
+        _pairing_portal_url_detail->setSize(kContentWidth, 20);
+        _pairing_portal_url_detail->align(LV_ALIGN_TOP_MID, 0, 128);
+        _pairing_portal_url_detail->setTextFont(&lv_font_montserrat_14);
+        _pairing_portal_url_detail->setTextColor(lv_color_hex(0x70B7FF));
+        _pairing_portal_url_detail->setTextAlign(LV_TEXT_ALIGN_CENTER);
+        _pairing_portal_url_detail->setHidden(true);
+        lv_label_set_long_mode(_pairing_portal_url_detail->get(), LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
 
         _saved_list = std::make_unique<Container>(_panel->get());
-        _saved_list->setSize(350, kListHeight);
+        _saved_list->setSize(kListWidth, kListHeight);
         _saved_list->align(LV_ALIGN_TOP_MID, 0, kListTop);
         _saved_list->setRadius(0);
         _saved_list->setBorderWidth(0);
@@ -121,7 +145,7 @@ public:
         _saved_list->setScrollbarMode(LV_SCROLLBAR_MODE_ACTIVE);
 
         _empty_label = std::make_unique<Label>(_saved_list->get());
-        _empty_label->setSize(kContentWidth, 28);
+        _empty_label->setSize(kListWidth, 28);
         _empty_label->align(LV_ALIGN_TOP_MID, 0, 56);
         _empty_label->setText("No saved WiFi");
         _empty_label->setTextFont(&lv_font_montserrat_18);
@@ -144,13 +168,32 @@ public:
 
     void render(const WifiSettingsSnapshot& snapshot)
     {
-        _status->setText(statusText(snapshot.state));
-
+        const bool connected = snapshot.state == WifiSettingsState::Connected;
+        const bool connecting = snapshot.state == WifiSettingsState::Connecting;
         const bool pairing = snapshot.state == WifiSettingsState::Pairing;
-        _pairing_detail->setHidden(!pairing);
+
+        std::string status = statusText(snapshot.state);
+        if (connected) {
+            status += ": " + snapshot.ssid;
+        } else if (connecting) {
+            status += ": " + snapshot.ssid;
+        }
+        _status->setText(status.c_str());
+
+        _connection_detail->setHidden(!connected);
+        if (connected) {
+            const std::string detail =
+                "IP: " + snapshot.ip_address + "  RSSI: " + std::to_string(snapshot.rssi) + " dBm";
+            _connection_detail->setText(detail.c_str());
+        }
+
+        _pairing_ap_ssid_detail->setHidden(!pairing);
+        _pairing_portal_url_detail->setHidden(!pairing);
         if (pairing) {
-            const std::string detail = "AP: " + snapshot.ap_ssid + "  " + snapshot.ap_url;
-            _pairing_detail->setText(detail.c_str());
+            const std::string ap_ssid_detail = "AP SSID: " + snapshot.ap_ssid;
+            const std::string portal_url_detail = "Portal: " + snapshot.ap_url;
+            _pairing_ap_ssid_detail->setText(ap_ssid_detail.c_str());
+            _pairing_portal_url_detail->setText(portal_url_detail.c_str());
         }
 
         _pairing_action->label().setText(pairing ? "Stop Pairing" : "Add WiFi");
@@ -161,23 +204,23 @@ public:
 
         for (std::size_t index = 0; index < snapshot.saved_ssids.size(); ++index) {
             auto row = std::make_unique<Button>(_saved_list->get());
-            row->setSize(350, kRowHeight);
+            row->setSize(kListWidth, kRowHeight);
             row->align(LV_ALIGN_TOP_MID, 0, static_cast<int>(index) * (kRowHeight + kRowGap));
 
             const bool connected = snapshot.state == WifiSettingsState::Connected &&
                                    snapshot.ssid == snapshot.saved_ssids[index];
             applyCompactButtonStyle(*row, connected ? lv_color_hex(0x1769AA) : lv_color_hex(0x252525));
             row->label().setText(snapshot.saved_ssids[index]);
-            row->label().setWidth(240);
-            row->label().align(LV_ALIGN_LEFT_MID, 20, 0);
+            row->label().setWidth(index == 0 ? kDefaultSsidLabelWidth : kNonDefaultSsidLabelWidth);
+            row->label().align(LV_ALIGN_LEFT_MID, kRowHorizontalInset, 0);
             row->label().setTextAlign(LV_TEXT_ALIGN_LEFT);
-            lv_label_set_long_mode(row->label().get(), LV_LABEL_LONG_MODE_DOTS);
+            lv_label_set_long_mode(row->label().get(), LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
             row->onClick().connect([this, index]() { _selected_network_requested = index; });
 
             if (index == 0) {
                 auto marker = std::make_unique<Label>(row->get());
-                marker->setSize(78, 20);
-                marker->align(LV_ALIGN_RIGHT_MID, -16, 0);
+                marker->setSize(kDefaultMarkerWidth, 20);
+                marker->align(LV_ALIGN_RIGHT_MID, -kDefaultMarkerRightInset, 0);
                 marker->setText("Default");
                 marker->setTextFont(&lv_font_montserrat_14);
                 marker->setTextColor(lv_color_hex(0xA8D2FF));
@@ -214,7 +257,9 @@ private:
     std::unique_ptr<Container> _panel;
     std::unique_ptr<Label> _title;
     std::unique_ptr<Label> _status;
-    std::unique_ptr<Label> _pairing_detail;
+    std::unique_ptr<Label> _connection_detail;
+    std::unique_ptr<Label> _pairing_ap_ssid_detail;
+    std::unique_ptr<Label> _pairing_portal_url_detail;
     std::unique_ptr<Container> _saved_list;
     std::unique_ptr<Label> _empty_label;
     std::unique_ptr<Button> _pairing_action;
