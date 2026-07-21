@@ -5,19 +5,170 @@
  */
 #include "wifi_settings_controller.h"
 
+#ifndef STOPWATCH_HOST_TEST
+#include "runtime/services/shared_wifi_service.h"
+
 #include <ssid_manager.h>
 #include <wifi_manager.h>
+#endif
 
 #include <utility>
 
+namespace {
+
+#ifndef STOPWATCH_HOST_TEST
+class ProductionWifiSettingsBackend final : public WifiSettingsBackend {
+public:
+    ProductionWifiSettingsBackend()
+        : _wifi_service(GetSharedWifiService()), _wifi_manager(WifiManager::GetInstance()),
+          _ssid_manager(SsidManager::GetInstance())
+    {
+    }
+
+    std::vector<std::string> copySavedSsids() const override
+    {
+        std::vector<std::string> ssids;
+        const auto& saved = _ssid_manager.GetSsidList();
+        ssids.reserve(saved.size());
+        for (const auto& item : saved) {
+            ssids.push_back(item.ssid);
+        }
+        return ssids;
+    }
+
+    bool selectSavedSsid(std::size_t index) override
+    {
+        const auto& saved = _ssid_manager.GetSsidList();
+        if (index >= saved.size()) {
+            return false;
+        }
+        _ssid_manager.SetDefaultSsid(static_cast<int>(index));
+        return true;
+    }
+
+    bool acquireSta() override
+    {
+        if (!_sta_lease.valid()) {
+            _sta_lease = _wifi_service.acquireSta(RuntimeOwner::Settings);
+        }
+        return _sta_lease.valid();
+    }
+
+    void releaseSta() override
+    {
+        _sta_lease.reset();
+    }
+
+    bool staHeld() const override
+    {
+        return _sta_lease.valid();
+    }
+
+    bool reconnectSta() override
+    {
+        return _wifi_service.reconnectSta(RuntimeOwner::Settings);
+    }
+
+    bool acquireConfigAp() override
+    {
+        if (!_config_ap_session.valid()) {
+            _config_ap_session = _wifi_service.acquireConfigAp(RuntimeOwner::Settings);
+        }
+        return _config_ap_session.valid();
+    }
+
+    void releaseConfigAp() override
+    {
+        _config_ap_session.reset();
+    }
+
+    bool configApHeld() const override
+    {
+        return _config_ap_session.valid();
+    }
+
+    bool configApMode() const override
+    {
+        return _wifi_manager.IsConfigMode();
+    }
+
+    std::string ssid() const override
+    {
+        return _wifi_manager.GetSsid();
+    }
+
+    bool isConnected() const override
+    {
+        return _wifi_manager.IsConnected();
+    }
+
+    std::string ipAddress() const override
+    {
+        return _wifi_manager.GetIpAddress();
+    }
+
+    std::string apSsid() const override
+    {
+        return _wifi_manager.GetApSsid();
+    }
+
+    std::string apUrl() const override
+    {
+        return _wifi_manager.GetApWebUrl();
+    }
+
+    int rssi() const override
+    {
+        return _wifi_manager.GetRssi();
+    }
+
+private:
+    SharedWifiService& _wifi_service;
+    WifiManager& _wifi_manager;
+    SsidManager& _ssid_manager;
+    WifiStaLease _sta_lease;
+    WifiConfigApSession _config_ap_session;
+};
+#else
+class HostWifiSettingsBackend final : public WifiSettingsBackend {
+public:
+    std::vector<std::string> copySavedSsids() const override { return {}; }
+    bool selectSavedSsid(std::size_t) override { return false; }
+    bool acquireSta() override { return false; }
+    void releaseSta() override {}
+    bool staHeld() const override { return false; }
+    bool reconnectSta() override { return false; }
+    bool acquireConfigAp() override { return false; }
+    void releaseConfigAp() override {}
+    bool configApHeld() const override { return false; }
+    bool configApMode() const override { return false; }
+    std::string ssid() const override { return {}; }
+    bool isConnected() const override { return false; }
+    std::string ipAddress() const override { return {}; }
+    std::string apSsid() const override { return {}; }
+    std::string apUrl() const override { return {}; }
+    int rssi() const override { return 0; }
+};
+#endif
+
+std::unique_ptr<WifiSettingsBackend> makeDefaultWifiSettingsBackend()
+{
+#ifndef STOPWATCH_HOST_TEST
+    return std::make_unique<ProductionWifiSettingsBackend>();
+#else
+    return std::make_unique<HostWifiSettingsBackend>();
+#endif
+}
+
+} // namespace
+
 WifiSettingsController::WifiSettingsController()
-    : WifiSettingsController(GetSharedWifiService(), WifiManager::GetInstance(), SsidManager::GetInstance())
+    : WifiSettingsController(makeDefaultWifiSettingsBackend())
 {
 }
 
-WifiSettingsController::WifiSettingsController(
-    SharedWifiService& wifi_service, WifiManager& wifi_manager, SsidManager& ssid_manager)
-    : _wifi_service(wifi_service), _wifi_manager(wifi_manager), _ssid_manager(ssid_manager)
+WifiSettingsController::WifiSettingsController(std::unique_ptr<WifiSettingsBackend> backend)
+    : _backend(std::move(backend))
 {
     refreshSavedSsids();
     acquireStaWhenSaved();
@@ -25,66 +176,68 @@ WifiSettingsController::WifiSettingsController(
 
 WifiSettingsController::~WifiSettingsController()
 {
-    stopPairing();
-    _sta_lease.reset();
+    _backend->releaseConfigAp();
+    _backend->releaseSta();
 }
 
 bool WifiSettingsController::startPairing()
 {
     _pairing_failed = false;
-    _refresh_after_pairing = false;
-    _sta_lease.reset();
-    _config_ap_session = _wifi_service.acquireConfigAp(RuntimeOwner::Settings);
-    _pairing_failed = !_config_ap_session.valid();
-    return !_pairing_failed;
+    if (_backend->configApHeld()) {
+        return true;
+    }
+
+    if (_backend->staHeld()) {
+        _backend->releaseSta();
+    }
+
+    if (_backend->acquireConfigAp()) {
+        return true;
+    }
+
+    _pairing_failed = true;
+    acquireStaWhenSaved();
+    return false;
 }
 
 void WifiSettingsController::stopPairing()
 {
-    _refresh_after_pairing = _config_ap_session.valid();
-    _config_ap_session.reset();
+    const bool had_config_ap = _backend->configApHeld();
     _pairing_failed = false;
+    if (had_config_ap) {
+        _backend->releaseConfigAp();
+        finishPairing();
+    }
 }
 
 bool WifiSettingsController::selectSaved(std::size_t index)
 {
-    const auto& saved = _ssid_manager.GetSsidList();
-    if (index >= saved.size()) {
+    if (index >= _saved_ssids.size() || !_backend->selectSavedSsid(index)) {
         return false;
     }
 
-    _ssid_manager.SetDefaultSsid(static_cast<int>(index));
     refreshSavedSsids();
     stopPairing();
-
-    if (!_sta_lease.valid()) {
+    if (!_backend->staHeld()) {
         acquireStaWhenSaved();
-        return _sta_lease.valid();
     }
-
-    return _wifi_service.reconnectSta(RuntimeOwner::Settings);
+    return _backend->staHeld() && _backend->reconnectSta();
 }
 
 WifiSettingsSnapshot WifiSettingsController::poll()
 {
-    if (_config_ap_session.valid() && !_wifi_manager.IsConfigMode()) {
-        _config_ap_session.reset();
-        _refresh_after_pairing = true;
-    }
-
-    if (_refresh_after_pairing) {
-        refreshSavedSsids();
-        acquireStaWhenSaved();
-        _refresh_after_pairing = false;
+    if (_backend->configApHeld() && !_backend->configApMode()) {
+        _backend->releaseConfigAp();
+        finishPairing();
     }
 
     WifiSettingsSnapshot snapshot;
     snapshot.saved_ssids = _saved_ssids;
 
-    if (_config_ap_session.valid()) {
+    if (_backend->configApHeld()) {
         snapshot.state = WifiSettingsState::Pairing;
-        snapshot.ap_ssid = _wifi_manager.GetApSsid();
-        snapshot.ap_url = _wifi_manager.GetApWebUrl();
+        snapshot.ap_ssid = _backend->apSsid();
+        snapshot.ap_url = _backend->apUrl();
         return snapshot;
     }
 
@@ -98,16 +251,16 @@ WifiSettingsSnapshot WifiSettingsController::poll()
         return snapshot;
     }
 
-    if (!_sta_lease.valid()) {
+    if (!_backend->staHeld()) {
         snapshot.state = WifiSettingsState::Busy;
         return snapshot;
     }
 
-    snapshot.ssid = _wifi_manager.GetSsid();
-    if (_wifi_manager.IsConnected()) {
+    snapshot.ssid = _backend->ssid();
+    if (_backend->isConnected()) {
         snapshot.state = WifiSettingsState::Connected;
-        snapshot.ip_address = _wifi_manager.GetIpAddress();
-        snapshot.rssi = _wifi_manager.GetRssi();
+        snapshot.ip_address = _backend->ipAddress();
+        snapshot.rssi = _backend->rssi();
     } else if (!snapshot.ssid.empty()) {
         snapshot.state = WifiSettingsState::Connecting;
     } else {
@@ -118,17 +271,18 @@ WifiSettingsSnapshot WifiSettingsController::poll()
 
 void WifiSettingsController::refreshSavedSsids()
 {
-    _saved_ssids.clear();
-    const auto& saved = _ssid_manager.GetSsidList();
-    _saved_ssids.reserve(saved.size());
-    for (const auto& item : saved) {
-        _saved_ssids.push_back(item.ssid);
-    }
+    _saved_ssids = _backend->copySavedSsids();
 }
 
 void WifiSettingsController::acquireStaWhenSaved()
 {
-    if (!_saved_ssids.empty() && !_sta_lease.valid()) {
-        _sta_lease = _wifi_service.acquireSta(RuntimeOwner::Settings);
+    if (!_saved_ssids.empty() && !_backend->staHeld()) {
+        _backend->acquireSta();
     }
+}
+
+void WifiSettingsController::finishPairing()
+{
+    refreshSavedSsids();
+    acquireStaWhenSaved();
 }

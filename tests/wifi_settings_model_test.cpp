@@ -42,6 +42,22 @@ int main()
     assert(connected == snapshot(WifiSettingsState::Connected));
 
     auto changed = connected;
+    changed.ssid = "Home";
+    assert(changed != connected);
+
+    changed = connected;
+    changed.ip_address = "192.168.1.26";
+    assert(changed != connected);
+
+    changed = connected;
+    changed.ap_ssid = "StopWatch-5678";
+    assert(changed != connected);
+
+    changed = connected;
+    changed.ap_url = "http://192.168.4.2";
+    assert(changed != connected);
+
+    changed = connected;
     changed.rssi = -56;
     assert(changed != connected);
 

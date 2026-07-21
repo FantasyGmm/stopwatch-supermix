@@ -5,19 +5,42 @@
  */
 #pragma once
 
-#include "runtime/services/shared_wifi_service.h"
 #include "wifi_settings_model.h"
 
 #include <cstddef>
+#include <memory>
+#include <string>
 #include <vector>
 
-class SsidManager;
-class WifiManager;
+class WifiSettingsBackend {
+public:
+    virtual ~WifiSettingsBackend() = default;
+
+    virtual std::vector<std::string> copySavedSsids() const = 0;
+    virtual bool selectSavedSsid(std::size_t index) = 0;
+
+    virtual bool acquireSta() = 0;
+    virtual void releaseSta() = 0;
+    virtual bool staHeld() const = 0;
+    virtual bool reconnectSta() = 0;
+
+    virtual bool acquireConfigAp() = 0;
+    virtual void releaseConfigAp() = 0;
+    virtual bool configApHeld() const = 0;
+    virtual bool configApMode() const = 0;
+
+    virtual std::string ssid() const = 0;
+    virtual bool isConnected() const = 0;
+    virtual std::string ipAddress() const = 0;
+    virtual std::string apSsid() const = 0;
+    virtual std::string apUrl() const = 0;
+    virtual int rssi() const = 0;
+};
 
 class WifiSettingsController {
 public:
     WifiSettingsController();
-    WifiSettingsController(SharedWifiService& wifi_service, WifiManager& wifi_manager, SsidManager& ssid_manager);
+    explicit WifiSettingsController(std::unique_ptr<WifiSettingsBackend> backend);
     ~WifiSettingsController();
 
     WifiSettingsController(const WifiSettingsController&) = delete;
@@ -31,13 +54,9 @@ public:
 private:
     void refreshSavedSsids();
     void acquireStaWhenSaved();
+    void finishPairing();
 
-    SharedWifiService& _wifi_service;
-    WifiManager& _wifi_manager;
-    SsidManager& _ssid_manager;
-    WifiStaLease _sta_lease;
-    WifiConfigApSession _config_ap_session;
+    std::unique_ptr<WifiSettingsBackend> _backend;
     std::vector<std::string> _saved_ssids;
     bool _pairing_failed = false;
-    bool _refresh_after_pairing = false;
 };
