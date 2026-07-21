@@ -210,6 +210,7 @@ public:
             const bool connected = snapshot.state == WifiSettingsState::Connected &&
                                    snapshot.ssid == snapshot.saved_ssids[index];
             applyCompactButtonStyle(*row, connected ? lv_color_hex(0x1769AA) : lv_color_hex(0x252525));
+            row->setPaddingAll(0);
             row->label().setText(snapshot.saved_ssids[index]);
             row->label().setWidth(index == 0 ? kDefaultSsidLabelWidth : kNonDefaultSsidLabelWidth);
             row->label().align(LV_ALIGN_LEFT_MID, kRowHorizontalInset, 0);
