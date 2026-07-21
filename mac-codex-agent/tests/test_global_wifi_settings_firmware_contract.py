@@ -101,18 +101,31 @@ class GlobalWifiSettingsFirmwareContractTests(unittest.TestCase):
             self.assertIn("GetSharedWifiService()", source, name)
             self.assertIn(owner, source, name)
 
-    def test_smartconfig_never_logs_password_values_and_still_saves_credentials(self):
-        source = read("managed_components/78__esp-wifi-connect/wifi_configuration_ap.cc")
-        handler = source.split(
-            "void WifiConfigurationAp::SmartConfigEventHandler", 1
-        )[1].split("#endif", 1)[0]
-        logs = re.findall(r"ESP_LOG[A-Z]\s*\([^;]+;", handler)
+    def test_smartconfig_password_redaction_uses_a_generated_component_overlay(self):
+        root_cmake = read("CMakeLists.txt")
+        overlay = read("main/cmake/esp_wifi_connect_security_overlay.cmake")
 
-        self.assertTrue(logs)
-        for log in logs:
-            self.assertNotRegex(log, re.compile(r"\bpassword\b", re.IGNORECASE))
-        self.assertIn("memcpy(password, evt->password", handler)
-        self.assertIn("self->Save(ssid, password);", handler)
+        self.assertIn("esp_wifi_connect_security_overlay.cmake", root_cmake)
+        self.assertIn("apply_esp_wifi_connect_security_overlay()", root_cmake)
+        self.assertIn("78__esp-wifi-connect COMPONENT_LIB", overlay)
+        self.assertIn("78__esp-wifi-connect COMPONENT_DIR", overlay)
+        self.assertIn('"${wifi_connect_dir}/wifi_configuration_ap.cc"', overlay)
+        self.assertIn('"${CMAKE_BINARY_DIR}/generated_overrides/esp_wifi_connect_security"', overlay)
+
+        password_log = 'ESP_LOGI(TAG, "SmartConfig SSID: %s, Password: %s", ssid, password);'
+        redacted_log = 'ESP_LOGI(TAG, "SmartConfig credentials received");'
+        self.assertIn(password_log, overlay)
+        self.assertIn(redacted_log, overlay)
+        self.assertIn('string(FIND "${wifi_configuration_source}" "${required_text}"', overlay)
+        self.assertIn('string(REPLACE "${smartconfig_password_log}" "${smartconfig_credentials_log}"', overlay)
+
+        # These anchors keep the upstream credential-copy and Save behavior intact.
+        self.assertIn('memcpy(password, evt->password, sizeof(evt->password));', overlay)
+        self.assertIn('self->Save(ssid, password);', overlay)
+
+        self.assertIn('list(REMOVE_ITEM wifi_connect_sources "${upstream_wifi_configuration}"', overlay)
+        self.assertIn('set_property(TARGET ${wifi_connect_lib} PROPERTY SOURCES', overlay)
+        self.assertIn('target_sources(${wifi_connect_lib} PRIVATE "${generated_wifi_configuration}")', overlay)
 
 
 if __name__ == "__main__":
