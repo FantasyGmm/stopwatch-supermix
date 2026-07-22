@@ -40,6 +40,21 @@ constexpr uint32_t kWifiFallbackDelayMs  = 15000;
 constexpr uint32_t kStatusStaleMs        = 10000;
 constexpr uint32_t kScreenOffHoldMs      = 2000;
 
+bool is_ascii_text(const char* text)
+{
+    if (text == nullptr) {
+        return true;
+    }
+    const auto* cursor = reinterpret_cast<const unsigned char*>(text);
+    while (*cursor != '\0') {
+        if (*cursor >= 0x80) {
+            return false;
+        }
+        ++cursor;
+    }
+    return true;
+}
+
 lv_obj_t* make_label(lv_obj_t* parent, const char* text, int x, int y, const lv_font_t* font, uint32_t color)
 {
     lv_obj_t* label = lv_label_create(parent);
@@ -126,11 +141,11 @@ QuotaWidgets make_quota_row(lv_obj_t* parent, int y, const char* label_text)
 
     lv_obj_t* pct = lv_label_create(parent);
     lv_label_set_text(pct, "--%");
-    lv_obj_set_style_text_font(pct, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(pct, &MontserratSemiBold26, 0);
     lv_obj_set_style_text_color(pct, lv_color_hex(kSignalWhite), 0);
     lv_obj_set_width(pct, kQuotaPercentWidth);
     lv_obj_set_style_text_align(pct, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_obj_set_pos(pct, kQuotaPercentX, y - 6);
+    lv_obj_set_pos(pct, kQuotaPercentX, y - 7);
 
     return {pct, bar};
 }
@@ -367,7 +382,7 @@ void AppCodexStatus::create_view()
     lv_image_set_scale(logo, kLogoScale);
     lv_obj_set_pos(logo, kLogoX, kLogoY);
 
-    make_label(_panel, "Codex", kBrandX, kBrandY, &lv_font_montserrat_24, kSignalWhite);
+    make_label(_panel, "Codex", kBrandX, kBrandY, &MontserratSemiBold26, kSignalWhite);
 
     _status_label = make_center_label(_panel, "START", kStatusY, &lv_font_montserrat_14, kEtchedGray);
     lv_obj_set_width(_status_label, 180);
@@ -400,7 +415,7 @@ void AppCodexStatus::create_view()
         kModelValueY,
         kTelemetryWidth,
         "--",
-        &lv_font_montserrat_24,
+        &MontserratSemiBold26,
         kSignalWhite
     );
 
@@ -420,7 +435,7 @@ void AppCodexStatus::create_view()
         kEffortValueY,
         kTelemetryWidth,
         "--",
-        &lv_font_montserrat_24,
+        &MontserratSemiBold26,
         kSignalWhite
     );
 
@@ -445,15 +460,14 @@ void AppCodexStatus::create_view()
     make_line(_panel, kAlertDividerX, kAlertDividerY, kAlertDividerWidth);
 
     _activity_title = make_center_label(
-        _panel, "NO ALERTS", kAlertHeadingY, &lv_font_montserrat_18, kEtchedGray
+        _panel, "NO ALERTS", kAlertHeadingY, &MontserratSemiBold26, kEtchedGray
     );
     _alert_project = make_center_label(
-        _panel, "--", kAlertProjectY, &lv_font_montserrat_18, kBeaconViolet
+        _panel, "--", kAlertProjectY, &MontserratSemiBold26, kBeaconViolet
     );
     _alert_detail = make_center_label(
-        _panel, "", kAlertDetailY, &lv_font_montserrat_14, kEtchedGray
+        _panel, "", kAlertDetailY, &lv_font_montserrat_14, kSecondaryText
     );
-    lv_obj_set_style_text_font(_alert_project, &font_puhui_14_1, 0);
     lv_obj_set_style_text_font(_alert_detail, &font_puhui_14_1, 0);
     const auto configure_alert_label = [](lv_obj_t* label, int y, int width) {
         lv_obj_set_width(label, width);
@@ -709,6 +723,7 @@ void AppCodexStatus::render_alert()
     lv_label_set_text(_activity_title, heading.c_str());
     if (alert == nullptr) {
         lv_label_set_text(_alert_project, "--");
+        lv_obj_set_style_text_font(_alert_project, &MontserratSemiBold26, 0);
         lv_label_set_text(_alert_detail, "");
         lv_obj_set_style_text_color(_activity_title, lv_color_hex(kTextDim), 0);
         return;
@@ -726,6 +741,13 @@ void AppCodexStatus::render_alert()
     const std::string detail =
         std::string(state_label) + " \xC2\xB7 " + alert->title;
     lv_label_set_text(_alert_project, alert->project.c_str());
+    lv_obj_set_style_text_font(
+        _alert_project,
+        is_ascii_text(alert->project.c_str())
+            ? &MontserratSemiBold26
+            : &font_puhui_14_1,
+        0
+    );
     lv_label_set_text(_alert_detail, detail.c_str());
     lv_obj_set_style_text_color(
         _activity_title,

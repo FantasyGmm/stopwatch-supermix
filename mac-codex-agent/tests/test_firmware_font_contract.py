@@ -9,7 +9,7 @@ class FirmwareFontContractTests(unittest.TestCase):
     def setUp(self):
         self.codex_root = ROOT / "main" / "apps" / "app_codex_status"
 
-    def test_codex_alert_rows_use_the_bundled_chinese_font(self):
+    def test_codex_alert_rows_use_project_font_fallback_for_non_ascii_text(self):
         cmake = (ROOT / "main" / "CMakeLists.txt").read_text(encoding="utf-8")
         app = (
             ROOT / "main" / "apps" / "app_codex_status" / "app_codex_status.cpp"
@@ -24,8 +24,12 @@ class FirmwareFontContractTests(unittest.TestCase):
 
         self.assertIn("font_puhui_14_1.c", cmake)
         self.assertIn("LV_FONT_DECLARE(font_puhui_14_1)", app)
-        self.assertIn("lv_obj_set_style_text_font(_alert_project, &font_puhui_14_1", app)
+        self.assertIn("bool is_ascii_text(const char* text)", app)
+        self.assertIn("is_ascii_text(alert->project.c_str())", app)
+        self.assertIn("? &MontserratSemiBold26", app)
+        self.assertIn(": &font_puhui_14_1", app)
         self.assertIn("lv_obj_set_style_text_font(_alert_detail, &font_puhui_14_1", app)
+        self.assertIn("kSecondaryText", app)
         for character in "中文项目进展监控":
             self.assertIn('U+{:04X} "{}"'.format(ord(character), character), font)
 
@@ -94,7 +98,7 @@ class FirmwareFontContractTests(unittest.TestCase):
         self.assertIn("_effort_value = make_telemetry_label(", app)
         self.assertIn("kEffortCaptionY", app)
         self.assertIn("kEffortValueY", app)
-        self.assertGreaterEqual(app.count("&lv_font_montserrat_24"), 3)
+        self.assertGreaterEqual(app.count("&MontserratSemiBold26"), 7)
         self.assertIn("lv_color_hex(kQuotaMint)", app)
         self.assertIn("constexpr uint32_t kInstrumentBlack = 0x000000", layout)
         self.assertIn("constexpr Rect kBeaconSpine{194, 96, 2, 104}", layout)
@@ -102,19 +106,20 @@ class FirmwareFontContractTests(unittest.TestCase):
         self.assertIn("constexpr int kTelemetryWidth = 200", layout)
         self.assertIn("constexpr int kQuotaBarX = 101", layout)
         self.assertIn("constexpr int kQuotaBarWidth = 248", layout)
-        self.assertIn("constexpr int kQuotaPercentX = 360", layout)
+        self.assertIn("constexpr int kQuotaPercentX = 351", layout)
+        self.assertIn("constexpr int kQuotaPercentWidth = 60", layout)
         self.assertIn("lv_image_set_src(logo, &logo_codex)", app)
         self.assertIn("lv_image_set_scale(logo, kLogoScale)", app)
         self.assertIn("lv_image_set_src(_pet_image, codex_pet_idle_frames[0])", app)
         self.assertIn("lv_image_set_antialias(_pet_image, false)", app)
         self.assertIn("lv_image_set_scale(_pet_image, kPetScale)", app)
         self.assertIn("lv_obj_set_pos(_pet_image, kPetX, kPetY)", app)
-        self.assertIn("lv_obj_set_pos(pct, kQuotaPercentX, y - 6)", app)
+        self.assertIn("lv_obj_set_pos(pct, kQuotaPercentX, y - 7)", app)
         self.assertIn(
             "lv_obj_set_style_text_align(pct, LV_TEXT_ALIGN_RIGHT, 0)", app
         )
         self.assertIn("codex_pet_idle_durations_ms[self->_pet_frame]", app)
-        self.assertIn('"Codex", kBrandX, kBrandY, &lv_font_montserrat_24, kSignalWhite', app)
+        self.assertIn('"Codex", kBrandX, kBrandY, &MontserratSemiBold26, kSignalWhite', app)
         self.assertIn("make_line(_panel, kAlertDividerX, kAlertDividerY, kAlertDividerWidth)", app)
         self.assertIn("lv_label_set_long_mode(label, LV_LABEL_LONG_MODE_DOTS)", app)
 
