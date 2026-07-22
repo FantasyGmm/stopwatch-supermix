@@ -25,9 +25,9 @@ fi
 python3 "$ROOT/scripts/report_firmware_metrics.py" \
     --repo-root "$ROOT" \
     --build-dir "$BUILD_DIR" \
-    --partition-table "$ROOT/partitions_unified.csv" \
+    --partition-table "$ROOT/partitions.csv" \
     --assets-bin "$BUILD_DIR/generated_assets.bin" \
     --max-app-bytes 0x660000 \
     --max-assets-bytes 0x400000 \
-    --source unified-shadow-candidate \
+    --source unified-release-candidate \
     --output "$BUILD_DIR/unified-runtime-metrics.json"

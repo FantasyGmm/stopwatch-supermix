@@ -21,6 +21,9 @@ int main()
     assert(std::string_view(AssistantTraceName(AssistantTraceComponent::Runtime)) == "runtime");
     assert(std::string_view(AssistantTraceName(AssistantTraceEvent::CloseRequest)) == "close-request");
     assert(std::string_view(AssistantTraceName(AssistantTraceDetail::PhysicalHome)) == "physical-home");
+    assert(std::string_view(AssistantTraceName(AssistantTraceDetail::Listening)) == "listening");
+    assert(std::string_view(AssistantTraceName(AssistantTraceDetail::Speaking)) == "speaking");
+    assert(std::string_view(AssistantTraceName(AssistantTraceDetail::OfflineStop)) == "offline-stop");
     assert(std::string_view(AssistantTraceName(AssistantTraceResult::TimedOut)) == "timed-out");
     assert(std::string_view(AssistantTraceName(AssistantRuntimeState::Stopping)) == "stopping");
 

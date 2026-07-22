@@ -177,6 +177,11 @@ bool SharedWifiService::staConnected() const
     return _policy.staConnected();
 }
 
+bool SharedWifiService::cycleStaForValidation()
+{
+    return _policy.cycleStaForValidation();
+}
+
 void SharedWifiService::releaseSta(RuntimeOwner owner)
 {
     _policy.releaseSta(owner);

@@ -53,6 +53,9 @@ enum class AssistantTraceDetail : uint8_t {
     BeforeStart,
     FirstRunning,
     StopBoundary,
+    Listening,
+    Speaking,
+    OfflineStop,
     StaleSession,
     Unexpected,
 };

@@ -7,6 +7,78 @@ function(apply_brookesia_audio_light_overlay)
     set(upstream_service "${brookesia_audio_dir}/src/service_audio.cpp")
     set(upstream_converter "${brookesia_audio_dir}/src/type_converter.cpp")
 
+    set(original_atomic_include [=[#include <algorithm>
+#include <mutex>]=])
+    set(serialized_atomic_include [=[#include <algorithm>
+#include <atomic>
+#include <mutex>]=])
+    set(original_lifecycle_namespace [=[namespace {
+// Helper function to get current time in milliseconds using std::chrono]=])
+    set(serialized_lifecycle_namespace [=[namespace {
+// Agent shutdown and service unbind can race after an unexpected network loss.
+// Serialize the shared encoder/decoder handles so repeated stop is idempotent.
+std::mutex encoder_lifecycle_mutex;
+std::mutex decoder_lifecycle_mutex;
+std::atomic<bool> encoder_fetch_stop_requested{false};
+
+// Helper function to get current time in milliseconds using std::chrono]=])
+    set(original_start_encoder [=[bool Audio::start_encoder(const AudioEncoderDynamicConfig &config)
+{
+    BROOKESIA_LOG_TRACE_GUARD_WITH_THIS();]=])
+    set(serialized_start_encoder [=[bool Audio::start_encoder(const AudioEncoderDynamicConfig &config)
+{
+    BROOKESIA_LOG_TRACE_GUARD_WITH_THIS();
+    std::lock_guard<std::mutex> lifecycle_lock(encoder_lifecycle_mutex);
+    encoder_fetch_stop_requested.store(false);]=])
+    set(original_stop_encoder [=[void Audio::stop_encoder()
+{
+    BROOKESIA_LOG_TRACE_GUARD_WITH_THIS();]=])
+    set(serialized_stop_encoder [=[void Audio::stop_encoder()
+{
+    BROOKESIA_LOG_TRACE_GUARD_WITH_THIS();
+    std::lock_guard<std::mutex> lifecycle_lock(encoder_lifecycle_mutex);
+    encoder_fetch_stop_requested.store(true);]=])
+    set(original_fetch_loop [=[            while (!boost::this_thread::interruption_requested()) {]=])
+    set(stoppable_fetch_loop [=[            while (!encoder_fetch_stop_requested.load() &&
+                   !boost::this_thread::interruption_requested()) {]=])
+    set(original_audio_shutdown_order [=[    BROOKESIA_CHECK_ESP_ERR_EXECUTE(
+    audio_playback_close(TypeConverter::to_playback_handle(playback_handle_)), {}, {
+        BROOKESIA_LOGE("Failed to close playback");
+    });
+    playback_handle_ = nullptr;
+
+    stop_encoder();
+    stop_decoder();]=])
+    set(light_audio_shutdown_order [=[    // Stop dependants before closing their shared playback. Closing playback
+    // first can strand the continuously-fed recorder during concurrent agent
+    // shutdown and service unbind after a Wi-Fi loss.
+    stop_encoder();
+    stop_decoder();
+
+    BROOKESIA_CHECK_ESP_ERR_EXECUTE(
+    audio_playback_close(TypeConverter::to_playback_handle(playback_handle_)), {}, {
+        BROOKESIA_LOGE("Failed to close playback");
+    });
+    playback_handle_ = nullptr;]=])
+    set(original_start_decoder [=[bool Audio::start_decoder(const AudioDecoderDynamicConfig &config)
+{
+    BROOKESIA_LOG_TRACE_GUARD_WITH_THIS();]=])
+    set(serialized_start_decoder [=[bool Audio::start_decoder(const AudioDecoderDynamicConfig &config)
+{
+    BROOKESIA_LOG_TRACE_GUARD_WITH_THIS();
+    std::lock_guard<std::mutex> lifecycle_lock(decoder_lifecycle_mutex);]=])
+    set(original_stop_decoder [=[void Audio::stop_decoder()
+{
+    BROOKESIA_LOG_TRACE_GUARD_WITH_THIS();]=])
+    set(serialized_stop_decoder [=[void Audio::stop_decoder()
+{
+    BROOKESIA_LOG_TRACE_GUARD_WITH_THIS();
+    std::lock_guard<std::mutex> lifecycle_lock(decoder_lifecycle_mutex);]=])
+    set(reallocating_queue_clear [=[std::queue<PlayUrlRequest>().swap(play_url_queue_);]=])
+    set(stable_queue_clear [=[while (!play_url_queue_.empty()) {
+            play_url_queue_.pop();
+        }]=])
+
     set(original_afe_convert [=[#if !AV_PROCESSOR_AFE_USE_CUSTOM
     av_processor_afe_config_t result = DEFAULT_AV_PROCESSOR_AFE_CONFIG();
     auto &afe_config = result.mode.afe;
@@ -141,6 +213,13 @@ function(apply_brookesia_audio_light_overlay)
 
     file(READ "${upstream_service}" service_source)
     foreach(required_text IN ITEMS
+            "${original_atomic_include}"
+            "${original_lifecycle_namespace}"
+            "${original_start_encoder}" "${original_stop_encoder}"
+            "${original_start_decoder}" "${original_stop_decoder}"
+            "${original_fetch_loop}"
+            "${reallocating_queue_clear}"
+            "${original_audio_shutdown_order}"
             "${original_mixer_open}" "${original_mixer_release}"
             "${original_mixer_close}" "${original_event_cast}")
         string(FIND "${service_source}" "${required_text}" required_position)
@@ -149,6 +228,24 @@ function(apply_brookesia_audio_light_overlay)
                 "Brookesia audio service changed; review the light processor overlay")
         endif()
     endforeach()
+    string(REPLACE "${original_atomic_include}" "${serialized_atomic_include}"
+        service_source "${service_source}")
+    string(REPLACE "${original_lifecycle_namespace}" "${serialized_lifecycle_namespace}"
+        service_source "${service_source}")
+    string(REPLACE "${original_start_encoder}" "${serialized_start_encoder}"
+        service_source "${service_source}")
+    string(REPLACE "${original_stop_encoder}" "${serialized_stop_encoder}"
+        service_source "${service_source}")
+    string(REPLACE "${original_start_decoder}" "${serialized_start_decoder}"
+        service_source "${service_source}")
+    string(REPLACE "${original_stop_decoder}" "${serialized_stop_decoder}"
+        service_source "${service_source}")
+    string(REPLACE "${original_fetch_loop}" "${stoppable_fetch_loop}"
+        service_source "${service_source}")
+    string(REPLACE "${reallocating_queue_clear}" "${stable_queue_clear}"
+        service_source "${service_source}")
+    string(REPLACE "${original_audio_shutdown_order}" "${light_audio_shutdown_order}"
+        service_source "${service_source}")
     string(REPLACE "${original_mixer_open}" "${light_mixer_open}"
         service_source "${service_source}")
     string(REPLACE "${original_mixer_release}" "${light_mixer_release}"

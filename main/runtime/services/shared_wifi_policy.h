@@ -45,6 +45,7 @@ public:
     StaReconfigureResult reconfigureSta(RuntimeOwner owner,
                                         const std::function<void()>& configure);
     bool staConnected() const;
+    bool cycleStaForValidation();
 
 private:
     ResourceSupervisor& _resources;

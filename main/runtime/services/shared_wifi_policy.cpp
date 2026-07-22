@@ -131,3 +131,14 @@ bool SharedWifiPolicy::staConnected() const
 {
     return _driver.staConnected();
 }
+
+bool SharedWifiPolicy::cycleStaForValidation()
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    const auto snapshot = _resources.snapshot();
+    if (snapshot.wifi_lease_count == 0 || snapshot.wifi_ap_active) {
+        return false;
+    }
+    _driver.stopSta();
+    return _driver.startSta();
+}

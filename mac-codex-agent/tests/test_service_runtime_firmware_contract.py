@@ -88,6 +88,19 @@ class ServiceRuntimeFirmwareContractTests(unittest.TestCase):
             r"WifiManager::GetInstance\(\)\.StopConfigAp\(\);",
         )
 
+    def test_service_stop_releases_state_lock_before_joining_owned_workers(self):
+        root_cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+        overlay = (
+            ROOT / "main" / "cmake" / "brookesia_service_stop_overlay.cmake"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("apply_brookesia_service_stop_overlay()", root_cmake)
+        mark_index = overlay.index("is_running_.store(false)")
+        unlock_index = overlay.index("state_lock->unlock()")
+        stop_index = overlay.index("on_stop()", unlock_index)
+        self.assertLess(mark_index, unlock_index)
+        self.assertLess(unlock_index, stop_index)
+
 
 if __name__ == "__main__":
     unittest.main()

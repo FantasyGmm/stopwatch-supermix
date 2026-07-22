@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 #include "assistant_runtime.h"
+#include "assistant_stop_policy.h"
 #include "assistant_trace.h"
 
 #include "hal/hal.h"
@@ -63,7 +64,6 @@ static_assert(sizeof(AssetTableEntry) == 44);
 
 const void* assets_mapping = nullptr;
 esp_partition_mmap_handle_t assets_mapping_handle = 0;
-
 uint32_t read_u32(const uint8_t* data)
 {
     uint32_t value = 0;
@@ -227,6 +227,8 @@ public:
     SignalConnection activation_code;
     SignalConnection user_text;
     SignalConnection agent_text;
+    SignalConnection listening_status;
+    SignalConnection speaking_status;
     SignalConnection emote;
 
     std::atomic<uint64_t> callback_session{0};
@@ -376,8 +378,21 @@ bool AssistantRuntime::Impl::requestStop()
         stop_started_ms = GetHAL().millis();
         mailbox.publish({session, AssistantEventKind::State, "Stopping"});
     }
-    if (service_setup_pending) {
+    const AssistantStopPath stop_path = DecideAssistantStopPath(
+        service_setup_pending, GetSharedWifiService().staConnected());
+    if (stop_path == AssistantStopPath::ReleasePendingSetup) {
         releaseSession(session);
+        return true;
+    }
+    if (stop_path == AssistantStopPath::WaitForOfflineAgentStop) {
+        // A transport loss makes Brookesia force its own Stop action. Do not
+        // race that action by unbinding its services here; its Stopped event
+        // now arrives well within the two-second gate and drives the single
+        // release path from update().
+        record_trace(session, AssistantTraceComponent::Runtime,
+                     AssistantTraceEvent::Release, state.state(),
+                     AssistantTraceDetail::OfflineStop,
+                     AssistantTraceResult::Accepted);
         return true;
     }
     if (stop_submitted.exchange(true)) {
@@ -580,6 +595,15 @@ bool AssistantRuntime::Impl::configureAudioAndAgent()
         ESP_LOGE(tag, "failed to map current volume: %s", volume_result.error().c_str());
         return false;
     }
+    // Brookesia initializes its desired volume to zero. Setting zero can therefore
+    // be treated as a no-op before the hardware path has actually been muted.
+    // Drive the independent mute state as well so HAL volume zero is unambiguous.
+    auto mute_result = AudioHelper::call_function_sync(
+        AudioHelper::FunctionId::SetMute, volume <= 0);
+    if (!mute_result) {
+        ESP_LOGE(tag, "failed to map current mute state: %s", mute_result.error().c_str());
+        return false;
+    }
 
     const std::string agent_name(XiaozhiHelper::get_name());
     boost::json::object info{
@@ -687,6 +711,30 @@ bool AssistantRuntime::Impl::subscribe(uint64_t session_id)
                 mailbox.publish({session_id, AssistantEventKind::AgentText, text});
             }
         });
+    listening_status = ManagerHelper::subscribe_event(
+        ManagerHelper::EventId::ListeningStatusChanged,
+        [this, session_id](const std::string& source, bool listening) {
+            if (callbackIsCurrentXiaozhi(
+                    session_id, source,
+                    manager_event_name(ManagerHelper::EventId::ListeningStatusChanged))) {
+                record_trace(session_id, AssistantTraceComponent::Callback,
+                             AssistantTraceEvent::Conversation, state.state(),
+                             AssistantTraceDetail::Listening, AssistantTraceResult::Accepted,
+                             listening ? 1 : 0);
+            }
+        });
+    speaking_status = ManagerHelper::subscribe_event(
+        ManagerHelper::EventId::SpeakingStatusChanged,
+        [this, session_id](const std::string& source, bool speaking) {
+            if (callbackIsCurrentXiaozhi(
+                    session_id, source,
+                    manager_event_name(ManagerHelper::EventId::SpeakingStatusChanged))) {
+                record_trace(session_id, AssistantTraceComponent::Callback,
+                             AssistantTraceEvent::Conversation, state.state(),
+                             AssistantTraceDetail::Speaking, AssistantTraceResult::Accepted,
+                             speaking ? 1 : 0);
+            }
+        });
     emote = ManagerHelper::subscribe_event(
         ManagerHelper::EventId::EmoteGot,
         [this, session_id](const std::string& source, const std::string& emotion) {
@@ -698,7 +746,8 @@ bool AssistantRuntime::Impl::subscribe(uint64_t session_id)
         });
 
     return general_event.connected() && activation_code.connected() && user_text.connected() &&
-           agent_text.connected() && emote.connected();
+           agent_text.connected() && listening_status.connected() &&
+           speaking_status.connected() && emote.connected();
 }
 
 bool AssistantRuntime::Impl::submitAction(uint64_t session_id,
@@ -776,6 +825,8 @@ void AssistantRuntime::Impl::disconnectSubscriptions()
     activation_code.disconnect();
     user_text.disconnect();
     agent_text.disconnect();
+    listening_status.disconnect();
+    speaking_status.disconnect();
     emote.disconnect();
 }
 
@@ -799,7 +850,6 @@ void AssistantRuntime::Impl::releaseSession(uint64_t session_id)
                  static_cast<int32_t>(bindings.size()),
                  static_cast<int32_t>(subscriptionCount()),
                  playback_owned ? 1 : 0, capture_owned ? 1 : 0);
-
     disconnectSubscriptions();
     service_setup_pending = false;
     bindings.clear();
@@ -848,6 +898,8 @@ std::size_t AssistantRuntime::Impl::subscriptionCount() const
            static_cast<std::size_t>(activation_code.connected()) +
            static_cast<std::size_t>(user_text.connected()) +
            static_cast<std::size_t>(agent_text.connected()) +
+           static_cast<std::size_t>(listening_status.connected()) +
+           static_cast<std::size_t>(speaking_status.connected()) +
            static_cast<std::size_t>(emote.connected());
 }
 

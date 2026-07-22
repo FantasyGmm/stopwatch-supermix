@@ -191,7 +191,7 @@ class XiaozhiProbeFirmwareContractTests(unittest.TestCase):
             deferred_start_body.group(1).find("bindServices(session_id)"),
         )
 
-    def test_hardware_report_separates_targeted_pass_from_manual_campaigns(self):
+    def test_hardware_report_separates_automated_pass_from_manual_observations(self):
         report = (
             ROOT
             / "docs"
@@ -200,10 +200,10 @@ class XiaozhiProbeFirmwareContractTests(unittest.TestCase):
             / "brookesia-xiaozhi-compatibility.md"
         ).read_text(encoding="utf-8")
 
-        self.assertIn("Targeted startup and lifecycle passed", report)
-        self.assertIn("Audible conversation", report)
+        self.assertIn("10-cycle, 20-cycle, and 50-cycle stability", report)
+        self.assertIn("Audible TTS | Passed manual", report)
+        self.assertIn("50-cycle connected-watch gate is complete", report)
         self.assertIn("Pending manual", report)
-        self.assertIn("Pending campaign", report)
         self.assertNotIn("Gate: PASS", report)
 
 

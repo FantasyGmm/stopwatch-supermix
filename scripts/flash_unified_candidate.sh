@@ -2,11 +2,12 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT/scripts/resolve_esptool_python.sh"
 PORT=""
 BACKUP=""
 BUILD_DIR="$ROOT/build-unified"
 DRY_RUN=0
-PYTHON_BIN="${PYTHON:-python}"
+PYTHON_BIN=""
 FLASH_BYTES=$((0x1000000))
 MAX_APP_BYTES=$((0x660000))
 MAX_ASSETS_BYTES=$((0x400000))
@@ -110,6 +111,7 @@ if [[ -z "$PORT" || -z "$BACKUP" ]]; then
     exit 2
 fi
 
+PYTHON_BIN="$(resolve_esptool_python "$BUILD_DIR")"
 verify_backup "$BACKUP"
 
 BOOTLOADER="$BUILD_DIR/bootloader/bootloader.bin"

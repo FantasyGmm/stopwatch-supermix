@@ -77,6 +77,9 @@ const char* AssistantTraceName(AssistantTraceDetail value)
         case AssistantTraceDetail::BeforeStart: return "before-start";
         case AssistantTraceDetail::FirstRunning: return "first-running";
         case AssistantTraceDetail::StopBoundary: return "stop-boundary";
+        case AssistantTraceDetail::Listening: return "listening";
+        case AssistantTraceDetail::Speaking: return "speaking";
+        case AssistantTraceDetail::OfflineStop: return "offline-stop";
         case AssistantTraceDetail::StaleSession: return "stale-session";
         case AssistantTraceDetail::Unexpected: return "unexpected";
     }

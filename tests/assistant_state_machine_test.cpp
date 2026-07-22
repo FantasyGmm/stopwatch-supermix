@@ -1,9 +1,14 @@
 #include "runtime/assistant/assistant_state.h"
+#include "runtime/assistant/assistant_stop_policy.h"
 
 #include <cassert>
 
 int main()
 {
+    assert(DecideAssistantStopPath(false, true) == AssistantStopPath::SubmitAgentStop);
+    assert(DecideAssistantStopPath(false, false) == AssistantStopPath::WaitForOfflineAgentStop);
+    assert(DecideAssistantStopPath(true, true) == AssistantStopPath::ReleasePendingSetup);
+
     AssistantStateMachine state;
     assert(state.state() == AssistantRuntimeState::Stopped);
     assert(state.requestStart() == TransitionResult::Accepted);

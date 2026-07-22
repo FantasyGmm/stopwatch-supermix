@@ -92,15 +92,16 @@ public:
     StaReconfigureResult reconfigureSta(RuntimeOwner owner,
                                         const std::function<void()>& configure);
     bool staConnected() const;
+    bool cycleStaForValidation();
 
 private:
     friend class WifiStaLease;
     friend class WifiApSession;
-    void releaseSta(RuntimeOwner owner);
     friend class WifiConfigApSession;
+    void releaseSta(RuntimeOwner owner);
     void releaseAp(RuntimeOwner owner);
-
     void releaseConfigAp(RuntimeOwner owner);
+
     SharedWifiPolicy& _policy;
 };
 

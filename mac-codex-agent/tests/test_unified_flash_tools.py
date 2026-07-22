@@ -118,6 +118,141 @@ class UnifiedFlashToolsTest(unittest.TestCase):
         ):
             self.assertIn(artifact, result.stdout)
 
+    def test_candidate_uses_build_python_when_environment_has_no_python_override(self):
+        fake_python = self.root / "idf python"
+        fake_python.write_text(
+            "#!/bin/sh\nprintf 'FAKE_IDF_PYTHON %s\\n' \"$*\"\n",
+            encoding="utf-8",
+        )
+        fake_python.chmod(0o755)
+        (self.build / "CMakeCache.txt").write_text(
+            f"PYTHON:UNINITIALIZED={fake_python}\n",
+            encoding="utf-8",
+        )
+        environment = os.environ.copy()
+        environment.pop("PYTHON", None)
+
+        result = subprocess.run(
+            [
+                "bash",
+                str(SCRIPTS / "flash_unified_candidate.sh"),
+                "--port",
+                "/dev/test",
+                "--backup",
+                str(self.backup),
+                "--build-dir",
+                str(self.build),
+            ],
+            cwd=ROOT,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("FAKE_IDF_PYTHON -m esptool", result.stdout)
+
+    def test_recovery_exercise_dry_run_restores_then_reinstalls_candidate(self):
+        result = run_script(
+            "exercise_full_flash_recovery.sh",
+            "--dry-run",
+            "--port",
+            "/dev/test",
+            "--backup",
+            self.backup,
+            "--build-dir",
+            self.build,
+            "--output-dir",
+            self.root / "recovery evidence",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        restore = result.stdout.index("RECOVERY STEP restore-backup")
+        legacy_boot = result.stdout.index("RECOVERY STEP validate-restored-boot")
+        candidate = result.stdout.index("RECOVERY STEP flash-unified-candidate")
+        unified_boot = result.stdout.index("RECOVERY STEP validate-unified-boot")
+        self.assertLess(restore, legacy_boot)
+        self.assertLess(legacy_boot, candidate)
+        self.assertLess(candidate, unified_boot)
+        self.assertIn("write_flash", result.stdout)
+        self.assertIn("StopWatch-UserDemo.bin", result.stdout)
+
+    def test_hardware_release_campaign_dry_run_includes_every_gate(self):
+        result = run_script(
+            "run_unified_hardware_validation.sh",
+            "--dry-run",
+            "--port",
+            "/dev/test",
+            "--backup",
+            self.backup,
+            "--build-dir",
+            self.build,
+            "--output-dir",
+            self.root / "hardware evidence",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for stage in (
+            "flash-candidate",
+            "validate-candidate-boot",
+            "mixed-10-cycles",
+            "product-smoke",
+            "mixed-50-cycles",
+            "full-flash-recovery",
+            "final-product-smoke",
+        ):
+            self.assertIn(f"HARDWARE STEP {stage}", result.stdout)
+        self.assertIn("--cycles 10", result.stdout)
+        self.assertIn("--cycles 50", result.stdout)
+        self.assertGreaterEqual(result.stdout.count("--profiles mixed"), 2)
+        ten_cycle_line = next(
+            line
+            for line in result.stdout.splitlines()
+            if "--cycles 10" in line
+        )
+        self.assertIn("--warmup", ten_cycle_line)
+
+    def test_hardware_campaign_propagates_build_python_to_every_flash_step(self):
+        fake_python = self.root / "idf python"
+        fake_python.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        fake_python.chmod(0o755)
+        (self.build / "CMakeCache.txt").write_text(
+            f"PYTHON:UNINITIALIZED={fake_python}\n",
+            encoding="utf-8",
+        )
+        environment = os.environ.copy()
+        environment.pop("PYTHON", None)
+
+        result = subprocess.run(
+            [
+                "bash",
+                str(SCRIPTS / "run_unified_hardware_validation.sh"),
+                "--dry-run",
+                "--port",
+                "/dev/test",
+                "--backup",
+                str(self.backup),
+                "--build-dir",
+                str(self.build),
+                "--output-dir",
+                str(self.root / "hardware evidence"),
+            ],
+            cwd=ROOT,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        write_lines = [line for line in result.stdout.splitlines() if "write_flash" in line]
+        self.assertEqual(len(write_lines), 3, result.stdout)
+        self.assertTrue(
+            all(str(fake_python).replace(" ", "\\ ") in line for line in write_lines),
+            result.stdout,
+        )
+
     def test_restore_rejects_short_backup_before_printing_write(self):
         with self.backup.open("r+b") as backup_file:
             backup_file.truncate(0x1000000 - 1)

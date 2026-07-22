@@ -43,17 +43,13 @@ def parse_partition_csv(relative_path):
 
 
 class UnifiedRuntimeFirmwareContractTest(unittest.TestCase):
-    def test_shadow_mode_does_not_bypass_remaining_promotion_gates(self):
-        plan = read(
-            "docs/superpowers/plans/2026-07-13-unified-runtime-assistant-merge.md"
-        )
+    def test_default_layout_is_promoted_while_manual_followup_remains_explicit(self):
         report = read(
             "docs/superpowers/reports/brookesia-xiaozhi-compatibility.md"
         )
-        self.assertIn("Tasks 8, 9, 11, and Task 10 preparation", plan)
-        self.assertIn("hardware status remains pending", plan)
-        self.assertIn("Targeted startup and lifecycle passed", report)
-        self.assertIn("single-partition promotion remains gated", report.lower())
+        self.assertIn("default single-application layout is promoted", report)
+        self.assertIn("50-cycle connected-watch gate is complete", report)
+        self.assertIn("remain manual checks", report)
 
     def test_only_launcher_defines_app_main(self):
         definitions = find_definitions(r'extern\s+"C"\s+void\s+app_main\s*\(')
@@ -144,8 +140,8 @@ class UnifiedRuntimeFirmwareContractTest(unittest.TestCase):
             self.assertNotIn(forbidden, view_header.lower())
             self.assertNotIn(forbidden, view_source.lower())
 
-    def test_unified_candidate_has_one_factory_application(self):
-        rows = parse_partition_csv("partitions_unified.csv")
+    def test_default_partition_table_has_one_factory_application(self):
+        rows = parse_partition_csv("partitions.csv")
         app_rows = [row for row in rows if len(row) >= 3 and row[1] == "app"]
         self.assertEqual(
             [(row[0], row[2], row[3], row[4]) for row in app_rows],
@@ -168,16 +164,20 @@ class UnifiedRuntimeFirmwareContractTest(unittest.TestCase):
         self.assertIn("espressif/cmake_utilities: 0.5.3", manifest)
         self.assertIn("jason-mao/av_processor: 0.6.6", manifest)
 
-    def test_legacy_layout_and_recovery_tools_remain_during_shadow_mode(self):
-        legacy = read("partitions.csv")
-        self.assertIn("ota_0", legacy)
-        self.assertIn("ota_1", legacy)
-        self.assertTrue(
-            (ROOT / "scripts" / "flash_assistant_runtime.sh").is_file()
-        )
-        self.assertTrue(
-            (ROOT / "scripts" / "flash_full_assistant_stack.sh").is_file()
-        )
+    def test_promoted_layout_removes_shadow_table_and_legacy_slot_tools(self):
+        self.assertFalse((ROOT / "partitions_unified.csv").exists())
+        for relative_path in (
+            "scripts/flash_assistant_runtime.sh",
+            "scripts/flash_full_assistant_stack.sh",
+            "scripts/force_boot_slot.py",
+        ):
+            self.assertFalse((ROOT / relative_path).exists(), relative_path)
+
+        defaults = read("sdkconfig.defaults")
+        build_script = read("scripts/build_unified_candidate.sh")
+        self.assertIn('CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"', defaults)
+        self.assertIn('--partition-table "$ROOT/partitions.csv"', build_script)
+        self.assertNotIn("partitions_unified.csv", build_script)
 
     def test_new_product_path_has_no_ota_slot_dependency(self):
         paths = [
@@ -228,8 +228,9 @@ class UnifiedRuntimeFirmwareContractTest(unittest.TestCase):
         self.assertIn("## Targeted hardware evidence", report)
         for status in (
             "Targeted hardware startup/lifecycle: Passed",
-            "Audible and UI conversation checks: Pending manual observation",
-            "10-cycle, 100-cycle, and full product regression: Pending campaign",
+            "Audible TTS after jitter-buffer fix: Passed by user observation",
+            "10-cycle, 20-cycle, 50-cycle, full product regression, and recovery exercise: Passed",
+            "Final boot-to-product-smoke handoff after recovery: Passed",
         ):
             self.assertIn(status, report)
 
@@ -240,11 +241,13 @@ class UnifiedRuntimeFirmwareContractTest(unittest.TestCase):
             "Bindings/subscriptions/Wi-Fi/capture/playback all zero",
             "second stop gate passed",
             "Pending manual",
-            "Pending campaign",
+            "20 measured sessions",
+            "50 measured sessions, all five profiles ran ten times",
+            "## Remaining manual hardware execution",
         ):
             self.assertIn(evidence, hardware_section)
 
-    def test_original_tasks_track_code_automated_and_hardware_separately(self):
+    def test_original_tasks_track_code_automated_and_hardware_status_separately(self):
         plan = read(
             "docs/superpowers/plans/2026-07-13-unified-runtime-assistant-merge.md"
         )
@@ -254,7 +257,14 @@ class UnifiedRuntimeFirmwareContractTest(unittest.TestCase):
                 section = section.split(f"### Task {task + 1}:", 1)[0]
             self.assertIn("- Code status:", section)
             self.assertIn("- Automated status:", section)
-            self.assertIn("- Hardware status: Pending hardware", section)
+            self.assertIn("- Hardware status:", section)
+
+        task_10 = plan.split("### Task 10:", 1)[1].split("### Task 11:", 1)[0]
+        task_11 = plan.split("### Task 11:", 1)[1].split("### Task 12:", 1)[0]
+        task_12 = plan.split("### Task 12:", 1)[1]
+        self.assertIn("full-Flash migration and recovery exercise passed", task_10)
+        self.assertIn("50-cycle campaign passed on 2026-07-22", task_11)
+        self.assertIn("remaining physical-control and experience matrix is manual", task_12)
 
     def test_settings_wifi_page_uses_controller_owned_round_screen_ui(self):
         app_setup = read("main/apps/app_setup/app_setup.cpp")

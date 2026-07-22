@@ -149,6 +149,10 @@ int main()
     SharedWifiPolicy policy(resources, driver);
     SharedWifiService wifi(policy);
 
+    assert(!wifi.cycleStaForValidation());
+    assert(driver.sta_starts == 0);
+    assert(driver.sta_stops == 0);
+
     {
         auto assistant = wifi.acquireSta(RuntimeOwner::Assistant);
         assert(assistant.valid());
@@ -156,27 +160,32 @@ int main()
         assert(resources.wifiLeaseCount() == 1);
         assert(!wifi.staConnected());
 
+        assert(wifi.cycleStaForValidation());
+        assert(driver.sta_starts == 2);
+        assert(driver.sta_stops == 1);
+        assert(resources.wifiLeaseCount() == 1);
+
         driver.sta_connected = true;
         assert(wifi.staConnected());
 
         auto duplicate = wifi.acquireSta(RuntimeOwner::Assistant);
         assert(!duplicate.valid());
-        assert(driver.sta_starts == 1);
+        assert(driver.sta_starts == 2);
 
         auto codex = wifi.acquireSta(RuntimeOwner::Codex);
         assert(codex.valid());
-        assert(driver.sta_starts == 1);
+        assert(driver.sta_starts == 2);
         assert(resources.wifiLeaseCount() == 2);
 
         assistant.reset();
-        assert(driver.sta_stops == 0);
+        assert(driver.sta_stops == 1);
         assert(resources.wifiLeaseCount() == 1);
 
         WifiStaLease moved = std::move(codex);
         assert(!codex.valid());
         assert(moved.valid());
     }
-    assert(driver.sta_stops == 1);
+    assert(driver.sta_stops == 2);
     assert(resources.wifiLeaseCount() == 0);
 
     driver.system_requires_sta = true;
@@ -184,8 +193,8 @@ int main()
         auto system_shared = wifi.acquireSta(RuntimeOwner::Codex);
         assert(system_shared.valid());
     }
-    assert(driver.sta_starts == 2);
-    assert(driver.sta_stops == 1);
+    assert(driver.sta_starts == 3);
+    assert(driver.sta_stops == 2);
     driver.system_requires_sta = false;
 
     auto assistant = wifi.acquireSta(RuntimeOwner::Assistant);
@@ -221,7 +230,6 @@ int main()
     auto failed_ap = wifi.acquireAp(RuntimeOwner::Badge);
     assert(!failed_ap.valid());
     assert(!resources.snapshot().wifi_ap_active);
-
     driver.ap_start_succeeds = true;
 
     assert(!wifi.reconnectSta(RuntimeOwner::Settings));

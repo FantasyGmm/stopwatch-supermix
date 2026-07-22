@@ -7,6 +7,29 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
 class AssistantMemoryPolicyContractTests(unittest.TestCase):
+    def test_xiaozhi_chat_owns_and_releases_the_session_mcp_engine(self):
+        root_cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+        overlay = (
+            ROOT / "main" / "cmake" / "brookesia_xiaozhi_mcp_ownership_overlay.cmake"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("brookesia_xiaozhi_mcp_ownership_overlay.cmake", root_cmake)
+        self.assertIn("apply_brookesia_xiaozhi_mcp_ownership_overlay()", root_cmake)
+        self.assertIn("chat_config.owns_mcp_engine = true;", overlay)
+        self.assertIn("list(REMOVE_ITEM xiaozhi_agent_sources", overlay)
+        self.assertIn("target_sources(${xiaozhi_agent_lib}", overlay)
+
+    def test_xiaozhi_mqtt_reconnect_poll_cannot_block_two_second_close_gate(self):
+        root_cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+        source = (ROOT / "main" / "cmake" / "xiaozhi_mqtt_stop_overlay.cmake").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("apply_xiaozhi_mqtt_stop_overlay()", root_cmake)
+        match = re.search(r"\.reconnect_timeout_ms\s*=\s*(\d+)", source)
+        self.assertIsNotNone(match)
+        self.assertLessEqual(int(match.group(1)), 1000)
+
     def test_radio_bss_and_general_allocations_preserve_internal_dma_memory(self):
         expected = (
             "CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y",
@@ -45,8 +68,27 @@ class AssistantMemoryPolicyContractTests(unittest.TestCase):
         self.assertIn("audio_recorder_wn_event_t", overlay)
         self.assertIn("Helper::AFE_Event::WakeStart", overlay)
         self.assertIn("light implementation writes feeder PCM directly", overlay)
+        self.assertIn("encoder_lifecycle_mutex", overlay)
+        self.assertIn("decoder_lifecycle_mutex", overlay)
+        self.assertIn("encoder_fetch_stop_requested", overlay)
+        self.assertIn("std::atomic<bool>", overlay)
+        self.assertIn("std::lock_guard<std::mutex>", overlay)
+        self.assertIn("Stop dependants before closing their shared playback", overlay)
+        self.assertIn("while (!play_url_queue_.empty())", overlay)
+        self.assertIn("reallocating_queue_clear", overlay)
+        self.assertIn("stable_queue_clear", overlay)
         self.assertIn("list(REMOVE_ITEM service_audio_sources", overlay)
         self.assertIn("list(REMOVE_ITEM type_converter_sources", overlay)
+
+    def test_agent_stop_clears_action_queue_without_reallocating_it(self):
+        overlay = (
+            ROOT / "main" / "cmake" / "brookesia_agent_manager_overlay.cmake"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("upstream_state_machine", overlay)
+        self.assertIn("while (!general_action_queue_.empty())", overlay)
+        self.assertIn("reallocating_action_queue_clear", overlay)
+        self.assertIn("stable_action_queue_clear", overlay)
 
     def test_wifi_event_loop_has_stack_for_scan_and_connect_callbacks(self):
         setting = "CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=4096"

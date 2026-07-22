@@ -18,6 +18,7 @@ public:
     static constexpr const char* Name = "StopWatch:AudioPlayer";
 
     explicit StopWatchPlayer(StopWatchAudioBackend& backend);
+    ~StopWatchPlayer() override;
 
     bool open(const Config& config) override;
     void close() override;
@@ -28,7 +29,10 @@ public:
     bool is_pa_on() const override;
 
 private:
+    struct Impl;
+
     StopWatchAudioBackend& _backend;
+    std::unique_ptr<Impl> _impl;
 };
 
 class StopWatchRecorder final : public esp_brookesia::hal::AudioCodecRecorderIface {

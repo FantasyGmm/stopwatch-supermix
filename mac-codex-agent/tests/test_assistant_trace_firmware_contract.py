@@ -17,9 +17,9 @@ class AssistantTraceFirmwareContractTests(unittest.TestCase):
         runner = (ROOT / "scripts/run_unified_offline_validation.sh").read_text(
             encoding="utf-8"
         )
-        trace_stage = runner.split(
-            'echo "[5/12] Assistant trace host test"', 1
-        )[1].split('echo "[6/12]', 1)[0]
+        trace_stage = runner.split("Assistant trace host test", 1)[1].split(
+            "Resource supervisor host test", 1
+        )[0]
         self.assertIn("-DSTOPWATCH_HOST_TEST", trace_stage)
 
     def test_runtime_records_lifecycle_boundaries(self):
@@ -68,6 +68,18 @@ class AssistantTraceFirmwareContractTests(unittest.TestCase):
             accepted_path.index("AssistantTraceEvent::CloseRequest"),
             accepted_path.index("runtime.requestStopAssistant()"),
         )
+
+    def test_runtime_traces_real_listening_and_speaking_states(self):
+        runtime = (
+            ROOT / "main/runtime/assistant/assistant_runtime.cpp"
+        ).read_text(encoding="utf-8")
+        for token in (
+            "ManagerHelper::EventId::ListeningStatusChanged",
+            "ManagerHelper::EventId::SpeakingStatusChanged",
+            "AssistantTraceDetail::Listening",
+            "AssistantTraceDetail::Speaking",
+        ):
+            self.assertIn(token, runtime)
 
 
 if __name__ == "__main__":

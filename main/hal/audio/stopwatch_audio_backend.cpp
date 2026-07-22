@@ -31,7 +31,9 @@ bool validFormat(uint32_t sample_rate, uint8_t bits, uint8_t channels)
 }  // namespace
 
 struct StopWatchAudioBackend::Impl {
-    mutable std::mutex mutex;
+    mutable std::mutex control_mutex;
+    mutable std::mutex recorder_io_mutex;
+    mutable std::mutex player_io_mutex;
     AudioBackendLifecycle lifecycle;
     i2s_chan_handle_t tx_handle              = nullptr;
     i2s_chan_handle_t rx_handle              = nullptr;
@@ -57,7 +59,7 @@ StopWatchAudioBackend& GetStopWatchAudioBackend()
 
 bool StopWatchAudioBackend::initialize(void* i2c_bus)
 {
-    std::lock_guard<std::mutex> lock(_impl->mutex);
+    std::lock_guard<std::mutex> lock(_impl->control_mutex);
     if (_impl->initialized) {
         return true;
     }
@@ -136,13 +138,14 @@ bool StopWatchAudioBackend::initialize(void* i2c_bus)
 
 bool StopWatchAudioBackend::initialized() const
 {
-    std::lock_guard<std::mutex> lock(_impl->mutex);
+    std::lock_guard<std::mutex> lock(_impl->control_mutex);
     return _impl->initialized;
 }
 
 bool StopWatchAudioBackend::openRecorder(uint32_t sample_rate, uint8_t bits, uint8_t channels)
 {
-    std::lock_guard<std::mutex> lock(_impl->mutex);
+    std::lock_guard<std::mutex> io_lock(_impl->recorder_io_mutex);
+    std::lock_guard<std::mutex> control_lock(_impl->control_mutex);
     if (!_impl->initialized || !validFormat(sample_rate, bits, channels)) {
         return false;
     }
@@ -158,7 +161,8 @@ bool StopWatchAudioBackend::openRecorder(uint32_t sample_rate, uint8_t bits, uin
 
 void StopWatchAudioBackend::closeRecorder()
 {
-    std::lock_guard<std::mutex> lock(_impl->mutex);
+    std::lock_guard<std::mutex> io_lock(_impl->recorder_io_mutex);
+    std::lock_guard<std::mutex> control_lock(_impl->control_mutex);
     if (_impl->lifecycle.closeRecorder() == AudioCloseResult::Closed) {
         i2s_channel_disable(_impl->rx_handle);
     }
@@ -167,16 +171,20 @@ void StopWatchAudioBackend::closeRecorder()
 std::size_t StopWatchAudioBackend::read(void* data, std::size_t bytes, TickType_t timeout)
 {
     (void)timeout;
-    std::lock_guard<std::mutex> lock(_impl->mutex);
-    if (!_impl->lifecycle.recorderOpen() || data == nullptr || bytes == 0) {
-        return 0;
+    std::lock_guard<std::mutex> io_lock(_impl->recorder_io_mutex);
+    {
+        std::lock_guard<std::mutex> control_lock(_impl->control_mutex);
+        if (!_impl->lifecycle.recorderOpen() || data == nullptr || bytes == 0) {
+            return 0;
+        }
     }
     return esp_codec_dev_read(_impl->codec_dev, data, bytes) == ESP_CODEC_DEV_OK ? bytes : 0;
 }
 
 bool StopWatchAudioBackend::openPlayer(uint32_t sample_rate, uint8_t bits, uint8_t channels)
 {
-    std::lock_guard<std::mutex> lock(_impl->mutex);
+    std::lock_guard<std::mutex> io_lock(_impl->player_io_mutex);
+    std::lock_guard<std::mutex> control_lock(_impl->control_mutex);
     if (!_impl->initialized || !validFormat(sample_rate, bits, channels)) {
         return false;
     }
@@ -192,7 +200,8 @@ bool StopWatchAudioBackend::openPlayer(uint32_t sample_rate, uint8_t bits, uint8
 
 void StopWatchAudioBackend::closePlayer()
 {
-    std::lock_guard<std::mutex> lock(_impl->mutex);
+    std::lock_guard<std::mutex> io_lock(_impl->player_io_mutex);
+    std::lock_guard<std::mutex> control_lock(_impl->control_mutex);
     if (_impl->lifecycle.closePlayer() == AudioCloseResult::Closed) {
         i2s_channel_disable(_impl->tx_handle);
     }
@@ -201,16 +210,20 @@ void StopWatchAudioBackend::closePlayer()
 std::size_t StopWatchAudioBackend::write(const void* data, std::size_t bytes, TickType_t timeout)
 {
     (void)timeout;
-    std::lock_guard<std::mutex> lock(_impl->mutex);
-    if (!_impl->lifecycle.playerOpen() || data == nullptr || bytes == 0) {
-        return 0;
+    std::lock_guard<std::mutex> io_lock(_impl->player_io_mutex);
+    {
+        std::lock_guard<std::mutex> control_lock(_impl->control_mutex);
+        if (!_impl->lifecycle.playerOpen() || data == nullptr || bytes == 0) {
+            return 0;
+        }
     }
     return esp_codec_dev_write(_impl->codec_dev, const_cast<void*>(data), bytes) == ESP_CODEC_DEV_OK ? bytes : 0;
 }
 
 bool StopWatchAudioBackend::resetPlayerPath()
 {
-    std::lock_guard<std::mutex> lock(_impl->mutex);
+    std::lock_guard<std::mutex> io_lock(_impl->player_io_mutex);
+    std::lock_guard<std::mutex> control_lock(_impl->control_mutex);
     if (!_impl->lifecycle.playerOpen()) {
         return false;
     }
@@ -219,13 +232,15 @@ bool StopWatchAudioBackend::resetPlayerPath()
 
 bool StopWatchAudioBackend::setVolume(uint8_t percent)
 {
-    std::lock_guard<std::mutex> lock(_impl->mutex);
+    std::lock_guard<std::mutex> io_lock(_impl->player_io_mutex);
+    std::lock_guard<std::mutex> control_lock(_impl->control_mutex);
     return _impl->initialized && esp_codec_dev_set_out_vol(_impl->codec_dev, percent) == ESP_CODEC_DEV_OK;
 }
 
 int StopWatchAudioBackend::getVolume() const
 {
-    std::lock_guard<std::mutex> lock(_impl->mutex);
+    std::lock_guard<std::mutex> io_lock(_impl->player_io_mutex);
+    std::lock_guard<std::mutex> control_lock(_impl->control_mutex);
     int volume = 0;
     if (_impl->initialized) {
         esp_codec_dev_get_out_vol(_impl->codec_dev, &volume);
@@ -235,7 +250,8 @@ int StopWatchAudioBackend::getVolume() const
 
 bool StopWatchAudioBackend::setGeneralGain(float gain_db)
 {
-    std::lock_guard<std::mutex> lock(_impl->mutex);
+    std::lock_guard<std::mutex> io_lock(_impl->recorder_io_mutex);
+    std::lock_guard<std::mutex> control_lock(_impl->control_mutex);
     return _impl->initialized && esp_codec_dev_set_in_gain(_impl->codec_dev, gain_db) == ESP_CODEC_DEV_OK;
 }
 
