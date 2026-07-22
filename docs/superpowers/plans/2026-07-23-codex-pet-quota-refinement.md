@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Use a pure-black Codex page, remove and enlarge the robot frame, center the robot/telemetry group, move each quota percentage to the right of its progress bar, and hide the host-name row in both the approved preview and firmware.
+**Goal:** Use a pure-black Codex page, remove and enlarge the robot frame, center the robot/telemetry group, move each quota percentage to the right of its progress bar, hide the host-name row, and shift all content below the connection status upward by 16 px in both the approved preview and firmware.
 
 **Architecture:** Keep all status data, timers, assets, and widget ownership unchanged. Update the layout contract first, then make the LVGL view consume those constants; update the standalone preview from the same exact geometry so it remains a faithful review surface.
 
@@ -23,7 +23,7 @@ Replace the pet-dock assertions with:
 ```cpp
 assert(kInstrumentBlack == 0x000000);
 assert(kPetX == 73);
-assert(kPetY == 104);
+assert(kPetY == 88);
 assert(kPetWidth == 110);
 assert(kPetHeight == 120);
 assert(kPetScale == 293);
@@ -66,11 +66,11 @@ Use these exact constants in `codex_status_ui_layout.h`:
 ```cpp
 constexpr uint32_t kInstrumentBlack = 0x000000;
 constexpr int kPetX = 73;
-constexpr int kPetY = 104;
+constexpr int kPetY = 88;
 constexpr int kPetWidth = 110;
 constexpr int kPetHeight = 120;
 constexpr int kPetScale = 293;
-constexpr Rect kBeaconSpine{194, 112, 2, 104};
+constexpr Rect kBeaconSpine{194, 96, 2, 104};
 constexpr int kTelemetryX = 214;
 constexpr int kTelemetryWidth = 200;
 
@@ -168,8 +168,8 @@ Remove the `.pet-dock` rule and element. Apply the approved pet and quota geomet
 
 ```css
 .watch { background: #000000; }
-.pet { left: 73px; top: 104px; width: 110px; height: 120px; }
-.spine { left: 194px; }
+.pet { left: 73px; top: 88px; width: 110px; height: 120px; }
+.spine { left: 194px; top: 96px; }
 .telemetry { left: 214px; width: 200px; }
 .quota-pct { left: 305px; top: -4px; width: 51px; text-align: right; }
 .track { left: 46px; top: 8px; width: 248px; }
@@ -178,6 +178,8 @@ Remove the `.pet-dock` rule and element. Apply the approved pet and quota geomet
 The quota positions are relative to `.quota-row` at `x=55`, producing global `x=101` for the track and `x=360` for the percentage.
 
 Also remove the `.host` rule and host-name element. Do not add a placeholder; the connection-status row stays at `y=63`.
+
+Shift every remaining content Y coordinate below the connection-status row upward by 16 px: telemetry `98/120/154/176`, quotas `220/260`, divider `304`, alerts `321/351/378`, and battery `419`.
 
 - [ ] **Step 2: Reload and visually inspect the preview**
 

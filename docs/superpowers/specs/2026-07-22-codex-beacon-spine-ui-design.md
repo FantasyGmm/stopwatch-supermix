@@ -31,17 +31,19 @@ Coordinates use the 466 × 466 screen's top-left origin.
 - Brand text: `x=218, y=32`.
 - Connection status: centered at `y=63`, width `180`.
 - Host name: not rendered; no placeholder or replacement text.
-- Pet image: `x=73, y=104, w=110, h=120`; no dock, border, card, or backdrop.
-- Beacon spine: `x=194, y=112, w=2, h=104`.
+- Pet image: `x=73, y=88, w=110, h=120`; no dock, border, card, or backdrop.
+- Beacon spine: `x=194, y=96, w=2, h=104`.
 - Telemetry column: `x=214, w=200`; right edge remains fixed at `x=414`.
-- Model caption/value: `y=114 / 136`.
-- Effort caption/value: `y=170 / 192`.
+- Model caption/value: `y=98 / 120`.
+- Effort caption/value: `y=154 / 176`.
 - Quota band: `x=55, w=356`.
-- 5H row: `y=236`; 7D row: `y=276`.
+- 5H row: `y=220`; 7D row: `y=260`.
 - Quota columns: label begins at `x=55`, track begins at `x=101` and is `248 × 8`, percentage begins at `x=360` with width `51` and right alignment.
-- Alert divider: `x=82, y=320, w=302`.
-- Alert heading/project/detail: centered at `y=337 / 367 / 394`.
-- Battery: centered at `y=435`.
+- Alert divider: `x=82, y=304, w=302`.
+- Alert heading/project/detail: centered at `y=321 / 351 / 378`.
+- Battery: centered at `y=419`.
+
+All content below the connection-status row is shifted upward by exactly 16 px after removing the host-name row. Horizontal geometry and internal spacing remain unchanged.
 
 ## Visual Tokens
 
