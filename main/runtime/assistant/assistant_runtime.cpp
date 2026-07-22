@@ -6,7 +6,11 @@
 #include "assistant_runtime.h"
 #include "assistant_stop_policy.h"
 #include "assistant_trace.h"
+#include "assistant_update_notice_bridge.h"
+#include "assistant_update_notice_policy.h"
+#include "assistant_update_notice_store.h"
 
+#include "apps/common/common.h"
 #include "hal/hal.h"
 #include "runtime/resource_supervisor.h"
 #include "runtime/runtime_diagnostics.h"
@@ -218,6 +222,8 @@ public:
 
     AssistantStateMachine state;
     AssistantEventMailbox mailbox;
+    AssistantUpdateNoticeModel update_notice{common::FirmwareVersion};
+    AssistantUpdateNoticeStore update_notice_store;
 
     WifiStaLease wifi;
     bool capture_owned = false;
@@ -254,6 +260,10 @@ public:
     void failStart(uint64_t session_id, const char* message);
     void releaseSession(uint64_t session_id);
     void disconnectSubscriptions();
+    void restoreUpdateNotice(uint64_t session_id);
+    void consumeUpdateNoticeReport(uint64_t session_id);
+    void applyUpdateStorageAction(AssistantUpdateStorageAction action);
+    void publishUpdateNotice(uint64_t session_id);
     bool callbackIsCurrentXiaozhi(uint64_t session_id, const std::string& actual_event,
                                   const std::string& expected_event) const;
     bool submitAction(uint64_t session_id, ManagerHelper::GeneralAction action,
@@ -298,10 +308,12 @@ AssistantStartResult AssistantRuntime::Impl::start()
     callback_xiaozhi_selected.store(false);
     control_bits.store(0);
     stop_submitted.store(false);
+    GetAssistantUpdateNoticeBridge().beginSession(session);
     mailbox.discardSessionsBefore(session);
     mailbox.publish({session, AssistantEventKind::State, "Starting"});
 
     try {
+        restoreUpdateNotice(session);
         log_memory_stage("before-resources");
         if (!GetServiceRuntime().isStarted()) {
             return failAndReturn(session, AssistantStartResult::ServiceUnavailable,
@@ -419,6 +431,7 @@ void AssistantRuntime::Impl::update(uint32_t now_ms)
         return;
     }
     const uint64_t session = state.sessionId();
+    consumeUpdateNoticeReport(session);
     if (service_setup_pending && state.state() == AssistantRuntimeState::Starting &&
         GetSharedWifiService().staConnected()) {
         finishStart(session);
@@ -840,8 +853,58 @@ void AssistantRuntime::Impl::disconnectSubscriptions()
     emote.disconnect();
 }
 
+void AssistantRuntime::Impl::restoreUpdateNotice(uint64_t session_id)
+{
+    const auto action = update_notice.restore(update_notice_store.load());
+    applyUpdateStorageAction(action);
+    publishUpdateNotice(session_id);
+}
+
+void AssistantRuntime::Impl::consumeUpdateNoticeReport(uint64_t session_id)
+{
+    const auto report = GetAssistantUpdateNoticeBridge().consume();
+    if (!report) {
+        return;
+    }
+    if (report->session_id != state.sessionId() || report->session_id != session_id) {
+        ESP_LOGW(tag, "discarded stale update notice report for session %" PRIu64,
+                 report->session_id);
+        return;
+    }
+
+    if (!NormalizeAssistantFirmwareVersion(report->version)) {
+        ESP_LOGW(tag, "ignored invalid remote firmware version");
+    }
+    const auto action = update_notice.observe(report->version);
+    applyUpdateStorageAction(action);
+    publishUpdateNotice(session_id);
+}
+
+void AssistantRuntime::Impl::applyUpdateStorageAction(AssistantUpdateStorageAction action)
+{
+    switch (action) {
+        case AssistantUpdateStorageAction::None:
+            return;
+        case AssistantUpdateStorageAction::Save:
+            update_notice_store.save(update_notice.pendingVersion());
+            return;
+        case AssistantUpdateStorageAction::Clear:
+            update_notice_store.clear();
+            return;
+    }
+}
+
+void AssistantRuntime::Impl::publishUpdateNotice(uint64_t session_id)
+{
+    if (update_notice.hasPending()) {
+        mailbox.publish(
+            {session_id, AssistantEventKind::UpdateAvailable, update_notice.pendingVersion()});
+    }
+}
+
 void AssistantRuntime::Impl::releaseSession(uint64_t session_id)
 {
+    GetAssistantUpdateNoticeBridge().endSession(session_id);
     if (session_id != state.sessionId()) {
         record_trace(session_id, AssistantTraceComponent::Runtime,
                      AssistantTraceEvent::Release, state.state(),

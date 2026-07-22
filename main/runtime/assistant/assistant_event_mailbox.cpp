@@ -93,6 +93,8 @@ int AssistantEventMailbox::persistentIndex(AssistantEventKind kind)
             return 1;
         case AssistantEventKind::Error:
             return 2;
+        case AssistantEventKind::UpdateAvailable:
+            return 3;
         case AssistantEventKind::UserText:
         case AssistantEventKind::AgentText:
         case AssistantEventKind::Emotion:

@@ -5,6 +5,19 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
 class FirmwareUpdateNoticeContractTests(unittest.TestCase):
+    def test_notice_uses_product_nvs_and_a_persistent_mailbox_slot(self):
+        store = (ROOT / "main/runtime/assistant/assistant_update_notice_store.cpp").read_text(encoding="utf-8")
+        mailbox_h = (ROOT / "main/runtime/assistant/assistant_event_mailbox.h").read_text(encoding="utf-8")
+        mailbox_cpp = (ROOT / "main/runtime/assistant/assistant_event_mailbox.cpp").read_text(encoding="utf-8")
+        runtime = (ROOT / "main/runtime/assistant/assistant_runtime.cpp").read_text(encoding="utf-8")
+        self.assertIn('"assistant_ui"', store)
+        self.assertIn('"update_ver"', store)
+        self.assertIn("nvs_commit", store)
+        self.assertIn("UpdateAvailable", mailbox_h)
+        self.assertIn("AssistantEventKind::UpdateAvailable", mailbox_cpp)
+        self.assertIn("AssistantUpdateNoticeStore", runtime)
+        self.assertIn("GetAssistantUpdateNoticeBridge", runtime)
+
     def test_xiaozhi_overlay_reports_version_without_install_inputs(self):
         overlay = (ROOT / "main/cmake/brookesia_xiaozhi_mcp_ownership_overlay.cmake").read_text(encoding="utf-8")
         self.assertIn("stopwatch_duplicate_firmware_version", overlay)

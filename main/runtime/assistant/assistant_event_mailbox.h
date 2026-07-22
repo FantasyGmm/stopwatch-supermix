@@ -20,6 +20,7 @@ enum class AssistantEventKind : uint8_t {
     UserText,
     AgentText,
     Emotion,
+    UpdateAvailable,
 };
 
 struct AssistantEvent {
@@ -46,7 +47,7 @@ private:
     static int persistentIndex(AssistantEventKind kind);
 
     mutable std::mutex _mutex;
-    std::array<std::optional<Envelope>, 3> _persistent;
+    std::array<std::optional<Envelope>, 4> _persistent;
     std::deque<Envelope> _transient;
     std::size_t _capacity;
     std::size_t _dropped = 0;
