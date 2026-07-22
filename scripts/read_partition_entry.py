@@ -39,6 +39,12 @@ def read_partition_table(path):
         chunk = data[index:index + ENTRY.size]
         if chunk == END_MARKER:
             break
+        if md5_seen:
+            if chunk[:16] == MD5_PREFIX:
+                raise PartitionTableError("duplicate partition table MD5 record")
+            raise PartitionTableError(
+                "partition table MD5 record must be terminal before padding"
+            )
         if chunk[:16] == MD5_PREFIX:
             if chunk[16:] != digest.digest():
                 raise PartitionTableError("partition table MD5 mismatch")

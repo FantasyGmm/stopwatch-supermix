@@ -9,6 +9,14 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "read_partition_entry.py"
 ENTRY = struct.Struct("<2sBBLL16sL")
 MD5_PREFIX = b"\xeb\xeb" + b"\xff" * 14
+ROW_COUNT = 6
+
+
+def pack_entry(kind, subtype, offset, size, name, magic=b"\xaa\x50"):
+    return ENTRY.pack(
+        magic, kind, subtype, offset, size,
+        name.encode().ljust(16, b"\0"), 0,
+    )
 
 
 def write_table(path, corrupt=False):
@@ -21,10 +29,7 @@ def write_table(path, corrupt=False):
         (1, 3, 0xFA0000, 0x10000, "coredump"),
     ]
     payload = b"".join(
-        ENTRY.pack(
-            b"\xaa\x50", kind, subtype, offset, size,
-            name.encode().ljust(16, b"\0"), 0,
-        )
+        pack_entry(kind, subtype, offset, size, name)
         for kind, subtype, offset, size, name in rows
     )
     digest = bytearray(hashlib.md5(payload).digest())
@@ -68,6 +73,61 @@ class PartitionTableReaderTests(unittest.TestCase):
         result = self.run_reader("assets", "offset")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("partition table MD5 mismatch", result.stderr)
+
+    def test_rejects_entry_after_terminal_md5(self):
+        data = self.table.read_bytes()
+        md5_end = ENTRY.size * (ROW_COUNT + 1)
+        trailing_entry = pack_entry(1, 4, 0xFB0000, 0x1000, "late")
+        self.table.write_bytes(data[:md5_end] + trailing_entry + b"\xff" * (0xC00 - md5_end - ENTRY.size))
+        result = self.run_reader("late", "offset")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("MD5 record must be terminal", result.stderr)
+
+    def test_rejects_duplicate_md5(self):
+        data = self.table.read_bytes()
+        md5_start = ENTRY.size * ROW_COUNT
+        md5_end = md5_start + ENTRY.size
+        duplicate = data[md5_start:md5_end]
+        self.table.write_bytes(data[:md5_end] + duplicate + b"\xff" * (0xC00 - md5_end - ENTRY.size))
+        result = self.run_reader("assets", "offset")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("duplicate partition table MD5 record", result.stderr)
+
+    def test_rejects_missing_md5(self):
+        self.table.write_bytes(self.table.read_bytes()[:ENTRY.size * ROW_COUNT])
+        result = self.run_reader("assets", "offset")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("partition table MD5 record is missing", result.stderr)
+
+    def test_rejects_invalid_entry_magic(self):
+        data = bytearray(self.table.read_bytes())
+        data[0] = 0
+        self.table.write_bytes(data)
+        result = self.run_reader("nvs", "offset")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("invalid entry magic", result.stderr)
+
+    def test_reads_type_and_subtype(self):
+        partition_type = self.run_reader("nvs", "type")
+        subtype = self.run_reader("nvs", "subtype")
+        self.assertEqual(partition_type.returncode, 0, partition_type.stderr)
+        self.assertEqual(subtype.returncode, 0, subtype.stderr)
+        self.assertEqual(partition_type.stdout.strip(), "0x1")
+        self.assertEqual(subtype.stdout.strip(), "0x2")
+
+    def test_rejects_malformed_length(self):
+        self.table.write_bytes(b"\0")
+        result = self.run_reader("assets", "offset")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("length is not a multiple of 32", result.stderr)
+
+    def test_rejects_invalid_utf8_name(self):
+        data = bytearray(self.table.read_bytes())
+        data[12] = 0xFF
+        self.table.write_bytes(data)
+        result = self.run_reader("nvs", "offset")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("invalid start byte", result.stderr)
 
 
 if __name__ == "__main__":
