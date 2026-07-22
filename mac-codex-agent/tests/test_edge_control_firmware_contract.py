@@ -6,7 +6,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
 class EdgeControlFirmwareContractTests(unittest.TestCase):
-    def test_shared_overlay_owns_rendering_gesture_and_hal_contracts(self):
+    def test_shared_overlay_is_presentation_only_and_centers_markers(self):
         edge_control_root = ROOT / "main" / "apps" / "common" / "edge_control"
         header = (edge_control_root / "edge_control_overlay.h").read_text(
             encoding="utf-8"
@@ -17,34 +17,35 @@ class EdgeControlFirmwareContractTests(unittest.TestCase):
 
         for token in (
             "class EdgeControlOverlay",
-            "EdgeControlLogic _logic",
-            "void init(lv_obj_t* parent",
-            "void update()",
+            "void init(lv_obj_t* parent)",
+            "void show(EdgeControlSide side, int value)",
+            "void hide()",
             "void shutdown()",
-            "bool last_release_consumed() const",
+            "EdgeControlSide _visible_side",
+            "int _current_value",
         ):
             self.assertIn(token, header)
 
         for token in (
-            "GetHAL().setBackLightBrightness",
-            "GetHAL().setSpeakerVolume",
-            "GetHAL().getBackLightBrightness",
-            "GetHAL().getSpeakerVolume",
+            "LV_EVENT_DRAW_MAIN_BEGIN",
+            "lv_obj_remove_event_cb_with_user_data",
+            "draw_sun_icon",
+            "draw_speaker_icon",
+            "draw_percent_label",
+            "_control_arc_radius - _control_arc_width / 2",
+        ):
+            self.assertIn(token, source)
+
+        for forbidden in (
+            "EdgeControlLogic _logic",
+            "GetHAL()",
+            "lv_indev_get_state",
             "_logic.press",
             "_logic.move",
             "_logic.release",
             "_logic.tick",
-            "LV_EVENT_DRAW_MAIN_BEGIN",
-            "lv_obj_remove_event_cb_with_user_data",
-            "_last_release_consumed",
-            "_on_active_changed(true)",
-            "_on_active_changed(false)",
-            "update.value, update.persist",
-            "draw_sun_icon",
-            "draw_speaker_icon",
-            "draw_percent_label",
         ):
-            self.assertIn(token, source)
+            self.assertNotIn(forbidden, header + source)
 
     def test_launcher_uses_shared_overlay_and_preserves_horizontal_swipes(self):
         launcher_root = ROOT / "main" / "apps" / "app_launcher" / "view"
