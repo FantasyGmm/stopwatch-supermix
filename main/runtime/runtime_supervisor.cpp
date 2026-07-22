@@ -110,7 +110,9 @@ bool RuntimeSupervisor::requestAssistantVolumeSync(int volume)
     if (!_started || !onRuntimeThread()) {
         return false;
     }
-    if (GetAssistantRuntime().state() != AssistantRuntimeState::Running) {
+    const AssistantRuntimeState state = GetAssistantRuntime().state();
+    if (state != AssistantRuntimeState::Starting &&
+        state != AssistantRuntimeState::Running) {
         return true;
     }
     return GetAssistantRuntime().requestOutputVolumeSync(volume);

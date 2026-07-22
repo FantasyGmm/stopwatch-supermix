@@ -168,20 +168,41 @@ class EdgeControlFirmwareContractTests(unittest.TestCase):
         runtime = (
             ROOT / "main" / "runtime" / "assistant" / "assistant_runtime.cpp"
         ).read_text(encoding="utf-8")
+        policy = (
+            ROOT
+            / "main"
+            / "runtime"
+            / "assistant"
+            / "assistant_output_sync_policy.cpp"
+        ).read_text(encoding="utf-8")
 
         self.assertIn("requestAssistantVolumeSync(update.value)", service)
         self.assertIn("requestOutputVolumeSync(volume)", supervisor)
-        self.assertIn("pending_output_volume", runtime)
+        self.assertIn("AssistantRuntimeState::Starting", supervisor)
+        self.assertIn("AssistantOutputSyncPolicy output_sync", runtime)
+        self.assertIn("output_sync.request(volume)", runtime)
+        self.assertIn("output_sync.begin(", runtime)
+        self.assertIn("output_sync.markVolumeResult", runtime)
+        self.assertIn("output_sync.markMuteResult", runtime)
+        self.assertIn("result.success", runtime)
         self.assertIn("AudioHelper::call_function_async", runtime)
         self.assertIn("AudioHelper::FunctionId::SetVolume", runtime)
         self.assertIn("AudioHelper::FunctionId::SetMute", runtime)
         self.assertIn("volume <= 0", runtime)
+        self.assertIn("CompletionTimeoutMs", policy)
+        self.assertIn("RetryDelayMs", policy)
+        self.assertIn("compare_exchange_strong", policy)
 
-    def test_offline_runner_executes_edge_control_host_test(self):
+    def test_offline_runner_executes_edge_and_output_sync_host_tests(self):
         runner = (ROOT / "scripts" / "run_unified_offline_validation.sh").read_text(
             encoding="utf-8"
         )
 
+        self.assertIn("Assistant output sync policy host test", runner)
+        self.assertIn("tests/assistant_output_sync_policy_test.cpp", runner)
+        self.assertIn(
+            "main/runtime/assistant/assistant_output_sync_policy.cpp", runner
+        )
         self.assertIn("Global edge control host test", runner)
         self.assertIn("tests/edge_control_logic_test.cpp", runner)
         self.assertIn(
