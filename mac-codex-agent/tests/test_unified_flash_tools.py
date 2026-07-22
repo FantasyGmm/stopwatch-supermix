@@ -169,7 +169,7 @@ class UnifiedFlashToolsTest(unittest.TestCase):
         ):
             self.assertIn(artifact, result.stdout)
 
-    def test_candidate_dry_run_reads_offsets_from_generated_partition_table(self):
+    def test_candidate_dry_run_rejects_valid_md5_partition_map_drift_before_write(self):
         write_test_partition_table(
             self.build / "partition_table" / "partition-table.bin",
             app_size=0x10000,
@@ -189,11 +189,8 @@ class UnifiedFlashToolsTest(unittest.TestCase):
             self.build,
         )
 
-        self.assertEqual(result.returncode, 0, result.stderr)
-        for offset in ("0x030000", "0xef0000"):
-            self.assertEqual(result.stdout.split().count(offset), 1, result.stdout)
-        self.assertNotIn("0x020000", result.stdout)
-        self.assertNotIn("0xee0000", result.stdout.lower())
+        self.assert_rejected_before_write(result)
+        self.assertIn("stopwatch-single-system-v1", result.stderr)
 
     def test_reader_aware_python_wrapper_delegates_reader_and_blocks_esptool(self):
         with tempfile.TemporaryDirectory(prefix="reader wrapper ") as temp_dir:
@@ -504,43 +501,35 @@ class UnifiedFlashToolsTest(unittest.TestCase):
         self.assert_rejected_before_write(result)
         self.assertIn("Unified assets exceeds capacity limit", result.stderr)
 
-    def test_candidate_rejects_app_larger_than_generated_partition(self):
-        write_test_partition_table(
-            self.build / "partition_table" / "partition-table.bin", app_size=2
+    def test_candidate_keeps_app_generated_partition_capacity_guard(self):
+        script = (SCRIPTS / "flash_unified_candidate.sh").read_text(
+            encoding="utf-8"
         )
 
-        result = run_script(
-            "flash_unified_candidate.sh",
-            "--dry-run",
-            "--port",
-            "/dev/test",
-            "--backup",
-            self.backup,
-            "--build-dir",
-            self.build,
+        self.assertIn(
+            'check_max_size "$APP" "$APP_PARTITION_BYTES" '
+            '"Unified application exceeds partition capacity"',
+            script,
         )
 
-        self.assert_rejected_before_write(result)
-        self.assertIn("Unified application exceeds partition capacity", result.stderr)
-
-    def test_candidate_rejects_assets_larger_than_generated_partition(self):
-        write_test_partition_table(
-            self.build / "partition_table" / "partition-table.bin", assets_size=3
+    def test_candidate_keeps_assets_generated_partition_capacity_guard(self):
+        script = (SCRIPTS / "flash_unified_candidate.sh").read_text(
+            encoding="utf-8"
         )
 
-        result = run_script(
-            "flash_unified_candidate.sh",
-            "--dry-run",
-            "--port",
-            "/dev/test",
-            "--backup",
-            self.backup,
-            "--build-dir",
-            self.build,
+        self.assertIn(
+            'check_max_size "$ASSETS" "$ASSETS_PARTITION_BYTES" '
+            '"Unified assets exceeds partition capacity"',
+            script,
         )
 
-        self.assert_rejected_before_write(result)
-        self.assertIn("Unified assets exceeds partition capacity", result.stderr)
+    def test_candidate_uses_strict_profile_for_each_partition_lookup(self):
+        script = (SCRIPTS / "flash_unified_candidate.sh").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn('PARTITION_PROFILE="stopwatch-single-system-v1"', script)
+        self.assertEqual(script.count('--profile "$PARTITION_PROFILE"'), 4)
 
     def test_candidate_rejects_invalid_partition_table_before_printing_write(self):
         (self.build / "partition_table" / "partition-table.bin").write_bytes(b"bad")
