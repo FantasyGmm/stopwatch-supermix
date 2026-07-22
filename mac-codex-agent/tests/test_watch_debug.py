@@ -53,6 +53,13 @@ class WatchDebugTests(unittest.TestCase):
             module.build_command("assistant-trace-clear"),
             b"debug assistant trace clear\n",
         )
+        self.assertEqual(
+            module.build_command("assistant-wifi-cycle"),
+            b"debug assistant wifi-cycle\n",
+        )
+        self.assertEqual(module.build_command("volume", 0), b"debug volume 0\n")
+        with self.assertRaises(module.DebugCommandError):
+            module.build_command("volume", 101)
 
     def test_classifies_matching_responses_and_errors(self):
         module = load_module()
@@ -108,6 +115,16 @@ class WatchDebugTests(unittest.TestCase):
             module.classify_response(
                 "assistant-trace-clear", None, "DEBUG ASSISTANT TRACE CLEAR OK"
             ),
+            module.ResponseStatus.SUCCESS,
+        )
+        self.assertEqual(
+            module.classify_response(
+                "assistant-wifi-cycle", None, "DEBUG ASSISTANT WIFI CYCLE OK"
+            ),
+            module.ResponseStatus.SUCCESS,
+        )
+        self.assertEqual(
+            module.classify_response("volume", 0, "DEBUG VOLUME 0 OK"),
             module.ResponseStatus.SUCCESS,
         )
 

@@ -7,6 +7,7 @@
 #include <runtime/assistant/assistant_runtime.h>
 #include <runtime/assistant/assistant_trace.h>
 #include <runtime/runtime_supervisor.h>
+#include <runtime/services/shared_wifi_service.h>
 
 #include <cinttypes>
 #include <string_view>
@@ -143,6 +144,28 @@ void DebugCommandService::dispatchLine()
     if (command.kind == DebugCommandKind::AssistantTraceClear) {
         GetAssistantTrace().clear();
         ESP_LOGI(tag, "DEBUG ASSISTANT TRACE CLEAR OK");
+        return;
+    }
+    if (command.kind == DebugCommandKind::AssistantWifiCycle) {
+        auto& assistant = GetAssistantRuntime();
+        const bool active = assistant.state() != AssistantRuntimeState::Stopped;
+        const bool cycled = active && GetSharedWifiService().cycleStaForValidation();
+        GetAssistantTrace().record({
+            .session_id = assistant.sessionId(),
+            .timestamp_ms = GetHAL().millis(),
+            .component = AssistantTraceComponent::Debug,
+            .event = AssistantTraceEvent::ResourceDecision,
+            .state = assistant.state(),
+            .detail = AssistantTraceDetail::Wifi,
+            .result = cycled ? AssistantTraceResult::Accepted
+                             : AssistantTraceResult::Rejected,
+        });
+        ESP_LOGI(tag, "DEBUG ASSISTANT WIFI CYCLE %s", cycled ? "OK" : "BUSY");
+        return;
+    }
+    if (command.kind == DebugCommandKind::VolumeSet) {
+        GetHAL().setSpeakerVolume(command.value, false);
+        ESP_LOGI(tag, "DEBUG VOLUME %u OK", static_cast<unsigned>(command.value));
         return;
     }
     ESP_LOGE(tag, "DEBUG ERROR INVALID_COMMAND");

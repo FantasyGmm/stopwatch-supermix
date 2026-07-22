@@ -14,6 +14,8 @@ enum class DebugCommandKind : uint8_t {
     AssistantStatus,
     AssistantTrace,
     AssistantTraceClear,
+    AssistantWifiCycle,
+    VolumeSet,
 };
 
 enum class DebugCommandError : uint8_t {
@@ -26,6 +28,7 @@ struct DebugCommand {
     DebugCommandKind kind = DebugCommandKind::None;
     DebugCommandError error = DebugCommandError::None;
     std::array<char, 49> argument{};
+    uint8_t value = 0;
 };
 
 constexpr std::size_t debug_command_max_line_length = 64;

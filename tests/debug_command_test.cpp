@@ -69,6 +69,19 @@ int main()
            DebugCommandKind::AssistantTrace);
     assert(ParseDebugCommand("debug assistant trace clear").kind ==
            DebugCommandKind::AssistantTraceClear);
+    assert(ParseDebugCommand("debug assistant wifi-cycle").kind ==
+           DebugCommandKind::AssistantWifiCycle);
+
+    const auto muted = ParseDebugCommand("debug volume 0");
+    assert(muted.kind == DebugCommandKind::VolumeSet);
+    assert(muted.value == 0);
+    const auto full_volume = ParseDebugCommand("debug volume 100\r");
+    assert(full_volume.kind == DebugCommandKind::VolumeSet);
+    assert(full_volume.value == 100);
+    assert(ParseDebugCommand("debug volume 101").error ==
+           DebugCommandError::InvalidCommand);
+    assert(ParseDebugCommand("debug volume -1").error ==
+           DebugCommandError::InvalidCommand);
 
     assert(ParseDebugCommand("app open assistant").error ==
            DebugCommandError::InvalidCommand);

@@ -10,6 +10,8 @@ constexpr std::string_view assistant_home_command = "debug assistant home";
 constexpr std::string_view assistant_status_command = "debug assistant status";
 constexpr std::string_view assistant_trace_command = "debug assistant trace";
 constexpr std::string_view assistant_trace_clear_command = "debug assistant trace clear";
+constexpr std::string_view assistant_wifi_cycle_command = "debug assistant wifi-cycle";
+constexpr std::string_view volume_prefix = "debug volume ";
 
 char normalized_character(char value)
 {
@@ -53,6 +55,28 @@ DebugCommand ParseDebugCommand(std::string_view line)
     }
     if (line == assistant_trace_clear_command) {
         command.kind = DebugCommandKind::AssistantTraceClear;
+        return command;
+    }
+    if (line == assistant_wifi_cycle_command) {
+        command.kind = DebugCommandKind::AssistantWifiCycle;
+        return command;
+    }
+    if (line.size() > volume_prefix.size() &&
+        line.substr(0, volume_prefix.size()) == volume_prefix) {
+        unsigned value = 0;
+        for (char character : line.substr(volume_prefix.size())) {
+            if (!std::isdigit(static_cast<unsigned char>(character))) {
+                command.error = DebugCommandError::InvalidCommand;
+                return command;
+            }
+            value = value * 10U + static_cast<unsigned>(character - '0');
+            if (value > 100U) {
+                command.error = DebugCommandError::InvalidCommand;
+                return command;
+            }
+        }
+        command.kind = DebugCommandKind::VolumeSet;
+        command.value = static_cast<uint8_t>(value);
         return command;
     }
     if (line.size() <= open_prefix.size() || line.substr(0, open_prefix.size()) != open_prefix) {

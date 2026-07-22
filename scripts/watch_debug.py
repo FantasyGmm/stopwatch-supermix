@@ -51,11 +51,14 @@ def build_command(action, name=None):
         return b"debug app home\n"
     if action == "open" and name is not None:
         return f"debug app open {normalize_app_name(name)}\n".encode("ascii")
+    if action == "volume" and isinstance(name, int) and 0 <= name <= 100:
+        return f"debug volume {name}\n".encode("ascii")
     assistant_commands = {
         "assistant-home": b"debug assistant home\n",
         "assistant-status": b"debug assistant status\n",
         "assistant-trace": b"debug assistant trace\n",
         "assistant-trace-clear": b"debug assistant trace clear\n",
+        "assistant-wifi-cycle": b"debug assistant wifi-cycle\n",
     }
     if action in assistant_commands:
         return assistant_commands[action]
@@ -85,11 +88,20 @@ def classify_response(action, name, line):
             return ResponseStatus.SUCCESS
         if f"{prefix}BUSY" in line or f"{prefix}NOT_FOUND" in line:
             return ResponseStatus.REJECTED
+    if action == "volume" and isinstance(name, int):
+        prefix = f"DEBUG VOLUME {name} "
+        if prefix in line:
+            return (
+                ResponseStatus.SUCCESS
+                if f"{prefix}OK" in line
+                else ResponseStatus.REJECTED
+            )
     assistant_responses = {
         "assistant-home": "DEBUG ASSISTANT HOME ",
         "assistant-status": "DEBUG ASSISTANT STATUS ",
         "assistant-trace": "DEBUG ASSISTANT TRACE ",
         "assistant-trace-clear": "DEBUG ASSISTANT TRACE CLEAR ",
+        "assistant-wifi-cycle": "DEBUG ASSISTANT WIFI CYCLE ",
     }
     prefix = assistant_responses.get(action)
     if prefix is not None and prefix in line:
@@ -189,6 +201,9 @@ def build_parser():
     assistant_command.add_parser("status")
     assistant_command.add_parser("trace")
     assistant_command.add_parser("trace-clear")
+    assistant_command.add_parser("wifi-cycle")
+    volume = scopes.add_parser("volume")
+    volume.add_argument("value", type=int, choices=range(0, 101))
     return parser
 
 
@@ -196,12 +211,16 @@ def main(argv=None):
     args = build_parser().parse_args(argv)
     try:
         path = args.port or discover_port()
-        name = getattr(args, "name", None)
-        action = (
-            args.action
-            if args.scope == "app"
-            else f"assistant-{args.action}"
-        )
+        if args.scope == "volume":
+            name = args.value
+            action = "volume"
+        else:
+            name = getattr(args, "name", None)
+            action = (
+                args.action
+                if args.scope == "app"
+                else f"assistant-{args.action}"
+            )
         with SerialTransport(path) as transport:
             execute_command(
                 transport,
