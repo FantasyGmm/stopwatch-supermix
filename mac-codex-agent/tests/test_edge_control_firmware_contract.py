@@ -177,6 +177,17 @@ class EdgeControlFirmwareContractTests(unittest.TestCase):
         self.assertIn("AudioHelper::FunctionId::SetMute", runtime)
         self.assertIn("volume <= 0", runtime)
 
+    def test_offline_runner_executes_edge_control_host_test(self):
+        runner = (ROOT / "scripts" / "run_unified_offline_validation.sh").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("Global edge control host test", runner)
+        self.assertIn("tests/edge_control_logic_test.cpp", runner)
+        self.assertIn(
+            "main/apps/common/edge_control/edge_control_logic.cpp", runner
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
