@@ -13,8 +13,11 @@ class FirmwareUpdateNoticeContractTests(unittest.TestCase):
             for row in csv.reader(handle):
                 values = [value.strip() for value in row]
                 if values and values[0] and not values[0].startswith("#"):
+                    self.assertGreaterEqual(
+                        len(values), 3, f"malformed partition CSV row: {values!r}"
+                    )
                     rows.append(values)
-        apps = [row for row in rows if len(row) >= 3 and row[1] == "app"]
+        apps = [row for row in rows if row[1] == "app"]
         self.assertEqual([(row[0], row[2]) for row in apps], [("app", "factory")])
         self.assertFalse(any(row[0] == "otadata" for row in rows))
         self.assertFalse(any(row[2] in ("ota_0", "ota_1") for row in apps))
@@ -24,6 +27,17 @@ class FirmwareUpdateNoticeContractTests(unittest.TestCase):
             r"esp_https_ota|esp_ota_begin|esp_ota_write|"
             r"esp_ota_end|esp_ota_set_boot_partition|esp_restart"
         )
+        source_suffixes = {
+            ".c",
+            ".cc",
+            ".cpp",
+            ".cxx",
+            ".h",
+            ".hh",
+            ".hpp",
+            ".hxx",
+            ".cmake",
+        }
         offenders = []
         roots = (
             ROOT / "main/runtime/assistant",
@@ -32,7 +46,7 @@ class FirmwareUpdateNoticeContractTests(unittest.TestCase):
         )
         for root in roots:
             for path in root.rglob("*"):
-                if path.suffix in {".c", ".cc", ".cpp", ".h", ".hpp", ".cmake"}:
+                if path.name == "CMakeLists.txt" or path.suffix in source_suffixes:
                     if forbidden.search(path.read_text(encoding="utf-8")):
                         offenders.append(path.relative_to(ROOT).as_posix())
         self.assertEqual(offenders, [])
@@ -98,6 +112,10 @@ class FirmwareUpdateNoticeContractTests(unittest.TestCase):
 
     def test_xiaozhi_overlay_reports_version_without_install_inputs(self):
         overlay = (ROOT / "main/cmake/brookesia_xiaozhi_mcp_ownership_overlay.cmake").read_text(encoding="utf-8")
+        request_start = overlay.index("set(versioned_info_request")
+        request_end = overlay.index("]=])", request_start)
+        request = overlay[request_start:request_end]
+
         self.assertIn("stopwatch_duplicate_firmware_version", overlay)
         self.assertIn("stopwatch_capture_firmware_update_session_token", overlay)
         self.assertIn("stopwatch_report_remote_firmware_version", overlay)
@@ -105,13 +123,21 @@ class FirmwareUpdateNoticeContractTests(unittest.TestCase):
             "stopwatch_report_remote_firmware_version(update_notice_session_token, info.firmware_version)",
             overlay,
         )
-        self.assertIn("info.current_version", overlay)
-        self.assertIn("info.firmware_version", overlay)
-        self.assertNotIn("info.firmware_url", overlay)
-        self.assertNotIn("force", overlay)
-        self.assertNotIn("install", overlay)
-        self.assertNotIn("esp_https_ota", overlay)
-        self.assertNotIn("esp_ota_", overlay)
+        self.assertEqual(
+            set(re.findall(r"\binfo\.([A-Za-z_]\w*)", request)),
+            {"current_version", "firmware_version"},
+        )
+        for forbidden in (
+            r"\binfo\.firmware_url\b",
+            r"\bforce\b",
+            r"\bdownload\b",
+            r"\binstall\b",
+            r"\besp_restart\b",
+            r"\besp_ota_set_boot_partition\b",
+            r"\besp_https_ota\b",
+            r"\besp_ota_(?:begin|write|end)\b",
+        ):
+            self.assertIsNone(re.search(forbidden, request), forbidden)
 
     def test_xiaozhi_overlay_frees_failed_info_before_return_guard(self):
         overlay = (ROOT / "main/cmake/brookesia_xiaozhi_mcp_ownership_overlay.cmake").read_text(encoding="utf-8")
