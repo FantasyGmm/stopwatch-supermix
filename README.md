@@ -14,7 +14,9 @@ This project is based on the M5Stack StopWatch user demo and extends it with:
 
 - Device: M5Stack StopWatch
 - Chip: ESP32-S3
-- Flash layout: the unified candidate uses one 7.5 MiB factory application, FAT storage, SPIFFS assets, and coredump partitions on 16 MB Flash
+- Flash layout: one 13.75 MiB factory application, 1 MiB FAT storage,
+  768 KiB read-only Assistant assets, and a 64 KiB coredump partition on
+  16 MiB Flash
 - Display/UI stack: LVGL 9, M5GFX, Mooncake, Smooth UI Toolkit
 - Toolchain: ESP-IDF v5.5.4
 
@@ -138,9 +140,15 @@ Runtime responsibilities are intentionally separated:
 - the StopWatch HAL owns display, buttons, microphone, speaker, and other hardware;
 - `ResourceSupervisor` and the shared Wi-Fi/audio services arbitrate resources between apps.
 
-The default [`partitions.csv`](partitions.csv) contains one 7.5 MiB factory application at `0x20000`; generated wake/audio assets remain in a separate `assets` partition at `0x8a0000`. Assets are part of the same full-firmware release even though they are not linked into the application binary. The old dual-OTA layout and Assistant-only slot tools have been removed.
+The default `partitions.csv` contains one 13.75 MiB factory application at
+`0x20000`, 1 MiB writable FAT storage at `0xDE0000`, and 768 KiB of generated
+Assistant assets at `0xEE0000`. The release remains USB-only and has no OTA
+application slot or automatic rollback. Before the first write of this layout,
+retain a checksum-verified complete 16 MiB Flash backup.
 
-This first-phase layout has no remote firmware update and no automatic rollback. Installations update the bootloader, partition table, unified application, and assets together over USB. Returning to an older release requires restoring a verified complete 16 MiB Flash backup over USB.
+The first migration initializes the relocated Storage partition as a clean FAT
+filesystem. Existing Storage files are not copied automatically. NVS keeps its
+starting offset, but settings preservation must be verified after migration.
 
 ## Navigation
 
