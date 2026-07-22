@@ -26,8 +26,11 @@ constexpr UBaseType_t kProducerTaskPriority = 5;
 constexpr TickType_t kProducerIdleDelay = pdMS_TO_TICKS(1);
 constexpr TickType_t kCaptureReadTimeout = pdMS_TO_TICKS(100);
 constexpr TickType_t kProducerStopTimeout = pdMS_TO_TICKS(500);
+constexpr TickType_t kProducerCancelGraceTimeout = pdMS_TO_TICKS(250);
 static_assert(kProducerStopTimeout > kCaptureReadTimeout,
               "worker stop timeout must exceed the maximum capture read timeout");
+static_assert(kProducerCancelGraceTimeout > kCaptureReadTimeout,
+              "worker cancellation grace must exceed capture read timeout");
 constexpr uint16_t kMinimumNotificationLimit =
     ble_voice_probe::kNotificationHeaderSize + ble_voice_probe::kStopSummarySize;
 constexpr uint32_t kCaptureRate = 44100;
@@ -312,22 +315,32 @@ void BleVoiceProbeController::shutdown()
 {
     _shutdown_requested = true;
     if (_producer_task != nullptr) {
-        xTaskNotifyGive(static_cast<TaskHandle_t>(_producer_task));
-        if (_producer_stopped != nullptr &&
-            xSemaphoreTake(static_cast<SemaphoreHandle_t>(_producer_stopped), kProducerStopTimeout) != pdTRUE) {
-            ESP_LOGW(kTag, "voice probe worker exceeded 500 ms stop barrier; entering safety wait");
-            // This fallback is intentionally unbounded: deleting a task that might
-            // hold recorder_io_mutex would corrupt the shared audio backend.
-            xSemaphoreTake(static_cast<SemaphoreHandle_t>(_producer_stopped), portMAX_DELAY);
+        TaskHandle_t worker = static_cast<TaskHandle_t>(_producer_task);
+        xTaskNotifyGive(worker);
+        bool worker_stopped = _producer_stopped != nullptr &&
+                              xSemaphoreTake(
+                                  static_cast<SemaphoreHandle_t>(_producer_stopped),
+                                  kProducerStopTimeout) == pdTRUE;
+        if (!worker_stopped) {
+            ESP_LOGW(kTag, "voice probe worker exceeded 500 ms stop barrier; aborting bounded wait");
+            xTaskAbortDelay(worker);
+            xTaskNotifyGive(worker);
+            worker_stopped = _producer_stopped != nullptr &&
+                             xSemaphoreTake(
+                                 static_cast<SemaphoreHandle_t>(_producer_stopped),
+                                 kProducerCancelGraceTimeout) == pdTRUE;
+            if (!worker_stopped) {
+                ESP_LOGW(kTag, "voice probe worker exceeded cancellation grace; forcing deletion");
+            }
         }
-        // The worker signals only after releasing recorder/resampler resources and
-        // then suspends, so deleting it here cannot strand recorder_io_mutex.
-        vTaskDelete(static_cast<TaskHandle_t>(_producer_task));
+        // read() holds no backend mutex while its I2S wait is active. The abort
+        // plus grace period exceeds that wait's 100 ms bound, so forced deletion
+        // cannot strand an audio mutex or the I2S driver's read-side binary lock.
+        vTaskDelete(worker);
         _producer_task = nullptr;
     }
 
-    // No worker can hold recorder or resampler state after the barrier above.
-    release_audio_resources();
+    release_audio_resources(true);
     _link_active = false;
     reset_session_locked();
     if (_packet_queue != nullptr) {
@@ -702,8 +715,11 @@ void BleVoiceProbeController::fail_microphone_session(ble_voice_probe::ErrorCode
     release_audio_resources();
 }
 
-void BleVoiceProbeController::release_audio_resources()
+void BleVoiceProbeController::release_audio_resources(bool forced_cleanup)
 {
+    if (_shutdown_requested.load() && !forced_cleanup) {
+        return;
+    }
     if (_resampler != nullptr) {
         esp_ae_rate_cvt_close(_resampler);
         _resampler = nullptr;
@@ -719,6 +735,12 @@ void BleVoiceProbeController::release_audio_resources()
     _resampler_output.clear();
     _microphone_pcm.clear();
     _resampler_output_capacity = 0;
+
+    if (forced_cleanup) {
+        _microphone_setup_pending = false;
+        _microphone_cleanup_pending = false;
+        return;
+    }
 
     StateLock lock(_state_mutex);
     if (lock.locked()) {

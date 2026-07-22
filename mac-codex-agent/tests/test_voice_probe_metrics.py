@@ -100,6 +100,44 @@ class VoiceProbeMetricsTests(unittest.TestCase):
         )
         self.assertEqual(result["wav_duration_error_percent"], 0.0)
         self.assertTrue(result["manual_audio_review_required"])
+        self.assertTrue(result["sender_receiver_payload_byte_parity"])
+        self.assertTrue(result["microphone_block_byte_parity"])
+
+    def test_microphone_requires_receiver_and_fixed_block_byte_parity(self):
+        cases = (
+            (
+                "receiver_mismatch",
+                (bytes(164), bytes(163)),
+                StopSummary(2, 2, 0, 0, 2000, 328, 32000, 256),
+                "payload_byte_parity",
+            ),
+            (
+                "block_mismatch",
+                (bytes(165), bytes(165)),
+                StopSummary(2, 2, 0, 0, 2000, 330, 32000, 256),
+                "microphone_block_byte_parity",
+            ),
+        )
+        for name, payloads, summary, failure_reason in cases:
+            with self.subTest(name=name):
+                metrics = ProbeMetrics(
+                    session=9,
+                    mode=MICROPHONE_ADPCM,
+                    target_bps=8192,
+                )
+                for sequence, payload in enumerate(payloads, start=1):
+                    metrics.observe(
+                        Notification(DATA, 9, sequence, sequence * 20, payload),
+                        arrival_ns=sequence * 20_000_000,
+                    )
+                result = metrics.finish(
+                    summary=summary,
+                    disconnected=False,
+                    decoded_pcm_samples=32000,
+                )
+                self.assertFalse(result["automated_pass"])
+                self.assertIn(failure_reason, result["failure_reasons"])
+
 
     def test_p95_deviation_over_40_ms_fails(self):
         metrics = ProbeMetrics(session=9, mode=SYNTHETIC, target_bps=8192)

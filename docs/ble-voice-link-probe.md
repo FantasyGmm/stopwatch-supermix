@@ -19,13 +19,21 @@ Create an evidence directory and record the firmware source revision used for
 the test:
 
 ```bash
-cd /Users/bytedance/Projects.localized/Codex/StopWatch
-PYTHON=/Users/bytedance/Projects.localized/Codex/StopWatch/mac-codex-agent/.venv/bin/python
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+PYTHON="$ROOT/mac-codex-agent/.venv/bin/python"
+FIRMWARE="${FIRMWARE:-$ROOT/build-unified/StopWatch-UserDemo.bin}"
 EVIDENCE="/tmp/stopwatch-ble-voice-probe/$(date +%Y%m%d-%H%M%S)"
-REVISION="$(git rev-parse HEAD)"
+REVISION="$(git -C "$ROOT" rev-parse HEAD)"
+test -f "$FIRMWARE"
 mkdir -p "$EVIDENCE"
 printf '%s\n' "$REVISION" > "$EVIDENCE/firmware-git-revision.txt"
+shasum -a 256 "$FIRMWARE" > "$EVIDENCE/firmware-app.sha256"
 ```
+
+`firmware-git-revision.txt` records the source checkout. `firmware-app.sha256`
+records the exact binary flashed for the hardware run; keep both with every
+probe report so a rebuilt image is not mistaken for the tested firmware.
 
 The CLI discovers `StopWatch-Codex` by name or its voice-probe BLE service.
 Each run requires a duration in seconds and a report destination. Pass the
@@ -113,9 +121,11 @@ following:
 - `disconnected` is false and `summary_semantically_valid` is true.
 
 For the microphone profile, the same transport conditions apply. In addition,
-`wav_duration_error_percent` must be at most 1% against
-`captured_pcm_samples`. The manual listening review remains required even when
-these automated checks pass.
+`sender_receiver_payload_byte_parity` and `microphone_block_byte_parity` must be
+true: every generated packet is one 164-byte ADPCM block and sender payload
+bytes must equal receiver payload bytes. `wav_duration_error_percent` must also
+be at most 1% against `captured_pcm_samples`. The manual listening review
+remains required even when these automated checks pass.
 
 The 32768 B/s result is labeled `exploratory_pass` or `exploratory_fail`; it is
 recorded for capacity information and is not a required BLE acceptance gate.

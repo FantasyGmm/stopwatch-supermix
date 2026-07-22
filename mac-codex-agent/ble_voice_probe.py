@@ -238,14 +238,19 @@ class VoiceProbeClient:
                     continue
 
                 if notification.kind == DATA:
-                    if notification.sequence != expected_sequence:
+                    if notification.sequence < expected_sequence:
                         raise ProbeError(
                             f"Data sequence {notification.sequence}; "
                             f"expected {expected_sequence}"
                         )
-                    expected_sequence += 1
-                    metrics.observe(notification, arrival_ns)
-                    if profile.mode == MICROPHONE_ADPCM:
+                    sequence_gap = notification.sequence > expected_sequence
+                    metrics.observe(
+                        notification,
+                        arrival_ns,
+                        expected_sequence=expected_sequence,
+                    )
+                    expected_sequence = notification.sequence + 1
+                    if profile.mode == MICROPHONE_ADPCM and not sequence_gap:
                         pcm_samples.extend(
                             decode_ima_adpcm_block(
                                 notification.payload, _MICROPHONE_SAMPLES_PER_BLOCK
@@ -424,6 +429,7 @@ class VoiceProbeClient:
             "summary_semantically_valid": False,
             "sender_receiver_counter_parity": False,
             "sender_receiver_payload_byte_parity": False,
+            "microphone_block_byte_parity": False,
             "p95_arrival_deviation_ms": None,
             "max_arrival_gap_ms": None,
             "synthetic_throughput_bps": None,

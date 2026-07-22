@@ -170,7 +170,6 @@ void StopWatchAudioBackend::closeRecorder()
 
 std::size_t StopWatchAudioBackend::read(void* data, std::size_t bytes, TickType_t timeout)
 {
-    std::lock_guard<std::mutex> io_lock(_impl->recorder_io_mutex);
     {
         std::lock_guard<std::mutex> control_lock(_impl->control_mutex);
         if (!_impl->lifecycle.recorderOpen() || data == nullptr || bytes == 0) {

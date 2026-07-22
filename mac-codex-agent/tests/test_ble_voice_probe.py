@@ -301,12 +301,15 @@ class BleVoiceProbeTests(unittest.TestCase):
                     "before matching start acknowledgment", saved["exception"]
                 )
 
-    def test_rejects_data_sequence_gap(self):
+    def test_rejects_data_sequence_regression(self):
         fake = FakeClient(
             [
                 start_ack(7, SYNTHETIC, 8192),
                 pack_notification(
-                    DATA, 7, 2, 0, expected_synthetic_payload(2, 8192)
+                    DATA, 7, 1, 0, expected_synthetic_payload(1, 4096)
+                ),
+                pack_notification(
+                    DATA, 7, 1, 20, expected_synthetic_payload(1, 4096)
                 ),
             ]
         )
@@ -322,7 +325,7 @@ class BleVoiceProbeTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 1)
         self.assertIn("Data sequence", saved["exception"])
-        self.assertIn("expected 1", saved["exception"])
+        self.assertIn("expected 2", saved["exception"])
 
     def test_rejects_stop_summary_sequence_gap(self):
         fake = FakeClient(
@@ -480,6 +483,42 @@ class BleVoiceProbeTests(unittest.TestCase):
         self.assertEqual(exit_code, 1)
         self.assertTrue(saved["metrics"]["required_profile"])
         self.assertFalse(saved["metrics"]["automated_pass"])
+
+    def test_sequence_gap_is_reported_with_sender_summary(self):
+        events = [
+            start_ack(7, SYNTHETIC, 8192),
+            pack_notification(
+                DATA, 7, 2, 0, expected_synthetic_payload(2, 4)
+            ),
+            pack_notification(
+                DATA, 7, 3, 20, expected_synthetic_payload(3, 4)
+            ),
+            pack_notification(
+                STOP_SUMMARY,
+                7,
+                4,
+                1000,
+                StopSummary(3, 3, 0, 0, 1000, 12, 0, 256).pack(),
+            ),
+        ]
+        fake = FakeClient(events)
+        runner = make_runner(fake)
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = pathlib.Path(temporary)
+            exit_code = self.run_probe(
+                runner,
+                Profile(session=7, mode=SYNTHETIC, target_bps=8192, duration_ms=1000),
+                directory,
+            )
+            saved = json.loads((directory / "report.json").read_text())
+
+        self.assertEqual(exit_code, 1)
+        self.assertIsNone(saved["exception"])
+        self.assertEqual(saved["metrics"]["sequence_gaps"], 1)
+        self.assertEqual(saved["metrics"]["sender_generated_data_packets"], 3)
+        self.assertEqual(saved["metrics"]["sender_accepted_data_packets"], 3)
+        self.assertEqual(saved["metrics"]["receiver_data_packets"], 2)
+        self.assertIn("sequence_gaps", saved["metrics"]["failure_reasons"])
 
     def test_exploratory_32768_result_is_retained_and_labeled(self):
         fake = FakeClient(synthetic_events(target_bps=32768))

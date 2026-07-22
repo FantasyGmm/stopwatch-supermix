@@ -21,13 +21,24 @@ class ProbeMetrics:
         self._arrival_deviations_ms: list[float] = []
         self._arrival_gaps_ms: list[float] = []
 
-    def observe(self, notification: Notification, arrival_ns: int) -> None:
+    def observe(
+        self,
+        notification: Notification,
+        arrival_ns: int,
+        expected_sequence: Optional[int] = None,
+    ) -> None:
         if notification.kind != DATA or notification.session != self.session:
             return
 
         self._data_packets_received += 1
         self._receiver_payload_bytes += len(notification.payload)
-        if self._previous_sequence is not None:
+        if expected_sequence is not None:
+            sequence_delta = notification.sequence - expected_sequence
+            if sequence_delta > 0:
+                self._sequence_gaps += sequence_delta
+            elif sequence_delta < 0:
+                self._sequence_regressions += 1
+        elif self._previous_sequence is not None:
             sequence_delta = notification.sequence - self._previous_sequence
             if sequence_delta > 1:
                 self._sequence_gaps += sequence_delta - 1
@@ -87,8 +98,12 @@ class ProbeMetrics:
             == self._data_packets_received
         )
         payload_byte_parity = (
-            self.mode != SYNTHETIC
-            or summary.generated_payload_bytes == self._receiver_payload_bytes
+            summary.generated_payload_bytes == self._receiver_payload_bytes
+        )
+        microphone_block_byte_parity = (
+            self.mode != MICROPHONE_ADPCM
+            or summary.generated_data_packets * 164
+            == summary.generated_payload_bytes
         )
         throughput_bps, throughput_error_percent = self._synthetic_throughput(summary)
         wav_duration_error_percent = self._wav_duration_error(
@@ -115,6 +130,8 @@ class ProbeMetrics:
             failure_reasons.append("counter_parity")
         if not payload_byte_parity:
             failure_reasons.append("payload_byte_parity")
+        if not microphone_block_byte_parity:
+            failure_reasons.append("microphone_block_byte_parity")
         if self.mode == SYNTHETIC and (
             throughput_error_percent is None or throughput_error_percent > 1
         ):
@@ -165,6 +182,7 @@ class ProbeMetrics:
             "summary_semantically_valid": summary_semantically_valid,
             "sender_receiver_counter_parity": counter_parity,
             "sender_receiver_payload_byte_parity": payload_byte_parity,
+            "microphone_block_byte_parity": microphone_block_byte_parity,
             "p95_arrival_deviation_ms": p95_arrival_deviation_ms,
             "max_arrival_gap_ms": max_arrival_gap_ms,
             "synthetic_throughput_bps": throughput_bps,

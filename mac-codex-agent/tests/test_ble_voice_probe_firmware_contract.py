@@ -44,7 +44,7 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         self.assertNotIn("KeyEvent::Right", controller)
         self.assertNotIn("start_session(key_event", app)
 
-    def test_controller_shutdown_waits_past_capture_timeout_before_worker_deletion(self):
+    def test_controller_shutdown_cancels_read_before_bounded_forced_deletion(self):
         controller = (
             ROOT / "main/apps/app_codex_status/ble_voice_probe_controller.cpp"
         ).read_text()
@@ -61,15 +61,47 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         self.assertIn(
             "static_assert(kProducerStopTimeout > kCaptureReadTimeout", controller
         )
+        self.assertNotIn("portMAX_DELAY", shutdown)
+        self.assertNotIn("return;", shutdown)
+        self.assertIn("xTaskAbortDelay", shutdown)
+        self.assertIn("kProducerCancelGraceTimeout", shutdown)
         self.assertIn(
-            "xSemaphoreTake(static_cast<SemaphoreHandle_t>(_producer_stopped), portMAX_DELAY)",
-            shutdown,
+            "static_assert(kProducerCancelGraceTimeout > kCaptureReadTimeout",
+            controller,
         )
         self.assertIn(
-            "vTaskDelete(static_cast<TaskHandle_t>(_producer_task))", shutdown
+            "vTaskDelete(worker)", shutdown
         )
-        self.assertLess(shutdown.index("portMAX_DELAY"), shutdown.index("vTaskDelete"))
+        self.assertIn("release_audio_resources(true)", shutdown)
+        self.assertLess(shutdown.index("xTaskAbortDelay"), shutdown.index("kProducerCancelGraceTimeout"))
+        self.assertLess(shutdown.index("kProducerCancelGraceTimeout"), shutdown.index("vTaskDelete"))
+        self.assertLess(shutdown.index("vTaskDelete"), shutdown.index("release_audio_resources(true)"))
         self.assertIn("vTaskSuspend(nullptr)", controller)
+
+    def test_audio_backend_read_holds_no_external_mutex_during_i2s_wait(self):
+        backend = (ROOT / "main/hal/audio/stopwatch_audio_backend.cpp").read_text()
+        read = backend.split("std::size_t StopWatchAudioBackend::read", 1)[1].split(
+            "bool StopWatchAudioBackend::openPlayer", 1
+        )[0]
+        self.assertNotIn("recorder_io_mutex", read)
+        self.assertIn("control_mutex", read)
+        self.assertIn("i2s_channel_read", read)
+        self.assertNotIn("timed_mutex", backend)
+
+    def test_forced_audio_cleanup_never_takes_worker_state_mutex(self):
+        controller = (
+            ROOT / "main/apps/app_codex_status/ble_voice_probe_controller.cpp"
+        ).read_text()
+        release = controller.split(
+            "void BleVoiceProbeController::release_audio_resources", 1
+        )[1].split("bool BleVoiceProbeController::start_session", 1)[0]
+        forced_branch = release.split("if (forced_cleanup)", 1)[1].split(
+            "StateLock lock", 1
+        )[0]
+        self.assertIn("_microphone_setup_pending = false", forced_branch)
+        self.assertIn("_microphone_cleanup_pending = false", forced_branch)
+        self.assertIn("return;", forced_branch)
+        self.assertNotIn("StateLock", forced_branch)
 
     def test_audio_backend_read_uses_caller_timeout_on_owned_rx_channel(self):
         backend = (ROOT / "main/hal/audio/stopwatch_audio_backend.cpp").read_text()
@@ -167,6 +199,23 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         self.assertIn("esp_ae_rate_cvt_close", controller)
         self.assertIn("encode_ima_adpcm_block", controller)
         self.assertIn("record_captured_samples", controller)
+
+    def test_offline_validation_and_probe_docs_cover_pcm_and_checkout_evidence(self):
+        runner = (ROOT / "scripts/run_unified_offline_validation.sh").read_text()
+        docs = (ROOT / "docs/ble-voice-link-probe.md").read_text()
+        self.assertIn("[17/20] BLE voice probe PCM buffer host test", runner)
+        self.assertIn("tests/ble_voice_probe_pcm_buffer_test.cpp", runner)
+        self.assertIn("[20/20] Whitespace error check", runner)
+        self.assertLess(
+            runner.index("tests/ble_voice_probe_pcm_buffer_test.cpp"),
+            runner.index("./scripts/build_unified_candidate.sh --clean"),
+        )
+        self.assertNotIn("/Users/bytedance/Projects.localized/Codex/StopWatch", docs)
+        self.assertIn('ROOT="$(git rev-parse --show-toplevel)"', docs)
+        self.assertIn('REVISION="$(git -C "$ROOT" rev-parse HEAD)"', docs)
+        self.assertIn('FIRMWARE="${FIRMWARE:-$ROOT/build-unified/StopWatch-UserDemo.bin}"', docs)
+        self.assertIn('shasum -a 256 "$FIRMWARE"', docs)
+        self.assertIn("firmware-app.sha256", docs)
 
 
 if __name__ == "__main__":
