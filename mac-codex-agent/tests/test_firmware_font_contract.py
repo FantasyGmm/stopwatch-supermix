@@ -99,6 +99,37 @@ class FirmwareFontContractTests(unittest.TestCase):
         self.assertIn("kEffortCaptionY", app)
         self.assertIn("kEffortValueY", app)
         self.assertGreaterEqual(app.count("&MontserratSemiBold26"), 7)
+        self.assertIn(
+            '_model_value = make_telemetry_label(\n'
+            '        _panel,\n'
+            '        kTelemetryX,\n'
+            '        kModelValueY,\n'
+            '        kTelemetryWidth,\n'
+            '        "--",\n'
+            '        &MontserratSemiBold26,',
+            app,
+        )
+        self.assertIn(
+            '_effort_value = make_telemetry_label(\n'
+            '        _panel,\n'
+            '        kTelemetryX,\n'
+            '        kEffortValueY,\n'
+            '        kTelemetryWidth,\n'
+            '        "--",\n'
+            '        &MontserratSemiBold26,',
+            app,
+        )
+        self.assertIn(
+            "lv_obj_set_style_text_font(pct, &MontserratSemiBold26, 0)", app
+        )
+        self.assertIn(
+            '_panel, "NO ALERTS", kAlertHeadingY, &MontserratSemiBold26, kEtchedGray',
+            app,
+        )
+        self.assertIn(
+            '_panel, "--", kAlertProjectY, &MontserratSemiBold26, kBeaconViolet',
+            app,
+        )
         self.assertIn("lv_color_hex(kQuotaMint)", app)
         self.assertIn("constexpr uint32_t kInstrumentBlack = 0x000000", layout)
         self.assertIn("constexpr Rect kBeaconSpine{194, 96, 2, 104}", layout)
