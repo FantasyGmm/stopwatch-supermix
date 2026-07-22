@@ -1,0 +1,89 @@
+import pathlib
+import struct
+import sys
+import unittest
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+
+from voice_probe_protocol import (
+    DATA,
+    ERROR,
+    MICROPHONE_ADPCM,
+    START_ACK,
+    STOP_SUMMARY,
+    SYNTHETIC,
+    StopSummary,
+    decode_ima_adpcm_block,
+    decode_error,
+    decode_notification,
+    decode_start_ack,
+    encode_start,
+    encode_stop,
+    expected_synthetic_payload,
+    pack_notification,
+)
+
+
+class VoiceProbeProtocolTests(unittest.TestCase):
+    def test_control_commands_match_firmware_layout(self):
+        self.assertEqual(
+            encode_start(0x1234, SYNTHETIC, 8192, 60000),
+            bytes.fromhex("0101010034120020000060ea0000"),
+        )
+        self.assertEqual(
+            encode_stop(0x1234),
+            bytes.fromhex("0102010034120000000000000000"),
+        )
+
+    def test_decodes_notification_and_rejects_bad_payload_length(self):
+        raw = struct.pack("<BBHIIH", 1, DATA, 7, 3, 100, 3) + b"abc"
+        packet = decode_notification(raw)
+        self.assertEqual((packet.session, packet.sequence, packet.payload), (7, 3, b"abc"))
+        with self.assertRaises(ValueError):
+            decode_notification(raw[:-1])
+        with self.assertRaises(ValueError):
+            decode_notification(bytes([2]) + raw[1:])
+        with self.assertRaises(ValueError):
+            decode_notification(bytes([1, 0]) + raw[2:])
+
+    def test_synthetic_pattern_uses_packet_sequence(self):
+        self.assertEqual(expected_synthetic_payload(0x102, 4), b"\x02\x03\x04\x05")
+
+    def test_decodes_known_ima_blocks(self):
+        self.assertEqual(
+            decode_ima_adpcm_block(b"\x00\x00\x00\x00\x00\x00", sample_count=5),
+            [0] * 5,
+        )
+        self.assertEqual(
+            decode_ima_adpcm_block(b"\x00\x00\x00\x00\x04", sample_count=2),
+            [0, 7],
+        )
+
+    def test_decodes_fixed_payloads(self):
+        ack = decode_start_ack(struct.pack("<HBBI", 256, MICROPHONE_ADPCM, 0, 8192))
+        self.assertEqual((ack.negotiated_mtu, ack.mode, ack.target_bps), (256, 2, 8192))
+        self.assertEqual(decode_error(struct.pack("<HH", 2, 0x1234)), (2, 0x1234))
+
+        summary = StopSummary(10, 9, 1, 2, 60000, 8192, 960000, 256)
+        packet = decode_notification(
+            pack_notification(STOP_SUMMARY, 7, 3, 100, summary.pack())
+        )
+        self.assertEqual(StopSummary.from_payload(packet.payload), summary)
+
+        for decoder, payload in ((decode_start_ack, b"\x00"), (decode_error, b"\x00")):
+            with self.assertRaises(ValueError):
+                decoder(payload)
+
+    def test_adpcm_uses_low_nibble_first_and_exact_size(self):
+        self.assertEqual(
+            decode_ima_adpcm_block(b"\x00\x00\x00\x00\x40", sample_count=2),
+            [0, 0],
+        )
+        with self.assertRaises(ValueError):
+            decode_ima_adpcm_block(b"\x00\x00\x00\x00", sample_count=2)
+        with self.assertRaises(ValueError):
+            decode_ima_adpcm_block(b"\x00\x00\x00\x00\x00", sample_count=1)
+
+
+if __name__ == "__main__":
+    unittest.main()
