@@ -47,6 +47,8 @@ int main()
     assert(cancelled.cancelled);
     assert(!cancelled.consumed);
     assert(!logic.release(2060).consumed);
+    assert(!logic.active());
+    assert(logic.visible_side() == EdgeControlSide::None);
 
     logic.reset();
     logic.press(80, 30, 50, 60, 3000);

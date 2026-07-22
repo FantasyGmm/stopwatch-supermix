@@ -47,6 +47,45 @@ class EdgeControlFirmwareContractTests(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, header + source)
 
+    def test_global_service_owns_touch_and_persists_hal_values(self):
+        edge_control_root = ROOT / "main" / "apps" / "common" / "edge_control"
+        header = (edge_control_root / "global_edge_control_service.h").read_text(
+            encoding="utf-8"
+        )
+        source = (edge_control_root / "global_edge_control_service.cpp").read_text(
+            encoding="utf-8"
+        )
+
+        for token in (
+            "class GlobalEdgeControlService",
+            "bool init()",
+            "void update()",
+            "bool ownsTouch() const",
+            "bool lastReleaseConsumed() const",
+            "uint32_t brightnessRevision() const",
+            "uint32_t volumeRevision() const",
+            "GlobalEdgeControlService& GetGlobalEdgeControlService()",
+        ):
+            self.assertIn(token, header)
+
+        for token in (
+            "lv_layer_top()",
+            "lv_indev_wait_release(indev)",
+            "lv_indev_reset(indev, nullptr)",
+            "GetHAL().setBackLightBrightness(update.value, update.persist)",
+            "GetHAL().setSpeakerVolume(update.value, update.persist)",
+            "_brightness_revision++",
+            "_volume_revision++",
+        ):
+            self.assertIn(token, source)
+
+    def test_global_service_updates_before_mooncake_apps(self):
+        main = (ROOT / "main" / "main.cpp").read_text(encoding="utf-8")
+        self.assertIn("GetGlobalEdgeControlService().init()", main)
+        edge_update = main.index("GetGlobalEdgeControlService().update()")
+        mooncake_update = main.index("GetMooncake().update()")
+        self.assertLess(edge_update, mooncake_update)
+
     def test_launcher_uses_shared_overlay_and_preserves_horizontal_swipes(self):
         launcher_root = ROOT / "main" / "apps" / "app_launcher" / "view"
         header = (launcher_root / "view.h").read_text(encoding="utf-8")

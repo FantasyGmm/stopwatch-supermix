@@ -8,6 +8,7 @@
 #include <mooncake_log.h>
 #include <mooncake.h>
 #include <apps/apps.h>
+#include <apps/common/edge_control/global_edge_control_service.h>
 #include <hal/hal.h>
 #include <lv_demos.h>
 #include <apps/common/audio/audio.h>
@@ -44,6 +45,13 @@ extern "C" void app_main(void)
     ui_hal::on_delay([](uint32_t ms) { GetHAL().delay(ms); });
     ui_hal::on_get_tick([]() { return GetHAL().millis(); });
 
+    {
+        LvglLockGuard lock;
+        if (!GetGlobalEdgeControlService().init()) {
+            mclog::tagError("Main", "global edge controls unavailable");
+        }
+    }
+
     // Install apps
     GetMooncake().installApp(std::make_unique<AppLauncher>());
     GetMooncake().installApp(std::make_unique<AppCodexStatus>());
@@ -62,6 +70,10 @@ extern "C" void app_main(void)
         GetDebugCommandService().update();
 #endif
         GetRuntimeSupervisor().update(GetHAL().millis());
+        {
+            LvglLockGuard lock;
+            GetGlobalEdgeControlService().update();
+        }
         GetMooncake().update();
     }
 }
