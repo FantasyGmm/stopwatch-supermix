@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 #include "workers.h"
+#include <apps/common/edge_control/global_edge_control_service.h>
 #include <assets/assets.h>
 #include <mooncake_log.h>
 #include <hal/hal.h>
@@ -93,6 +94,20 @@ public:
     int currentValue() const
     {
         return _current_value;
+    }
+
+    void setCurrentValue(int value)
+    {
+        const int normalized = normalizeValue(value);
+        if (normalized == _current_value) {
+            return;
+        }
+
+        _syncing_slider = true;
+        _slider->setValue(normalized);
+        _syncing_slider = false;
+        _current_value = normalized;
+        updateValueLabel(_current_value);
     }
 
     bool consumeSaveRequested()
@@ -235,11 +250,19 @@ BrightnessWorker::BrightnessWorker()
     mclog::tagInfo(_tag, "start brightness worker");
 
     _applied_brightness = GetHAL().getBackLightBrightness();
+    _global_revision    = GetGlobalEdgeControlService().brightnessRevision();
     _view               = std::make_unique<PercentageAdjustView>(_applied_brightness, 10, 100, 1);
 }
 
 void BrightnessWorker::update()
 {
+    auto& controls = GetGlobalEdgeControlService();
+    if (_view && _global_revision != controls.brightnessRevision()) {
+        _global_revision    = controls.brightnessRevision();
+        _applied_brightness = GetHAL().getBackLightBrightness();
+        _view->setCurrentValue(_applied_brightness);
+    }
+
     if (_view && _applied_brightness != _view->currentValue()) {
         GetHAL().setBackLightBrightness(_view->currentValue(), false);
         _applied_brightness = _view->currentValue();
@@ -260,11 +283,19 @@ VolumeWorker::VolumeWorker()
     mclog::tagInfo(_tag, "start volume worker");
 
     _applied_volume = GetHAL().getSpeakerVolume();
+    _global_revision = GetGlobalEdgeControlService().volumeRevision();
     _view           = std::make_unique<PercentageAdjustView>(_applied_volume, 0, 100, 5);
 }
 
 void VolumeWorker::update()
 {
+    auto& controls = GetGlobalEdgeControlService();
+    if (_view && _global_revision != controls.volumeRevision()) {
+        _global_revision = controls.volumeRevision();
+        _applied_volume  = GetHAL().getSpeakerVolume();
+        _view->setCurrentValue(_applied_volume);
+    }
+
     if (_view && _applied_volume != _view->currentValue()) {
         GetHAL().setSpeakerVolume(_view->currentValue(), false);
         _applied_volume = _view->currentValue();

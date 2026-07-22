@@ -136,6 +136,23 @@ class EdgeControlFirmwareContractTests(unittest.TestCase):
         )
         self.assertIn("_gesture_pressing = false", source)
 
+    def test_settings_workers_follow_global_brightness_and_volume_changes(self):
+        workers_root = ROOT / "main" / "apps" / "app_setup" / "workers"
+        header = (workers_root / "workers.h").read_text(encoding="utf-8")
+        source = (workers_root / "device.cpp").read_text(encoding="utf-8")
+
+        self.assertIn("void setCurrentValue(int value)", source)
+        self.assertGreaterEqual(header.count("uint32_t _global_revision"), 2)
+        for token in (
+            "GetGlobalEdgeControlService()",
+            "brightnessRevision()",
+            "volumeRevision()",
+            "GetHAL().getBackLightBrightness()",
+            "GetHAL().getSpeakerVolume()",
+            "_view->setCurrentValue",
+        ):
+            self.assertIn(token, source)
+
 
 if __name__ == "__main__":
     unittest.main()
