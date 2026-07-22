@@ -48,7 +48,10 @@ void AppAssistant::onOpen()
 
     _key_manager = std::make_unique<input::KeyManager>();
     _close_controller.reset();
+    _presentation.reset();
+    _last_telemetry_ms = 0;
     _retry_available = false;
+    _has_conversation_text = false;
 #if CONFIG_STOPWATCH_DEBUG_COMMANDS
     _debug_close_pending = false;
     if (!RegisterDebugAssistantTarget(this)) {
@@ -76,6 +79,15 @@ void AppAssistant::onOpen()
 
 void AppAssistant::onRunning()
 {
+    const uint32_t now = GetHAL().millis();
+    {
+        LvglLockGuard lock;
+        if (_view) {
+            _view->update(now);
+        }
+    }
+    updateTelemetry(now);
+
     auto& runtime = GetRuntimeSupervisor();
     drainRuntimeEvents();
 #if CONFIG_STOPWATCH_DEBUG_COMMANDS
@@ -93,9 +105,10 @@ void AppAssistant::onRunning()
     if (key == input::KeyEvent::GoNext && _retry_available && !_close_controller.requested() &&
         runtime.assistantState() == AssistantRuntimeState::Stopped) {
         _retry_available = false;
+        _has_conversation_text = false;
         {
             LvglLockGuard lock;
-            _view->setState(AssistantViewState::Connecting);
+            applyPresentationSignal(AssistantPresentationSignal::Connecting);
         }
         runtime.startAssistant();
     }
@@ -131,7 +144,7 @@ bool AppAssistant::requestGracefulClose(AssistantCloseTrigger trigger)
 
     {
         LvglLockGuard lock;
-        _view->setState(AssistantViewState::Closing);
+        applyPresentationSignal(AssistantPresentationSignal::Closing);
     }
 
     // Record the user-visible close intent before requestStopAssistant() can
@@ -196,6 +209,8 @@ void AppAssistant::onClose()
     GetRuntimeSupervisor().requestStopAssistant();
 
     _key_manager.reset();
+    _last_telemetry_ms = 0;
+    _has_conversation_text = false;
 
     LvglLockGuard lock;
     if (_view) {
@@ -255,56 +270,89 @@ void AppAssistant::applyRuntimeEvent(const AssistantEvent& event,
             if (_close_controller.requested() && event.text != "Stopping" && event.text != "Stopped") {
                 return;
             }
-            if (event.text == "Starting") {
-                _view->setState(AssistantViewState::Connecting);
+            if (event.text == "Starting" || event.text == "Connecting") {
+                _has_conversation_text = false;
+                applyPresentationSignal(AssistantPresentationSignal::Connecting);
             } else if (event.text == "Activating" || event.text == "Activated") {
-                _view->setState(AssistantViewState::Activating);
+                applyPresentationSignal(AssistantPresentationSignal::Activating);
             } else if (event.text == "Running") {
-                _view->setState(AssistantViewState::Listening);
+                _has_conversation_text = false;
+                applyPresentationSignal(AssistantPresentationSignal::Running);
             } else if (event.text == "Stopping") {
-                _view->setState(AssistantViewState::Closing);
+                applyPresentationSignal(AssistantPresentationSignal::Closing);
             }
             break;
         case AssistantEventKind::ActivationCode:
-            _view->setState(AssistantViewState::Activating);
-            _view->setPrimaryText("Activation code");
-            _view->setSecondaryText(event.text.c_str());
+            applyPresentationSignal(AssistantPresentationSignal::Activating);
+            _view->setConversationText(event.text.c_str());
             break;
         case AssistantEventKind::Error:
             if (runtime_state == AssistantRuntimeState::StopTimedOut) {
-                _view->setState(AssistantViewState::StopTimedOut);
+                applyPresentationSignal(AssistantPresentationSignal::StopTimedOut);
             } else if (_close_controller.requested()) {
-                _view->setState(AssistantViewState::Closing);
-                _view->setSecondaryText(event.text.c_str());
+                applyPresentationSignal(AssistantPresentationSignal::Closing);
             } else {
-                _view->setState(AssistantViewState::Failed);
-                _view->setSecondaryText(event.text.c_str());
+                applyPresentationSignal(AssistantPresentationSignal::Failed);
                 _retry_available = runtime_state == AssistantRuntimeState::Stopped;
             }
+            _view->setConversationText(event.text.c_str());
             break;
         case AssistantEventKind::UserText:
-            _view->setState(AssistantViewState::Thinking);
-            _view->setSecondaryText(event.text.c_str());
+            _has_conversation_text = true;
+            applyPresentationSignal(AssistantPresentationSignal::UserText);
+            _view->setConversationText(event.text.c_str());
             break;
         case AssistantEventKind::AgentText:
-            _view->setState(AssistantViewState::Speaking);
-            _view->setSecondaryText(event.text.c_str());
+            _has_conversation_text = true;
+            applyPresentationSignal(AssistantPresentationSignal::AgentText);
+            _view->setConversationText(event.text.c_str());
             break;
         case AssistantEventKind::Emotion:
-            _view->setPrimaryText("Emotion");
-            _view->setSecondaryText(event.text.c_str());
+            if (!_has_conversation_text && !event.text.empty()) {
+                _view->setConversationText(event.text.c_str());
+            }
             break;
         case AssistantEventKind::UpdateAvailable:
             _view->setUpdateVersion(event.text.c_str());
             break;
         case AssistantEventKind::ListeningStatus:
-            if (event.active) {
-                _view->setState(AssistantViewState::Listening);
-            }
+            applyPresentationSignal(AssistantPresentationSignal::ListeningChanged, event.active);
             break;
         case AssistantEventKind::SpeakingStatus:
-            _view->setState(event.active ? AssistantViewState::Speaking
-                                         : AssistantViewState::Listening);
+            applyPresentationSignal(AssistantPresentationSignal::SpeakingChanged, event.active);
+            if (!event.active) {
+                _has_conversation_text = false;
+            }
             break;
+    }
+}
+
+void AppAssistant::applyPresentationSignal(AssistantPresentationSignal signal, bool active)
+{
+    _presentation.apply(signal, active);
+    if (!_view) {
+        return;
+    }
+    _view->setState(_presentation.state());
+    if (signal == AssistantPresentationSignal::Connecting) {
+        _view->setConnected(false);
+    } else if (signal == AssistantPresentationSignal::Activating ||
+               signal == AssistantPresentationSignal::Running) {
+        _view->setConnected(true);
+    }
+}
+
+void AppAssistant::updateTelemetry(uint32_t now_ms)
+{
+    if (_view == nullptr ||
+        static_cast<uint32_t>(now_ms - _last_telemetry_ms) < 1000) {
+        return;
+    }
+    _last_telemetry_ms = now_ms;
+    const uint8_t battery = GetHAL().getBatteryLevel();
+    const bool charging = GetHAL().isBatteryCharging();
+    LvglLockGuard lock;
+    if (_view) {
+        _view->setBattery(battery, charging);
     }
 }

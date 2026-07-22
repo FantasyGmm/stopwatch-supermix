@@ -12,8 +12,6 @@
 #include <memory>
 #include <smooth_lvgl.hpp>
 
-using AssistantViewState = AssistantVisualState;
-
 class AssistantView {
 public:
     void init(lv_obj_t* parent);
@@ -23,8 +21,6 @@ public:
     void setUpdateVersion(const char* canonical_version);
     void setBattery(uint8_t percent, bool charging);
     void setConnected(bool connected);
-    void setPrimaryText(const char* text);
-    void setSecondaryText(const char* text);
     void destroy();
 
 private:

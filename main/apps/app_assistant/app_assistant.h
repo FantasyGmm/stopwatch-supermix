@@ -5,6 +5,7 @@
  */
 #pragma once
 #include "assistant_close_controller.h"
+#include "assistant_presentation_model.h"
 #include "view/assistant_view.h"
 #include <apps/common/key_manager/key_manager.h>
 #include <mooncake.h>
@@ -36,7 +37,10 @@ private:
     std::unique_ptr<input::KeyManager> _key_manager;
     std::unique_ptr<AssistantView> _view;
     AssistantCloseController _close_controller;
+    AssistantPresentationModel _presentation;
+    uint32_t _last_telemetry_ms = 0;
     bool _retry_available = false;
+    bool _has_conversation_text = false;
 #if CONFIG_STOPWATCH_DEBUG_COMMANDS
     bool _debug_close_pending = false;
 #endif
@@ -44,4 +48,6 @@ private:
     bool requestGracefulClose(AssistantCloseTrigger trigger);
     void drainRuntimeEvents();
     void applyRuntimeEvent(const AssistantEvent& event, AssistantRuntimeState runtime_state);
+    void applyPresentationSignal(AssistantPresentationSignal signal, bool active = true);
+    void updateTelemetry(uint32_t now_ms);
 };

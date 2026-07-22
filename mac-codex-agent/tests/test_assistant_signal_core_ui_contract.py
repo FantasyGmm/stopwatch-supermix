@@ -287,6 +287,34 @@ class AssistantSignalCoreUiContractTests(unittest.TestCase):
             self.assertLess(destroy.index(f"{raw_handle} = nullptr;"), panel_reset)
         self.assertLess(destroy.index("_wave_bars.fill(nullptr);"), panel_reset)
 
+    def test_app_routes_running_to_waiting_and_status_events_exhaustively(self):
+        app = (ROOT / "main/apps/app_assistant/app_assistant.cpp").read_text()
+        self.assertIn("AssistantPresentationSignal::Running", app)
+        self.assertIn("AssistantEventKind::ListeningStatus", app)
+        self.assertIn("event.active", app)
+        self.assertIn("AssistantEventKind::SpeakingStatus", app)
+        self.assertNotRegex(
+            app,
+            r'event\.text == "Running"[\s\S]{0,180}AssistantVisualState::Listening',
+        )
+
+    def test_app_samples_battery_outside_the_lvgl_lock(self):
+        app = (ROOT / "main/apps/app_assistant/app_assistant.cpp").read_text()
+        function = app[app.index("void AppAssistant::updateTelemetry") :]
+        sample = function.index("GetHAL().getBatteryLevel()")
+        lock = function.index("LvglLockGuard")
+        self.assertLess(sample, lock)
+        self.assertIn("_view->setBattery", function[lock:])
+
+    def test_signal_core_adds_no_task_timer_asset_or_full_font(self):
+        paths = [
+            ROOT / "main/apps/app_assistant/app_assistant.cpp",
+            ROOT / "main/apps/app_assistant/view/assistant_view.cpp",
+        ]
+        combined = "\n".join(path.read_text() for path in paths)
+        self.assertNotRegex(combined, r"xTaskCreate|lv_timer_create|esp_timer_create|FFT")
+        self.assertNotIn("LV_IMG_DECLARE", combined)
+
 
 if __name__ == "__main__":
     unittest.main()

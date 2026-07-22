@@ -272,18 +272,6 @@ void AssistantView::setConnected(bool connected)
     _network_label->setTextColor(lv_color_hex(color));
 }
 
-void AssistantView::setPrimaryText(const char* text)
-{
-    if (_title_label) {
-        _title_label->setText(text != nullptr ? text : "");
-    }
-}
-
-void AssistantView::setSecondaryText(const char* text)
-{
-    setConversationText(text);
-}
-
 void AssistantView::destroy()
 {
     _hint_label.reset();
