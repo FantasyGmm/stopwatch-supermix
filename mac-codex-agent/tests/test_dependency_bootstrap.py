@@ -1,8 +1,16 @@
 import copy
+import dataclasses
+import hashlib
+import json
+import os
 import pathlib
+import shutil
+import subprocess
 import sys
 import tempfile
+import time
 import unittest
+from unittest import mock
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -10,10 +18,15 @@ sys.path.insert(0, str(ROOT))
 
 from dependency_bootstrap import (  # noqa: E402
     DependencyError,
+    PatchSpec,
+    RepoSpec,
     content_tree_hash,
+    materialize_all,
     parse_manifest,
+    verify_all,
     write_stamp,
 )
+import fetch_repos  # noqa: E402
 
 
 REVISION = "37db04861687858b6748f5dbd1a84439a6635c46"
@@ -32,6 +45,30 @@ def valid_entry():
             "sha256": PATCH_SHA256,
         },
     }
+
+
+def run_git(cwd, *args, env=None):
+    completed = subprocess.run(
+        ["git", "-c", "gc.auto=0", "-c", "maintenance.auto=false", *args],
+        cwd=cwd,
+        env=env,
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    return completed.stdout.strip()
+
+
+def create_local_upstream(root, name="upstream", content="before\n"):
+    upstream = root / name
+    upstream.mkdir()
+    run_git(upstream, "init", "--quiet")
+    run_git(upstream, "config", "user.email", "test@example.com")
+    run_git(upstream, "config", "user.name", "Dependency Test")
+    (upstream / "source.txt").write_text(content, encoding="utf-8")
+    run_git(upstream, "add", "source.txt")
+    run_git(upstream, "commit", "--quiet", "-m", "fixture")
+    return upstream, run_git(upstream, "rev-parse", "HEAD")
 
 
 class DependencyManifestTests(unittest.TestCase):
@@ -120,6 +157,190 @@ class DependencyManifestTests(unittest.TestCase):
 
             self.assertNotEqual(initial, executable)
             self.assertNotEqual(executable, changed_link)
+
+
+class DependencyMaterializationTests(unittest.TestCase):
+    def setUp(self):
+        self.root = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(self.cleanup_root)
+        (self.root / "components").mkdir()
+        (self.root / "patches").mkdir()
+        self.upstream = None
+        self.revision = None
+        self.destination = self.root / "components" / "fixture"
+
+    def cleanup_root(self):
+        for attempt in range(5):
+            try:
+                shutil.rmtree(self.root)
+                return
+            except FileNotFoundError:
+                return
+            except OSError:
+                if attempt == 4:
+                    raise
+                time.sleep(0.05)
+
+    def spec(self, revision=None, patch=None, name="fixture", upstream=None):
+        source = upstream
+        if source is None:
+            if self.upstream is None:
+                self.upstream, self.revision = create_local_upstream(self.root)
+            source = self.upstream
+        return RepoSpec(
+            url=source.as_uri(),
+            path=self.root / "components" / name,
+            revision=revision or self.revision,
+            release="fixture",
+            with_submodules=False,
+            patch=patch,
+        )
+
+    def patch_spec(self):
+        patch = self.root / "patches" / "fixture.patch"
+        patch.write_text(
+            """diff --git a/source.txt b/source.txt
+--- a/source.txt
++++ b/source.txt
+@@ -1 +1 @@
+-before
++after
+""",
+            encoding="utf-8",
+        )
+        digest = hashlib.sha256(patch.read_bytes()).hexdigest()
+        return PatchSpec(path=patch, sha256=digest)
+
+    def test_materializes_and_checks_exact_revision(self):
+        spec = self.spec()
+
+        materialize_all([spec], self.root)
+
+        self.assertEqual(verify_all([spec], self.root), [])
+        self.assertEqual(
+            run_git(self.destination, "rev-parse", "HEAD"), self.revision
+        )
+        stamp = json.loads(
+            (self.destination / ".stopwatch-dependency.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(stamp["revision"], self.revision)
+
+    def test_wrong_patch_hash_fails_without_replacing_destination(self):
+        self.destination.mkdir()
+        keep = self.destination / "keep.txt"
+        keep.write_text("keep\n", encoding="utf-8")
+        patch = dataclasses.replace(self.patch_spec(), sha256="0" * 64)
+        unavailable = self.root / "not-cloned"
+
+        with self.assertRaisesRegex(DependencyError, "patch hash"):
+            materialize_all(
+                [self.spec(patch=patch, upstream=unavailable)],
+                self.root,
+                force=True,
+            )
+
+        self.assertEqual(keep.read_text(encoding="utf-8"), "keep\n")
+
+    def test_expected_patch_is_valid_but_extra_edit_is_preserved(self):
+        spec = self.spec(patch=self.patch_spec())
+        materialize_all([spec], self.root)
+        self.assertEqual(
+            (self.destination / "source.txt").read_text(encoding="utf-8"),
+            "after\n",
+        )
+        self.assertEqual(verify_all([spec], self.root), [])
+
+        extra = self.destination / "extra.txt"
+        extra.write_text("user change\n", encoding="utf-8")
+        with self.assertRaisesRegex(DependencyError, "local changes"):
+            materialize_all([spec], self.root)
+        self.assertTrue(extra.exists())
+
+    def test_verification_reports_missing_stamp_wrong_head_and_changed_content(self):
+        spec = self.spec()
+        self.destination.mkdir()
+        issues = verify_all([spec], self.root)
+        self.assertEqual(issues[0].category, "missing_stamp")
+
+        materialize_all([spec], self.root, force=True)
+        (self.destination / "source.txt").write_text("changed\n", encoding="utf-8")
+        issues = verify_all([spec], self.root)
+        self.assertEqual(issues[0].category, "content_changed")
+
+        run_git(self.destination, "checkout", "--quiet", "--", "source.txt")
+        run_git(self.destination, "checkout", "--quiet", "--detach", "HEAD~0")
+        wrong_spec = dataclasses.replace(spec, revision="0" * 40)
+        issues = verify_all([wrong_spec], self.root)
+        self.assertEqual(issues[0].category, "wrong_revision")
+
+    def test_one_failed_stage_leaves_all_existing_destinations_untouched(self):
+        first = self.root / "components" / "first"
+        second = self.root / "components" / "second"
+        first.mkdir()
+        second.mkdir()
+        (first / "keep.txt").write_text("first\n", encoding="utf-8")
+        (second / "keep.txt").write_text("second\n", encoding="utf-8")
+        good = self.spec(name="first")
+        bad = self.spec(revision="0" * 40, name="second")
+
+        with self.assertRaises(DependencyError):
+            materialize_all([good, bad], self.root, force=True)
+
+        self.assertEqual((first / "keep.txt").read_text(), "first\n")
+        self.assertEqual((second / "keep.txt").read_text(), "second\n")
+
+    def test_records_initialized_submodule_revision(self):
+        submodule, submodule_revision = create_local_upstream(
+            self.root, "submodule", "nested\n"
+        )
+        parent = self.root / "parent"
+        parent.mkdir()
+        run_git(parent, "init", "--quiet")
+        run_git(parent, "config", "user.email", "test@example.com")
+        run_git(parent, "config", "user.name", "Dependency Test")
+        env = os.environ.copy()
+        env["GIT_ALLOW_PROTOCOL"] = "file"
+        run_git(
+            parent,
+            "submodule",
+            "add",
+            "--quiet",
+            submodule.as_uri(),
+            "nested",
+            env=env,
+        )
+        run_git(parent, "commit", "--quiet", "-am", "add submodule")
+        revision = run_git(parent, "rev-parse", "HEAD")
+        spec = dataclasses.replace(
+            self.spec(revision=revision, upstream=parent), with_submodules=True
+        )
+
+        with mock.patch.dict(os.environ, {"GIT_ALLOW_PROTOCOL": "file"}):
+            materialize_all([spec], self.root)
+
+        stamp = json.loads(
+            (self.destination / ".stopwatch-dependency.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(stamp["submodules"], {"nested": submodule_revision})
+        self.assertEqual(verify_all([spec], self.root), [])
+
+
+class FetchReposCliTests(unittest.TestCase):
+    def test_check_returns_nonzero_and_prints_issues(self):
+        issue = mock.Mock(
+            category="missing", path=pathlib.Path("components/test"), message="absent"
+        )
+        with mock.patch.object(fetch_repos, "load_manifest", return_value=[]):
+            with mock.patch.object(fetch_repos, "verify_all", return_value=[issue]):
+                self.assertEqual(fetch_repos.main(["--check"]), 1)
+
+    def test_check_and_force_are_mutually_exclusive(self):
+        with self.assertRaises(SystemExit):
+            fetch_repos.parse_args(["--check", "--force"])
 
 
 if __name__ == "__main__":
