@@ -27,52 +27,60 @@ if ! command -v idf.py >/dev/null 2>&1; then
     source "$IDF_EXPORT"
 fi
 
-echo "[1/15] Python contract and tooling tests"
+echo "[1/16] Python contract and tooling tests"
 "$PYTHON" -m unittest discover -s mac-codex-agent/tests -p 'test_*.py'
 
-echo "[2/15] Assistant state machine host test"
+echo "[2/16] Assistant state machine host test"
 "$CXX" -std=c++17 -Wall -Wextra -Werror -Imain \
     tests/assistant_state_machine_test.cpp \
     main/runtime/assistant/assistant_state.cpp \
     -o "$HOST_TEST_DIR/assistant_state_machine_test"
 "$HOST_TEST_DIR/assistant_state_machine_test"
 
-echo "[3/15] Assistant close controller host test"
+echo "[3/16] Assistant close controller host test"
 "$CXX" -std=c++17 -Wall -Wextra -Werror -Imain \
     tests/assistant_close_controller_test.cpp \
     main/apps/app_assistant/assistant_close_controller.cpp \
     -o "$HOST_TEST_DIR/assistant_close_controller_test"
 "$HOST_TEST_DIR/assistant_close_controller_test"
 
-echo "[4/15] Assistant event mailbox host test"
+echo "[4/16] Assistant event mailbox host test"
 "$CXX" -std=c++17 -Wall -Wextra -Werror -pthread -Imain \
     tests/assistant_event_mailbox_test.cpp \
     main/runtime/assistant/assistant_event_mailbox.cpp \
     -o "$HOST_TEST_DIR/assistant_event_mailbox_test"
 "$HOST_TEST_DIR/assistant_event_mailbox_test"
 
-echo "[5/15] Assistant trace host test"
+echo "[5/16] Assistant update notice host test"
+"$CXX" -std=c++17 -Wall -Wextra -Werror -pthread -Imain \
+    tests/assistant_update_notice_test.cpp \
+    main/runtime/assistant/assistant_update_notice_policy.cpp \
+    main/runtime/assistant/assistant_update_notice_bridge.cpp \
+    -o "$HOST_TEST_DIR/assistant_update_notice_test"
+"$HOST_TEST_DIR/assistant_update_notice_test"
+
+echo "[6/16] Assistant trace host test"
 "$CXX" -std=c++17 -Wall -Wextra -Werror -DSTOPWATCH_HOST_TEST -Imain \
     tests/assistant_trace_test.cpp \
     main/runtime/assistant/assistant_trace.cpp \
     -o "$HOST_TEST_DIR/assistant_trace_test"
 "$HOST_TEST_DIR/assistant_trace_test"
 
-echo "[6/15] Resource supervisor host test"
+echo "[7/16] Resource supervisor host test"
 "$CXX" -std=c++17 -Wall -Wextra -Werror -Imain \
     tests/resource_supervisor_test.cpp \
     main/runtime/resource_supervisor.cpp \
     -o "$HOST_TEST_DIR/resource_supervisor_test"
 "$HOST_TEST_DIR/resource_supervisor_test"
 
-echo "[7/15] Button feedback policy host test"
+echo "[8/16] Button feedback policy host test"
 "$CXX" -std=c++17 -Wall -Wextra -Werror -Imain \
     tests/button_feedback_policy_test.cpp \
     main/hal/button_feedback_policy.cpp \
     -o "$HOST_TEST_DIR/button_feedback_policy_test"
 "$HOST_TEST_DIR/button_feedback_policy_test"
 
-echo "[8/15] Shared Wi-Fi policy host test"
+echo "[9/16] Shared Wi-Fi policy host test"
 "$CXX" -std=c++17 -Wall -Wextra -Werror -pthread -Imain \
     tests/shared_wifi_policy_test.cpp \
     main/runtime/resource_supervisor.cpp \
@@ -81,20 +89,20 @@ echo "[8/15] Shared Wi-Fi policy host test"
     -o "$HOST_TEST_DIR/shared_wifi_policy_test"
 "$HOST_TEST_DIR/shared_wifi_policy_test"
 
-echo "[9/15] WiFi settings model host test"
+echo "[10/16] WiFi settings model host test"
 "$CXX" -std=c++17 -Wall -Wextra -Werror -Imain \
     tests/wifi_settings_model_test.cpp \
     -o "$HOST_TEST_DIR/wifi_settings_model_test"
 "$HOST_TEST_DIR/wifi_settings_model_test"
 
-echo "[10/15] WiFi settings controller host test"
+echo "[11/16] WiFi settings controller host test"
 "$CXX" -std=c++17 -Wall -Wextra -Werror -DSTOPWATCH_HOST_TEST -Imain \
     tests/wifi_settings_controller_test.cpp \
     main/apps/app_setup/workers/wifi_settings_controller.cpp \
     -o "$HOST_TEST_DIR/wifi_settings_controller_test"
 "$HOST_TEST_DIR/wifi_settings_controller_test"
 
-echo "[11/15] USB debug command host test"
+echo "[12/16] USB debug command host test"
 "$CXX" -std=c++17 -Wall -Wextra -Werror -Imain \
     tests/debug_command_test.cpp \
     main/debug/debug_command_parser.cpp \
@@ -103,23 +111,23 @@ echo "[11/15] USB debug command host test"
     -o "$HOST_TEST_DIR/debug_command_test"
 "$HOST_TEST_DIR/debug_command_test"
 
-echo "[12/15] Runtime diagnostics host test"
+echo "[13/16] Runtime diagnostics host test"
 "$CXX" -std=c++17 -Wall -Wextra -Werror -DSTOPWATCH_HOST_TEST -Imain \
     tests/runtime_diagnostics_test.cpp \
     main/runtime/runtime_diagnostics.cpp \
     -o "$HOST_TEST_DIR/runtime_diagnostics_test"
 "$HOST_TEST_DIR/runtime_diagnostics_test"
 
-echo "[13/15] Audio jitter buffer policy host test"
+echo "[14/16] Audio jitter buffer policy host test"
 "$CXX" -std=c++17 -Wall -Wextra -Werror -Imain \
     tests/audio_jitter_buffer_policy_test.cpp \
     -o "$HOST_TEST_DIR/audio_jitter_buffer_policy_test"
 "$HOST_TEST_DIR/audio_jitter_buffer_policy_test"
 
-echo "[14/15] Isolated unified candidate clean build and capacity gates"
+echo "[15/16] Isolated unified candidate clean build and capacity gates"
 ./scripts/build_unified_candidate.sh --clean
 
-echo "[15/15] Whitespace error check"
+echo "[16/16] Whitespace error check"
 git diff --check
 
 echo "Unified offline validation passed. Hardware status is tracked separately in the validation reports."
