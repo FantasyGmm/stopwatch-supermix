@@ -73,6 +73,23 @@ class ReproducibleDependencyFirmwareContractTests(unittest.TestCase):
         self.assertIn("Run: python3 ./fetch_repos.py", build_script)
         self.assertLess(build_script.index(preflight), build_script.index('"$IDF_PY"'))
 
+    def test_clean_checkout_gate_rebuilds_without_local_generated_dependencies(self):
+        script = read("scripts/validate_reproducible_checkout.sh")
+
+        for required in (
+            "git clone --no-local",
+            "components managed_components third_party build build-unified",
+            "python3 ./fetch_repos.py",
+            "./scripts/build_unified_candidate.sh --clean",
+            "git rev-parse HEAD",
+            "shasum -a 256",
+            "StopWatch-UserDemo.bin",
+            "generated_assets.bin",
+        ):
+            self.assertIn(required, script)
+        self.assertNotIn("ln -s", script)
+        self.assertNotIn("ln -sf", script)
+
 
 if __name__ == "__main__":
     unittest.main()
