@@ -7,25 +7,28 @@ int main()
     using namespace codex_status_ui;
 
     assert(kScreenSize == 466);
-    assert(kPetDock.x == 52);
-    assert(kPetDock.y == 112);
-    assert(kPetDock.w == 104);
-    assert(kPetDock.h == 104);
-    assert(kPetX == 56);
-    assert(kPetY == 112);
-    assert(kPetWidth == 96);
-    assert(kPetHeight == 104);
+    assert(kInstrumentBlack == 0x000000);
+    assert(kPetX == 73);
+    assert(kPetY == 88);
+    assert(kPetWidth == 110);
+    assert(kPetHeight == 120);
+    assert(kPetScale == 293);
+    assert(kPetX + kPetWidth == 183);
 
-    assert(kBeaconSpine.x == 170);
-    assert(kBeaconSpine.y == kPetDock.y);
+    assert(kBeaconSpine.x == 194);
+    assert(kBeaconSpine.y == 96);
     assert(kBeaconSpine.w == 2);
-    assert(kBeaconSpine.h == kPetDock.h);
-    assert(kPetDock.x + kPetDock.w < kBeaconSpine.x);
+    assert(kBeaconSpine.h == 104);
+    assert(kBeaconSpine.x - (kPetX + kPetWidth) == 11);
 
-    assert(kTelemetryX == 190);
-    assert(kTelemetryWidth == 224);
+    assert(kTelemetryX == 214);
+    assert(kTelemetryWidth == 200);
     assert(kTelemetryX > kBeaconSpine.x + kBeaconSpine.w);
-    assert(kTelemetryX + kTelemetryWidth <= kScreenSize - 52);
+    assert(kTelemetryX + kTelemetryWidth == 414);
+    assert(kModelCaptionY == 98);
+    assert(kModelValueY == 120);
+    assert(kEffortCaptionY == 154);
+    assert(kEffortValueY == 176);
     assert(kModelCaptionY < kModelValueY);
     assert(kModelValueY < kEffortCaptionY);
     assert(kEffortCaptionY < kEffortValueY);
@@ -33,10 +36,14 @@ int main()
     assert(kQuotaX == 55);
     assert(kQuotaWidth == 356);
     assert(kQuotaLabelWidth == 32);
-    assert(kQuotaPercentWidth == 70);
-    assert(kQuotaBarX == 180);
-    assert(kQuotaBarWidth == 231);
-    assert(kQuotaBarX + kQuotaBarWidth == kQuotaX + kQuotaWidth);
+    assert(kQuotaBarX == 101);
+    assert(kQuotaBarWidth == 248);
+    assert(kQuotaPercentX == 360);
+    assert(kQuotaPercentWidth == 51);
+    assert(kQuotaBarX + kQuotaBarWidth < kQuotaPercentX);
+    assert(kQuotaPercentX + kQuotaPercentWidth == kQuotaX + kQuotaWidth);
+    assert(kFiveHourY == 220);
+    assert(kWeekY == 260);
     assert(kFiveHourY < kWeekY);
     assert(kWeekY < kAlertDividerY);
     assert(kAlertDividerY < kAlertHeadingY);
@@ -45,13 +52,17 @@ int main()
     assert(kAlertDetailY < kBatteryY);
 
     assert(kAlertDividerX == 82);
+    assert(kAlertDividerY == 304);
     assert(kAlertDividerWidth == 302);
+    assert(kAlertHeadingY == 321);
     assert(kAlertHeadingWidth == 310);
+    assert(kAlertProjectY == 351);
     assert(kAlertProjectWidth == 340);
+    assert(kAlertDetailY == 378);
     assert(kAlertDetailWidth == 320);
+    assert(kBatteryY == 419);
     assert(kBatteryY < kScreenSize);
 
-    assert(kInstrumentBlack == 0x070A0F);
     assert(kPanelGraphite == 0x27303E);
     assert(kBeaconViolet == 0x7C9DFF);
     assert(kQuotaMint == 0x53D7A4);

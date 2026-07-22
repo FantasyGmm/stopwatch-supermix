@@ -9,9 +9,10 @@ Replace the current symmetric instrument-frame layout on the 466 × 466 Codex st
 The implementation follows the approved second-round mockup, not the previous Precision Console spec.
 
 - Keep the existing Codex logo asset, scale, and compact centered brand block.
-- Keep connection state and host centered below the brand.
+- Keep the connection state centered below the brand and do not render the configured host name.
 - Reuse the original 96 × 104 pet frames, frame order, durations, and disabled antialiasing.
 - Render the pet at `110 × 120` without a surrounding frame, preserving its center and leaving an 11 px gap to the spine.
+- Shift the pet, spine, and telemetry group 24 px right from the previous revision so its visible content reads as centered.
 - Use one 2 px violet-blue vertical spine between the pet and telemetry.
 - Stack `MODEL` and `EFFORT` on the right, left-aligned on one shared axis.
 - Give the model value enough width for `gpt-5.6-sol` before ellipsis.
@@ -29,22 +30,24 @@ Coordinates use the 466 × 466 screen's top-left origin.
 - Logo: `x=168, y=22`, existing scale `170`.
 - Brand text: `x=218, y=32`.
 - Connection status: centered at `y=63`, width `180`.
-- Host: centered at `y=84`, width `320`.
-- Pet image: `x=49, y=104, w=110, h=120`; no dock, border, card, or backdrop.
-- Beacon spine: `x=170, y=112, w=2, h=104`.
-- Telemetry column: `x=190, w=224`.
-- Model caption/value: `y=114 / 136`.
-- Effort caption/value: `y=170 / 192`.
+- Host name: not rendered; no placeholder or replacement text.
+- Pet image: `x=73, y=88, w=110, h=120`; no dock, border, card, or backdrop.
+- Beacon spine: `x=194, y=96, w=2, h=104`.
+- Telemetry column: `x=214, w=200`; right edge remains fixed at `x=414`.
+- Model caption/value: `y=98 / 120`.
+- Effort caption/value: `y=154 / 176`.
 - Quota band: `x=55, w=356`.
-- 5H row: `y=236`; 7D row: `y=276`.
+- 5H row: `y=220`; 7D row: `y=260`.
 - Quota columns: label begins at `x=55`, track begins at `x=101` and is `248 × 8`, percentage begins at `x=360` with width `51` and right alignment.
-- Alert divider: `x=82, y=320, w=302`.
-- Alert heading/project/detail: centered at `y=337 / 367 / 394`.
-- Battery: centered at `y=435`.
+- Alert divider: `x=82, y=304, w=302`.
+- Alert heading/project/detail: centered at `y=321 / 351 / 378`.
+- Battery: centered at `y=419`.
+
+All content below the connection-status row is shifted upward by exactly 16 px after removing the host-name row. Horizontal geometry and internal spacing remain unchanged.
 
 ## Visual Tokens
 
-- Instrument black `#070A0F`: background.
+- Pure black `#000000`: background.
 - Panel graphite `#27303E`: divider and quota tracks.
 - Beacon violet `#7C9DFF`: connection state, spine, and project.
 - Signal white `#F2F6F8`: primary values and percentages.
@@ -57,12 +60,14 @@ No gradients, shadows, glow, rounded cards, or decorative red model frame are al
 
 ## Behavior Preservation
 
-The redesign changes only widget construction and coordinates. BLE/Wi-Fi handling, JSON parsing, quota mapping, alert carousel ordering, edge controls, screen-off behavior, battery updates, and pet timer behavior remain untouched.
+The redesign changes only widget construction and coordinates. BLE/Wi-Fi handling, configured host storage, JSON parsing, quota mapping, alert carousel ordering, edge controls, screen-off behavior, battery updates, and pet timer behavior remain untouched. Host updates may still occur internally but have no visible label.
 
 ## Verification
 
 - Native layout-contract test locks exact bounds, ordering, and the model-width requirement.
 - The layout contract verifies that the enlarged pet stays clear of the spine and that quota percentages follow their progress tracks.
+- The layout contract verifies the shifted group coordinates and preserves the telemetry right edge at `x=414`.
+- The source contract verifies that no host-name label is constructed while connection status remains visible.
 - Existing Codex model and carousel tests must still pass.
 - Full ESP-IDF firmware build must pass.
 - Source inspection must confirm the original logo and pet descriptors are still used.
