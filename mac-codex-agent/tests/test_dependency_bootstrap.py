@@ -1,5 +1,6 @@
 import copy
 import dataclasses
+import errno
 import hashlib
 import json
 import os
@@ -247,6 +248,31 @@ class DependencyMaterializationTests(unittest.TestCase):
             )
         )
         self.assertEqual(stamp["revision"], self.revision)
+
+    def test_retries_transient_staging_cleanup_race(self):
+        spec = self.spec()
+        original_rmtree = shutil.rmtree
+        cleanup_failures = 0
+
+        def fail_first_staging_cleanup(path, *args, **kwargs):
+            nonlocal cleanup_failures
+            if (
+                pathlib.Path(path).name.startswith(".stopwatch-dependencies-")
+                and cleanup_failures == 0
+            ):
+                cleanup_failures += 1
+                raise OSError(errno.ENOTEMPTY, "Directory not empty", str(path))
+            return original_rmtree(path, *args, **kwargs)
+
+        with mock.patch(
+            "dependency_bootstrap.shutil.rmtree",
+            side_effect=fail_first_staging_cleanup,
+        ):
+            materialize_all([spec], self.root)
+
+        self.assertEqual(cleanup_failures, 1)
+        self.assertEqual(verify_all([spec], self.root), [])
+        self.assertEqual(list(self.root.glob(".stopwatch-dependencies-*")), [])
 
     def test_wrong_patch_hash_fails_without_replacing_destination(self):
         self.destination.mkdir()

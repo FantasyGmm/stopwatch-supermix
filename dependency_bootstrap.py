@@ -11,6 +11,7 @@ import stat
 import struct
 import subprocess
 import tempfile
+import time
 import urllib.parse
 from typing import Iterable, Optional, Sequence, Tuple
 
@@ -416,12 +417,21 @@ def verify_all(specs, root=None):
     return issues
 
 
-def _remove_path(path):
+def _remove_path(path, attempts=5, retry_delay=0.05):
     path = pathlib.Path(path)
-    if path.is_symlink() or path.is_file():
-        path.unlink()
-    elif path.exists():
-        shutil.rmtree(str(path))
+    for attempt in range(attempts):
+        try:
+            if path.is_symlink() or path.is_file():
+                path.unlink()
+            elif path.exists():
+                shutil.rmtree(str(path))
+            return
+        except FileNotFoundError:
+            return
+        except OSError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(retry_delay)
 
 
 def materialize_all(specs, root, force=False):
@@ -445,10 +455,10 @@ def materialize_all(specs, root, force=False):
     if not requested:
         return
 
-    with tempfile.TemporaryDirectory(
+    temporary_root = pathlib.Path(tempfile.mkdtemp(
         prefix=".stopwatch-dependencies-", dir=str(project_root)
-    ) as temporary:
-        temporary_root = pathlib.Path(temporary)
+    ))
+    try:
         staged_root = temporary_root / "staged"
         backup_root = temporary_root / "backups"
         staged_root.mkdir()
@@ -482,3 +492,5 @@ def materialize_all(specs, root, force=False):
             if isinstance(error, DependencyError):
                 raise
             raise DependencyError("cannot replace dependencies: {}".format(error)) from error
+    finally:
+        _remove_path(temporary_root)
