@@ -16,11 +16,9 @@ class FirmwareFontContractTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         font = (
             ROOT
-            / "third_party"
-            / "xiaozhi-esp32"
-            / "managed_components"
-            / "78__xiaozhi-fonts"
-            / "src"
+            / "main"
+            / "assets"
+            / "fonts"
             / "font_puhui_14_1.c"
         ).read_text(encoding="utf-8")
 

@@ -1,6 +1,6 @@
 set(UNIFIED_ASSETS_BIN "${CMAKE_BINARY_DIR}/generated_assets.bin")
 set(UNIFIED_ASSETS_SCRIPT
-    "${PROJECT_DIR}/third_party/xiaozhi-esp32/scripts/build_default_assets.py"
+    "${PROJECT_DIR}/tools/xiaozhi/build_default_assets.py"
 )
 set(UNIFIED_SR_MODEL_PATH
     "${PROJECT_DIR}/managed_components/espressif__esp-sr/model"

@@ -1,0 +1,3 @@
+# Preserve byte-identical verified upstream inputs without weakening project checks.
+tools/xiaozhi/build_default_assets.py whitespace=-trailing-space,-blank-at-eof
+main/assets/fonts/font_puhui_14_1.c whitespace=-trailing-space,-blank-at-eof
