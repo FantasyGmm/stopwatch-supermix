@@ -82,22 +82,6 @@ lv_obj_t* make_frame_segment(
     return segment;
 }
 
-lv_obj_t* make_outline(lv_obj_t* parent, const Rect& rect, uint32_t color)
-{
-    lv_obj_t* outline = lv_obj_create(parent);
-    lv_obj_set_size(outline, rect.w, rect.h);
-    lv_obj_set_pos(outline, rect.x, rect.y);
-    lv_obj_set_style_border_width(outline, 1, 0);
-    lv_obj_set_style_border_color(outline, lv_color_hex(color), 0);
-    lv_obj_set_style_border_opa(outline, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_opa(outline, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_pad_all(outline, 0, 0);
-    lv_obj_set_style_radius(outline, 0, 0);
-    lv_obj_clear_flag(outline, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(outline, LV_OBJ_FLAG_CLICKABLE);
-    return outline;
-}
-
 lv_obj_t* make_telemetry_label(
     lv_obj_t* parent,
     int x,
@@ -145,8 +129,8 @@ QuotaWidgets make_quota_row(lv_obj_t* parent, int y, const char* label_text)
     lv_obj_set_style_text_font(pct, &lv_font_montserrat_24, 0);
     lv_obj_set_style_text_color(pct, lv_color_hex(kSignalWhite), 0);
     lv_obj_set_width(pct, kQuotaPercentWidth);
-    lv_obj_set_style_text_align(pct, LV_TEXT_ALIGN_LEFT, 0);
-    lv_obj_set_pos(pct, kQuotaX + kQuotaLabelWidth, y - 6);
+    lv_obj_set_style_text_align(pct, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_set_pos(pct, kQuotaPercentX, y - 6);
 
     return {pct, bar};
 }
@@ -388,13 +372,6 @@ void AppCodexStatus::create_view()
     lv_label_set_long_mode(_status_label, LV_LABEL_LONG_MODE_DOTS);
     lv_obj_align(_status_label, LV_ALIGN_TOP_MID, 0, kStatusY);
 
-    _host_label = make_center_label(_panel, "", kHostY, &lv_font_montserrat_14, kEtchedGray);
-    lv_obj_set_width(_host_label, 320);
-    lv_obj_set_style_text_align(_host_label, LV_TEXT_ALIGN_CENTER, 0);
-    lv_label_set_long_mode(_host_label, LV_LABEL_LONG_MODE_DOTS);
-    lv_obj_align(_host_label, LV_ALIGN_TOP_MID, 0, kHostY);
-
-    make_outline(_panel, kPetDock, kPanelGraphite);
     make_frame_segment(
         _panel,
         kBeaconSpine.x,
@@ -447,6 +424,7 @@ void AppCodexStatus::create_view()
     _pet_image = lv_image_create(_panel);
     lv_image_set_src(_pet_image, codex_pet_idle_frames[0]);
     lv_image_set_antialias(_pet_image, false);
+    lv_image_set_scale(_pet_image, kPetScale);
     lv_obj_clear_flag(_pet_image, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_pos(_pet_image, kPetX, kPetY);
 

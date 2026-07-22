@@ -38,7 +38,11 @@ WAITING_PHRASES = (
     "需要你",
     "可以吗",
     "请重新",
+    "请复核",
     "告诉我",
+    "确认后继续",
+    "确认后我继续",
+    "确认后我会继续",
     "等待你的",
     "等待回复",
     "等待确认",
@@ -189,6 +193,8 @@ def classify_outcome(message: Any) -> str:
     if not isinstance(message, str):
         return "completed"
     paragraphs = [part.strip() for part in message.split("\n\n") if part.strip()]
+    while paragraphs and paragraphs[-1].startswith("::"):
+        paragraphs.pop()
     if not paragraphs:
         return "completed"
     final = paragraphs[-1]
