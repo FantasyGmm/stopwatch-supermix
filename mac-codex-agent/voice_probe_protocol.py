@@ -179,10 +179,20 @@ class StopSummary:
 def encode_start(session: int, mode: int, target_bps: int, duration_ms: int) -> bytes:
     if not 1 <= session <= 0xFFFF:
         raise ValueError("session must be 1..65535")
+    if mode not in (SYNTHETIC, MICROPHONE_ADPCM):
+        raise ValueError("invalid mode")
+    if not 1000 <= duration_ms <= 120000:
+        raise ValueError("duration must be 1000..120000 ms")
+    if mode == SYNTHETIC and not 1024 <= target_bps <= 32768:
+        raise ValueError("synthetic target bitrate must be 1024..32768")
+    if mode == MICROPHONE_ADPCM and target_bps != 8192:
+        raise ValueError("microphone target bitrate must be 8192")
     return CONTROL.pack(PROTOCOL_VERSION, START, mode, 0, session, target_bps, duration_ms)
 
 
 def encode_stop(session: int) -> bytes:
+    if not 1 <= session <= 0xFFFF:
+        raise ValueError("session must be 1..65535")
     return CONTROL.pack(PROTOCOL_VERSION, STOP, SYNTHETIC, 0, session, 0, 0)
 
 

@@ -35,6 +35,27 @@ class VoiceProbeProtocolTests(unittest.TestCase):
             bytes.fromhex("0102010034120000000000000000"),
         )
 
+    def test_rejects_control_values_forbidden_by_firmware(self):
+        invalid_start_commands = (
+            (0, SYNTHETIC, 8192, 60000),
+            (0x10000, SYNTHETIC, 8192, 60000),
+            (1, 0, 8192, 60000),
+            (1, 3, 8192, 60000),
+            (1, SYNTHETIC, 8192, 999),
+            (1, SYNTHETIC, 8192, 120001),
+            (1, SYNTHETIC, 1023, 60000),
+            (1, SYNTHETIC, 32769, 60000),
+            (1, MICROPHONE_ADPCM, 8191, 60000),
+            (1, MICROPHONE_ADPCM, 8193, 60000),
+        )
+        for command in invalid_start_commands:
+            with self.subTest(command=command), self.assertRaises(ValueError):
+                encode_start(*command)
+
+        for session in (0, 0x10000):
+            with self.subTest(session=session), self.assertRaises(ValueError):
+                encode_stop(session)
+
     def test_decodes_notification_and_rejects_bad_payload_length(self):
         raw = struct.pack("<BBHIIH", 1, DATA, 7, 3, 100, 3) + b"abc"
         packet = decode_notification(raw)
