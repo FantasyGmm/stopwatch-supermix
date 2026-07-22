@@ -66,8 +66,11 @@ class FirmwareFontContractTests(unittest.TestCase):
         self.assertNotIn("ALL HANDLED", carousel)
         self.assertNotIn("all_handled", carousel)
 
-    def test_model_and_effort_instruments_match_precision_console_mockup(self):
+    def test_codex_status_matches_beacon_spine_mockup_and_reuses_assets(self):
         app = (self.codex_root / "app_codex_status.cpp").read_text(encoding="utf-8")
+        layout = (self.codex_root / "codex_status_ui_layout.h").read_text(
+            encoding="utf-8"
+        )
 
         for legacy_caption in (
             'make_arc_value(_panel, 70, 138, "MODEL"',
@@ -76,22 +79,32 @@ class FirmwareFontContractTests(unittest.TestCase):
             'make_arc_value(_panel, 306, 182, "reason"',
         ):
             self.assertNotIn(legacy_caption, app)
-        self.assertIn("make_instrument_frame(", app)
+        self.assertNotIn("make_instrument_frame(", app)
         self.assertNotIn("make_instrument_arc(", app)
-        self.assertIn('132, "MODEL", &lv_font_montserrat_14, kEtchedGray', app)
-        self.assertIn('132, "EFFORT", &lv_font_montserrat_14, kEtchedGray', app)
-        self.assertIn("kModelInstrument, kAlertVermilion, true", app)
-        self.assertIn("kEffortInstrument, kCalibrationBlue, false", app)
-        self.assertIn("_model_value = make_instrument_value(", app)
-        self.assertIn(
-            '_panel, kModelInstrument, 157, "--", &lv_font_montserrat_18, kSignalWhite',
-            app,
-        )
-        self.assertIn("_effort_value = make_instrument_value(", app)
-        self.assertIn(
-            '_panel, kEffortInstrument, 157, "--", &lv_font_montserrat_18, kSignalWhite',
-            app,
-        )
+        self.assertIn("make_outline(_panel, kPetDock, kPanelGraphite)", app)
+        self.assertIn("kBeaconSpine.x", app)
+        self.assertIn("kBeaconSpine.y", app)
+        self.assertIn("kBeaconViolet", app)
+        self.assertIn("_model_value = make_telemetry_label(", app)
+        self.assertIn("kModelCaptionY", app)
+        self.assertIn("kModelValueY", app)
+        self.assertIn("_effort_value = make_telemetry_label(", app)
+        self.assertIn("kEffortCaptionY", app)
+        self.assertIn("kEffortValueY", app)
+        self.assertGreaterEqual(app.count("&lv_font_montserrat_24"), 3)
+        self.assertIn("lv_color_hex(kQuotaMint)", app)
+        self.assertIn("constexpr Rect kPetDock{52, 112, 104, 104}", layout)
+        self.assertIn("constexpr Rect kBeaconSpine{170, 112, 2, 104}", layout)
+        self.assertIn("constexpr int kTelemetryX = 190", layout)
+        self.assertIn("constexpr int kTelemetryWidth = 224", layout)
+        self.assertIn("constexpr int kQuotaBarX = 180", layout)
+        self.assertIn("constexpr int kQuotaBarWidth = 231", layout)
+        self.assertIn("lv_image_set_src(logo, &logo_codex)", app)
+        self.assertIn("lv_image_set_scale(logo, kLogoScale)", app)
+        self.assertIn("lv_image_set_src(_pet_image, codex_pet_idle_frames[0])", app)
+        self.assertIn("lv_image_set_antialias(_pet_image, false)", app)
+        self.assertIn("lv_obj_set_pos(_pet_image, kPetX, kPetY)", app)
+        self.assertIn("codex_pet_idle_durations_ms[self->_pet_frame]", app)
         self.assertIn('"Codex", kBrandX, kBrandY, &lv_font_montserrat_24, kSignalWhite', app)
         self.assertIn("make_line(_panel, kAlertDividerX, kAlertDividerY, kAlertDividerWidth)", app)
         self.assertIn("lv_label_set_long_mode(label, LV_LABEL_LONG_MODE_DOTS)", app)

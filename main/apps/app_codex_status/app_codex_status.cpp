@@ -28,7 +28,7 @@ namespace {
 
 using namespace codex_status_ui;
 
-constexpr uint32_t kCodexBlue = kCalibrationBlue;
+constexpr uint32_t kCodexBlue = kBeaconViolet;
 constexpr uint32_t kCodexRed = kAlertVermilion;
 constexpr uint32_t kHandledGreen = 0x3CB371;
 constexpr uint32_t kCompletedGreen = kHandledGreen;
@@ -82,26 +82,27 @@ lv_obj_t* make_frame_segment(
     return segment;
 }
 
-void make_instrument_frame(
-    lv_obj_t* parent,
-    const Rect& rect,
-    uint32_t accent,
-    bool accent_on_left
-)
+lv_obj_t* make_outline(lv_obj_t* parent, const Rect& rect, uint32_t color)
 {
-    constexpr int kRule = 3;
-    make_frame_segment(parent, rect.x, rect.y, rect.w, kRule, kPanelGraphite);
-    make_frame_segment(
-        parent, rect.x, rect.y + rect.h - kRule, rect.w, kRule, kPanelGraphite
-    );
-    const int accent_x = accent_on_left ? rect.x : rect.x + rect.w - kRule;
-    make_frame_segment(parent, accent_x, rect.y, kRule, rect.h, accent);
+    lv_obj_t* outline = lv_obj_create(parent);
+    lv_obj_set_size(outline, rect.w, rect.h);
+    lv_obj_set_pos(outline, rect.x, rect.y);
+    lv_obj_set_style_border_width(outline, 1, 0);
+    lv_obj_set_style_border_color(outline, lv_color_hex(color), 0);
+    lv_obj_set_style_border_opa(outline, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_opa(outline, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_pad_all(outline, 0, 0);
+    lv_obj_set_style_radius(outline, 0, 0);
+    lv_obj_clear_flag(outline, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(outline, LV_OBJ_FLAG_CLICKABLE);
+    return outline;
 }
 
-lv_obj_t* make_instrument_value(
+lv_obj_t* make_telemetry_label(
     lv_obj_t* parent,
-    const Rect& rect,
+    int x,
     int y,
+    int width,
     const char* text,
     const lv_font_t* font,
     uint32_t color
@@ -111,10 +112,10 @@ lv_obj_t* make_instrument_value(
     lv_label_set_text(label, text);
     lv_obj_set_style_text_font(label, font, 0);
     lv_obj_set_style_text_color(label, lv_color_hex(color), 0);
-    lv_obj_set_width(label, rect.w);
-    lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_width(label, width);
+    lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_LEFT, 0);
     lv_label_set_long_mode(label, LV_LABEL_LONG_MODE_DOTS);
-    lv_obj_set_pos(label, rect.x, y);
+    lv_obj_set_pos(label, x, y);
     return label;
 }
 
@@ -125,35 +126,27 @@ struct QuotaWidgets {
 
 QuotaWidgets make_quota_row(lv_obj_t* parent, int y, const char* label_text)
 {
-    constexpr int label_x = kQuotaX;
-    constexpr int label_w = 43;
-    constexpr int gap = 10;
-    constexpr int pct_w = 66;
-    constexpr int pct_x = kQuotaX + kQuotaWidth - pct_w;
-    constexpr int bar_x = label_x + label_w + gap;
-    constexpr int bar_w = pct_x - gap - bar_x;
-
-    make_label(parent, label_text, label_x, y - 2, &lv_font_montserrat_18, kSignalWhite);
+    make_label(parent, label_text, kQuotaX, y - 2, &lv_font_montserrat_18, kSignalWhite);
 
     lv_obj_t* bar = lv_bar_create(parent);
-    lv_obj_set_size(bar, bar_w, 8);
-    lv_obj_set_pos(bar, bar_x, y + 8);
+    lv_obj_set_size(bar, kQuotaBarWidth, 8);
+    lv_obj_set_pos(bar, kQuotaBarX, y + 8);
     lv_bar_set_range(bar, 0, 100);
     lv_bar_set_value(bar, 0, LV_ANIM_OFF);
     lv_obj_set_style_radius(bar, 2, 0);
     lv_obj_set_style_radius(bar, 2, LV_PART_INDICATOR);
     lv_obj_set_style_bg_color(bar, lv_color_hex(kPanelGraphite), 0);
     lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(bar, lv_color_hex(kCalibrationBlue), LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(bar, lv_color_hex(kQuotaMint), LV_PART_INDICATOR);
     lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, LV_PART_INDICATOR);
 
     lv_obj_t* pct = lv_label_create(parent);
     lv_label_set_text(pct, "--%");
     lv_obj_set_style_text_font(pct, &lv_font_montserrat_24, 0);
     lv_obj_set_style_text_color(pct, lv_color_hex(kSignalWhite), 0);
-    lv_obj_set_width(pct, pct_w);
-    lv_obj_set_style_text_align(pct, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_obj_set_pos(pct, pct_x, y - 6);
+    lv_obj_set_width(pct, kQuotaPercentWidth);
+    lv_obj_set_style_text_align(pct, LV_TEXT_ALIGN_LEFT, 0);
+    lv_obj_set_pos(pct, kQuotaX + kQuotaLabelWidth, y - 6);
 
     return {pct, bar};
 }
@@ -404,33 +397,61 @@ void AppCodexStatus::create_view()
     lv_label_set_long_mode(_host_label, LV_LABEL_LONG_MODE_DOTS);
     lv_obj_align(_host_label, LV_ALIGN_TOP_MID, 0, kHostY);
 
-    make_instrument_frame(_panel, kModelInstrument, kAlertVermilion, true);
-    lv_obj_t* model_caption = make_instrument_value(
-        _panel, kModelInstrument, 132, "MODEL", &lv_font_montserrat_14, kEtchedGray
-    );
-    lv_obj_set_style_text_letter_space(model_caption, 3, 0);
-    _model_value = make_instrument_value(
-        _panel, kModelInstrument, 157, "--", &lv_font_montserrat_18, kSignalWhite
+    make_outline(_panel, kPetDock, kPanelGraphite);
+    make_frame_segment(
+        _panel,
+        kBeaconSpine.x,
+        kBeaconSpine.y,
+        kBeaconSpine.w,
+        kBeaconSpine.h,
+        kBeaconViolet
     );
 
-    make_instrument_frame(_panel, kEffortInstrument, kCalibrationBlue, false);
-    lv_obj_t* effort_caption = make_instrument_value(
-        _panel, kEffortInstrument, 132, "EFFORT", &lv_font_montserrat_14, kEtchedGray
+    lv_obj_t* model_caption = make_telemetry_label(
+        _panel,
+        kTelemetryX,
+        kModelCaptionY,
+        kTelemetryWidth,
+        "MODEL",
+        &lv_font_montserrat_14,
+        kEtchedGray
+    );
+    lv_obj_set_style_text_letter_space(model_caption, 3, 0);
+    _model_value = make_telemetry_label(
+        _panel,
+        kTelemetryX,
+        kModelValueY,
+        kTelemetryWidth,
+        "--",
+        &lv_font_montserrat_24,
+        kSignalWhite
+    );
+
+    lv_obj_t* effort_caption = make_telemetry_label(
+        _panel,
+        kTelemetryX,
+        kEffortCaptionY,
+        kTelemetryWidth,
+        "EFFORT",
+        &lv_font_montserrat_14,
+        kEtchedGray
     );
     lv_obj_set_style_text_letter_space(effort_caption, 3, 0);
-    _effort_value = make_instrument_value(
-        _panel, kEffortInstrument, 157, "--", &lv_font_montserrat_18, kSignalWhite
+    _effort_value = make_telemetry_label(
+        _panel,
+        kTelemetryX,
+        kEffortValueY,
+        kTelemetryWidth,
+        "--",
+        &lv_font_montserrat_24,
+        kSignalWhite
     );
 
     _pet_image = lv_image_create(_panel);
     lv_image_set_src(_pet_image, codex_pet_idle_frames[0]);
     lv_image_set_antialias(_pet_image, false);
     lv_obj_clear_flag(_pet_image, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_pos(
-        _pet_image,
-        kPetCenterX - CODEX_PET_FRAME_W / 2,
-        kPetCenterY - CODEX_PET_FRAME_H / 2
-    );
+    lv_obj_set_pos(_pet_image, kPetX, kPetY);
 
     if (_pet_timer == nullptr) {
         _pet_timer = lv_timer_create(AppCodexStatus::pet_timer_cb, codex_pet_idle_durations_ms[0], this);
@@ -449,7 +470,7 @@ void AppCodexStatus::create_view()
         _panel, "NO ALERTS", kAlertHeadingY, &lv_font_montserrat_18, kEtchedGray
     );
     _alert_project = make_center_label(
-        _panel, "--", kAlertProjectY, &lv_font_montserrat_18, kCalibrationBlue
+        _panel, "--", kAlertProjectY, &lv_font_montserrat_18, kBeaconViolet
     );
     _alert_detail = make_center_label(
         _panel, "", kAlertDetailY, &lv_font_montserrat_14, kEtchedGray
