@@ -95,10 +95,12 @@ int AssistantEventMailbox::persistentIndex(AssistantEventKind kind)
             return 2;
         case AssistantEventKind::UpdateAvailable:
             return 3;
-        case AssistantEventKind::ListeningStatus:
+        case AssistantEventKind::WakeDetected:
             return 4;
-        case AssistantEventKind::SpeakingStatus:
+        case AssistantEventKind::ListeningStatus:
             return 5;
+        case AssistantEventKind::SpeakingStatus:
+            return 6;
         case AssistantEventKind::UserText:
         case AssistantEventKind::AgentText:
         case AssistantEventKind::Emotion:

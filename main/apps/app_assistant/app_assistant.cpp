@@ -26,6 +26,7 @@ bool isConversationEvent(AssistantEventKind kind)
            kind == AssistantEventKind::UserText ||
            kind == AssistantEventKind::AgentText ||
            kind == AssistantEventKind::Emotion ||
+           kind == AssistantEventKind::WakeDetected ||
            kind == AssistantEventKind::ListeningStatus ||
            kind == AssistantEventKind::SpeakingStatus;
 }
@@ -314,6 +315,9 @@ void AppAssistant::applyRuntimeEvent(const AssistantEvent& event,
             break;
         case AssistantEventKind::UpdateAvailable:
             _view->setUpdateVersion(event.text.c_str());
+            break;
+        case AssistantEventKind::WakeDetected:
+            applyPresentationSignal(AssistantPresentationSignal::WakeDetected);
             break;
         case AssistantEventKind::ListeningStatus:
             applyPresentationSignal(AssistantPresentationSignal::ListeningChanged, event.active);

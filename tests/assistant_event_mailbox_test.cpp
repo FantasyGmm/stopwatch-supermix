@@ -69,16 +69,18 @@ int main()
 
     AssistantEventMailbox statuses(0);
     statuses.publish({1, AssistantEventKind::State, "Running"});
+    statuses.publish({1, AssistantEventKind::WakeDetected, {}, false});
     statuses.publish({1, AssistantEventKind::ListeningStatus, {}, true});
     statuses.publish({1, AssistantEventKind::SpeakingStatus, {}, true});
     statuses.publish({1, AssistantEventKind::ListeningStatus, {}, false});
     events = drain(statuses);
-    assert(events.size() == 3);
+    assert(events.size() == 4);
     assert(events[0].kind == AssistantEventKind::State);
-    assert(events[1].kind == AssistantEventKind::SpeakingStatus);
-    assert(events[1].active);
-    assert(events[2].kind == AssistantEventKind::ListeningStatus);
-    assert(!events[2].active);
+    assert(events[1].kind == AssistantEventKind::WakeDetected);
+    assert(events[2].kind == AssistantEventKind::SpeakingStatus);
+    assert(events[2].active);
+    assert(events[3].kind == AssistantEventKind::ListeningStatus);
+    assert(!events[3].active);
 
     statuses.publish({1, AssistantEventKind::ListeningStatus, {}, true});
     statuses.publish({1, AssistantEventKind::SpeakingStatus, {}, true});

@@ -88,6 +88,24 @@ class AssistantSignalCoreUiContractTests(unittest.TestCase):
             r"AssistantEventKind::SpeakingStatus,\s*\{\},\s*speaking\}\)",
         )
 
+    def test_runtime_forwards_awake_as_wake_detected(self):
+        mailbox = (ROOT / "main/runtime/assistant/assistant_event_mailbox.h").read_text()
+        runtime = (ROOT / "main/runtime/assistant/assistant_runtime.cpp").read_text()
+
+        self.assertIn("WakeDetected", mailbox)
+        awake_branch = re.search(
+            r"event == event_name\(ManagerHelper::GeneralEvent::Awake\)\) \{"
+            r"(?P<body>.*?)\n\s*\}",
+            runtime,
+            re.S,
+        )
+        self.assertIsNotNone(awake_branch)
+        self.assertRegex(
+            awake_branch.group("body"),
+            r"mailbox\.publish\(\{session_id,\s*AssistantEventKind::WakeDetected,\s*"
+            r"\{\},\s*false\}\)",
+        )
+
     def test_close_suppression_includes_listening_and_speaking_status(self):
         app = (ROOT / "main/apps/app_assistant/app_assistant.cpp").read_text()
         conversation_events = re.search(
@@ -99,6 +117,7 @@ class AssistantSignalCoreUiContractTests(unittest.TestCase):
         self.assertIsNotNone(conversation_events)
         self.assertIn("AssistantEventKind::ListeningStatus", conversation_events.group("body"))
         self.assertIn("AssistantEventKind::SpeakingStatus", conversation_events.group("body"))
+        self.assertIn("AssistantEventKind::WakeDetected", conversation_events.group("body"))
 
     def test_view_uses_exact_fixed_signal_core_geometry_and_frames(self):
         header = (ROOT / "main/apps/app_assistant/view/assistant_view.h").read_text()

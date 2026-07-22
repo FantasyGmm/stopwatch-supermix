@@ -18,6 +18,7 @@ enum class AssistantPresentationSignal : std::uint8_t {
     Connecting,
     Activating,
     Running,
+    WakeDetected,
     ListeningChanged,
     UserText,
     AgentText,
@@ -61,10 +62,13 @@ public:
             case AssistantPresentationSignal::Running:
                 _state = AssistantVisualState::WaitingWake;
                 break;
-            case AssistantPresentationSignal::ListeningChanged:
-                if (active) {
+            case AssistantPresentationSignal::WakeDetected:
+                if (_state == AssistantVisualState::WaitingWake) {
                     _state = AssistantVisualState::Listening;
-                } else if (_state == AssistantVisualState::Listening) {
+                }
+                break;
+            case AssistantPresentationSignal::ListeningChanged:
+                if (!active && _state == AssistantVisualState::Listening) {
                     _state = AssistantVisualState::WaitingWake;
                 }
                 break;

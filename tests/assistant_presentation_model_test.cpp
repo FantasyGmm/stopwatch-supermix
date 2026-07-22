@@ -16,6 +16,10 @@ int main()
     model.apply(AssistantPresentationSignal::ListeningChanged, false);
     assert(model.state() == AssistantVisualState::WaitingWake);
     model.apply(AssistantPresentationSignal::ListeningChanged, true);
+    assert(model.state() == AssistantVisualState::WaitingWake);
+    model.apply(AssistantPresentationSignal::WakeDetected);
+    assert(model.state() == AssistantVisualState::Listening);
+    model.apply(AssistantPresentationSignal::ListeningChanged, true);
     assert(model.state() == AssistantVisualState::Listening);
     model.apply(AssistantPresentationSignal::ListeningChanged, false);
     assert(model.state() == AssistantVisualState::WaitingWake);
@@ -32,8 +36,13 @@ int main()
     assert(model.state() == AssistantVisualState::Speaking);
     model.apply(AssistantPresentationSignal::SpeakingChanged, false);
     assert(model.state() == AssistantVisualState::WaitingWake);
+    model.apply(AssistantPresentationSignal::ListeningChanged, true);
+    assert(model.state() == AssistantVisualState::WaitingWake);
     model.apply(AssistantPresentationSignal::SpeakingChanged, false);
     assert(model.state() == AssistantVisualState::WaitingWake);
+
+    model.apply(AssistantPresentationSignal::WakeDetected);
+    assert(model.state() == AssistantVisualState::Listening);
 
     model.apply(AssistantPresentationSignal::Closing);
     assert(model.state() == AssistantVisualState::Closing);

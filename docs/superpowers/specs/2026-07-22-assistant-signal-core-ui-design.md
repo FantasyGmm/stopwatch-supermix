@@ -115,7 +115,8 @@ The app loop drives animation. The view does not create a task, FreeRTOS timer, 
 
 ### Listening
 
-- entered only from the real `ListeningStatusChanged(true)` callback;
+- entered only from the real `GeneralEvent::Awake` callback after WakeNet opens the audio channel;
+- `ListeningStatusChanged(true)` confirms an already awake cycle but cannot leave Waiting For Wake on its own;
 - status: `正在聆听`;
 - waveform: active cyan/teal;
 - title: `我在听`;
@@ -137,7 +138,7 @@ The app loop drives animation. The view does not create a task, FreeRTOS timer, 
 - title: `小智助手`;
 - content: the latest Assistant text, without a subtitle label.
 
-When `SpeakingStatusChanged(false)` is received, the screen returns to Waiting For Wake and clears stale conversation text. A late inactive-listening event must not overwrite Thinking or Speaking.
+When `SpeakingStatusChanged(false)` is received, the screen returns to Waiting For Wake and clears stale conversation text. The XiaoZhi producer immediately emits `ListeningStatusChanged(true)` after speech completion; that automatic event must not leave Waiting For Wake. A new real `GeneralEvent::Awake` starts the next visible listening cycle. A late inactive-listening event must not overwrite Thinking or Speaking.
 
 ### Failure
 
@@ -176,18 +177,20 @@ Battery is refreshed at most once per second from `GetHAL().getBatteryLevel()`. 
 
 ## Event Routing
 
-The existing runtime callbacks already receive real listening and speaking changes but currently use them only for trace records. The implementation forwards those changes to the app mailbox so the UI does not infer microphone or speaker state from elapsed time.
+The existing runtime callbacks receive the WakeNet-driven `GeneralEvent::Awake` plus listening and speaking changes. The implementation forwards them to the app mailbox so the UI does not infer microphone or speaker state from elapsed time. `Awake` is the authoritative transition out of Waiting For Wake because the XiaoZhi producer does not emit `ListeningStatusChanged(true)` when the first audio channel opens.
 
 Required presentation rules:
 
 1. `Running` maps to Waiting For Wake, not Listening.
-2. `ListeningStatusChanged(true)` maps to Listening.
-3. User text maps to Thinking and replaces the conversation line.
-4. Assistant text maps to Speaking and replaces the conversation line.
-5. `SpeakingStatusChanged(false)` maps back to Waiting For Wake.
-6. Inactive listening events do not demote Thinking or Speaking.
-7. Closing, failure, and timeout states override conversation events.
-8. Events from stale sessions continue to be discarded by the existing mailbox/session boundary.
+2. `GeneralEvent::Awake` maps Waiting For Wake to Listening.
+3. `ListeningStatusChanged(true)` only confirms an already active listening cycle; it cannot leave Waiting For Wake.
+4. User text maps to Thinking and replaces the conversation line.
+5. Assistant text maps to Speaking and replaces the conversation line.
+6. `SpeakingStatusChanged(false)` maps back to Waiting For Wake.
+7. Automatic listening status after speaking completion cannot leave Waiting For Wake.
+8. Inactive listening events do not demote Thinking or Speaking.
+9. Closing, failure, and timeout states override conversation events.
+10. Events from stale sessions continue to be discarded by the existing mailbox/session boundary.
 
 The event extension must remain typed and bounded. It must not add a new queue, worker, callback allocation loop, or direct LVGL call from the runtime callback thread.
 
@@ -232,7 +235,8 @@ The firmware build must remain below the existing application capacity gate. The
 ### Host And Contract Tests
 
 - `Running` renders Waiting For Wake.
-- Real listening and speaking callbacks are forwarded through the mailbox.
+- Real awake, listening, and speaking callbacks are forwarded through the mailbox.
+- the production sequence `Speaking(false) -> Listening(true)` remains Waiting For Wake until the next Awake event.
 - inactive listening cannot overwrite Thinking/Speaking.
 - speaking completion returns to Waiting For Wake.
 - update metadata remains non-interactive and visible across state changes.
