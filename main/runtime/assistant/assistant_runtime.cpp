@@ -247,6 +247,7 @@ public:
     bool subscribe(uint64_t session_id);
     bool submitActivate(uint64_t session_id);
     bool submitStart(uint64_t session_id);
+    bool submitSleep(uint64_t session_id);
     bool submitStop(uint64_t session_id);
     AssistantStartResult failAndReturn(uint64_t session_id, AssistantStartResult result,
                                        const char* message);
@@ -457,6 +458,10 @@ void AssistantRuntime::Impl::update(uint32_t now_ms)
     if ((signals & Started) != 0 &&
         state.markRunning(session) == TransitionResult::Accepted) {
         mailbox.publish({session, AssistantEventKind::State, "Running"});
+        if (!submitSleep(session)) {
+            failStart(session, "Initial sleep submission failed");
+            return;
+        }
     }
 
     if (state.state() == AssistantRuntimeState::Stopping &&
@@ -792,6 +797,11 @@ bool AssistantRuntime::Impl::submitActivate(uint64_t session_id)
 bool AssistantRuntime::Impl::submitStart(uint64_t session_id)
 {
     return submitAction(session_id, ManagerHelper::GeneralAction::Start, StartAsyncFailed);
+}
+
+bool AssistantRuntime::Impl::submitSleep(uint64_t session_id)
+{
+    return submitAction(session_id, ManagerHelper::GeneralAction::Sleep, StartAsyncFailed);
 }
 
 bool AssistantRuntime::Impl::submitStop(uint64_t session_id)
