@@ -25,7 +25,9 @@ bool isConversationEvent(AssistantEventKind kind)
     return kind == AssistantEventKind::ActivationCode ||
            kind == AssistantEventKind::UserText ||
            kind == AssistantEventKind::AgentText ||
-           kind == AssistantEventKind::Emotion;
+           kind == AssistantEventKind::Emotion ||
+           kind == AssistantEventKind::ListeningStatus ||
+           kind == AssistantEventKind::SpeakingStatus;
 }
 } // namespace
 
