@@ -23,6 +23,27 @@ int main()
     assert(encoded[4] == 0x04);
 
     assert(ima_adpcm_block_size(320) == 164);
-    assert(encode_ima_adpcm_block(nullptr, 320, encoded.data(), encoded.size()) == 0);
-    assert(encode_ima_adpcm_block(step.data(), step.size(), encoded.data(), 4) == 0);
+    assert(ima_adpcm_block_size(0) == 0);
+
+    std::array<uint8_t, 16> sentinel = {};
+    sentinel.fill(0xa5);
+    std::array<uint8_t, 16> rejected = sentinel;
+    assert(encode_ima_adpcm_block(zero.data(), 0, rejected.data(), rejected.size()) == 0);
+    assert(rejected == sentinel);
+
+    rejected = sentinel;
+    assert(encode_ima_adpcm_block(step.data(), step.size(), nullptr, rejected.size()) == 0);
+    assert(rejected == sentinel);
+
+    rejected = sentinel;
+    assert(encode_ima_adpcm_block(step.data(), step.size(), rejected.data(), 0) == 0);
+    assert(rejected == sentinel);
+
+    rejected = sentinel;
+    assert(encode_ima_adpcm_block(nullptr, 320, rejected.data(), rejected.size()) == 0);
+    assert(rejected == sentinel);
+
+    rejected = sentinel;
+    assert(encode_ima_adpcm_block(step.data(), step.size(), rejected.data(), 4) == 0);
+    assert(rejected == sentinel);
 }
