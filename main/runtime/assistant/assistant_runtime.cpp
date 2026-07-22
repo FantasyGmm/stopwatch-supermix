@@ -496,40 +496,48 @@ void AssistantRuntime::Impl::update(uint32_t now_ms)
     }
 
     output_sync.update(now_ms);
+    if (output_sync.takeTimeoutNotice()) {
+        ESP_LOGW(tag, "output sync still pending; suppressing duplicate submissions");
+    }
     const auto sync_request = output_sync.begin(
         now_ms, state.state() == AssistantRuntimeState::Running);
     if (sync_request) {
         const int volume = sync_request->volume;
         const uint32_t generation = sync_request->generation;
-        const bool volume_submitted = AudioHelper::call_function_async(
-            AudioHelper::FunctionId::SetVolume, static_cast<double>(volume),
-            [this, session, generation](FunctionResult&& result) {
-                if (callback_session.load() != session) {
-                    return;
-                }
-                output_sync.markVolumeResult(generation, result.success);
-                if (!result.success) {
-                    ESP_LOGW(tag, "output volume sync RPC failed");
-                }
+        const auto submission = SubmitAssistantOutputSyncPair(
+            output_sync, generation,
+            [this, session, generation, volume]() {
+                return AudioHelper::call_function_async(
+                    AudioHelper::FunctionId::SetVolume, static_cast<double>(volume),
+                    [this, session, generation](FunctionResult&& result) {
+                        if (callback_session.load() != session) {
+                            return;
+                        }
+                        output_sync.markVolumeResult(generation, result.success);
+                        if (!result.success) {
+                            ESP_LOGW(tag, "output volume sync RPC failed");
+                        }
+                    });
+            },
+            [this, session, generation, volume]() {
+                return AudioHelper::call_function_async(
+                    AudioHelper::FunctionId::SetMute, volume <= 0,
+                    [this, session, generation](FunctionResult&& result) {
+                        if (callback_session.load() != session) {
+                            return;
+                        }
+                        output_sync.markMuteResult(generation, result.success);
+                        if (!result.success) {
+                            ESP_LOGW(tag, "output mute sync RPC failed");
+                        }
+                    });
             });
-        const bool mute_submitted = AudioHelper::call_function_async(
-            AudioHelper::FunctionId::SetMute, volume <= 0,
-            [this, session, generation](FunctionResult&& result) {
-                if (callback_session.load() != session) {
-                    return;
-                }
-                output_sync.markMuteResult(generation, result.success);
-                if (!result.success) {
-                    ESP_LOGW(tag, "output mute sync RPC failed");
-                }
-            });
-        if (!volume_submitted) {
-            output_sync.markVolumeResult(generation, false);
+        if (submission.volume_threw || submission.mute_threw) {
+            ESP_LOGE(tag, "exception submitting output sync pair: volume=%d mute=%d",
+                     submission.volume_threw ? 1 : 0,
+                     submission.mute_threw ? 1 : 0);
         }
-        if (!mute_submitted) {
-            output_sync.markMuteResult(generation, false);
-        }
-        if (!volume_submitted || !mute_submitted) {
+        if (!submission.allSubmitted()) {
             ESP_LOGW(tag, "failed to submit output sync pair: volume=%d", volume);
         }
     }

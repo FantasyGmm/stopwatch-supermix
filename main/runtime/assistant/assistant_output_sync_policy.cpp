@@ -35,6 +35,8 @@ void AssistantOutputSyncPolicy::reset()
     _next_retry_ms = 0;
     _in_flight_volume = -1;
     _in_flight = false;
+    _timeout_reported = false;
+    _timeout_notice_pending = false;
 }
 
 void AssistantOutputSyncPolicy::request(int volume)
@@ -62,6 +64,8 @@ std::optional<AssistantOutputSyncRequest> AssistantOutputSyncPolicy::begin(
     _in_flight_volume = volume;
     _started_ms = now_ms;
     _in_flight = true;
+    _timeout_reported = false;
+    _timeout_notice_pending = false;
     _callback_state.store(make_callback_state(_active_generation));
     return AssistantOutputSyncRequest{volume, _active_generation};
 }
@@ -90,9 +94,13 @@ void AssistantOutputSyncPolicy::update(uint32_t now_ms)
     const uint32_t bits = callback_bits(callback_state);
     const bool completed = (bits & (VolumeDone | MuteDone)) ==
                            (VolumeDone | MuteDone);
-    const bool timed_out = static_cast<uint32_t>(now_ms - _started_ms) >=
-                           CompletionTimeoutMs;
-    if (!completed && !timed_out) {
+    if (!completed) {
+        const bool timed_out = static_cast<uint32_t>(now_ms - _started_ms) >=
+                               CompletionTimeoutMs;
+        if (timed_out && !_timeout_reported) {
+            _timeout_reported = true;
+            _timeout_notice_pending = true;
+        }
         return;
     }
 
@@ -107,7 +115,16 @@ void AssistantOutputSyncPolicy::update(uint32_t now_ms)
     _active_generation = 0;
     _in_flight_volume = -1;
     _in_flight = false;
+    _timeout_reported = false;
+    _timeout_notice_pending = false;
     _next_retry_ms = succeeded ? now_ms : now_ms + RetryDelayMs;
+}
+
+bool AssistantOutputSyncPolicy::takeTimeoutNotice()
+{
+    const bool pending = _timeout_notice_pending;
+    _timeout_notice_pending = false;
+    return pending;
 }
 
 int AssistantOutputSyncPolicy::pendingVolume() const

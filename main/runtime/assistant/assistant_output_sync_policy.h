@@ -20,6 +20,7 @@ public:
     void markVolumeResult(uint32_t generation, bool success);
     void markMuteResult(uint32_t generation, bool success);
     void update(uint32_t now_ms);
+    bool takeTimeoutNotice();
 
     int pendingVolume() const;
     bool inFlight() const;
@@ -40,7 +41,47 @@ private:
     uint32_t _next_retry_ms = 0;
     int _in_flight_volume = -1;
     bool _in_flight = false;
+    bool _timeout_reported = false;
+    bool _timeout_notice_pending = false;
 
     void markResult(uint32_t generation, uint32_t done_bit,
                     uint32_t failed_bit, bool success);
 };
+
+struct AssistantOutputSyncSubmissionResult {
+    bool volume_submitted = false;
+    bool mute_submitted = false;
+    bool volume_threw = false;
+    bool mute_threw = false;
+
+    bool allSubmitted() const
+    {
+        return volume_submitted && mute_submitted;
+    }
+};
+
+template <typename VolumeSubmit, typename MuteSubmit>
+AssistantOutputSyncSubmissionResult SubmitAssistantOutputSyncPair(
+    AssistantOutputSyncPolicy& policy, uint32_t generation,
+    VolumeSubmit&& submit_volume, MuteSubmit&& submit_mute) noexcept
+{
+    AssistantOutputSyncSubmissionResult result;
+    try {
+        result.volume_submitted = submit_volume();
+    } catch (...) {
+        result.volume_threw = true;
+    }
+    if (!result.volume_submitted && !result.volume_threw) {
+        policy.markVolumeResult(generation, false);
+    }
+
+    try {
+        result.mute_submitted = submit_mute();
+    } catch (...) {
+        result.mute_threw = true;
+    }
+    if (!result.mute_submitted && !result.mute_threw) {
+        policy.markMuteResult(generation, false);
+    }
+    return result;
+}
