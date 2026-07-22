@@ -14,13 +14,19 @@ SCRIPTS = ROOT / "scripts"
 ENTRY = struct.Struct("<2sBBLL16sL")
 
 
-def write_test_partition_table(path, app_size=0xDC0000, assets_size=0xC0000):
+def write_test_partition_table(
+    path,
+    app_size=0xDC0000,
+    assets_size=0xC0000,
+    app_offset=0x20000,
+    assets_offset=0xEE0000,
+):
     rows = [
         (1, 2, 0x9000, 0x10000, "nvs"),
         (1, 1, 0x19000, 0x1000, "phy_init"),
-        (0, 0, 0x20000, app_size, "app"),
+        (0, 0, app_offset, app_size, "app"),
         (1, 0x81, 0xDE0000, 0x100000, "storage"),
-        (1, 0x82, 0xEE0000, assets_size, "assets"),
+        (1, 0x82, assets_offset, assets_size, "assets"),
         (1, 3, 0xFA0000, 0x10000, "coredump"),
     ]
     payload = b"".join(
@@ -34,17 +40,37 @@ def write_test_partition_table(path, app_size=0xDC0000, assets_size=0xC0000):
     path.write_bytes(payload + b"\xff" * (0xC00 - len(payload)))
 
 
+def write_reader_aware_python_wrapper(path):
+    reader = shlex.quote(str(SCRIPTS / "read_partition_entry.py"))
+    real_python = shlex.quote(sys.executable)
+    path.write_text(
+        "#!/bin/sh\n"
+        f"if [ \"$1\" = {reader} ]; then\n"
+        f"  exec {real_python} \"$@\"\n"
+        "fi\n"
+        "printf 'Unexpected test Python invocation: %s\\n' \"$*\" >&2\n"
+        "exit 97\n",
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+    return path
+
+
 def run_script(name, *args):
     environment = os.environ.copy()
-    environment["PYTHON"] = sys.executable
-    return subprocess.run(
-        ["bash", str(SCRIPTS / name), *map(str, args)],
-        cwd=ROOT,
-        env=environment,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    with tempfile.TemporaryDirectory(prefix="reader wrapper ") as temp_dir:
+        wrapper = write_reader_aware_python_wrapper(
+            pathlib.Path(temp_dir) / "python wrapper"
+        )
+        environment["PYTHON"] = str(wrapper)
+        return subprocess.run(
+            ["bash", str(SCRIPTS / name), *map(str, args)],
+            cwd=ROOT,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
 
 
 class UnifiedFlashToolsTest(unittest.TestCase):
@@ -142,6 +168,66 @@ class UnifiedFlashToolsTest(unittest.TestCase):
             "generated_assets.bin",
         ):
             self.assertIn(artifact, result.stdout)
+
+    def test_candidate_dry_run_reads_offsets_from_generated_partition_table(self):
+        write_test_partition_table(
+            self.build / "partition_table" / "partition-table.bin",
+            app_size=0x10000,
+            assets_size=0xA0000,
+            app_offset=0x30000,
+            assets_offset=0xEF0000,
+        )
+
+        result = run_script(
+            "flash_unified_candidate.sh",
+            "--dry-run",
+            "--port",
+            "/dev/test",
+            "--backup",
+            self.backup,
+            "--build-dir",
+            self.build,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for offset in ("0x030000", "0xef0000"):
+            self.assertEqual(result.stdout.split().count(offset), 1, result.stdout)
+        self.assertNotIn("0x020000", result.stdout)
+        self.assertNotIn("0xee0000", result.stdout.lower())
+
+    def test_reader_aware_python_wrapper_delegates_reader_and_blocks_esptool(self):
+        with tempfile.TemporaryDirectory(prefix="reader wrapper ") as temp_dir:
+            wrapper = write_reader_aware_python_wrapper(
+                pathlib.Path(temp_dir) / "python wrapper"
+            )
+            reader = subprocess.run(
+                [
+                    str(wrapper),
+                    str(SCRIPTS / "read_partition_entry.py"),
+                    "--table",
+                    str(self.build / "partition_table" / "partition-table.bin"),
+                    "--name",
+                    "assets",
+                    "--field",
+                    "offset",
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            esptool = subprocess.run(
+                [str(wrapper), "-m", "esptool"],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        self.assertEqual(reader.returncode, 0, reader.stderr)
+        self.assertEqual(reader.stdout.strip(), "0xee0000")
+        self.assertNotEqual(esptool.returncode, 0)
+        self.assertIn("Unexpected test Python invocation", esptool.stderr)
 
     def test_candidate_uses_build_python_when_environment_has_no_python_override(self):
         fake_python = self.root / "idf python"
