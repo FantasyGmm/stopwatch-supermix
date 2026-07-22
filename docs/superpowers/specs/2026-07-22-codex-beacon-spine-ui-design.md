@@ -20,6 +20,7 @@ The implementation follows the approved second-round mockup, not the previous Pr
 - Use a mint quota fill so quotas are visually distinct from connection state and alerts.
 - Separate the alert channel with a restrained horizontal rule.
 - Keep alert heading, project, detail, and battery centered.
+- Reuse the existing `MontserratSemiBold26` asset for the English primary hierarchy instead of introducing another font file.
 
 No new information, interaction, animation, font, or raster asset is introduced.
 
@@ -38,12 +39,21 @@ Coordinates use the 466 × 466 screen's top-left origin.
 - Effort caption/value: `y=154 / 176`.
 - Quota band: `x=55, w=356`.
 - 5H row: `y=220`; 7D row: `y=260`.
-- Quota columns: label begins at `x=55`, track begins at `x=101` and is `248 × 8`, percentage begins at `x=360` with width `51` and right alignment.
+- Quota columns: label begins at `x=55`, track begins at `x=101` and is `248 × 8`, percentage begins at `x=351` with width `60` and right alignment.
 - Alert divider: `x=82, y=304, w=302`.
-- Alert heading/project/detail: centered at `y=321 / 351 / 378`.
-- Battery: centered at `y=419`.
+- Alert heading/project/detail: centered at `y=315 / 346 / 382`.
+- Battery: centered at `y=438`.
 
-All content below the connection-status row is shifted upward by exactly 16 px after removing the host-name row. Horizontal geometry and internal spacing remain unchanged.
+The pet, telemetry, quotas, divider, and alert group retain the approved 16 px upward shift after removing the host-name row. The battery is deliberately moved down to `y=438` in this typography refinement.
+
+## Typography Hierarchy
+
+- Brand, model value, effort value, quota percentage, alert heading, and ASCII project name use the existing `MontserratSemiBold26` font.
+- Alert heading remains state-colored: vermilion for pending, beacon violet for running, and handled green for completed.
+- ASCII project names such as `StopWatch` use `MontserratSemiBold26`. Project names containing non-ASCII characters fall back to the existing `font_puhui_14_1` so no glyph is lost.
+- Alert detail remains `font_puhui_14_1` for full Chinese coverage, but changes from etched gray to secondary light gray `#B8C2CC`.
+- Connection state, `MODEL`/`EFFORT` captions, and `5H`/`7D` labels keep their current fonts and sizes. This preserves contrast between labels and live values.
+- The larger quota percentage uses `x=351, w=60`, keeping its right edge fixed at `x=411`.
 
 ## Visual Tokens
 
@@ -51,7 +61,8 @@ All content below the connection-status row is shifted upward by exactly 16 px a
 - Panel graphite `#27303E`: divider and quota tracks.
 - Beacon violet `#7C9DFF`: connection state, spine, and project.
 - Signal white `#F2F6F8`: primary values and percentages.
-- Etched gray `#788391`: captions, host, detail, and battery.
+- Etched gray `#788391`: captions and battery.
+- Secondary light gray `#B8C2CC`: alert detail.
 - Quota mint `#53D7A4`: quota fills.
 - Alert vermilion `#FF6248`: pending and error states.
 - Existing handled green remains unchanged for handled/charging semantics.
@@ -68,6 +79,7 @@ The redesign changes only widget construction and coordinates. BLE/Wi-Fi handlin
 - The layout contract verifies that the enlarged pet stays clear of the spine and that quota percentages follow their progress tracks.
 - The layout contract verifies the shifted group coordinates and preserves the telemetry right edge at `x=414`.
 - The source contract verifies that no host-name label is constructed while connection status remains visible.
+- The source contract verifies reuse of `MontserratSemiBold26`, ASCII/non-ASCII project-font fallback, the brighter detail color, and the lower battery coordinate.
 - Existing Codex model and carousel tests must still pass.
 - Full ESP-IDF firmware build must pass.
 - Source inspection must confirm the original logo and pet descriptors are still used.
