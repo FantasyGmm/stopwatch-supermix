@@ -170,7 +170,6 @@ void StopWatchAudioBackend::closeRecorder()
 
 std::size_t StopWatchAudioBackend::read(void* data, std::size_t bytes, TickType_t timeout)
 {
-    (void)timeout;
     std::lock_guard<std::mutex> io_lock(_impl->recorder_io_mutex);
     {
         std::lock_guard<std::mutex> control_lock(_impl->control_mutex);
@@ -178,7 +177,13 @@ std::size_t StopWatchAudioBackend::read(void* data, std::size_t bytes, TickType_
             return 0;
         }
     }
-    return esp_codec_dev_read(_impl->codec_dev, data, bytes) == ESP_CODEC_DEV_OK ? bytes : 0;
+    size_t bytes_read = 0;
+    const uint32_t timeout_ms = timeout == portMAX_DELAY
+                                    ? UINT32_MAX
+                                    : static_cast<uint32_t>(pdTICKS_TO_MS(timeout));
+    return i2s_channel_read(_impl->rx_handle, data, bytes, &bytes_read, timeout_ms) == ESP_OK
+               ? bytes_read
+               : 0;
 }
 
 bool StopWatchAudioBackend::openPlayer(uint32_t sample_rate, uint8_t bits, uint8_t channels)

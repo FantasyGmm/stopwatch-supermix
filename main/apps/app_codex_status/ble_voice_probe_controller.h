@@ -4,9 +4,72 @@
 #include "ble_voice_probe_session.h"
 #include "codex_ble_transport.h"
 
+#include <algorithm>
 #include <atomic>
+#include <array>
+#include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <vector>
+
+namespace ble_voice_probe::detail {
+
+class MicrophonePcmBuffer {
+public:
+    static constexpr size_t kBlockSamples = 320;
+    using Block = std::array<int16_t, kBlockSamples>;
+
+    void append(const int16_t* samples, size_t count)
+    {
+        if (samples == nullptr || count == 0) {
+            return;
+        }
+        _retained.insert(_retained.end(), samples, samples + count);
+        while (_retained.size() >= kBlockSamples) {
+            Block block = {};
+            std::copy_n(_retained.begin(), kBlockSamples, block.begin());
+            _complete.push_back(block);
+            _retained.erase(_retained.begin(), _retained.begin() + kBlockSamples);
+        }
+    }
+
+    bool has_complete_block() const
+    {
+        return !_complete.empty();
+    }
+
+    bool take_complete_block(Block& block)
+    {
+        if (_complete.empty()) {
+            return false;
+        }
+        block = _complete.front();
+        _complete.pop_front();
+        return true;
+    }
+
+    size_t complete_blocks() const
+    {
+        return _complete.size();
+    }
+
+    size_t retained_samples() const
+    {
+        return _retained.size();
+    }
+
+    void clear()
+    {
+        _complete.clear();
+        _retained.clear();
+    }
+
+private:
+    std::deque<Block> _complete;
+    std::vector<int16_t> _retained;
+};
+
+}  // namespace ble_voice_probe::detail
 
 class BleVoiceProbeController {
 public:
@@ -35,11 +98,16 @@ private:
                                 uint32_t target_bps,
                                 uint32_t now_ms);
     bool setup_microphone_resources(ble_voice_probe::ErrorCode& error);
-    bool capture_microphone_packet(ble_voice_probe::ErrorCode& error);
+    bool capture_microphone_samples(ble_voice_probe::ErrorCode& error);
+    bool prepare_microphone_packet(ble_voice_probe::ErrorCode& error);
     void fail_microphone_session(ble_voice_probe::ErrorCode error);
     void release_audio_resources();
     void retry_start_ack();
+    void retry_preserved_packet();
+    void retry_terminal_error();
     void finalize_stop(uint32_t now_ms);
+    void prepare_terminal_error_locked(ble_voice_probe::ErrorCode code,
+                                       uint16_t detail, uint32_t now_ms);
 
     void enqueue_error(ble_voice_probe::ErrorCode code, uint16_t session,
                        uint16_t detail, uint32_t now_ms, uint32_t sequence = 0);
@@ -57,9 +125,10 @@ private:
     ble_voice_probe::Notification _pending_start_ack = {};
     ble_voice_probe::Notification _pending_data = {};
     ble_voice_probe::Notification _pending_summary = {};
+    ble_voice_probe::Notification _pending_error = {};
     std::atomic<bool> _shutdown_requested{false};
     std::vector<int16_t> _resampler_output;
-    std::vector<int16_t> _microphone_pcm;
+    ble_voice_probe::detail::MicrophonePcmBuffer _microphone_pcm;
     uint16_t _notification_payload_capacity = 0;
     uint16_t _negotiated_mtu = 0;
     uint32_t _resampler_output_capacity = 0;
@@ -68,9 +137,16 @@ private:
     bool _stop_requested = false;
     bool _start_ack_pending = false;
     bool _start_ack_queued = false;
+    bool _start_ack_ever_queued = false;
     bool _summary_queued = false;
     bool _summary_prepared = false;
+    bool _summary_ever_queued = false;
     bool _pending_data_valid = false;
+    bool _pending_data_queued = false;
+    bool _pending_data_ever_queued = false;
+    bool _pending_data_counted = false;
+    bool _terminal_error_pending = false;
+    bool _terminal_error_queued = false;
     bool _microphone_setup_pending = false;
     bool _microphone_cleanup_pending = false;
     bool _capture_owned = false;

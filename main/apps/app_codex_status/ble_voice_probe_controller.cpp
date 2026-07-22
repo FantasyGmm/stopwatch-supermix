@@ -24,8 +24,10 @@ constexpr uint8_t kMaxConsecutiveQueueFailures = 3;
 constexpr uint32_t kProducerTaskStackDepth = 4 * 1024;
 constexpr UBaseType_t kProducerTaskPriority = 5;
 constexpr TickType_t kProducerIdleDelay = pdMS_TO_TICKS(1);
-constexpr TickType_t kProducerStopTimeout = pdMS_TO_TICKS(1000);
 constexpr TickType_t kCaptureReadTimeout = pdMS_TO_TICKS(100);
+constexpr TickType_t kProducerStopTimeout = pdMS_TO_TICKS(500);
+static_assert(kProducerStopTimeout > kCaptureReadTimeout,
+              "worker stop timeout must exceed the maximum capture read timeout");
 constexpr uint16_t kMinimumNotificationLimit =
     ble_voice_probe::kNotificationHeaderSize + ble_voice_probe::kStopSummarySize;
 constexpr uint32_t kCaptureRate = 44100;
@@ -190,6 +192,8 @@ void BleVoiceProbeController::handle_control(
 void BleVoiceProbeController::poll(uint32_t now_ms)
 {
     retry_start_ack();
+    retry_preserved_packet();
+    retry_terminal_error();
     finalize_stop(now_ms);
 }
 
@@ -223,23 +227,56 @@ void BleVoiceProbeController::record_notify_result(
             if (kind == ble_voice_probe::Kind::StartAck && _start_ack_queued) {
                 _start_ack_queued = false;
                 _start_ack_pending = false;
+                _start_ack_ever_queued = false;
                 wake_producer = true;
             }
-            if (kind == ble_voice_probe::Kind::Data && _session.active()) {
+            if (kind == ble_voice_probe::Kind::Data && _pending_data_queued &&
+                _session.active()) {
                 _session.record_notify_accepted();
+                _pending_data = {};
+                _pending_data_valid = false;
+                _pending_data_queued = false;
+                _pending_data_ever_queued = false;
+                _pending_data_counted = false;
+                wake_producer = true;
             }
             if (kind == ble_voice_probe::Kind::StopSummary && _summary_queued) {
+                if (_terminal_error_pending) {
+                    _pending_summary = {};
+                    _summary_queued = false;
+                    _summary_prepared = false;
+                    _summary_ever_queued = false;
+                } else {
+                    reset_session_locked();
+                }
+            }
+            if (kind == ble_voice_probe::Kind::Error && _terminal_error_queued) {
                 reset_session_locked();
             }
         } else {
-            ++_consecutive_failures;
+            bool retryable_packet = false;
             if (kind == ble_voice_probe::Kind::StartAck && _start_ack_queued) {
                 _start_ack_queued = false;
+                retryable_packet = true;
+                wake_producer = true;
+            }
+            if (kind == ble_voice_probe::Kind::Data && _pending_data_queued) {
+                _pending_data_queued = false;
+                retryable_packet = true;
+                wake_producer = true;
             }
             if (kind == ble_voice_probe::Kind::StopSummary && _summary_queued) {
                 _summary_queued = false;
+                retryable_packet = true;
             }
-            stop_for_congestion = _consecutive_failures >= kMaxConsecutiveQueueFailures;
+            if (kind == ble_voice_probe::Kind::Error && _terminal_error_queued) {
+                _terminal_error_queued = false;
+                wake_producer = true;
+            } else if (retryable_packet) {
+                ++_consecutive_failures;
+                stop_for_congestion =
+                    _consecutive_failures >= kMaxConsecutiveQueueFailures;
+            }
         }
     }
 
@@ -277,15 +314,18 @@ void BleVoiceProbeController::shutdown()
         xTaskNotifyGive(static_cast<TaskHandle_t>(_producer_task));
         if (_producer_stopped != nullptr &&
             xSemaphoreTake(static_cast<SemaphoreHandle_t>(_producer_stopped), kProducerStopTimeout) != pdTRUE) {
-            ESP_LOGW(kTag, "voice probe worker stop timed out");
+            ESP_LOGW(kTag, "voice probe worker exceeded 500 ms stop barrier; entering safety wait");
+            // This fallback is intentionally unbounded: deleting a task that might
+            // hold recorder_io_mutex would corrupt the shared audio backend.
+            xSemaphoreTake(static_cast<SemaphoreHandle_t>(_producer_stopped), portMAX_DELAY);
         }
-        // Task deletion is the final ownership barrier before forced cleanup can touch
-        // recorder or resampler state that the worker might otherwise still access.
+        // The worker signals only after releasing recorder/resampler resources and
+        // then suspends, so deleting it here cannot strand recorder_io_mutex.
         vTaskDelete(static_cast<TaskHandle_t>(_producer_task));
         _producer_task = nullptr;
     }
 
-    // No worker remains after the controller-owned task deletion above.
+    // No worker can hold recorder or resampler state after the barrier above.
     release_audio_resources();
     _link_active = false;
     reset_session_locked();
@@ -318,6 +358,7 @@ void BleVoiceProbeController::producer_loop()
             bool stop_for_duration = false;
             bool have_packet = false;
             bool setup_microphone = false;
+            bool prepare_microphone = false;
             bool capture_microphone = false;
             bool release_microphone = false;
             bool wait_for_state_change = false;
@@ -327,21 +368,28 @@ void BleVoiceProbeController::producer_loop()
                 if (!lock.locked()) {
                     break;
                 }
-                if (!_producer_enabled || !_session.active()) {
+                if (!_session.active() || !_producer_enabled || _terminal_error_pending) {
                     producer_inactive = true;
                     release_microphone = _microphone_cleanup_pending;
                 } else if (_microphone_setup_pending) {
                     _microphone_setup_pending = false;
                     setup_microphone = true;
-                } else if (_stop_requested || _start_ack_pending || _start_ack_queued) {
-                    release_microphone = _stop_requested && _microphone_cleanup_pending;
-                    wait_for_state_change = !release_microphone;
+                } else if (_start_ack_pending || _start_ack_queued) {
+                    wait_for_state_change = true;
+                } else if (_pending_data_valid) {
+                    have_packet = !_pending_data_queued;
+                    wait_for_state_change = _pending_data_queued;
+                } else if (_session.mode() == ble_voice_probe::Mode::MicrophoneAdpcm &&
+                           _microphone_pcm.has_complete_block()) {
+                    prepare_microphone = true;
+                } else if (_stop_requested) {
+                    _producer_enabled = false;
+                    producer_inactive = true;
+                    release_microphone = _microphone_cleanup_pending;
                 } else {
                     const uint32_t now_ms = GetHAL().millis();
                     if (_session.duration_reached(now_ms)) {
                         stop_for_duration = true;
-                    } else if (_pending_data_valid) {
-                        have_packet = true;
                     } else if (_session.mode() == ble_voice_probe::Mode::Synthetic) {
                         const uint32_t due = _session.synthetic_bytes_due(now_ms);
                         if (due != 0 && _notification_payload_capacity != 0) {
@@ -358,6 +406,9 @@ void BleVoiceProbeController::producer_loop()
                                 _pending_data.payload.data(),
                                 payload_length);
                             _pending_data_valid = true;
+                            _pending_data_queued = false;
+                            _pending_data_ever_queued = false;
+                            _pending_data_counted = false;
                             have_packet = true;
                         }
                     } else {
@@ -401,20 +452,32 @@ void BleVoiceProbeController::producer_loop()
             }
             if (stop_for_duration) {
                 request_stop(true, ble_voice_probe::ErrorCode::InvalidCommand);
-                release_audio_resources();
-                break;
+                continue;
             }
-            if (capture_microphone) {
-                ble_voice_probe::ErrorCode error = ble_voice_probe::ErrorCode::ResamplerFailed;
-                if (!capture_microphone_packet(error)) {
-                    if (error == ble_voice_probe::ErrorCode::EncoderFailed) {
-                        StateLock lock(_state_mutex);
-                        if (lock.locked() && _session.active()) {
-                            _session.record_encode_failure();
-                        }
+            if (prepare_microphone) {
+                ble_voice_probe::ErrorCode error = ble_voice_probe::ErrorCode::EncoderFailed;
+                if (!prepare_microphone_packet(error)) {
+                    StateLock lock(_state_mutex);
+                    if (lock.locked() && _session.active()) {
+                        _session.record_encode_failure();
                     }
                     fail_microphone_session(error);
                     break;
+                }
+                continue;
+            }
+            if (capture_microphone) {
+                ble_voice_probe::ErrorCode error = ble_voice_probe::ErrorCode::ResamplerFailed;
+                if (!capture_microphone_samples(error)) {
+                    bool stopping = false;
+                    {
+                        StateLock lock(_state_mutex);
+                        stopping = lock.locked() && _stop_requested;
+                    }
+                    if (!stopping) {
+                        fail_microphone_session(error);
+                        break;
+                    }
                 }
                 continue;
             }
@@ -432,7 +495,8 @@ void BleVoiceProbeController::producer_loop()
             bool stop_for_congestion = false;
             {
                 StateLock lock(_state_mutex);
-                if (!lock.locked() || !_session.active() || !_pending_data_valid || _stop_requested) {
+                if (!lock.locked() || !_session.active() || !_pending_data_valid ||
+                    _pending_data_queued || _terminal_error_pending) {
                     continue;
                 }
                 packet = _pending_data;
@@ -441,12 +505,15 @@ void BleVoiceProbeController::producer_loop()
                     packet.payload_length == kAdpcmBytesPerBlock;
                 enqueued = enqueue_packet(packet);
                 if (enqueued) {
-                    _session.record_generated(packet.payload_length);
-                    if (microphone_packet) {
-                        _session.record_captured_samples(kOutputSamplesPerBlock);
+                    _pending_data_queued = true;
+                    _pending_data_ever_queued = true;
+                    if (!_pending_data_counted) {
+                        _session.record_generated(packet.payload_length);
+                        if (microphone_packet) {
+                            _session.record_captured_samples(kOutputSamplesPerBlock);
+                        }
+                        _pending_data_counted = true;
                     }
-                    _pending_data_valid = false;
-                    _consecutive_failures = 0;
                 } else {
                     _session.record_queue_overflow();
                     ++_consecutive_failures;
@@ -500,8 +567,10 @@ bool BleVoiceProbeController::queue_start_ack_locked(
     }
 
     _start_ack_pending = true;
+    _start_ack_ever_queued = false;
     if (enqueue_packet(_pending_start_ack)) {
         _start_ack_queued = true;
+        _start_ack_ever_queued = true;
     } else {
         _session.record_queue_overflow();
         ++_consecutive_failures;
@@ -551,11 +620,10 @@ bool BleVoiceProbeController::setup_microphone_resources(ble_voice_probe::ErrorC
     _resampler_output_capacity = output_capacity;
     _resampler_output.assign(_resampler_output_capacity, 0);
     _microphone_pcm.clear();
-    _microphone_pcm.reserve(_resampler_output_capacity + kOutputSamplesPerBlock);
     return true;
 }
 
-bool BleVoiceProbeController::capture_microphone_packet(ble_voice_probe::ErrorCode& error)
+bool BleVoiceProbeController::capture_microphone_samples(ble_voice_probe::ErrorCode& error)
 {
     if (_resampler == nullptr || !_recorder_open || _resampler_output_capacity == 0 ||
         _resampler_output.size() != _resampler_output_capacity) {
@@ -582,18 +650,21 @@ bool BleVoiceProbeController::capture_microphone_packet(ble_voice_probe::ErrorCo
         return false;
     }
 
-    _microphone_pcm.insert(
-        _microphone_pcm.end(),
-        _resampler_output.begin(),
-        _resampler_output.begin() + output_samples);
-    if (_microphone_pcm.size() < kOutputSamplesPerBlock) {
+    _microphone_pcm.append(_resampler_output.data(), output_samples);
+    return true;
+}
+
+bool BleVoiceProbeController::prepare_microphone_packet(ble_voice_probe::ErrorCode& error)
+{
+    ble_voice_probe::detail::MicrophonePcmBuffer::Block samples = {};
+    if (!_microphone_pcm.take_complete_block(samples)) {
         return true;
     }
 
     std::array<uint8_t, kAdpcmBytesPerBlock> encoded = {};
     if (ble_voice_probe::encode_ima_adpcm_block(
-            _microphone_pcm.data(),
-            kOutputSamplesPerBlock,
+            samples.data(),
+            samples.size(),
             encoded.data(),
             encoded.size()) != kAdpcmBytesPerBlock) {
         error = ble_voice_probe::ErrorCode::EncoderFailed;
@@ -602,7 +673,8 @@ bool BleVoiceProbeController::capture_microphone_packet(ble_voice_probe::ErrorCo
 
     {
         StateLock lock(_state_mutex);
-        if (!lock.locked() || !_session.active() || !_producer_enabled || _stop_requested ||
+        if (!lock.locked() || !_session.active() || !_producer_enabled ||
+            _terminal_error_pending || _pending_data_valid ||
             _session.mode() != ble_voice_probe::Mode::MicrophoneAdpcm) {
             return true;
         }
@@ -614,37 +686,24 @@ bool BleVoiceProbeController::capture_microphone_packet(ble_voice_probe::ErrorCo
         _pending_data.payload_length = kAdpcmBytesPerBlock;
         std::copy(encoded.begin(), encoded.end(), _pending_data.payload.begin());
         _pending_data_valid = true;
+        _pending_data_queued = false;
+        _pending_data_ever_queued = false;
+        _pending_data_counted = false;
     }
-
-    _microphone_pcm.erase(
-        _microphone_pcm.begin(),
-        _microphone_pcm.begin() + kOutputSamplesPerBlock);
     return true;
 }
 
 void BleVoiceProbeController::fail_microphone_session(ble_voice_probe::ErrorCode error)
 {
-    uint16_t session = 0;
-    uint32_t sequence = 0;
-    bool queue_error = false;
     {
         StateLock lock(_state_mutex);
         if (lock.locked() && _session.active() &&
             _session.mode() == ble_voice_probe::Mode::MicrophoneAdpcm) {
-            session = _session.id();
-            sequence = _session.allocate_sequence();
-            reset_session_locked();
-            if (_packet_queue != nullptr) {
-                xQueueReset(static_cast<QueueHandle_t>(_packet_queue));
-            }
-            queue_error = true;
+            prepare_terminal_error_locked(error, 0, GetHAL().millis());
         }
     }
 
     release_audio_resources();
-    if (queue_error) {
-        enqueue_error(error, session, 0, GetHAL().millis(), sequence);
-    }
 }
 
 void BleVoiceProbeController::release_audio_resources()
@@ -683,7 +742,8 @@ bool BleVoiceProbeController::start_session(
         if (!lock.locked()) {
             return false;
         }
-        if (_session.active() || _summary_queued || _microphone_cleanup_pending ||
+        if (_session.active() || _summary_queued || _terminal_error_pending ||
+            _microphone_cleanup_pending ||
             (_packet_queue != nullptr && uxQueueMessagesWaiting(static_cast<QueueHandle_t>(_packet_queue)) != 0) ||
             !_session.start(command, now_ms, negotiated_mtu)) {
             return false;
@@ -716,35 +776,21 @@ bool BleVoiceProbeController::start_session(
 
 void BleVoiceProbeController::request_stop(bool emit_summary, ble_voice_probe::ErrorCode reason)
 {
-    uint16_t session = 0;
-    uint32_t sequence = 0;
-    bool queue_error = false;
     {
         StateLock lock(_state_mutex);
         if (!lock.locked() || !_session.active()) {
             return;
         }
 
-        _producer_enabled = false;
-        _pending_data_valid = false;
         if (emit_summary) {
             _stop_requested = true;
         } else {
-            session = _session.id();
-            sequence = _session.allocate_sequence();
-            reset_session_locked();
-            if (_packet_queue != nullptr) {
-                xQueueReset(static_cast<QueueHandle_t>(_packet_queue));
-            }
-            queue_error = true;
+            prepare_terminal_error_locked(reason, 0, GetHAL().millis());
         }
     }
 
     if (_producer_task != nullptr) {
         xTaskNotifyGive(static_cast<TaskHandle_t>(_producer_task));
-    }
-    if (queue_error) {
-        enqueue_error(reason, session, 0, GetHAL().millis(), sequence);
     }
 }
 
@@ -765,11 +811,13 @@ void BleVoiceProbeController::retry_start_ack()
     bool stop_for_congestion = false;
     {
         StateLock lock(_state_mutex);
-        if (!lock.locked() || !_session.active() || !_start_ack_pending || _start_ack_queued) {
+        if (!lock.locked() || !_session.active() || _terminal_error_pending ||
+            !_start_ack_pending || _start_ack_queued) {
             return;
         }
         if (enqueue_packet(_pending_start_ack)) {
             _start_ack_queued = true;
+            _start_ack_ever_queued = true;
         } else {
             _session.record_queue_overflow();
             ++_consecutive_failures;
@@ -781,12 +829,59 @@ void BleVoiceProbeController::retry_start_ack()
     }
 }
 
+void BleVoiceProbeController::retry_preserved_packet()
+{
+    StateLock lock(_state_mutex);
+    if (!lock.locked() || !_session.active() || !_terminal_error_pending ||
+        _terminal_error_queued || _packet_queue == nullptr ||
+        uxQueueMessagesWaiting(static_cast<QueueHandle_t>(_packet_queue)) != 0) {
+        return;
+    }
+
+    if (_start_ack_pending) {
+        if (!_start_ack_queued && enqueue_packet(_pending_start_ack)) {
+            _start_ack_queued = true;
+            _start_ack_ever_queued = true;
+        }
+        return;
+    }
+    if (_pending_data_valid) {
+        if (!_pending_data_queued && enqueue_packet(_pending_data)) {
+            _pending_data_queued = true;
+            _pending_data_ever_queued = true;
+        }
+        return;
+    }
+    if (_summary_prepared && !_summary_queued && enqueue_packet(_pending_summary)) {
+        _summary_queued = true;
+        _summary_ever_queued = true;
+    }
+}
+
+void BleVoiceProbeController::retry_terminal_error()
+{
+    StateLock lock(_state_mutex);
+    if (!lock.locked() || !_session.active() || !_terminal_error_pending ||
+        _terminal_error_queued || _microphone_cleanup_pending ||
+        _start_ack_pending || _start_ack_queued ||
+        _pending_data_valid || _pending_data_queued ||
+        _summary_prepared || _summary_queued ||
+        _packet_queue == nullptr ||
+        uxQueueMessagesWaiting(static_cast<QueueHandle_t>(_packet_queue)) != 0) {
+        return;
+    }
+    if (enqueue_packet(_pending_error)) {
+        _terminal_error_queued = true;
+    }
+}
+
 void BleVoiceProbeController::finalize_stop(uint32_t now_ms)
 {
     bool stop_for_congestion = false;
     {
         StateLock lock(_state_mutex);
-        if (!lock.locked() || !_session.active() || !_stop_requested || _start_ack_pending ||
+        if (!lock.locked() || !_session.active() || !_stop_requested ||
+            _terminal_error_pending || _microphone_cleanup_pending || _start_ack_pending ||
             _start_ack_queued || _summary_queued ||
             _pending_data_valid || _packet_queue == nullptr ||
             uxQueueMessagesWaiting(static_cast<QueueHandle_t>(_packet_queue)) != 0) {
@@ -807,6 +902,7 @@ void BleVoiceProbeController::finalize_stop(uint32_t now_ms)
                 return;
             }
             _summary_prepared = true;
+            _summary_ever_queued = false;
         }
         if (!enqueue_packet(_pending_summary)) {
             _session.record_queue_overflow();
@@ -814,11 +910,76 @@ void BleVoiceProbeController::finalize_stop(uint32_t now_ms)
             stop_for_congestion = _consecutive_failures >= kMaxConsecutiveQueueFailures;
         } else {
             _summary_queued = true;
+            _summary_ever_queued = true;
         }
     }
     if (stop_for_congestion) {
         request_stop(false, ble_voice_probe::ErrorCode::QueueCongested);
     }
+}
+
+void BleVoiceProbeController::prepare_terminal_error_locked(
+    ble_voice_probe::ErrorCode code,
+    uint16_t detail,
+    uint32_t now_ms
+)
+{
+    if (!_session.active() || _terminal_error_pending) {
+        return;
+    }
+
+    const bool replace_pending_data =
+        _pending_data_valid && !_pending_data_ever_queued;
+    const bool replace_pending_start_ack =
+        _start_ack_pending && !_start_ack_ever_queued;
+    const bool replace_pending_summary =
+        _summary_prepared && !_summary_ever_queued;
+
+    uint32_t sequence = 0;
+    if (replace_pending_data) {
+        sequence = _pending_data.sequence;
+    } else if (replace_pending_start_ack) {
+        sequence = _pending_start_ack.sequence;
+    } else if (replace_pending_summary) {
+        sequence = _pending_summary.sequence;
+    } else {
+        sequence = _session.allocate_sequence();
+    }
+
+    _pending_error = {};
+    _pending_error.kind = ble_voice_probe::Kind::Error;
+    _pending_error.session = _session.id();
+    _pending_error.sequence = sequence;
+    _pending_error.watch_ms = now_ms;
+    _pending_error.payload_length = ble_voice_probe::encode_error(
+        code,
+        detail,
+        _pending_error.payload.data(),
+        _pending_error.payload.size());
+
+    _producer_enabled = false;
+    _stop_requested = false;
+    if (replace_pending_start_ack) {
+        _pending_start_ack = {};
+        _start_ack_pending = false;
+        _start_ack_queued = false;
+        _start_ack_ever_queued = false;
+    }
+    if (replace_pending_data) {
+        _pending_data = {};
+        _pending_data_valid = false;
+        _pending_data_queued = false;
+        _pending_data_ever_queued = false;
+        _pending_data_counted = false;
+    }
+    if (replace_pending_summary) {
+        _pending_summary = {};
+        _summary_prepared = false;
+        _summary_queued = false;
+        _summary_ever_queued = false;
+    }
+    _terminal_error_pending = _pending_error.payload_length != 0;
+    _terminal_error_queued = false;
 }
 
 void BleVoiceProbeController::enqueue_error(
@@ -879,11 +1040,19 @@ void BleVoiceProbeController::reset_session_locked()
     _stop_requested = false;
     _start_ack_pending = false;
     _start_ack_queued = false;
+    _start_ack_ever_queued = false;
     _summary_queued = false;
     _summary_prepared = false;
+    _summary_ever_queued = false;
     _pending_data_valid = false;
+    _pending_data_queued = false;
+    _pending_data_ever_queued = false;
+    _pending_data_counted = false;
+    _terminal_error_pending = false;
+    _terminal_error_queued = false;
     _microphone_setup_pending = false;
     _pending_start_ack = {};
     _pending_data = {};
     _pending_summary = {};
+    _pending_error = {};
 }
