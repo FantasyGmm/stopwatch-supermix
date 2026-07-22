@@ -74,6 +74,13 @@ class ProbeMetrics:
         p95_arrival_deviation_ms = self._nearest_rank_p95(self._arrival_deviations_ms)
         max_arrival_gap_ms = max(self._arrival_gaps_ms, default=0.0)
         summary_semantically_valid = self._summary_is_semantically_valid(summary)
+        decoded_pcm_samples_valid = (
+            self.mode != MICROPHONE_ADPCM
+            or self._is_nonnegative_int(decoded_pcm_samples)
+        )
+        safe_decoded_pcm_samples = (
+            decoded_pcm_samples if decoded_pcm_samples_valid else None
+        )
         counter_parity = (
             summary.generated_data_packets
             == summary.accepted_data_packets
@@ -84,7 +91,9 @@ class ProbeMetrics:
             or summary.generated_payload_bytes == self._receiver_payload_bytes
         )
         throughput_bps, throughput_error_percent = self._synthetic_throughput(summary)
-        wav_duration_error_percent = self._wav_duration_error(summary, decoded_pcm_samples)
+        wav_duration_error_percent = self._wav_duration_error(
+            summary, safe_decoded_pcm_samples
+        )
         required_profile = not (self.mode == SYNTHETIC and self.target_bps == 32768)
 
         failure_reasons = []
@@ -118,6 +127,8 @@ class ProbeMetrics:
             failure_reasons.append("disconnected")
         if self._invalid_arrival_timing:
             failure_reasons.append("invalid_arrival_timing")
+        if not decoded_pcm_samples_valid:
+            failure_reasons.append("invalid_decoded_pcm_samples")
         if (
             self.mode == MICROPHONE_ADPCM
             and (wav_duration_error_percent is None or wav_duration_error_percent > 1)
@@ -143,7 +154,8 @@ class ProbeMetrics:
             "elapsed_ms": summary.elapsed_ms,
             "generated_payload_bytes": summary.generated_payload_bytes,
             "captured_pcm_samples": summary.captured_pcm_samples,
-            "decoded_pcm_samples": decoded_pcm_samples,
+            "decoded_pcm_samples": safe_decoded_pcm_samples,
+            "decoded_pcm_samples_valid": decoded_pcm_samples_valid,
             "negotiated_mtu": summary.negotiated_mtu,
             "disconnected": disconnected,
             "sequence_gaps": self._sequence_gaps,
@@ -183,8 +195,11 @@ class ProbeMetrics:
     def _is_valid_watch_ms(value: object) -> bool:
         return isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 0xFFFFFFFF
 
-    @classmethod
-    def _summary_is_semantically_valid(cls, summary: StopSummary) -> bool:
+    @staticmethod
+    def _is_nonnegative_int(value: object) -> bool:
+        return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+    def _summary_is_semantically_valid(self, summary: StopSummary) -> bool:
         numeric_fields = (
             summary.generated_data_packets,
             summary.accepted_data_packets,
@@ -195,15 +210,28 @@ class ProbeMetrics:
             summary.captured_pcm_samples,
             summary.negotiated_mtu,
         )
-        if not all(isinstance(value, int) and not isinstance(value, bool) and value >= 0 for value in numeric_fields):
+        if not all(self._is_nonnegative_int(value) for value in numeric_fields):
+            return False
+        if summary.elapsed_ms == 0 or summary.negotiated_mtu < 23:
             return False
         if summary.accepted_data_packets > summary.generated_data_packets:
             return False
         if summary.generated_data_packets == 0 and summary.generated_payload_bytes != 0:
             return False
-        return not (
-            summary.generated_data_packets > 0 and summary.generated_payload_bytes == 0
-        )
+        if summary.generated_data_packets > 0 and summary.generated_payload_bytes == 0:
+            return False
+        if self.mode == MICROPHONE_ADPCM:
+            if summary.generated_data_packets > 0 and summary.captured_pcm_samples == 0:
+                return False
+            expected_pcm_samples = summary.elapsed_ms * 16
+            duration_error_percent = (
+                abs(summary.captured_pcm_samples - expected_pcm_samples)
+                / expected_pcm_samples
+                * 100
+            )
+            if duration_error_percent > 1:
+                return False
+        return True
 
     def _synthetic_throughput(self, summary: StopSummary) -> tuple[Optional[float], Optional[float]]:
         if self.mode != SYNTHETIC:
@@ -216,11 +244,14 @@ class ProbeMetrics:
     def _wav_duration_error(
         self, summary: StopSummary, decoded_pcm_samples: Optional[int]
     ) -> Optional[float]:
-        if self.mode != MICROPHONE_ADPCM or summary.captured_pcm_samples <= 0:
+        if (
+            self.mode != MICROPHONE_ADPCM
+            or summary.captured_pcm_samples <= 0
+            or decoded_pcm_samples is None
+        ):
             return None
-        decoded_samples = 0 if decoded_pcm_samples is None else decoded_pcm_samples
         return (
-            abs(decoded_samples - summary.captured_pcm_samples)
+            abs(decoded_pcm_samples - summary.captured_pcm_samples)
             / summary.captured_pcm_samples
             * 100
         )

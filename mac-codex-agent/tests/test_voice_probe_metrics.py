@@ -216,6 +216,8 @@ class VoiceProbeMetricsTests(unittest.TestCase):
         )
         self.assertFalse(result["automated_pass"])
         self.assertIn("throughput_error_percent", result["failure_reasons"])
+        self.assertFalse(result["summary_semantically_valid"])
+        self.assertIn("invalid_summary", result["failure_reasons"])
 
     def test_required_profiles_need_at_least_two_matching_data_packets(self):
         cases = (
@@ -319,6 +321,84 @@ class VoiceProbeMetricsTests(unittest.TestCase):
         )
         self.assertFalse(result["summary_semantically_valid"])
         self.assertIn("invalid_summary", result["failure_reasons"])
+
+    def test_microphone_rejects_invalid_decoded_sample_counts_as_strict_json(self):
+        invalid_samples = (None, 32000.0, float("nan"), float("inf"), -1, True)
+        for decoded_samples in invalid_samples:
+            with self.subTest(decoded_samples=decoded_samples):
+                metrics = ProbeMetrics(
+                    session=9,
+                    mode=MICROPHONE_ADPCM,
+                    target_bps=8192,
+                )
+                for sequence, timestamp_ms in ((1, 0), (2, 100)):
+                    metrics.observe(
+                        Notification(DATA, 9, sequence, timestamp_ms, bytes(164)),
+                        arrival_ns=timestamp_ms * 1_000_000,
+                    )
+                result = metrics.finish(
+                    summary=StopSummary(2, 2, 0, 0, 2000, 328, 32000, 256),
+                    disconnected=False,
+                    decoded_pcm_samples=decoded_samples,
+                )
+                self.assertFalse(result["automated_pass"])
+                self.assertIn(
+                    "invalid_decoded_pcm_samples",
+                    result["failure_reasons"],
+                )
+                self.assertIsNone(result["decoded_pcm_samples"])
+                json.dumps(result, allow_nan=False)
+
+    def test_summary_rejects_nonpositive_elapsed_and_small_mtu(self):
+        summaries = (
+            StopSummary(2, 2, 0, 0, 0, 8192, 0, 256),
+            StopSummary(2, 2, 0, 0, 1000, 8192, 0, 0),
+        )
+        for summary in summaries:
+            with self.subTest(elapsed_ms=summary.elapsed_ms, mtu=summary.negotiated_mtu):
+                metrics = ProbeMetrics(session=9, mode=SYNTHETIC, target_bps=8192)
+                for sequence, size in ((1, 4096), (2, 4096)):
+                    metrics.observe(
+                        Notification(
+                            DATA,
+                            9,
+                            sequence,
+                            sequence * 100,
+                            expected_synthetic_payload(sequence, size),
+                        ),
+                        arrival_ns=sequence * 100_000_000,
+                    )
+                result = metrics.finish(summary=summary, disconnected=False)
+                self.assertFalse(result["summary_semantically_valid"])
+                self.assertIn("invalid_summary", result["failure_reasons"])
+
+    def test_microphone_summary_requires_positive_plausible_capture_count(self):
+        summaries = (
+            StopSummary(2, 2, 0, 0, 2000, 328, 0, 256),
+            StopSummary(2, 2, 0, 0, 1, 328, 32000, 256),
+        )
+        for summary in summaries:
+            with self.subTest(
+                elapsed_ms=summary.elapsed_ms,
+                captured_pcm_samples=summary.captured_pcm_samples,
+            ):
+                metrics = ProbeMetrics(
+                    session=9,
+                    mode=MICROPHONE_ADPCM,
+                    target_bps=8192,
+                )
+                for sequence, timestamp_ms in ((1, 0), (2, 1)):
+                    metrics.observe(
+                        Notification(DATA, 9, sequence, timestamp_ms, bytes(164)),
+                        arrival_ns=timestamp_ms * 1_000_000,
+                    )
+                result = metrics.finish(
+                    summary=summary,
+                    disconnected=False,
+                    decoded_pcm_samples=summary.captured_pcm_samples,
+                )
+                self.assertFalse(result["summary_semantically_valid"])
+                self.assertIn("invalid_summary", result["failure_reasons"])
 
 
 if __name__ == "__main__":
