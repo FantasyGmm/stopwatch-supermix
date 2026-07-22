@@ -7,6 +7,12 @@ SDKCONFIG="$ROOT/sdkconfig.unified"
 DEFAULTS="$ROOT/sdkconfig.defaults;$ROOT/sdkconfig.unified.defaults"
 IDF_PY="${IDF_PY:-idf.py}"
 
+if ! python3 "$ROOT/fetch_repos.py" --check; then
+    echo "Source dependencies are missing or invalid." >&2
+    echo "Run: python3 ./fetch_repos.py" >&2
+    exit 2
+fi
+
 if [[ "${1:-}" == "--clean" && -f "$BUILD_DIR/CMakeCache.txt" ]]; then
     "$IDF_PY" -B "$BUILD_DIR" fullclean
     rm -f "$SDKCONFIG"

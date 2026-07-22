@@ -54,6 +54,25 @@ class ReproducibleDependencyFirmwareContractTests(unittest.TestCase):
     def test_obsolete_standalone_xiaozhi_patch_is_removed(self):
         self.assertFalse((ROOT / "patches/xiaozhi-stopwatch-size.patch").exists())
 
+    def test_supported_build_has_no_full_xiaozhi_tree_dependency(self):
+        for path in (
+            "main/CMakeLists.txt",
+            "main/cmake/unified_assets.cmake",
+            "scripts/build_unified_candidate.sh",
+            "scripts/report_firmware_metrics.py",
+            "README.md",
+        ):
+            self.assertNotIn("third_party/xiaozhi-esp32", read(path), path)
+
+    def test_candidate_build_checks_source_dependencies_before_idf(self):
+        build_script = read("scripts/build_unified_candidate.sh")
+        preflight = 'python3 "$ROOT/fetch_repos.py" --check'
+
+        self.assertIn(preflight, build_script)
+        self.assertIn("Source dependencies are missing or invalid.", build_script)
+        self.assertIn("Run: python3 ./fetch_repos.py", build_script)
+        self.assertLess(build_script.index(preflight), build_script.index('"$IDF_PY"'))
+
 
 if __name__ == "__main__":
     unittest.main()

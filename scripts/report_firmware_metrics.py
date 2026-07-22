@@ -253,15 +253,6 @@ def main(argv=None):
         args.partition_table or repo_root / "partitions.csv"
     ).resolve()
     assistant_bin = args.assistant_bin
-    if assistant_bin is None and args.source == "launcher-baseline":
-        default_assistant = (
-            repo_root
-            / "third_party"
-            / "xiaozhi-esp32"
-            / "build-m5stack-stopwatch"
-            / "xiaozhi.bin"
-        )
-        assistant_bin = default_assistant if default_assistant.is_file() else None
 
     try:
         metrics = collect_metrics(

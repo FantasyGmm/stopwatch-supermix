@@ -213,6 +213,40 @@ class ReportFirmwareMetricsTests(unittest.TestCase):
         self.assertNotIn("assistant_app_bytes", metrics)
         self.assertNotIn("combined_app_bytes", metrics)
 
+    def test_launcher_report_does_not_auto_discover_ignored_assistant_binary(self):
+        metrics_module = load_metrics_module()
+        ignored_assistant = (
+            self.root
+            / "third_party"
+            / "xiaozhi-esp32"
+            / "build-m5stack-stopwatch"
+            / "xiaozhi.bin"
+        )
+        ignored_assistant.parent.mkdir(parents=True)
+        ignored_assistant.write_bytes(b"ignored")
+        output = self.root / "launcher-metrics.json"
+
+        with redirect_stdout(io.StringIO()):
+            result = metrics_module.main(
+                [
+                    "--repo-root",
+                    str(self.root),
+                    "--build-dir",
+                    str(self.build),
+                    "--partition-table",
+                    str(self.root / "partitions.csv"),
+                    "--source",
+                    "launcher-baseline",
+                    "--output",
+                    str(output),
+                ]
+            )
+
+        self.assertEqual(result, 0)
+        metrics = json.loads(output.read_text(encoding="utf-8"))
+        self.assertNotIn("assistant_app_bytes", metrics)
+        self.assertNotIn("combined_app_bytes", metrics)
+
 
 if __name__ == "__main__":
     unittest.main()

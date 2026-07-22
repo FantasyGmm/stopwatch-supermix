@@ -171,26 +171,43 @@ Generated folders such as `build/`, `managed_components/`, `components/`, and `t
 
 ## Dependencies
 
-Fetch external components:
+Fetch source components at the exact commits recorded in `repos.json`:
 
 ```bash
 python3 ./fetch_repos.py
 ```
 
-The component list currently includes Mooncake, Mooncake Log, Smooth UI Toolkit, M5GFX, ArduinoJson, LVGL, M5IOE1, M5PM1, and BMI270/BMM150 sensor support.
+Verify the local source trees without downloading or changing them:
 
-The assistant runtime is expected to be built separately. By default, the flashing scripts look for it at:
-
-```text
-third_party/xiaozhi-esp32/build-m5stack-stopwatch/
+```bash
+python3 ./fetch_repos.py --check
 ```
 
-with these files:
+The source component list includes Mooncake, Mooncake Log, Smooth UI Toolkit,
+M5GFX, ArduinoJson, LVGL, M5IOE1, M5PM1, and BMI270/BMM150 sensor support.
+Every checkout is locked to an immutable Git commit. Project patches are also
+hash-checked and a patch that no longer applies is a hard failure.
 
-```text
-xiaozhi.bin
-generated_assets.bin
-```
+ESP-IDF registry dependencies, including Brookesia, XiaoZhi Agent, ESP-SR, and
+ESP WiFi Connect, are declared in `main/idf_component.yml` and resolved by the
+tracked `dependencies.lock`. The generated `managed_components/` directory is
+disposable.
+
+The unified build does not require a complete standalone XiaoZhi checkout. It
+tracks only the verified asset builder in `tools/xiaozhi/` and the required CJK
+font in `main/assets/fonts/`; provenance and SHA256 values are recorded in
+`third_party_notices/xiaozhi-build-inputs.md`.
+
+### Dependency upgrades
+
+- Upgrade a source component by resolving the intended release to a commit,
+  updating `repos.json`, refreshing any patch hash, and rebuilding from a clean
+  dependency tree.
+- Upgrade the Assistant runtime by updating the Brookesia or XiaoZhi Agent
+  versions in `main/idf_component.yml`, regenerating `dependencies.lock`, and
+  running Assistant lifecycle and hardware regression tests.
+- Upgrade the XiaoZhi asset builder or font by replacing only the tracked input,
+  updating its provenance and SHA256, and passing the clean firmware build.
 
 ## Build
 
