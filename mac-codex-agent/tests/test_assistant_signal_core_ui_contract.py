@@ -6,6 +6,50 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
 class AssistantSignalCoreUiContractTests(unittest.TestCase):
+    def cpp_function_body(self, source, signature):
+        signature_start = source.index(signature)
+        body_start = source.index("{", signature_start)
+        depth = 0
+        for index in range(body_start, len(source)):
+            if source[index] == "{":
+                depth += 1
+            elif source[index] == "}":
+                depth -= 1
+                if depth == 0:
+                    return source[body_start + 1 : index]
+        self.fail(f"unterminated function: {signature}")
+
+    def state_case_body(self, function_body, state):
+        case = re.search(
+            rf"case AssistantVisualState::{state}:(?P<body>.*?)"
+            r"(?=\n\s*case AssistantVisualState::|\Z)",
+            function_body,
+            re.S,
+        )
+        self.assertIsNotNone(case, state)
+        return case.group("body")
+
+    def wave_frame(self, source, name):
+        frame = re.search(
+            rf"constexpr WaveFrame {name}\{{(?P<values>[^}}]+)\}};",
+            source,
+        )
+        self.assertIsNotNone(frame, name)
+        return tuple(int(value) for value in frame.group("values").split(","))
+
+    def wave_frames(self, source, name):
+        table = re.search(
+            rf"constexpr std::array<WaveFrame, 4> {name}\{{\{{"
+            r"(?P<rows>.*?)\}\};",
+            source,
+            re.S,
+        )
+        self.assertIsNotNone(table, name)
+        return tuple(
+            tuple(int(value) for value in row.split(","))
+            for row in re.findall(r"\{([^{}]+)\}", table.group("rows"))
+        )
+
     def callback_guard_body(self, runtime, event_name):
         callback = re.search(
             rf"ManagerHelper::EventId::{event_name},\s*"
@@ -56,27 +100,192 @@ class AssistantSignalCoreUiContractTests(unittest.TestCase):
         self.assertIn("AssistantEventKind::ListeningStatus", conversation_events.group("body"))
         self.assertIn("AssistantEventKind::SpeakingStatus", conversation_events.group("body"))
 
-    def test_view_uses_fixed_signal_core_layout_without_new_assets(self):
+    def test_view_uses_exact_fixed_signal_core_geometry_and_frames(self):
         header = (ROOT / "main/apps/app_assistant/view/assistant_view.h").read_text()
         source = (ROOT / "main/apps/app_assistant/view/assistant_view.cpp").read_text()
         combined = header + source
+        init = self.cpp_function_body(source, "void AssistantView::init")
+
+        expected_geometry = {
+            "panel_size": 466,
+            "safe_text_width": 370,
+            "status_y": 34,
+            "status_line_height": 22,
+            "phase_y": 68,
+            "wave_y": 88,
+            "wave_height": 132,
+            "title_y": 228,
+            "divider_y": 276,
+            "content_y": 294,
+            "content_height": 60,
+            "hint_bottom": -48,
+            "wave_bar_width": 14,
+            "wave_bar_gap": 12,
+        }
+        constants = {
+            name: int(value)
+            for name, value in re.findall(r"constexpr int (\w+) = (-?\d+);", source)
+        }
+        self.assertEqual(
+            {name: constants.get(name) for name in expected_geometry},
+            expected_geometry,
+        )
 
         self.assertIn("std::array<lv_obj_t*, 9>", header)
-        self.assertIn("void update(uint32_t now_ms)", header)
-        self.assertIn("setBattery", header)
-        self.assertIn("setConnected", header)
-        self.assertIn("font_puhui_14_1", source)
+        wave_create = init.index("_wave_container = lv_obj_create(_panel->get());")
+        wave_size = init.index(
+            "lv_obj_set_size(_wave_container, panel_size, wave_height);"
+        )
+        wave_position = init.index("lv_obj_set_pos(_wave_container, 0, wave_y);")
+        self.assertLess(wave_create, wave_size)
+        self.assertLess(wave_size, wave_position)
+        self.assertIn("lv_obj_set_width(_wave_bars[index], wave_bar_width);", init)
+        self.assertIn(
+            "static_cast<int>(index) * (wave_bar_width + wave_bar_gap)",
+            init,
+        )
+        self.assertIn("_phase_label->align(LV_ALIGN_TOP_MID, 0, phase_y);", init)
+        self.assertIn("_title_label->align(LV_ALIGN_TOP_MID, 0, title_y);", init)
+        self.assertIn("lv_obj_set_pos(_divider, 60, divider_y);", init)
+        self.assertIn(
+            "lv_obj_set_size(_content_label->get(), safe_text_width, content_height);",
+            init,
+        )
+        self.assertIn("_content_label->align(LV_ALIGN_TOP_MID, 0, content_y);", init)
+        self.assertIn("_hint_label->align(LV_ALIGN_BOTTOM_MID, 0, hint_bottom);", init)
+
+        self.assertEqual(
+            self.wave_frame(source, "inactive_wave"),
+            (22, 22, 35, 22, 48, 22, 35, 22, 22),
+        )
+        self.assertEqual(
+            self.wave_frames(source, "active_wave"),
+            (
+                (24, 49, 80, 61, 103, 61, 80, 49, 24),
+                (42, 77, 45, 92, 64, 101, 52, 70, 31),
+                (61, 35, 96, 54, 84, 47, 103, 42, 65),
+                (31, 68, 52, 101, 59, 88, 43, 75, 26),
+            ),
+        )
+        self.assertEqual(
+            self.wave_frames(source, "thinking_wave"),
+            (
+                (9, 16, 25, 35, 45, 35, 25, 16, 9),
+                (12, 21, 32, 44, 55, 44, 32, 21, 12),
+                (16, 27, 39, 52, 63, 52, 39, 27, 16),
+                (12, 21, 32, 44, 55, 44, 32, 21, 12),
+            ),
+        )
+
         self.assertNotIn("实时字幕", combined)
         self.assertNotRegex(combined, r"lv_timer_create|xTaskCreate|TaskHandle_t|FFT|gif")
         self.assertNotRegex(combined, r"LV_ALIGN_BOTTOM_MID,\s*0,\s*-[0-3][0-9]\b")
 
-    def test_waiting_state_is_visually_distinct_and_silent(self):
+    def test_animation_intervals_and_update_label_are_bounded(self):
         source = (ROOT / "main/apps/app_assistant/view/assistant_view.cpp").read_text()
+        update = self.cpp_function_body(source, "void AssistantView::update")
+        init = self.cpp_function_body(source, "void AssistantView::init")
 
-        self.assertIn("AssistantVisualState::WaitingWake", source)
-        self.assertIn("等待唤醒", source)
-        self.assertIn("你好小智", source)
-        self.assertIn("inactive_wave", source)
+        self.assertRegex(
+            update,
+            r"case AssistantVisualState::Listening:\s*"
+            r"case AssistantVisualState::Speaking:\s*interval_ms = 120;",
+        )
+        self.assertRegex(
+            update,
+            r"case AssistantVisualState::Connecting:\s*"
+            r"case AssistantVisualState::Activating:\s*"
+            r"case AssistantVisualState::Thinking:\s*"
+            r"case AssistantVisualState::Closing:\s*interval_ms = 170;",
+        )
+        self.assertRegex(
+            update,
+            r"case AssistantVisualState::WaitingWake:\s*"
+            r"case AssistantVisualState::Failed:\s*"
+            r"case AssistantVisualState::StopTimedOut:\s*return;",
+        )
+        self.assertIn("_update_label->setSize(170, status_line_height);", init)
+        self.assertIn(
+            "lv_label_set_long_mode(_update_label->get(), LV_LABEL_LONG_MODE_DOTS);",
+            init,
+        )
+        self.assertIn("_update_label->align(LV_ALIGN_TOP_MID, 0, status_y);", init)
+
+    def test_fixed_titles_use_montserrat_ascii_fallback(self):
+        source = (ROOT / "main/apps/app_assistant/view/assistant_view.cpp").read_text()
+        init = self.cpp_function_body(source, "void AssistantView::init")
+        copy = self.cpp_function_body(source, "void AssistantView::applyDefaultCopy")
+        expected_titles = {
+            "Connecting": "CONNECTING",
+            "Activating": "XIAOZHI",
+            "WaitingWake": "HELLO XIAOZHI",
+            "Listening": "LISTENING",
+            "Thinking": "THINKING",
+            "Speaking": "XIAOZHI",
+            "Failed": "UNAVAILABLE",
+            "Closing": "CLOSING",
+            "StopTimedOut": "PROTECTED",
+        }
+
+        self.assertIn("_title_label->setTextFont(&lv_font_montserrat_24);", init)
+        self.assertIn("_phase_label->setTextFont(&font_puhui_14_1);", init)
+        self.assertIn("_content_label->setTextFont(&font_puhui_14_1);", init)
+        fixed_titles = [
+            title for title in re.findall(r'title = "([^"]*)";', copy) if title
+        ]
+        self.assertEqual(len(fixed_titles), len(expected_titles))
+        self.assertTrue(all(title.isascii() for title in fixed_titles))
+        for state, title in expected_titles.items():
+            self.assertTrue(title.isascii())
+            self.assertRegex(
+                self.state_case_body(copy, state),
+                rf'title = "{re.escape(title)}";',
+            )
+
+    def test_waiting_state_copy_and_inactive_wave_are_case_local(self):
+        source = (ROOT / "main/apps/app_assistant/view/assistant_view.cpp").read_text()
+        copy = self.cpp_function_body(source, "void AssistantView::applyDefaultCopy")
+        wave = self.cpp_function_body(source, "void AssistantView::applyWaveFrame")
+        waiting = self.state_case_body(copy, "WaitingWake")
+
+        self.assertIn('phase = "等待唤醒";', waiting)
+        self.assertIn('title = "HELLO XIAOZHI";', waiting)
+        self.assertIn('content = "说“你好小智”开始对话";', waiting)
+        self.assertIn("wave_color = inactive_wave_color;", waiting)
+        self.assertRegex(wave, r"const WaveFrame\* frame = &inactive_wave;")
+        self.assertRegex(
+            wave,
+            r"case AssistantVisualState::WaitingWake:\s*"
+            r"case AssistantVisualState::Failed:\s*"
+            r"case AssistantVisualState::StopTimedOut:\s*break;",
+        )
+
+    def test_destroy_clears_children_and_raw_handles_before_panel(self):
+        source = (ROOT / "main/apps/app_assistant/view/assistant_view.cpp").read_text()
+        init = self.cpp_function_body(source, "void AssistantView::init")
+        destroy = self.cpp_function_body(source, "void AssistantView::destroy")
+        panel_reset = destroy.index("_panel.reset();")
+
+        self.assertLess(init.index("destroy();"), init.index("_panel ="))
+        for child in (
+            "_hint_label",
+            "_content_label",
+            "_title_label",
+            "_phase_label",
+            "_update_label",
+            "_network_label",
+        ):
+            self.assertLess(destroy.index(f"{child}.reset();"), panel_reset)
+        for raw_handle in (
+            "_wave_container",
+            "_divider",
+            "_network_dot",
+            "_battery_body",
+            "_battery_tip",
+            "_battery_label",
+        ):
+            self.assertLess(destroy.index(f"{raw_handle} = nullptr;"), panel_reset)
+        self.assertLess(destroy.index("_wave_bars.fill(nullptr);"), panel_reset)
 
 
 if __name__ == "__main__":

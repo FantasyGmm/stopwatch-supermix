@@ -20,6 +20,7 @@ namespace {
 constexpr int panel_size = 466;
 constexpr int safe_text_width = 370;
 constexpr int status_y = 34;
+constexpr int status_line_height = 22;
 constexpr int phase_y = 68;
 constexpr int wave_y = 88;
 constexpr int wave_height = 132;
@@ -94,10 +95,11 @@ void AssistantView::init(lv_obj_t* parent)
     _network_label->align(LV_ALIGN_TOP_LEFT, 66, status_y);
 
     _update_label = std::make_unique<Label>(_panel->get());
-    _update_label->setWidth(170);
+    _update_label->setSize(170, status_line_height);
     _update_label->setTextAlign(LV_TEXT_ALIGN_CENTER);
     _update_label->setTextFont(&font_puhui_14_1);
     _update_label->setTextColor(lv_color_hex(amber_color));
+    lv_label_set_long_mode(_update_label->get(), LV_LABEL_LONG_MODE_DOTS);
     _update_label->align(LV_ALIGN_TOP_MID, 0, status_y);
     _update_label->setText("");
 
@@ -312,57 +314,57 @@ void AssistantView::applyDefaultCopy()
     switch (_state) {
         case AssistantVisualState::Connecting:
             phase = "正在连接";
-            title = "连接网络";
+            title = "CONNECTING";
             content = "正在连接 Wi-Fi...";
             wave_color = cyan_color;
             break;
         case AssistantVisualState::Activating:
             phase = "正在激活";
-            title = "小智助手";
+            title = "XIAOZHI";
             content = "正在激活...";
             wave_color = cyan_color;
             break;
         case AssistantVisualState::WaitingWake:
             phase = "等待唤醒";
-            title = "你好，小智";
+            title = "HELLO XIAOZHI";
             content = "说“你好小智”开始对话";
             wave_color = inactive_wave_color;
             break;
         case AssistantVisualState::Listening:
             phase = "正在聆听";
-            title = "我在听";
+            title = "LISTENING";
             content = "请说";
             wave_color = cyan_color;
             break;
         case AssistantVisualState::Thinking:
             phase = "正在思考";
-            title = "请稍候";
+            title = "THINKING";
             content = "";
             wave_color = indigo_color;
             break;
         case AssistantVisualState::Speaking:
             phase = "正在播报";
-            title = "小智助手";
+            title = "XIAOZHI";
             content = "";
             wave_color = teal_color;
             break;
         case AssistantVisualState::Failed:
             phase = "暂不可用";
-            title = "助手不可用";
+            title = "UNAVAILABLE";
             content = "助手启动失败";
             hint = "右键重试  双键返回";
             wave_color = failure_color;
             break;
         case AssistantVisualState::Closing:
             phase = "正在关闭";
-            title = "正在返回";
+            title = "CLOSING";
             content = "等待助手释放资源...";
             wave_color = inactive_color;
             show_hint = false;
             break;
         case AssistantVisualState::StopTimedOut:
             phase = "关闭超时";
-            title = "资源仍受保护";
+            title = "PROTECTED";
             content = "关闭等待超时";
             hint = "右键再次停止";
             wave_color = failure_color;

@@ -34,3 +34,27 @@ Not run to completion. The controller was mechanically copying `managed_componen
 ## Residual Risk
 
 ESP-IDF compile/link and on-device visual validation remain pending. Task 4 still owns application-loop animation driving, telemetry sampling, and final presentation-state integration.
+
+## Important Review Fixes
+
+- Changed all nine fixed Montserrat 24 primary titles to concise ASCII English while preserving Chinese phase, content, and hint copy on `font_puhui_14_1`.
+- Fixed the update label at `170 x 22` and enabled `LV_LABEL_LONG_MODE_DOTS`, preventing a canonical uint64 semver from wrapping into the phase or waveform zones.
+- Replaced broad source-token checks with structural contracts for exact geometry, bar width/gap, all frame rows, animation intervals, update clipping, title/font mapping, Waiting Wake copy and inactive frame selection, and child-before-panel teardown.
+
+### Review TDD Evidence
+
+RED: the focused suite ran 15 tests with exactly three expected failures: missing fixed update height/dots, non-ASCII fixed title mappings, and the Waiting Wake ASCII title. Exact geometry/frame and lifecycle contracts already passed.
+
+GREEN:
+
+```bash
+/Users/bytedance/Projects.localized/Codex/StopWatch/mac-codex-agent/.venv/bin/python -m unittest \
+  mac-codex-agent/tests/test_assistant_signal_core_ui_contract.py \
+  mac-codex-agent/tests/test_firmware_update_notice_contract.py -v
+```
+
+Result: `Ran 15 tests ... OK`.
+
+No ESP-IDF build was started for this fix. The controller owns the clean firmware build already running in session 54744.
+
+Review-fix commit subject: `Fix Assistant signal core review findings`.
