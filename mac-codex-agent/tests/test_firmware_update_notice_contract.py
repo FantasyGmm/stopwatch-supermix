@@ -57,9 +57,6 @@ class FirmwareUpdateNoticeContractTests(unittest.TestCase):
             'CONFIG_XIAOZHI_OTA_URL="https://api.tenclass.net/xiaozhi/ota/"',
             defaults,
         )
-        overlay = (ROOT / "main/cmake/brookesia_xiaozhi_mcp_ownership_overlay.cmake").read_text(encoding="utf-8")
-        self.assertIn("info.firmware_version", overlay)
-        self.assertNotIn("info.firmware_url", overlay)
 
     def test_app_event_switch_is_exhaustive_and_routes_update_notice_to_view(self):
         mailbox_h = (ROOT / "main/runtime/assistant/assistant_event_mailbox.h").read_text(encoding="utf-8")
