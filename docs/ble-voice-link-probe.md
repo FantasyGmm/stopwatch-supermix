@@ -1,0 +1,133 @@
+# BLE Voice Link Probe
+
+`mac-codex-agent/ble_voice_probe.py` is a standalone diagnostic for measuring
+the StopWatch-to-Mac BLE voice data path. It does not invoke Typeless, send the
+`Fn` key, or change any production right-button behavior. It is not the voice
+input feature itself.
+
+## Preconditions
+
+1. Fully quit **StopWatch Codex Agent** from its menu-bar menu. Disabling its
+   watch-connection toggle is not sufficient: the standalone probe must be the
+   only process using the watch BLE service.
+2. Open the watch **Codex** app before starting discovery, so it advertises as
+   `StopWatch-Codex`.
+3. Keep all generated reports, WAV files, and terminal logs outside Git under
+   `/tmp/stopwatch-ble-voice-probe/<timestamp>/`.
+
+Create an evidence directory and record the firmware source revision used for
+the test:
+
+```bash
+cd /Users/bytedance/Projects.localized/Codex/StopWatch
+PYTHON=/Users/bytedance/Projects.localized/Codex/StopWatch/mac-codex-agent/.venv/bin/python
+EVIDENCE="/tmp/stopwatch-ble-voice-probe/$(date +%Y%m%d-%H%M%S)"
+REVISION="$(git rev-parse HEAD)"
+mkdir -p "$EVIDENCE"
+printf '%s\n' "$REVISION" > "$EVIDENCE/firmware-git-revision.txt"
+```
+
+The CLI discovers `StopWatch-Codex` by name or its voice-probe BLE service.
+Each run requires a duration in seconds and a report destination. Pass the
+firmware revision with `--firmware-revision` so the report identifies the
+firmware under test.
+
+## Required Synthetic Profiles
+
+Run both required profiles for 60 seconds. Preserve both the JSON report and
+the command log even when the command exits nonzero.
+
+```bash
+"$PYTHON" mac-codex-agent/ble_voice_probe.py \
+  synthetic --target-bps 8192 --duration 60 \
+  --firmware-revision "$REVISION" \
+  --report "$EVIDENCE/synthetic-8192.json" \
+  > "$EVIDENCE/synthetic-8192.log" 2>&1
+
+"$PYTHON" mac-codex-agent/ble_voice_probe.py \
+  synthetic --target-bps 16384 --duration 60 \
+  --firmware-revision "$REVISION" \
+  --report "$EVIDENCE/synthetic-16384.json" \
+  > "$EVIDENCE/synthetic-16384.log" 2>&1
+```
+
+The 32768 B/s profile is exploratory only. Record its result, but a failure
+does not reject BLE after both required profiles pass.
+
+```bash
+set +e
+"$PYTHON" mac-codex-agent/ble_voice_probe.py \
+  synthetic --target-bps 32768 --duration 60 \
+  --firmware-revision "$REVISION" \
+  --report "$EVIDENCE/synthetic-32768.json" \
+  > "$EVIDENCE/synthetic-32768.log" 2>&1
+EXPLORATORY_RC=$?
+set -e
+printf '%s\n' "$EXPLORATORY_RC" > "$EVIDENCE/synthetic-32768.exit-code"
+```
+
+## Microphone Profile
+
+Speak normal Mandarin continuously while the 30-second probe runs. The command
+creates 16 kHz mono PCM WAV output as well as its JSON report.
+
+```bash
+"$PYTHON" mac-codex-agent/ble_voice_probe.py \
+  microphone --target-bps 8192 --duration 30 \
+  --firmware-revision "$REVISION" \
+  --report "$EVIDENCE/microphone.json" \
+  --wav "$EVIDENCE/microphone.wav" \
+  > "$EVIDENCE/microphone.log" 2>&1
+```
+
+Play the saved file and record the human decision separately:
+
+```bash
+afplay "$EVIDENCE/microphone.wav"
+printf '%s\n' \
+  'Manual audio review: intelligible Mandarin; stable speed; no periodic dropout: PASS' \
+  > "$EVIDENCE/manual-audio-review.txt"
+```
+
+Only record `PASS` after listening confirms intelligible Mandarin, stable
+speed, and no periodic dropout. This listening check is a separate manual
+acceptance item; an automated transport pass does not establish audio quality.
+
+## Reading The Report
+
+Every JSON report records the requested profile, firmware revision, negotiated
+MTU, sender counters, receiver counters, payload bytes, timing metrics, the
+automated decision, exception text, and the WAV path when applicable.
+
+For required 8192 and 16384 B/s synthetic profiles, pass requires all of the
+following:
+
+- `automated_pass` is `true` and `acceptance_decision` is `pass`.
+- Sender generated/accepted packet counts equal `receiver_data_packets`, with
+  at least two received data packets.
+- `sequence_gaps`, `sequence_regressions`, `payload_corruptions`,
+  `queue_overflows`, `encode_failures`, and `invalid_arrival_timing` are zero.
+- `sender_receiver_payload_byte_parity` is true, synthetic throughput error is
+  at most 1%, `p95_arrival_deviation_ms` is at most 40 ms, and
+  `max_arrival_gap_ms` is at most 100 ms.
+- `disconnected` is false and `summary_semantically_valid` is true.
+
+For the microphone profile, the same transport conditions apply. In addition,
+`wav_duration_error_percent` must be at most 1% against
+`captured_pcm_samples`. The manual listening review remains required even when
+these automated checks pass.
+
+The 32768 B/s result is labeled `exploratory_pass` or `exploratory_fail`; it is
+recorded for capacity information and is not a required BLE acceptance gate.
+
+## Cleanup And Recovery
+
+After every probe, close the watch Codex app. Open **Assistant** and verify it
+can acquire the microphone. Then reopen Codex and confirm its status BLE
+connection reconnects. Keep reports, WAV files, and logs under the evidence
+directory for diagnosis.
+
+An offline build or a successful firmware flash only proves that the image was
+built or written. It does not prove BLE transport, microphone ownership,
+reconnect behavior, or audio quality on hardware; those require the physical
+probe and recovery checks above.
