@@ -1,18 +1,42 @@
 import hashlib
 import os
 import pathlib
+import shlex
+import struct
 import subprocess
+import sys
 import tempfile
 import unittest
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 SCRIPTS = ROOT / "scripts"
+ENTRY = struct.Struct("<2sBBLL16sL")
+
+
+def write_test_partition_table(path, app_size=0xDC0000, assets_size=0xC0000):
+    rows = [
+        (1, 2, 0x9000, 0x10000, "nvs"),
+        (1, 1, 0x19000, 0x1000, "phy_init"),
+        (0, 0, 0x20000, app_size, "app"),
+        (1, 0x81, 0xDE0000, 0x100000, "storage"),
+        (1, 0x82, 0xEE0000, assets_size, "assets"),
+        (1, 3, 0xFA0000, 0x10000, "coredump"),
+    ]
+    payload = b"".join(
+        ENTRY.pack(
+            b"\xaa\x50", kind, subtype, offset, size,
+            name.encode().ljust(16, b"\0"), 0,
+        )
+        for kind, subtype, offset, size, name in rows
+    )
+    payload += b"\xeb\xeb" + b"\xff" * 14 + hashlib.md5(payload).digest()
+    path.write_bytes(payload + b"\xff" * (0xC00 - len(payload)))
 
 
 def run_script(name, *args):
     environment = os.environ.copy()
-    environment["PYTHON"] = "/definitely/not/an/executable"
+    environment["PYTHON"] = sys.executable
     return subprocess.run(
         ["bash", str(SCRIPTS / name), *map(str, args)],
         cwd=ROOT,
@@ -39,8 +63,8 @@ class UnifiedFlashToolsTest(unittest.TestCase):
         (self.build / "bootloader").mkdir(parents=True)
         (self.build / "partition_table").mkdir()
         (self.build / "bootloader" / "bootloader.bin").write_bytes(b"boot")
-        (self.build / "partition_table" / "partition-table.bin").write_bytes(
-            b"partitions"
+        write_test_partition_table(
+            self.build / "partition_table" / "partition-table.bin"
         )
         (self.build / "StopWatch-UserDemo.bin").write_bytes(b"app")
         (self.build / "generated_assets.bin").write_bytes(b"assets")
@@ -108,8 +132,9 @@ class UnifiedFlashToolsTest(unittest.TestCase):
         )
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        for offset in ("0x000000", "0x008000", "0x020000", "0x8a0000"):
+        for offset in ("0x000000", "0x008000", "0x020000", "0xee0000"):
             self.assertEqual(result.stdout.split().count(offset), 1, result.stdout)
+        self.assertNotIn("0x8a0000", result.stdout.lower())
         for artifact in (
             "bootloader.bin",
             "partition-table.bin",
@@ -120,8 +145,14 @@ class UnifiedFlashToolsTest(unittest.TestCase):
 
     def test_candidate_uses_build_python_when_environment_has_no_python_override(self):
         fake_python = self.root / "idf python"
+        reader = shlex.quote(str(SCRIPTS / "read_partition_entry.py"))
+        real_python = shlex.quote(sys.executable)
         fake_python.write_text(
-            "#!/bin/sh\nprintf 'FAKE_IDF_PYTHON %s\\n' \"$*\"\n",
+            "#!/bin/sh\n"
+            f"if [ \"$1\" = {reader} ]; then\n"
+            f"  exec {real_python} \"$@\"\n"
+            "fi\n"
+            "printf 'FAKE_IDF_PYTHON %s\\n' \"$*\"\n",
             encoding="utf-8",
         )
         fake_python.chmod(0o755)
@@ -215,7 +246,16 @@ class UnifiedFlashToolsTest(unittest.TestCase):
 
     def test_hardware_campaign_propagates_build_python_to_every_flash_step(self):
         fake_python = self.root / "idf python"
-        fake_python.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        reader = shlex.quote(str(SCRIPTS / "read_partition_entry.py"))
+        real_python = shlex.quote(sys.executable)
+        fake_python.write_text(
+            "#!/bin/sh\n"
+            f"if [ \"$1\" = {reader} ]; then\n"
+            f"  exec {real_python} \"$@\"\n"
+            "fi\n"
+            "exit 0\n",
+            encoding="utf-8",
+        )
         fake_python.chmod(0o755)
         (self.build / "CMakeCache.txt").write_text(
             f"PYTHON:UNINITIALIZED={fake_python}\n",
@@ -362,7 +402,7 @@ class UnifiedFlashToolsTest(unittest.TestCase):
 
     def test_candidate_rejects_assets_over_capacity_before_printing_write(self):
         with (self.build / "generated_assets.bin").open("wb") as assets_file:
-            assets_file.truncate(0x400000 + 1)
+            assets_file.truncate(0xA0000 + 1)
 
         result = run_script(
             "flash_unified_candidate.sh",
@@ -377,6 +417,61 @@ class UnifiedFlashToolsTest(unittest.TestCase):
 
         self.assert_rejected_before_write(result)
         self.assertIn("Unified assets exceeds capacity limit", result.stderr)
+
+    def test_candidate_rejects_app_larger_than_generated_partition(self):
+        write_test_partition_table(
+            self.build / "partition_table" / "partition-table.bin", app_size=2
+        )
+
+        result = run_script(
+            "flash_unified_candidate.sh",
+            "--dry-run",
+            "--port",
+            "/dev/test",
+            "--backup",
+            self.backup,
+            "--build-dir",
+            self.build,
+        )
+
+        self.assert_rejected_before_write(result)
+        self.assertIn("Unified application exceeds partition capacity", result.stderr)
+
+    def test_candidate_rejects_assets_larger_than_generated_partition(self):
+        write_test_partition_table(
+            self.build / "partition_table" / "partition-table.bin", assets_size=3
+        )
+
+        result = run_script(
+            "flash_unified_candidate.sh",
+            "--dry-run",
+            "--port",
+            "/dev/test",
+            "--backup",
+            self.backup,
+            "--build-dir",
+            self.build,
+        )
+
+        self.assert_rejected_before_write(result)
+        self.assertIn("Unified assets exceeds partition capacity", result.stderr)
+
+    def test_candidate_rejects_invalid_partition_table_before_printing_write(self):
+        (self.build / "partition_table" / "partition-table.bin").write_bytes(b"bad")
+
+        result = run_script(
+            "flash_unified_candidate.sh",
+            "--dry-run",
+            "--port",
+            "/dev/test",
+            "--backup",
+            self.backup,
+            "--build-dir",
+            self.build,
+        )
+
+        self.assert_rejected_before_write(result)
+        self.assertIn("Partition table error", result.stderr)
 
     def test_candidate_requires_each_exact_build_artifact(self):
         artifacts = (

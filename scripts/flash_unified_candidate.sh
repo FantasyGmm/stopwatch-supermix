@@ -10,7 +10,7 @@ DRY_RUN=0
 PYTHON_BIN=""
 FLASH_BYTES=$((0x1000000))
 MAX_APP_BYTES=$((0x660000))
-MAX_ASSETS_BYTES=$((0x400000))
+MAX_ASSETS_BYTES=$((0xA0000))
 
 usage() {
     echo "Usage: $0 --port PORT --backup FILE [--build-dir DIR] [--dry-run]" >&2
@@ -34,7 +34,7 @@ check_max_size() {
     local size
     size="$(file_size "$path")"
     if (( size > max_size )); then
-        echo "$label exceeds capacity limit: $size > $max_size bytes" >&2
+        echo "$label: $size > $max_size bytes" >&2
         return 1
     fi
 }
@@ -123,8 +123,20 @@ require_file "$BOOTLOADER"
 require_file "$PARTITION_TABLE"
 require_file "$APP"
 require_file "$ASSETS"
-check_max_size "$APP" "$MAX_APP_BYTES" "Unified application"
-check_max_size "$ASSETS" "$MAX_ASSETS_BYTES" "Unified assets"
+PARTITION_READER="$ROOT/scripts/read_partition_entry.py"
+require_file "$PARTITION_READER"
+
+APP_OFFSET="$("$PYTHON_BIN" "$PARTITION_READER" --table "$PARTITION_TABLE" --name app --field offset)"
+APP_PARTITION_BYTES="$("$PYTHON_BIN" "$PARTITION_READER" --table "$PARTITION_TABLE" --name app --field size)"
+ASSETS_OFFSET="$("$PYTHON_BIN" "$PARTITION_READER" --table "$PARTITION_TABLE" --name assets --field offset)"
+ASSETS_PARTITION_BYTES="$("$PYTHON_BIN" "$PARTITION_READER" --table "$PARTITION_TABLE" --name assets --field size)"
+APP_OFFSET="$(printf '0x%06x' "$APP_OFFSET")"
+ASSETS_OFFSET="$(printf '0x%06x' "$ASSETS_OFFSET")"
+
+check_max_size "$APP" "$MAX_APP_BYTES" "Unified application exceeds capacity limit"
+check_max_size "$APP" "$APP_PARTITION_BYTES" "Unified application exceeds partition capacity"
+check_max_size "$ASSETS" "$MAX_ASSETS_BYTES" "Unified assets exceeds capacity limit"
+check_max_size "$ASSETS" "$ASSETS_PARTITION_BYTES" "Unified assets exceeds partition capacity"
 
 command=(
     "$PYTHON_BIN" -m esptool
@@ -139,8 +151,8 @@ command=(
     --flash_size 16MB
     0x000000 "$BOOTLOADER"
     0x008000 "$PARTITION_TABLE"
-    0x020000 "$APP"
-    0x8a0000 "$ASSETS"
+    "$APP_OFFSET" "$APP"
+    "$ASSETS_OFFSET" "$ASSETS"
 )
 
 if (( DRY_RUN )); then
