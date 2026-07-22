@@ -318,22 +318,29 @@ void AppAssistant::applyRuntimeEvent(const AssistantEvent& event,
         case AssistantEventKind::ListeningStatus:
             applyPresentationSignal(AssistantPresentationSignal::ListeningChanged, event.active);
             break;
-        case AssistantEventKind::SpeakingStatus:
+        case AssistantEventKind::SpeakingStatus: {
+            const AssistantVisualState previous_state = _presentation.state();
             applyPresentationSignal(AssistantPresentationSignal::SpeakingChanged, event.active);
-            if (!event.active) {
+            if (!event.active &&
+                previous_state == AssistantVisualState::Speaking &&
+                _presentation.state() == AssistantVisualState::WaitingWake) {
                 _has_conversation_text = false;
             }
             break;
+        }
     }
 }
 
 void AppAssistant::applyPresentationSignal(AssistantPresentationSignal signal, bool active)
 {
+    const AssistantVisualState previous_state = _presentation.state();
     _presentation.apply(signal, active);
     if (!_view) {
         return;
     }
-    _view->setState(_presentation.state());
+    if (previous_state != _presentation.state()) {
+        _view->setState(_presentation.state());
+    }
     if (signal == AssistantPresentationSignal::Connecting) {
         _view->setConnected(false);
     } else if (signal == AssistantPresentationSignal::Activating ||

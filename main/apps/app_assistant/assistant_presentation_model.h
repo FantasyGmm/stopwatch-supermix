@@ -64,6 +64,8 @@ public:
             case AssistantPresentationSignal::ListeningChanged:
                 if (active) {
                     _state = AssistantVisualState::Listening;
+                } else if (_state == AssistantVisualState::Listening) {
+                    _state = AssistantVisualState::WaitingWake;
                 }
                 break;
             case AssistantPresentationSignal::UserText:
@@ -73,8 +75,11 @@ public:
                 _state = AssistantVisualState::Speaking;
                 break;
             case AssistantPresentationSignal::SpeakingChanged:
-                _state = active ? AssistantVisualState::Speaking
-                                : AssistantVisualState::WaitingWake;
+                if (active) {
+                    _state = AssistantVisualState::Speaking;
+                } else if (_state == AssistantVisualState::Speaking) {
+                    _state = AssistantVisualState::WaitingWake;
+                }
                 break;
             case AssistantPresentationSignal::Failed:
                 _state = AssistantVisualState::Failed;

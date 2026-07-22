@@ -17,14 +17,21 @@ int main()
     assert(model.state() == AssistantVisualState::WaitingWake);
     model.apply(AssistantPresentationSignal::ListeningChanged, true);
     assert(model.state() == AssistantVisualState::Listening);
+    model.apply(AssistantPresentationSignal::ListeningChanged, false);
+    assert(model.state() == AssistantVisualState::WaitingWake);
 
     model.apply(AssistantPresentationSignal::UserText);
     assert(model.state() == AssistantVisualState::Thinking);
     model.apply(AssistantPresentationSignal::ListeningChanged, false);
     assert(model.state() == AssistantVisualState::Thinking);
 
+    model.apply(AssistantPresentationSignal::SpeakingChanged, false);
+    assert(model.state() == AssistantVisualState::Thinking);
+
     model.apply(AssistantPresentationSignal::AgentText);
     assert(model.state() == AssistantVisualState::Speaking);
+    model.apply(AssistantPresentationSignal::SpeakingChanged, false);
+    assert(model.state() == AssistantVisualState::WaitingWake);
     model.apply(AssistantPresentationSignal::SpeakingChanged, false);
     assert(model.state() == AssistantVisualState::WaitingWake);
 

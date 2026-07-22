@@ -90,12 +90,18 @@ class UnifiedRuntimeFirmwareContractTest(unittest.TestCase):
         source = read("main/apps/app_assistant/app_assistant.cpp")
         main = read("main/main.cpp")
         header = read("main/apps/app_assistant/app_assistant.h")
+        presentation_header = read(
+            "main/apps/app_assistant/assistant_presentation_model.h"
+        )
         view_header = read("main/apps/app_assistant/view/assistant_view.h")
         view_source = read("main/apps/app_assistant/view/assistant_view.cpp")
 
+        self.assertIn("enum class AssistantVisualState", presentation_header)
+        self.assertIn("void setState(AssistantVisualState state)", view_header)
         for state in (
             "Connecting",
             "Activating",
+            "WaitingWake",
             "Listening",
             "Thinking",
             "Speaking",
@@ -103,8 +109,9 @@ class UnifiedRuntimeFirmwareContractTest(unittest.TestCase):
             "Closing",
             "StopTimedOut",
         ):
-            self.assertIn(state, view_header)
-            self.assertIn(f"AssistantViewState::{state}", source + view_source)
+            self.assertIn(state, presentation_header)
+            self.assertIn(f"AssistantVisualState::{state}", view_source)
+        self.assertNotIn("AssistantViewState", source + header + view_header + view_source)
 
         for event_kind in (
             "ActivationCode",

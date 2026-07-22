@@ -62,7 +62,7 @@ class AssistantTraceFirmwareContractTests(unittest.TestCase):
             encoding="utf-8"
         )
         accepted_path = app.split(
-            "_view->setState(AssistantViewState::Closing);", 1
+            "applyPresentationSignal(AssistantPresentationSignal::Closing);", 1
         )[1].split("void AppAssistant::onClose", 1)[0]
         self.assertLess(
             accepted_path.index("AssistantTraceEvent::CloseRequest"),

@@ -306,6 +306,55 @@ class AssistantSignalCoreUiContractTests(unittest.TestCase):
         self.assertLess(sample, lock)
         self.assertIn("_view->setBattery", function[lock:])
 
+    def test_presentation_bridge_renders_only_real_state_transitions(self):
+        app = (ROOT / "main/apps/app_assistant/app_assistant.cpp").read_text()
+        bridge = self.cpp_function_body(
+            app, "void AppAssistant::applyPresentationSignal"
+        )
+
+        previous = "const AssistantVisualState previous_state = _presentation.state();"
+        self.assertIn(previous, bridge)
+        self.assertLess(bridge.index(previous), bridge.index("_presentation.apply(signal, active);"))
+        self.assertRegex(
+            bridge,
+            r"if \(previous_state != _presentation\.state\(\)\) \{\s*"
+            r"_view->setState\(_presentation\.state\(\)\);\s*\}",
+        )
+        self.assertLess(
+            bridge.index("_view->setState(_presentation.state());"),
+            bridge.index("if (signal == AssistantPresentationSignal::Connecting)"),
+        )
+
+    def test_ignored_status_events_preserve_conversation_text(self):
+        app = (ROOT / "main/apps/app_assistant/app_assistant.cpp").read_text()
+        event_handler = self.cpp_function_body(
+            app, "void AppAssistant::applyRuntimeEvent"
+        )
+        listening = re.search(
+            r"case AssistantEventKind::ListeningStatus:(?P<body>.*?)"
+            r"(?=\n\s*case AssistantEventKind::|\Z)",
+            event_handler,
+            re.S,
+        )
+        speaking = re.search(
+            r"case AssistantEventKind::SpeakingStatus:(?P<body>.*?)"
+            r"(?=\n\s*case AssistantEventKind::|\Z)",
+            event_handler,
+            re.S,
+        )
+
+        self.assertIsNotNone(listening)
+        self.assertIsNotNone(speaking)
+        self.assertNotIn("setConversationText", listening.group("body"))
+        self.assertNotIn("setConversationText", speaking.group("body"))
+        self.assertRegex(
+            speaking.group("body"),
+            r"if \(!event\.active &&\s*"
+            r"previous_state == AssistantVisualState::Speaking &&\s*"
+            r"_presentation\.state\(\) == AssistantVisualState::WaitingWake\) \{\s*"
+            r"_has_conversation_text = false;\s*\}",
+        )
+
     def test_signal_core_adds_no_task_timer_asset_or_full_font(self):
         paths = [
             ROOT / "main/apps/app_assistant/app_assistant.cpp",
