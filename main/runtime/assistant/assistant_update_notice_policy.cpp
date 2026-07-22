@@ -104,14 +104,18 @@ AssistantUpdateStorageAction AssistantUpdateNoticeModel::restore(
         return AssistantUpdateStorageAction::Clear;
     }
 
-    _pending_version = FormatFirmwareVersion(*stored);
-    if (!local) {
-        return AssistantUpdateStorageAction::None;
-    }
-    if (!IsNewer(*stored, *local)) {
-        _pending_version.clear();
+    if (local && !IsNewer(*stored, *local)) {
         return AssistantUpdateStorageAction::Clear;
     }
+
+    if (!_pending_version.empty()) {
+        const auto pending = ParseCanonicalFirmwareVersion(_pending_version);
+        if (pending && !IsNewer(*stored, *pending)) {
+            return AssistantUpdateStorageAction::None;
+        }
+    }
+
+    _pending_version = FormatFirmwareVersion(*stored);
     return AssistantUpdateStorageAction::None;
 }
 

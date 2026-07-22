@@ -40,6 +40,22 @@ int main()
            AssistantUpdateStorageAction::None);
     assert(offline_reopen.displayText() == "发现新版本 v0.6.0");
 
+    AssistantUpdateNoticeModel failed_save_reopen("V0.5");
+    assert(failed_save_reopen.restore(std::optional<std::string>("v0.6")) ==
+           AssistantUpdateStorageAction::None);
+    assert(failed_save_reopen.observe("v0.7") == AssistantUpdateStorageAction::Save);
+    assert(failed_save_reopen.restore(std::optional<std::string>("v0.6")) ==
+           AssistantUpdateStorageAction::None);
+    assert(failed_save_reopen.pendingVersion() == "0.7.0");
+
+    AssistantUpdateNoticeModel clear_stale_store("V0.6");
+    assert(clear_stale_store.observe("v0.7") == AssistantUpdateStorageAction::Save);
+    for (const auto& stale : {"invalid", "v0.5", "v0.6"}) {
+        assert(clear_stale_store.restore(std::optional<std::string>(stale)) ==
+               AssistantUpdateStorageAction::Clear);
+        assert(clear_stale_store.pendingVersion() == "0.7.0");
+    }
+
     AssistantUpdateNoticeModel malformed_local("not-a-version");
     assert(malformed_local.restore(std::optional<std::string>("v0.6")) ==
            AssistantUpdateStorageAction::None);
