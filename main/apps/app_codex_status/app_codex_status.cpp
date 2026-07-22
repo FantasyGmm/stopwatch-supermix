@@ -6,6 +6,7 @@
 #include "app_codex_status.h"
 #include "assets/codex_pet_assets.h"
 #include "codex_ble_transport.h"
+#include "codex_pending_glow_logic.h"
 #include "codex_status_ui_layout.h"
 #include "codex_status_model.h"
 #include <assets/assets.h>
@@ -359,6 +360,9 @@ void AppCodexStatus::create_view()
     lv_obj_set_style_pad_all(_panel, 0, 0);
     lv_obj_set_style_bg_color(_panel, lv_color_hex(kInstrumentBlack), 0);
 
+    _pending_glow = std::make_unique<CodexPendingSoftGlow>();
+    _pending_glow->init(_panel);
+
     lv_obj_t* logo = lv_image_create(_panel);
     lv_image_set_src(logo, &logo_codex);
     lv_image_set_scale(logo, kLogoScale);
@@ -461,6 +465,7 @@ void AppCodexStatus::create_view()
     configure_alert_label(_activity_title, kAlertHeadingY, kAlertHeadingWidth);
     configure_alert_label(_alert_project, kAlertProjectY, kAlertProjectWidth);
     configure_alert_label(_alert_detail, kAlertDetailY, kAlertDetailWidth);
+    _pending_glow->set_heading(_activity_title);
 
     _battery_label = lv_label_create(_panel);
     lv_obj_set_style_text_font(_battery_label, &lv_font_montserrat_14, 0);
@@ -473,6 +478,11 @@ void AppCodexStatus::create_view()
 
 void AppCodexStatus::destroy_view()
 {
+    if (_pending_glow) {
+        _pending_glow->shutdown();
+        _pending_glow.reset();
+    }
+
     if (_pet_timer != nullptr) {
         lv_timer_delete(_pet_timer);
         _pet_timer = nullptr;
@@ -701,6 +711,7 @@ void AppCodexStatus::render_alert()
         lv_label_set_text(_alert_project, "--");
         lv_label_set_text(_alert_detail, "");
         lv_obj_set_style_text_color(_activity_title, lv_color_hex(kTextDim), 0);
+        sync_pending_glow();
         return;
     }
 
@@ -722,6 +733,19 @@ void AppCodexStatus::render_alert()
         lv_color_hex(state_color),
         0
     );
+    sync_pending_glow();
+}
+
+void AppCodexStatus::sync_pending_glow()
+{
+    if (_pending_glow == nullptr) {
+        return;
+    }
+    const bool active = codex_pending_glow::desired_active(
+        _alert_carousel.display_state(),
+        _screen_off
+    );
+    _pending_glow->set_active(active);
 }
 
 bool AppCodexStatus::update_screen_off_control(uint32_t now_ms)
@@ -769,6 +793,10 @@ void AppCodexStatus::enter_screen_off()
 {
     _screen_off_restore_brightness = std::max(10, GetHAL().getBackLightBrightness());
     _screen_off = true;
+    {
+        LvglLockGuard lock;
+        sync_pending_glow();
+    }
     _screen_off_wake_armed = false;
     _screen_off_left_press_started_ms = 0;
     GetHAL().setBackLightBrightness(0, false);
@@ -778,6 +806,10 @@ void AppCodexStatus::wake_screen()
 {
     GetHAL().setBackLightBrightness(_screen_off_restore_brightness, false);
     _screen_off = false;
+    {
+        LvglLockGuard lock;
+        sync_pending_glow();
+    }
     _screen_off_wake_armed = true;
     _screen_off_left_press_started_ms = 0;
 }
