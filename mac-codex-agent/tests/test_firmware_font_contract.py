@@ -1,4 +1,5 @@
 import pathlib
+import re
 import unittest
 
 
@@ -153,6 +154,87 @@ class FirmwareFontContractTests(unittest.TestCase):
         self.assertIn('"Codex", kBrandX, kBrandY, &MontserratSemiBold26, kSignalWhite', app)
         self.assertIn("make_line(_panel, kAlertDividerX, kAlertDividerY, kAlertDividerWidth)", app)
         self.assertIn("lv_label_set_long_mode(label, LV_LABEL_LONG_MODE_DOTS)", app)
+
+    def test_quota_percentages_use_single_line_compression_and_fit_bundled_font(self):
+        app = (self.codex_root / "app_codex_status.cpp").read_text(encoding="utf-8")
+        quota_row = app.split("QuotaWidgets make_quota_row", 1)[1].split(
+            "lv_obj_t* make_line", 1
+        )[0]
+
+        letter_space_px = -3
+        box_width_px = 60
+        self.assertIn(
+            "lv_obj_set_style_text_letter_space(pct, -3, 0);", quota_row
+        )
+        self.assertIn(
+            "lv_label_set_long_mode(pct, LV_LABEL_LONG_MODE_CLIP);", quota_row
+        )
+
+        font = (
+            ROOT / "main" / "assets" / "fonts" / "MontserratSemiBold26.c"
+        ).read_text(encoding="utf-8")
+        glyph_block = re.search(
+            r"static const lv_font_fmt_txt_glyph_dsc_t glyph_dsc\[\] = \{"
+            r"(?P<body>.*?)\n\};",
+            font,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(glyph_block)
+        advances_16 = [
+            int(value)
+            for value in re.findall(r"\.adv_w = (\d+)", glyph_block.group("body"))
+        ]
+
+        cmap = re.search(
+            r"\.range_start\s*=\s*(?P<range_start>\d+),.*?"
+            r"\.range_length\s*=\s*(?P<range_length>\d+),.*?"
+            r"\.glyph_id_start\s*=\s*(?P<glyph_id_start>\d+),",
+            font,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(cmap)
+        range_start = int(cmap.group("range_start"))
+        range_length = int(cmap.group("range_length"))
+        glyph_id_start = int(cmap.group("glyph_id_start"))
+        self.assertEqual(range_start, 0x20)
+
+        expected_metrics = {
+            "--%": ([160, 160, 358], 582, 36),
+            "99%": ([261, 261, 358], 784, 48),
+            "100%": ([158, 280, 280, 358], 932, 59),
+        }
+
+        def measure_text(text):
+            glyph_advances = []
+            for character in text:
+                codepoint = ord(character)
+                self.assertLess(codepoint, range_start + range_length)
+                glyph_id = glyph_id_start + codepoint - range_start
+                glyph_advances.append(advances_16[glyph_id])
+
+            width_16 = sum(glyph_advances) + (
+                letter_space_px * 16 * (len(text) - 1)
+            )
+            lvgl_width_px = sum(
+                (advance_16 + 8) >> 4 for advance_16 in glyph_advances
+            ) + letter_space_px * (len(text) - 1)
+            return glyph_advances, width_16, lvgl_width_px
+
+        for text, expected in expected_metrics.items():
+            with self.subTest(text=text):
+                glyph_advances, width_16, lvgl_width_px = measure_text(text)
+                self.assertEqual(
+                    (glyph_advances, width_16, lvgl_width_px), expected
+                )
+                self.assertLessEqual(width_16, box_width_px * 16)
+                self.assertLessEqual(lvgl_width_px, box_width_px)
+
+        for value in range(101):
+            text = f"{value}%"
+            with self.subTest(text=text):
+                _, width_16, lvgl_width_px = measure_text(text)
+                self.assertLessEqual(width_16, box_width_px * 16)
+                self.assertLessEqual(lvgl_width_px, box_width_px)
 
 
 if __name__ == "__main__":

@@ -142,8 +142,10 @@ QuotaWidgets make_quota_row(lv_obj_t* parent, int y, const char* label_text)
     lv_obj_t* pct = lv_label_create(parent);
     lv_label_set_text(pct, "--%");
     lv_obj_set_style_text_font(pct, &MontserratSemiBold26, 0);
+    lv_obj_set_style_text_letter_space(pct, -3, 0);
     lv_obj_set_style_text_color(pct, lv_color_hex(kSignalWhite), 0);
     lv_obj_set_width(pct, kQuotaPercentWidth);
+    lv_label_set_long_mode(pct, LV_LABEL_LONG_MODE_CLIP);
     lv_obj_set_style_text_align(pct, LV_TEXT_ALIGN_RIGHT, 0);
     lv_obj_set_pos(pct, kQuotaPercentX, y - 7);
 
