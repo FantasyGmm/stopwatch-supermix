@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Use a pure-black Codex page, remove and enlarge the robot frame, center the robot/telemetry group, and move each quota percentage to the right of its progress bar in both the approved preview and firmware.
+**Goal:** Use a pure-black Codex page, remove and enlarge the robot frame, center the robot/telemetry group, move each quota percentage to the right of its progress bar, and hide the host-name row in both the approved preview and firmware.
 
 **Architecture:** Keep all status data, timers, assets, and widget ownership unchanged. Update the layout contract first, then make the LVGL view consume those constants; update the standalone preview from the same exact geometry so it remains a faithful review surface.
 
@@ -99,11 +99,13 @@ Expected: exit code 0 with no output.
 
 - [ ] **Step 1: Make the source-contract test fail on the old UI**
 
-Change the test to require removal of the outline, use of `kPetScale`, and right-aligned percentage placement:
+Change the test to require removal of the outline and host row, use of `kPetScale`, and right-aligned percentage placement:
 
 ```python
 self.assertNotIn("make_outline(", app)
 self.assertNotIn("kPetDock", layout)
+self.assertNotIn('make_center_label(_panel, "", kHostY', app)
+self.assertNotIn("kHostY", layout)
 self.assertIn("lv_image_set_scale(_pet_image, kPetScale)", app)
 self.assertIn("lv_obj_set_pos(pct, kQuotaPercentX, y - 6)", app)
 self.assertIn("lv_obj_set_style_text_align(pct, LV_TEXT_ALIGN_RIGHT, 0)", app)
@@ -148,6 +150,8 @@ lv_obj_set_pos(pct, kQuotaPercentX, y - 6);
 
 - [ ] **Step 5: Run the layout and source-contract tests**
 
+Before running the tests, remove `kHostY` and the `_host_label` construction/configuration block from `create_view()`. Keep the `_host_label` member and the null guard in `set_host_text()` so host configuration and connection logic remain compatible without rendering the row.
+
 Run the commands from Task 1 Step 2 and Task 2 Step 2.
 
 Expected: both exit 0; Python reports all tests `OK`.
@@ -173,6 +177,8 @@ Remove the `.pet-dock` rule and element. Apply the approved pet and quota geomet
 
 The quota positions are relative to `.quota-row` at `x=55`, producing global `x=101` for the track and `x=360` for the percentage.
 
+Also remove the `.host` rule and host-name element. Do not add a placeholder; the connection-status row stays at `y=63`.
+
 - [ ] **Step 2: Reload and visually inspect the preview**
 
 Reload `http://127.0.0.1:60257/` and verify:
@@ -182,6 +188,7 @@ Reload `http://127.0.0.1:60257/` and verify:
 - the watch background is pure black and the shifted telemetry column ends at `x=414`;
 - both rows read `5H → bar → 72%` and `7D → bar → 64%`;
 - neither percentage crosses the right safe edge at `x=411`.
+- no host name or empty host placeholder is rendered.
 
 - [ ] **Step 3: Run the focused Codex tests**
 
