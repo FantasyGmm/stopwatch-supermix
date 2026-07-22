@@ -11,7 +11,9 @@
 ## Exact Tests
 
 1. `mac-codex-agent/.venv/bin/python -m unittest mac-codex-agent.tests.test_service_runtime_firmware_contract`
-   - Result: `Ran 7 tests ... OK`
+   - Result in the preserved working tree: `Ran 7 tests ... OK`.
+   - Reproducible committed-tree count: 6 Task-2-relevant tests; the seventh
+     working-tree test is the pre-existing uncommitted service-stop contract.
 2. `c++ -std=c++17 -Wall -Wextra -Werror -pthread -Imain tests/shared_wifi_policy_test.cpp main/runtime/resource_supervisor.cpp main/runtime/services/shared_wifi_policy.cpp main/runtime/services/shared_wifi_service.cpp -o /tmp/stopwatch-task2-host-<pid>/shared_wifi_policy_test && /tmp/stopwatch-task2-host-<pid>/shared_wifi_policy_test`
    - Result: compile and execution passed with exit status 0.
 

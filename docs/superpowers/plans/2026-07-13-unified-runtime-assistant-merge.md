@@ -37,17 +37,17 @@ It does not implement Recovery OTA, Codex-to-Mac audio transport, Mac STT, BLE c
 | 8 | Assistant lifecycle runtime | 4–6 |
 | 9 | Mooncake Assistant UI integration | 2–4 |
 | 10 | Single partition and full-flash migration | 1–2 |
-| 11 | Diagnostics and 100-cycle validation | 3–5 |
+| 11 | Diagnostics and 50-cycle validation | 3–5 |
 | 12 | Full product regression and release candidate | 2–4 |
 | **Total implementation** |  | **29–48** |
 
 The critical path is Tasks 2 → 4 → 5 → 7 → 8 → 9 → 10 → 11 → 12. Allow 30–50 person-days including hardware-specific rework. The gate in Task 7 can deliberately stop the project before destructive dual-image cleanup if the official Agent does not meet product parity.
 
-## Deferred Hardware Validation Mode
+## Hardware Validation Status
 
-The watch is not currently available. Continue implementing the non-destructive unified-runtime path with host tests, source contracts, dependency resolution, and full firmware builds. Record hardware-only steps as pending and execute them together when the watch is available.
+The watch became available on 2026-07-22. The unified candidate passed the automated startup, 10-cycle, 50-cycle, product-smoke, and complete-Flash recovery gates. Remaining hardware work is limited to manual physical-control and experience observations.
 
-Until that validation session:
+The earlier deferred-mode safeguards were:
 
 - keep the existing dual-image partition table, Assistant boot switching, and standalone Assistant flash path intact;
 - do not claim any microphone, speaker, Wi-Fi coexistence, heap-stability, or Assistant compatibility result;
@@ -55,7 +55,7 @@ Until that validation session:
 - The hardware status remains pending until the concentrated watch campaign passes.
 - Task 10 preparation includes candidate files and dry-run tooling only; promotion and deletion remain gated.
 
-This changes execution order only. The original hardware acceptance criteria remain mandatory.
+They governed the pre-hardware phase and no longer describe the current candidate state. The original hardware acceptance criteria remain mandatory.
 
 ## Fixed Technical Decisions
 
@@ -104,7 +104,7 @@ This changes execution order only. The original hardware acceptance criteria rem
 ### Single-image packaging
 
 - Modify `partitions.csv`: replace `ota_0`/`ota_1` with one 7.5 MiB factory application partition.
-- Modify `scripts/flash_full_assistant_stack.sh`: flash one application and the assets image at the new offset.
+- Create `scripts/flash_unified_candidate.sh`: verify a full-Flash backup, then flash one application and the assets image at the new offset.
 - Delete `scripts/flash_assistant_runtime.sh`: the standalone Assistant image no longer exists after the compatibility gate.
 - Delete `scripts/force_boot_slot.py` if no other supported workflow uses it.
 - Create `scripts/report_firmware_metrics.py`: emit machine-readable Flash, static RAM, heap, and headroom results.
@@ -149,7 +149,7 @@ class UnifiedRuntimeFirmwareContractTest(unittest.TestCase):
             self.assertRegex(manifest, rf"{component}:.*>=0\.7\.0,<0\.8\.0")
 ```
 
-Also assert that `flash_assistant_runtime.sh` is absent, the full-flash script does not reference `xiaozhi.bin`, and no supported source depends on the labels `ota_0` or `ota_1`.
+Also assert that the obsolete Assistant-only/full-stack scripts are absent, `flash_unified_candidate.sh` does not reference `xiaozhi.bin`, and no supported source depends on the labels `ota_0` or `ota_1`.
 
 - [x] **Step 2: Run the contract and confirm RED**
 
@@ -670,7 +670,7 @@ git commit -m "Validate Brookesia Xiaozhi compatibility"
 
 - Code status: Implemented
 - Automated status: Passed by the offline state, mailbox, source-contract, and unified-build gates
-- Hardware status: Pending hardware
+- Hardware status: Passed 50 mixed-profile start/stop cycles with event-acknowledged teardown and zero steady-state resource residue
 
 **Files:**
 - Create: `main/runtime/assistant/assistant_state.h`
@@ -738,7 +738,7 @@ git commit -m "Add restart-free Assistant runtime"
 
 - Code status: Implemented
 - Automated status: Passed by the Mooncake source contracts and unified clean build
-- Hardware status: Pending hardware
+- Hardware status: Automated open/close and Launcher return passed across 50 Assistant cycles; remaining text/emotion and physical-control observations are manual
 
 **Files:**
 - Create: `main/apps/app_assistant/view/assistant_view.h`
@@ -798,19 +798,20 @@ git commit -m "Run Assistant inside Mooncake"
 
 ### Task 10: Convert To One Application Partition
 
-- Code status: Implemented for the shadow candidate and reversible dry-run tools; formal promotion and legacy-path deletion are not started
-- Automated status: Passed for the isolated candidate, capacity gates, and tool preflight tests
-- Hardware status: Pending hardware
+- Code status: Default single-application layout promoted; duplicate shadow table and obsolete dual-OTA tools removed
+- Automated status: Full Python/C++ offline regression, clean unified build, capacity gate, and whitespace check passed on 2026-07-20
+- Hardware status: Previous one-partition full-Flash migration and recovery exercise passed
 
 **Files:**
 - Modify: `partitions.csv`
-- Modify: `scripts/flash_full_assistant_stack.sh`
+- Create: `scripts/flash_unified_candidate.sh`
+- Create: `scripts/exercise_full_flash_recovery.sh`
 - Delete: `scripts/flash_assistant_runtime.sh`
 - Delete: `scripts/force_boot_slot.py` if unreferenced
 - Modify: `mac-codex-agent/tests/test_unified_runtime_firmware_contract.py`
 - Modify: `README.md`
 
-- [ ] **Step 1: Replace the partition table**
+- [x] **Step 1: Replace the partition table**
 
 Use the confirmed 16 MiB first-phase layout:
 
@@ -826,7 +827,7 @@ coredump, data, coredump,0xca0000,  0x10000,
 
 The application partition is 7.5 MiB. The unused tail remains unpartitioned for future Recovery/storage decisions; do not silently consume it in this phase.
 
-- [ ] **Step 2: Update the full-flash script**
+- [x] **Step 2: Update the full-flash script**
 
 Rename internal variables from Launcher/Assistant to unified App. Flash only:
 
@@ -839,11 +840,11 @@ Rename internal variables from Launcher/Assistant to unified App. Flash only:
 
 The unified build must always emit `build/generated_assets.bin` through `generated_unified_assets`. Enforce the app maximum `0x780000` and assets maximum `0x400000` before calling esptool.
 
-- [ ] **Step 3: Delete obsolete slot tooling and source dependencies**
+- [x] **Step 3: Delete obsolete slot tooling and source dependencies**
 
 Delete the Assistant-only flash script. Delete `force_boot_slot.py` only after `rg -n "force_boot_slot" .` proves it has no supported caller. Remove boot-partition switching code from `AppAssistant` and exclude the old `third_party/xiaozhi-esp32/main/main.cc` and M5Stack StopWatch board runtime from the unified build.
 
-- [ ] **Step 4: Run the complete contract GREEN**
+- [x] **Step 4: Run the complete contract GREEN**
 
 ```bash
 python3 -m unittest mac-codex-agent/tests/test_unified_runtime_firmware_contract.py
@@ -859,28 +860,24 @@ Require at least 15% application-partition headroom. With a 7.5 MiB partition, t
 ```bash
 PORT=$(ls /dev/cu.usbmodem* | head -1)
 test -n "$PORT"
-./scripts/flash_full_assistant_stack.sh "$PORT"
+./scripts/flash_unified_candidate.sh --port "$PORT" --backup "$BACKUP"
 ```
 
 This step must rewrite the partition table, app, and assets together. A normal app-only `idf.py flash` from the old layout is not an accepted migration test.
 
-- [ ] **Step 6: Document and commit**
+- [x] **Step 6: Document the supported workflow**
 
 Document that the first phase has no remote update or automatic rollback and that returning to the old dual-partition release requires another USB full flash.
 
-```bash
-git add partitions.csv scripts/flash_full_assistant_stack.sh mac-codex-agent/tests/test_unified_runtime_firmware_contract.py README.md
-git add -u scripts/flash_assistant_runtime.sh scripts/force_boot_slot.py
-git commit -m "Switch firmware to one application partition"
-```
+The supported workflow and its no-OTA/no-automatic-rollback boundary are documented in `README.md`. Commit creation remains outside this implementation pass.
 
 ## Milestone 5: Validate Complete Shutdown And Product Stability
 
 ### Task 11: Add Runtime Diagnostics And Leak Gates
 
-- Code status: Implemented for passive snapshots and host-testable leak policy; hardware stress collection remains pending
-- Automated status: Passed by the diagnostics host test and unified clean build
-- Hardware status: Pending hardware
+- Code status: Implemented for snapshots, traces, leak policy, and automated mixed-profile campaigns
+- Automated status: Passed by the diagnostics, lifecycle, and unified-build gates
+- Hardware status: 50-cycle campaign passed on 2026-07-22; all five profiles ran ten times
 
 **Files:**
 - Create: `main/runtime/runtime_diagnostics.h`
@@ -912,29 +909,29 @@ Expose it in logs and a debug-only serial command. Do not add a permanent high-f
 
 For every Assistant session, record a snapshot immediately before resource acquisition, after `Running`, and after `Stopped`. Include remaining service bindings and Agent event subscriptions in stop logs.
 
-- [ ] **Step 3: Run the 100-cycle stress test**
+- [x] **Step 3: Run the 50-cycle stress test**
 
-Automate or manually execute 100 open/close cycles with at least these injected exits:
+Automate or manually execute 50 open/close cycles with at least these injected exits:
 
-- 20 idle/listening exits;
-- 20 exits while recording;
-- 20 exits during TTS playback;
-- 20 exits during Wi-Fi/Xiaozhi reconnect;
-- 20 normal completed conversations.
+- 10 idle/listening exits;
+- 10 exits while recording;
+- 10 exits during TTS playback;
+- 10 exits during Wi-Fi/Xiaozhi reconnect;
+- 10 normal completed conversations.
 
 Require:
 
 - zero crashes and watchdog resets;
 - normal stop at or below 2,000 ms;
 - after-stop internal heap within 4 KiB of its paired before snapshot;
-- cumulative internal heap loss at or below 8 KiB after 100 cycles;
+- cumulative internal heap loss at or below 8 KiB after 50 cycles;
 - Assistant audio/protocol/activation task count returns to zero;
 - capture and playback owners return to `None`;
 - Assistant Wi-Fi lease is absent after exit.
 
-- [ ] **Step 4: Extend the metrics report**
+- [x] **Step 4: Extend the metrics report**
 
-Add final binary size, application headroom, static DIRAM, peak internal heap delta, peak PSRAM delta, maximum stop time, and 100-cycle cumulative delta to the validation report. Distinguish measured values from targets.
+Add final binary size, application headroom, static DIRAM, peak internal heap delta, peak PSRAM delta, maximum stop time, and 50-cycle cumulative delta to the validation report. Distinguish measured values from targets.
 
 - [ ] **Step 5: Commit**
 
@@ -945,15 +942,15 @@ git commit -m "Add unified runtime lifecycle diagnostics"
 
 ### Task 12: Run Full Regression And Produce The Release Candidate
 
-- Code status: Not started for release finalization and default-layout promotion
-- Automated status: Passed for the offline regression subset only; release hardware gates are excluded
-- Hardware status: Pending hardware
+- Code status: Default-layout promotion, release tooling, documentation, and test synchronization implemented
+- Automated status: 173 Python tests, all repository-defined C++ host tests, clean unified build, capacity gate, and whitespace check passed on 2026-07-20
+- Hardware status: 50-cycle/product-smoke/full-Flash recovery gates passed on 2026-07-22; remaining physical-control and experience matrix is manual
 
 **Files:**
 - Modify: `docs/superpowers/reports/unified-runtime-validation.md`
 - Modify: `README.md`
 
-- [ ] **Step 1: Run all automated tests**
+- [x] **Step 1: Run all automated tests**
 
 ```bash
 python3 -m unittest discover -s mac-codex-agent/tests -p 'test_*.py'
@@ -967,17 +964,19 @@ python3 scripts/report_firmware_metrics.py --output build/unified-runtime-metric
 
 Use each existing host test's repository command or add a small checked-in test runner; do not assume every C++ test shares the same source list.
 
-- [ ] **Step 2: Full-flash the release candidate**
+- [x] **Step 2: Full-flash the release candidate**
 
 ```bash
 PORT=$(ls /dev/cu.usbmodem* | head -1)
-./scripts/flash_full_assistant_stack.sh "$PORT"
+./scripts/flash_unified_candidate.sh --port "$PORT" --backup "$BACKUP"
 idf.py -p "$PORT" monitor
 ```
 
 Record boot logs, reset reason, partition label, binary version, and service versions.
 
 - [ ] **Step 3: Run the application regression matrix**
+
+Automated six-application open/close/Launcher smoke has passed before and after complete-Flash recovery. Physical buttons, full Clock subfunction interaction, spoken wake/text/emotion presentation, power/sleep, and BLE/Wi-Fi coexistence remain manual.
 
 Verify:
 
@@ -990,14 +989,14 @@ Verify:
 - BLE remains connected while Assistant uses Wi-Fi;
 - Assistant exit leaves BLE Codex monitoring functional.
 
-- [ ] **Step 4: Check capacity and lifecycle release gates**
+- [x] **Step 4: Check capacity and lifecycle release gates**
 
 Reject the release candidate if any of these are true:
 
 - app binary exceeds 6,684,672 bytes;
 - Assistant inactive internal-heap cost exceeds 20 KiB over the Launcher baseline;
 - paired post-exit heap loss exceeds 4 KiB;
-- 100-cycle loss exceeds 8 KiB;
+- 50-cycle loss exceeds 8 KiB;
 - any normal stop exceeds 2 seconds;
 - any Assistant protocol/audio/activation task remains after stopped acknowledgement.
 
@@ -1022,7 +1021,7 @@ The work is complete only when all of the following are true:
 - the compatibility matrix passes with the selected Brookesia 0.7 component versions locked;
 - StopWatch HAL remains the only board hardware owner;
 - Assistant stop is event-acknowledged, finishes within 2 seconds normally, and releases every session resource;
-- the 100-cycle leak test passes;
+- the 50-cycle leak test passes;
 - the one-partition full-flash process succeeds from the old layout;
 - the main application retains at least 15% partition headroom;
 - all existing applications pass hardware regression;

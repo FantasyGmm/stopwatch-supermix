@@ -6,15 +6,15 @@ This project is based on the M5Stack StopWatch user demo and extends it with:
 
 - a launcher-first app shell built on Mooncake/LVGL;
 - a Codex status monitor app added as the first launcher app;
-- an Assistant entry that switches into the Xiaozhi runtime stored in the second OTA slot;
+- an in-process Assistant app backed by Xiaozhi/Brookesia services, without rebooting;
 - full-screen utility apps for clock, badge, IMU, FFT, and setup;
-- helper scripts for flashing both the launcher firmware and the assistant runtime.
+- backup-first build, flash, lifecycle, product-smoke, and recovery tooling.
 
 ## Hardware Target
 
 - Device: M5Stack StopWatch
 - Chip: ESP32-S3
-- Flash layout: 16 MB flash, dual OTA application slots, FAT storage partition, SPIFFS assets partition, and coredump partition
+- Flash layout: the unified candidate uses one 7.5 MiB factory application, FAT storage, SPIFFS assets, and coredump partitions on 16 MB Flash
 - Display/UI stack: LVGL 9, M5GFX, Mooncake, Smooth UI Toolkit
 - Toolchain: ESP-IDF v5.5.4
 
@@ -129,21 +129,22 @@ Pending silent.
 
 ## Assistant Runtime
 
-The Assistant app does not run the Xiaozhi runtime inside the launcher process. It switches boot to the second OTA application partition (`ota_1`) and restarts the device.
+Assistant runs inside the same firmware process as Launcher and the other Mooncake applications. Opening Assistant starts the Xiaozhi services through `RuntimeSupervisor`; closing it stops the Agent, audio, network, and service bindings asynchronously, releases their owners, and returns to Launcher without rebooting.
 
-Runtime layout:
+Runtime responsibilities are intentionally separated:
 
-- launcher app: `ota_0`, offset `0x20000`;
-- assistant app: `ota_1`, offset `0x510000`;
-- assistant generated assets: `assets`, offset `0xb00000`.
+- Mooncake owns application installation, UI, and navigation;
+- Brookesia owns Assistant services and the Xiaozhi Agent;
+- the StopWatch HAL owns display, buttons, microphone, speaker, and other hardware;
+- `ResourceSupervisor` and the shared Wi-Fi/audio services arbitrate resources between apps.
 
-This separation keeps the launcher small enough to hold local utility apps while allowing the assistant runtime to be built and flashed independently.
+The default [`partitions.csv`](partitions.csv) contains one 7.5 MiB factory application at `0x20000`; generated wake/audio assets remain in a separate `assets` partition at `0x8a0000`. Assets are part of the same full-firmware release even though they are not linked into the application binary. The old dual-OTA layout and Assistant-only slot tools have been removed.
+
+This first-phase layout has no remote firmware update and no automatic rollback. Installations update the bootloader, partition table, unified application, and assets together over USB. Returning to an older release requires restoring a verified complete 16 MiB Flash backup over USB.
 
 ## Navigation
 
-The launcher and apps use the shared key manager. Long-pressing both side buttons triggers the `GoHome` event, which closes the current app and returns to the launcher.
-
-For the Assistant app, the return shortcut is available while the launcher-side transition screen is still active. Once the device switches into the assistant OTA slot, navigation is handled by the assistant runtime.
+The launcher and apps use the shared key manager. Long-pressing both side buttons triggers the `GoHome` event, which closes the current app and returns to the launcher. In Assistant, the same event starts a one-shot graceful shutdown; the UI remains responsive on `Closing` until the runtime reports `Stopped`.
 
 ## Repository Structure
 
@@ -152,17 +153,18 @@ For the Assistant app, the return shortcut is available while the launcher-side 
 ├── main/
 │   ├── apps/                         # Launcher apps
 │   │   ├── app_codex_status/         # Codex status monitor
-│   │   ├── app_assistant/            # OTA handoff into Xiaozhi runtime
+│   │   ├── app_assistant/            # In-process Xiaozhi Assistant UI/lifecycle
 │   │   ├── app_launcher/             # App launcher shell
 │   │   └── ...
 │   └── main.cpp                      # Firmware entrypoint and app installation order
 ├── mac-codex-agent/                  # macOS Codex collector and BLE central
 ├── patches/                          # Dependency/runtime patches
 ├── scripts/
-│   ├── flash_assistant_runtime.sh    # Flash assistant app/assets only
-│   ├── flash_full_assistant_stack.sh # Flash launcher + assistant stack
-│   └── force_boot_slot.py            # Force ESP-IDF OTA boot slot
-├── partitions.csv                    # 16 MB flash partition table
+│   ├── build_unified_candidate.sh    # Isolated unified build and size gates
+│   ├── flash_unified_candidate.sh    # Backup-gated full candidate write
+│   ├── run_unified_offline_validation.sh
+│   └── run_unified_hardware_validation.sh
+├── partitions.csv                    # Default unified 16 MB layout
 ├── repos.json                        # External component list
 └── fetch_repos.py                    # Dependency fetch/update helper
 ```
@@ -223,33 +225,39 @@ Fetch dependencies:
 python3 ./fetch_repos.py
 ```
 
-Build the launcher firmware:
+Build the isolated unified candidate and enforce its capacity gates:
 
 ```bash
-idf.py build
+./scripts/build_unified_candidate.sh --clean
 ```
+
+The release output is written to `build-unified/`. A normal root `idf.py build` now uses the same default single-application partition table, while the release script additionally enforces application/assets capacity gates and emits reproducible metrics.
 
 ## Flash
 
-Flash only the launcher firmware:
+Before the first unified write, create and retain a complete 16 MiB backup:
 
 ```bash
-idf.py -p /dev/cu.usbmodem1101 flash
+./scripts/backup_watch_flash.sh \
+  --port /dev/cu.usbmodem1101 \
+  --output backups/watch-full-flash.bin
 ```
 
-Flash only the assistant runtime:
+Flash the application, partition table, bootloader, and assets together. The script rejects a missing, short, or checksum-mismatched backup before writing:
 
 ```bash
-scripts/flash_assistant_runtime.sh /dev/cu.usbmodem1101
+./scripts/flash_unified_candidate.sh \
+  --port /dev/cu.usbmodem1101 \
+  --backup backups/watch-full-flash.bin
 ```
 
-Flash the full launcher + assistant stack:
+Run the complete hardware release gate (10 mixed lifecycles, all-app smoke, 50 mixed lifecycles, full-Flash restore exercise, and final smoke):
 
 ```bash
-scripts/flash_full_assistant_stack.sh /dev/cu.usbmodem1101
+./scripts/run_unified_hardware_validation.sh \
+  --port /dev/cu.usbmodem1101 \
+  --backup backups/watch-full-flash.bin
 ```
-
-After flashing the full stack, the script forces the boot slot back to the launcher (`ota_0`) so the device starts from the app launcher.
 
 ## BLE And Wi-Fi Setup
 
@@ -304,26 +312,16 @@ If you add a settings UI or provisioning command later, write the host value the
 
 ## Troubleshooting
 
-### Assistant stays on the launcher initialization screen
+### Assistant initialization fails or the watch reboots
 
-Check that the assistant app is actually flashed into `ota_1` and that `esp_ota_get_partition_description()` can read a valid app descriptor from that partition.
-
-Useful checks:
+A reboot is not expected when opening or closing the unified Assistant. Capture the causal trace and runtime resource status over USB:
 
 ```bash
-python -m esptool --chip esp32s3 -p /dev/cu.usbmodem1101 read_flash 0xd000 0x2000 /tmp/otadata.bin
-python /path/to/esp-idf/components/app_update/otatool.py -p /dev/cu.usbmodem1101 read_otadata
+./scripts/watch_debug.py --port /dev/cu.usbmodem1101 assistant trace
+./scripts/watch_debug.py --port /dev/cu.usbmodem1101 assistant status
 ```
 
-If the assistant partition is valid but the device should return to the launcher, force boot slot 0:
-
-```bash
-scripts/force_boot_slot.py 0 -p /dev/cu.usbmodem1101
-```
-
-### Device reboots after entering Assistant
-
-The Assistant entry intentionally calls `esp_ota_set_boot_partition()` and then restarts. A reboot is expected during handoff. A reboot loop usually means the assistant runtime in `ota_1` is missing, oversized, built for the wrong partition layout, or failing early during its own boot.
+For a repeatable open/close diagnosis, use `validate_assistant_graceful_close.py`; it fails on reset/watchdog markers, a shutdown over two seconds, retained resources/tasks, more than 4 KiB single-session internal-heap loss, or more than 8 KiB cumulative campaign loss.
 
 ### Codex monitor shows SETUP or SCAN
 

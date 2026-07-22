@@ -1,87 +1,106 @@
 # Unified Runtime Validation
 
-Date: 2026-07-19
+Date: 2026-07-22
 
-- Automated tests: Passed (144 Python tests and 9 host C++ test groups)
-- Unified clean build: Passed (isolated build, capacity gates, and whitespace gate)
+- Automated tests and unified build: Passed
 - Targeted hardware startup/lifecycle: Passed
-- Audible and UI conversation checks: Pending manual observation
-- Five-cycle Assistant graceful-close campaign: Passed
-- 10-cycle, 100-cycle, and full product regression: Pending campaign
+- Audible TTS after jitter-buffer fix: Passed by user observation
+- 10-cycle, 20-cycle, 50-cycle, full product regression, and recovery exercise: Passed
+- Final boot-to-product-smoke handoff after recovery: Passed
+- Unified candidate currently installed on the watch: Yes
 
-This report separates automated build evidence, targeted hardware evidence, and broader manual campaigns. The targeted run establishes that the merged Launcher/Assistant firmware can boot, activate Xiaozhi, start its audio path, exchange data with the server, and return Home without rebooting or retaining runtime owners. It does not substitute for audible TTS, spoken wake-word, display-content, stress, or full application regression testing.
+The merged Launcher/Assistant firmware now boots one application image, starts Xiaozhi in-process, connects to the server, runs microphone and playback, and returns to Launcher without rebooting. The 50-round mixed-profile release gate, complete-Flash recovery exercise, and final all-application smoke test have now passed on the connected watch.
 
 ## Automated evidence
 
-`scripts/run_unified_offline_validation.sh` completed successfully on 2026-07-19. The final hardware image was rebuilt from committed runtime source `7cc2f034f17342324c6ca7a6e10f51cfabe2b478`, then passed the test, build, capacity, flash, and hardware gates described below.
-
-The values below come from `build-unified/unified-runtime-metrics.json` (schema 2).
+The formal ESP-IDF 5.5.4 build completed after the MCP ownership fix. The exact application image currently installed after the final current-source follow-up is:
 
 | Evidence | Value |
 |---|---:|
-| Application image SHA256 | `3f3b44e3a2ac4dac9736bb322ddf2889deff5df1ccea9f1723616cc69c7ae43b` |
-| Application bytes | `6,006,768` (`0x5ba7f0`) |
+| Application image SHA256 | `0bddd1cbe4502d803e19e71ba1e99efdd8c5e470659dcdefdf1df300cd86b0c7` |
+| Application bytes | `6,036,080` (`0x5c1a70`) |
 | Application partition bytes | `7,864,320` (`0x780000`) |
-| Application headroom | `1,857,552` bytes (`23.62%`) |
+| Application headroom | `1,828,240` bytes (`23.25%`) |
 | Application hard gate | `6,684,672` (`0x660000`) |
 | Assets image SHA256 | `93b87d059d1c2a31f1dd65bbdfa4d5b7275774f6f12e82eb84a1737acad3723f` |
 | Assets bytes | `291,198` |
-| Assets hard gate | `4,194,304` (`0x400000`) |
-| Static DIRAM bytes | `188,015` |
+| Static DIRAM bytes | `191,275` |
 | Capacity gate | Passed |
 
-The candidate keeps the locked Brookesia 0.7 component family. The Assistant product path does not switch boot partitions, call `esp_restart`, or reference `ota_1`. The legacy dual-OTA partition table, recovery path, and complete-backup restore helper remain available; this work does not remove that fallback.
+The final image remains 23.25% below the partition limit and does not contain a separately bootable Assistant application. `generated_assets.bin` remains a separate Flash partition artifact but is written and recovered as part of the same full-firmware release.
+
+The targeted Python contracts cover Assistant lifecycle, memory ownership, trace parsing, product smoke, boot validation, unified Flash tooling, shared Wi-Fi, and audio behavior. Host-side C++ contracts cover the runtime state machine, diagnostics, debug commands, Wi-Fi policy, and audio jitter-buffer policy.
+
+The release tooling includes:
+
+- `validate_assistant_graceful_close.py`: balanced listening, recording, TTS, reconnect, and completed-conversation exits with heap, task, resource, reset, and two-second stop gates;
+- `validate_product_smoke.py`: automated open/close/Launcher round trips for Codex, Clock, Badge, IMU, Audio.FFT, and Settings;
+- `validate_watch_boot.py`: hard reset, fatal-marker, and Launcher boot validation;
+- `exercise_full_flash_recovery.sh`: restore the verified 16 MiB backup, validate the restored firmware, reinstall the unified candidate, and validate it again;
+- `run_unified_hardware_validation.sh`: candidate flash, boot, 10 cycles, product smoke, 50 cycles, full-Flash recovery, and final smoke.
 
 ## Targeted hardware evidence
 
 | Field | Result |
 |---|---|
-| Device | ESP32-S3 watch, MAC `44:1b:f6:c1:86:5c`, serial port `/dev/cu.usbmodem1101` during the run |
+| Device | ESP32-S3 watch, MAC `44:1b:f6:c1:86:5c`, serial port `/dev/cu.usbmodem1101` in the final run |
 | Complete Flash backup | 16 MiB `backups/watch-full-flash-20260718-173922.bin`; SHA256 `b6ecc3da8f0dbd41de9722a1956566ca3ce0f5506e6439fe5c4a57366c9000dc` |
-| Preserved assets | SHA256 `93b87d059d1c2a31f1dd65bbdfa4d5b7275774f6f12e82eb84a1737acad3723f` |
-| Automated control | `debug app open assistant`, `debug assistant home`, `debug assistant status`, and trace commands acknowledged by the watch |
-| Wi-Fi | Acquired `192.168.50.238` before heavy service startup |
-| Xiaozhi activation | Passed; endpoint reported activation successful |
-| Audio startup | Decoder and Encoder started; light feeder/recorder opened |
-| Wake model | `wn9_nihaoxiaozhi_tts` loaded from the `assets` partition |
-| Server path | Agent connected; MCP initialize and tools/list received; audio channel opened |
-| Microphone path | Continuous 180-byte encoded packets emitted |
-| Runtime state | Reached `first-running`, state 2, without reset or reboot |
-| Running resources | 2 bindings, 5 subscriptions, Wi-Fi/capture/playback owned as expected |
-| Stop/Home | Agent, Encoder, Decoder, NVS, AgentXiaoZhi, AgentManager, Audio, Device, SNTP, and Wi-Fi stopped |
-| Stopped resources | Bindings/subscriptions/Wi-Fi/capture/playback all zero |
-| Repeated lifecycle | Five consecutive sessions (`sid=3..7`) reached Running, closed, reopened Launcher, and passed the steady-state stop gate |
+| Automated control | USB debug commands opened Assistant, returned Home, queried status, and collected causal traces without human tapping |
+| Wi-Fi/server | Wi-Fi acquired `192.168.50.238`; activation succeeded; MCP initialize/tools-list and the audio channel completed |
+| Assistant startup | Reached `first-running`; decoder, encoder, WakeNet, playback, microphone upload, and server session were active |
+| Graceful Home | Agent, Audio, Device, SNTP, Wi-Fi, capture, playback, bindings, and subscriptions stopped |
+| Stopped resources | Bindings/subscriptions/Wi-Fi/capture/playback all zero; task delta returned to zero after warm-up |
+| 10-cycle gate | Passed; all five profiles ran twice; cumulative internal loss 284 B; peak internal loss 0 B; peak PSRAM loss 464 B; maximum stop 307 ms |
+| 20-cycle gate | Passed; 20 measured sessions, all five profiles ran four times; cumulative internal loss -4 B; peak PSRAM loss 264 B; maximum stop 314 ms |
+| 50-cycle gate | Passed; 50 measured sessions, all five profiles ran ten times; cumulative internal loss -20 B; peak internal loss 0 B; peak PSRAM loss 320 B; maximum stop 314 ms |
+| Product smoke | Passed before and after recovery for Codex, Clock, Badge, IMU, Audio.FFT, and Settings |
+| Full-Flash recovery | Passed; verified backup restored and booted, then the unified candidate was reinstalled, hash-verified, and booted to Launcher |
+| Final handoff | Passed a hard-reset Launcher boot followed immediately by six-application smoke; the cross-session debug parser synchronization correctly isolated a stale boot probe |
 
-The original physical-button failure was isolated to legacy button audio feedback reopening the shared playback/I2S path while Assistant still owned it. Button vibration and the `GoHome` key event are retained, but the sound effect is now suppressed whenever supervised playback has an owner. The exact physical gesture and the USB command converge on the same one-shot graceful-close controller.
+### Branch-advancing follow-up and muted automation
 
-The five-cycle hardware transcript is `/tmp/assistant-graceful-close-20260719-v5.log`. Every cycle recorded the causal sequence `close-request -> stopping -> stopped callback -> release -> closed`, returned bindings/subscriptions/Wi-Fi/capture/playback to zero, and reopened Launcher. The second stop gate passed, as did all later steady-state gates: snapshots reported `task_delta=0` and `gate=true`; internal loss was 288, 288, 288, 288, and 376 bytes, while PSRAM loss stayed between 21,080 and 21,412 bytes. No reset, panic, or watchdog marker was observed.
+After the continuous 50-cycle release gate, shared Wi-Fi work continued landing on the branch while the follow-up campaign was running. Per the test instruction, counting continued across two reflashes instead of restarting: 18 sessions on the first coherent build, 11 on the next build, then 21 on the final `cd5b72d-dirty` build. The reflashes included the branch HEAD available at each build as well as the debug volume/mute changes, so the combined 50 sessions are workload-continuity evidence, not a claim that one final binary ran 50 uninterrupted sessions. The profile schedule continued across the boundaries, so listening, recording, TTS, reconnect, and completed conversation each ran exactly ten times. No reset, panic, watchdog, or stuck close occurred in the combined run.
 
-One earlier attempt captured an external activation HTTP timeout before the Assistant reached Running; the trace made that failure distinguishable from shutdown behavior, and a subsequent five-cycle run passed. A GMF `Got NULL Pointer` diagnostic occurs during Audio deinitialization in every cycle, but the stop sequence continues, all owners reach zero, the resource gate passes, and no reset follows. It remains a tracked non-fatal upstream teardown warning.
+The reflashes reset the heap baseline, so a single cumulative heap-loss value across all 50 sessions would be misleading. The exact final image's 21-session segment passed with cumulative internal loss 176 B, peak internal loss 0 B, peak PSRAM loss 332 B, and maximum stop time 293 ms. Its summary is `build-unified/hardware-validation/current-assistant-final-21-muted.json`. The exact current image then passed hard-reset boot validation and the six-application product smoke again. The earlier single-image continuous 50-cycle release gate remains the uninterrupted long-run evidence.
 
-The exact image listed above was flashed after all four address ranges passed esptool write-hash verification. The watch then completed five consecutive automated open/run/graceful-Home lifecycles against that image.
+The follow-up also found that Brookesia could treat `SetVolume(0)` as a no-op when its desired volume already defaulted to zero, even though the hardware player path had not been muted. Assistant startup now synchronizes both volume and mute state (`SetMute(true)` when the HAL volume is zero). The hardware log confirms both calls on every muted lifecycle, and the watch remains configured at volume zero after validation.
+
+The first lifecycle after a cold boot is treated as warm-up because Xiaozhi creates persistent shared infrastructure and therefore changes the task and heap baseline. Every measured steady-state session used the post-warm-up baseline. The second stop gate passed, as did all later steady-state gates.
+
+### MCP leak diagnosis and correction
+
+Heap tracing isolated the earlier approximately 20.7 KiB PSRAM loss per Assistant lifecycle to the MCP engine allocated by `esp_mcp_create()`. Brookesia passed that engine to `esp_xiaozhi_chat` as borrowed memory, so chat teardown did not destroy it.
+
+The build overlay now sets `chat_config.owns_mcp_engine = true`. Native `esp_xiaozhi_chat_deinit()` consequently destroys the session engine only after its MCP runtime users stop. Temporary heap-tracing instrumentation was removed and heap tracing was disabled again in the release configuration. The 10- and 20-cycle results above show the leak has dropped from roughly 21 KiB per cycle to a bounded few hundred bytes of PSRAM variation, with no cumulative internal-heap loss.
+
+The causal shutdown sequence remained `close-request -> stopping -> stopped callback -> release -> closed`; Launcher reopened every time. No reset, panic, or watchdog marker occurred during the 50 measured sessions.
+
+A GMF `Got NULL Pointer` diagnostic still appears during Audio deinitialization. It is currently classified as a non-fatal upstream teardown warning because shutdown continues, all resource owners reach zero, the gate passes, Launcher reopens, and no reset follows.
+
+The earlier audible stutter was addressed by buffering playback in PSRAM, starting after a 180 ms prebuffer, draining it on a dedicated task, and separating capture/playback I2S locks. The user subsequently confirmed normal Assistant voice.
 
 ## Compatibility and lifecycle matrix
 
 | Capability | Status | Evidence or remaining check |
 |---|---|---|
-| Existing activation | Passed | Activation completed without generating a new user-visible identity |
-| Manual/listen startup | Passed | Agent session and server audio channel opened |
-| Microphone upload | Passed | Continuous encoded audio packets observed |
+| Existing activation | Passed | Server activation completed without a new user-visible identity |
+| Listen/server session | Passed | Agent and server audio channel opened |
+| Microphone upload | Passed | Encoder/recorder and continuous audio transfer observed |
 | MCP initialization | Passed | Initialize and tools/list received |
-| Wake phrase `你好小智` | Pending manual | Speak phrase and observe WakeStart |
-| User text | Pending manual | Observe recognized text on UI/log |
-| Assistant text/emotion | Pending manual | Observe UI callbacks |
-| TTS audio | Pending manual | Confirm audible, stable playback |
-| Stop while active recording | Passed | Automated Home stopped encoder/recorder and released capture |
-| Stop while idle/playing/reconnecting | Pending campaign | Exercise each timing window explicitly |
-| Repeated entry | Passed | Five consecutive automated opens reached Running |
-| Post-stop runtime residue | Passed | Owners zero; `task_delta=0` and steady-state gate true in all five cycles |
-| Reboot/crash during targeted run | Passed | None observed |
+| TTS audio | Passed manual | User confirmed normal voice after the jitter-buffer fix |
+| Stop while listening/recording/TTS/reconnecting/conversation | Passed | Each profile completed ten times in the 50-cycle campaign |
+| Repeated entry | Passed | 50 measured mixed-profile sessions, after a separate warm-up |
+| Post-stop runtime residue | Passed | Owners zero, task delta zero, steady-state gates true |
+| Reboot/crash | Passed | None observed in lifecycle, product-smoke, or recovery validation |
+| Wake phrase `你好小智` | Pending manual | Speak the phrase and observe WakeStart |
+| User text and emotion/display | Pending manual | Observe transcription and UI presentation |
 
-## Remaining campaigns
+## Remaining manual hardware execution
 
-- Manually exercise the exact two-button gesture once; the shared application path and button-audio ownership policy are automated, but the physical switches were not robotically actuated.
-- Run 10 mixed open/close cycles, including Starting, Listening, recording, TTS playback, and reconnect windows.
-- Run the planned 100-cycle stress/leak campaign and evaluate cumulative internal/PSRAM trends.
-- Manually validate spoken wake phrase, recognized text, assistant text/emotion, and audible TTS.
-- Run full Launcher, Clock, Codex, Badge, IMU, FFT, Setup, boot-sound, display, buttons, sleep/wake, power, BLE/Wi-Fi coexistence, and recovery regression.
+The automated hardware release gate is complete. The following experience and physical-control checks remain manual:
+
+- exercise the exact two-button physical gesture once; the same application close path is covered through USB automation, but the switches were not robotically actuated;
+- manually confirm spoken wake phrase, recognized text, and the full assistant text/emotion display matrix;
+- separately observe boot sound, display correctness, sleep/wake, power behavior, and BLE/Wi-Fi coexistence.
+
+The default `partitions.csv` is now the single-application layout. The duplicate shadow table and obsolete Assistant-only/boot-slot tools have been removed. This phase has no remote update or automatic rollback; recovery continues to use the verified complete Flash backup and a USB full-Flash write.

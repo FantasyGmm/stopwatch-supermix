@@ -71,3 +71,23 @@
 3. `c++ -std=c++17 -Wall -Wextra -Werror -Imain tests/resource_supervisor_test.cpp main/runtime/resource_supervisor.cpp -o /tmp/resource_supervisor_test && /tmp/resource_supervisor_test` - passed (exit 0).
 4. `c++ -std=c++17 -Wall -Wextra -Werror -pthread -Imain tests/shared_wifi_policy_test.cpp main/runtime/resource_supervisor.cpp main/runtime/services/shared_wifi_policy.cpp main/runtime/services/shared_wifi_service.cpp -o /tmp/shared_wifi_policy_test && /tmp/shared_wifi_policy_test` - passed (exit 0).
 5. `bash -n scripts/run_unified_offline_validation.sh && git diff --check` - passed (exit 0).
+
+## Commit-Isolation Fix
+
+- Commit: `85cfc89cb20df0750b78b713c4cdd63f34ed38ea` (`Declare detailed WiFi config AP acquisition`).
+- Committed diff: `main/runtime/services/shared_wifi_policy.h | 1 +`; `1 file changed, 1 insertion(+)`.
+- The committed diff adds exactly `WifiConfigApAcquireResult acquireConfigApDetailed(RuntimeOwner owner);`.
+- `cycleStaForValidation` remains an unstaged working-tree-only declaration in `main/runtime/services/shared_wifi_policy.h`.
+
+### Committed-Snapshot Validation
+
+The clean archive was extracted at `/tmp/stopwatch-task3-clean.1uv71H` from `HEAD=85cfc89cb20df0750b78b713c4cdd63f34ed38ea`.
+
+1. `c++ -std=c++17 -Wall -Wextra -Werror -pthread -Imain tests/shared_wifi_policy_test.cpp main/runtime/resource_supervisor.cpp main/runtime/services/shared_wifi_policy.cpp main/runtime/services/shared_wifi_service.cpp -o /tmp/stopwatch-task3-clean.1uv71H/shared_wifi_policy_test && /tmp/stopwatch-task3-clean.1uv71H/shared_wifi_policy_test`
+   - `shared_wifi_policy_test: PASS (compile and execution exit 0)`.
+2. `c++ -std=c++17 -Wall -Wextra -Werror -DSTOPWATCH_HOST_TEST -Imain tests/wifi_settings_controller_test.cpp main/apps/app_setup/workers/wifi_settings_controller.cpp -o /tmp/stopwatch-task3-clean.1uv71H/wifi_settings_controller_test && /tmp/stopwatch-task3-clean.1uv71H/wifi_settings_controller_test`
+   - `wifi_settings_controller_test: PASS (compile and execution exit 0)`.
+3. `git diff --check HEAD^ HEAD` - passed with no output (exit 0).
+4. `git diff --check` - passed with no output (exit 0).
+5. `git diff --cached --check` - passed with no output (exit 0).
+6. Post-commit `git diff -- main/runtime/services/shared_wifi_policy.h` contains only the pre-existing `cycleStaForValidation` declaration.
