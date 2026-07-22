@@ -87,8 +87,11 @@ class FirmwareUpdateNoticeContractTests(unittest.TestCase):
         app = (ROOT / "main/apps/app_assistant/app_assistant.cpp").read_text(encoding="utf-8")
         self.assertIn("setUpdateVersion", view_h)
         self.assertIn("_update_label", view_h)
-        self.assertIn("发现新版本 v", view_cpp)
-        self.assertIn("LV_ALIGN_BOTTOM_MID", view_cpp)
+        self.assertIn('std::string("v") + canonical_version + " 可用"', view_cpp)
+        self.assertRegex(
+            view_cpp,
+            r"_update_label->align\(LV_ALIGN_TOP_MID,\s*0,\s*status_y\)",
+        )
         self.assertIn("AssistantEventKind::UpdateAvailable", app)
         self.assertIn("setUpdateVersion(event.text.c_str())", app)
         for forbidden in ("Update now", "立即升级", "esp_restart", "esp_ota_"):

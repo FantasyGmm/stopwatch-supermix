@@ -56,6 +56,28 @@ class AssistantSignalCoreUiContractTests(unittest.TestCase):
         self.assertIn("AssistantEventKind::ListeningStatus", conversation_events.group("body"))
         self.assertIn("AssistantEventKind::SpeakingStatus", conversation_events.group("body"))
 
+    def test_view_uses_fixed_signal_core_layout_without_new_assets(self):
+        header = (ROOT / "main/apps/app_assistant/view/assistant_view.h").read_text()
+        source = (ROOT / "main/apps/app_assistant/view/assistant_view.cpp").read_text()
+        combined = header + source
+
+        self.assertIn("std::array<lv_obj_t*, 9>", header)
+        self.assertIn("void update(uint32_t now_ms)", header)
+        self.assertIn("setBattery", header)
+        self.assertIn("setConnected", header)
+        self.assertIn("font_puhui_14_1", source)
+        self.assertNotIn("实时字幕", combined)
+        self.assertNotRegex(combined, r"lv_timer_create|xTaskCreate|TaskHandle_t|FFT|gif")
+        self.assertNotRegex(combined, r"LV_ALIGN_BOTTOM_MID,\s*0,\s*-[0-3][0-9]\b")
+
+    def test_waiting_state_is_visually_distinct_and_silent(self):
+        source = (ROOT / "main/apps/app_assistant/view/assistant_view.cpp").read_text()
+
+        self.assertIn("AssistantVisualState::WaitingWake", source)
+        self.assertIn("等待唤醒", source)
+        self.assertIn("你好小智", source)
+        self.assertIn("inactive_wave", source)
+
 
 if __name__ == "__main__":
     unittest.main()
