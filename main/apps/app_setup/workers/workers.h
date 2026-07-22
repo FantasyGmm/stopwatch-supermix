@@ -62,6 +62,7 @@ public:
 private:
     std::unique_ptr<PercentageAdjustView> _view;
     int _applied_brightness = 0;
+    uint32_t _global_revision = 0;
     bool _save_requested    = false;
 };
 
@@ -78,6 +79,7 @@ public:
 private:
     std::unique_ptr<PercentageAdjustView> _view;
     int _applied_volume  = 0;
+    uint32_t _global_revision = 0;
     bool _save_requested = false;
 };
 

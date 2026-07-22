@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 #include "assistant_runtime.h"
+#include "assistant_output_sync_policy.h"
 #include "assistant_stop_policy.h"
 #include "assistant_trace.h"
 #include "assistant_update_notice_bridge.h"
@@ -218,6 +219,7 @@ class AssistantRuntime::Impl {
 public:
     AssistantStartResult start();
     bool requestStop();
+    bool requestOutputVolumeSync(int volume);
     void update(uint32_t now_ms);
 
     AssistantStateMachine state;
@@ -241,6 +243,7 @@ public:
     std::atomic<bool> callback_xiaozhi_selected{false};
     std::atomic<uint32_t> control_bits{0};
     std::atomic<bool> stop_submitted{false};
+    AssistantOutputSyncPolicy output_sync;
     uint32_t stop_started_ms = 0;
     uint32_t wifi_connect_started_ms = 0;
     TaskHandle_t runtime_task = nullptr;
@@ -308,6 +311,7 @@ AssistantStartResult AssistantRuntime::Impl::start()
     callback_xiaozhi_selected.store(false);
     control_bits.store(0);
     stop_submitted.store(false);
+    output_sync.reset();
     GetAssistantUpdateNoticeBridge().beginSession(session);
     mailbox.discardSessionsBefore(session);
     mailbox.publish({session, AssistantEventKind::State, "Starting"});
@@ -421,6 +425,20 @@ bool AssistantRuntime::Impl::requestStop()
     return true;
 }
 
+bool AssistantRuntime::Impl::requestOutputVolumeSync(int volume)
+{
+    if (!onRuntimeThread()) {
+        return false;
+    }
+    const AssistantRuntimeState current = state.state();
+    if (current != AssistantRuntimeState::Starting &&
+        current != AssistantRuntimeState::Running) {
+        return false;
+    }
+    output_sync.request(volume);
+    return true;
+}
+
 void AssistantRuntime::Impl::update(uint32_t now_ms)
 {
     if (state.state() == AssistantRuntimeState::Stopped && runtime_task == nullptr) {
@@ -474,6 +492,53 @@ void AssistantRuntime::Impl::update(uint32_t now_ms)
         if (!submitSleep(session)) {
             failStart(session, "Initial sleep submission failed");
             return;
+        }
+    }
+
+    output_sync.update(now_ms);
+    if (output_sync.takeTimeoutNotice()) {
+        ESP_LOGW(tag, "output sync still pending; suppressing duplicate submissions");
+    }
+    const auto sync_request = output_sync.begin(
+        now_ms, state.state() == AssistantRuntimeState::Running);
+    if (sync_request) {
+        const int volume = sync_request->volume;
+        const uint32_t generation = sync_request->generation;
+        const auto submission = SubmitAssistantOutputSyncPair(
+            output_sync, generation,
+            [this, session, generation, volume]() {
+                return AudioHelper::call_function_async(
+                    AudioHelper::FunctionId::SetVolume, static_cast<double>(volume),
+                    [this, session, generation](FunctionResult&& result) {
+                        if (callback_session.load() != session) {
+                            return;
+                        }
+                        output_sync.markVolumeResult(generation, result.success);
+                        if (!result.success) {
+                            ESP_LOGW(tag, "output volume sync RPC failed");
+                        }
+                    });
+            },
+            [this, session, generation, volume]() {
+                return AudioHelper::call_function_async(
+                    AudioHelper::FunctionId::SetMute, volume <= 0,
+                    [this, session, generation](FunctionResult&& result) {
+                        if (callback_session.load() != session) {
+                            return;
+                        }
+                        output_sync.markMuteResult(generation, result.success);
+                        if (!result.success) {
+                            ESP_LOGW(tag, "output mute sync RPC failed");
+                        }
+                    });
+            });
+        if (submission.volume_threw || submission.mute_threw) {
+            ESP_LOGE(tag, "exception submitting output sync pair: volume=%d mute=%d",
+                     submission.volume_threw ? 1 : 0,
+                     submission.mute_threw ? 1 : 0);
+        }
+        if (!submission.allSubmitted()) {
+            ESP_LOGW(tag, "failed to submit output sync pair: volume=%d", volume);
         }
     }
 
@@ -940,6 +1005,7 @@ void AssistantRuntime::Impl::releaseSession(uint64_t session_id)
     GetResourceSupervisor().unblock();
     stop_submitted.store(false);
     control_bits.store(0);
+    output_sync.reset();
     state.markStopped(session_id);
     mailbox.publish({session_id, AssistantEventKind::State, "Stopped"});
     const auto resources = GetResourceSupervisor().snapshot();
@@ -992,6 +1058,11 @@ AssistantStartResult AssistantRuntime::start()
 bool AssistantRuntime::requestStop()
 {
     return _impl->requestStop();
+}
+
+bool AssistantRuntime::requestOutputVolumeSync(int volume)
+{
+    return _impl->requestOutputVolumeSync(volume);
 }
 
 void AssistantRuntime::update(uint32_t now_ms)

@@ -4,7 +4,6 @@
  * SPDX-License-Identifier: MIT
  */
 #pragma once
-#include <apps/common/edge_control/edge_control_overlay.h>
 #include <apps/common/key_manager/key_manager.h>
 #include <mooncake.h>
 #include <lvgl.h>
@@ -13,6 +12,7 @@
 #include <string>
 #include <esp_event_base.h>
 #include "codex_alert_carousel.h"
+#include "codex_pending_soft_glow.h"
 #include "runtime/services/shared_wifi_service.h"
 
 class CodexBleTransport;
@@ -31,7 +31,7 @@ public:
 
 private:
     std::unique_ptr<input::KeyManager> _key_manager;
-    std::unique_ptr<EdgeControlOverlay> _edge_controls;
+    std::unique_ptr<CodexPendingSoftGlow> _pending_glow;
 
     lv_obj_t* _panel             = nullptr;
     lv_obj_t* _model_value       = nullptr;
@@ -81,6 +81,7 @@ private:
     bool handle_status_json(const char* data, int length, const char* live_status = "LIVE");
     void set_percent(lv_obj_t* label, lv_obj_t* bar, int value);
     void render_alert();
+    void sync_pending_glow();
     bool update_screen_off_control(uint32_t now_ms);
     void enter_screen_off();
     void wake_screen();

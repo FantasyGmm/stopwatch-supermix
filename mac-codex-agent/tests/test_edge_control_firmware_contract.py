@@ -6,7 +6,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
 class EdgeControlFirmwareContractTests(unittest.TestCase):
-    def test_shared_overlay_owns_rendering_gesture_and_hal_contracts(self):
+    def test_shared_overlay_is_presentation_only_and_centers_markers(self):
         edge_control_root = ROOT / "main" / "apps" / "common" / "edge_control"
         header = (edge_control_root / "edge_control_overlay.h").read_text(
             encoding="utf-8"
@@ -17,64 +17,93 @@ class EdgeControlFirmwareContractTests(unittest.TestCase):
 
         for token in (
             "class EdgeControlOverlay",
-            "EdgeControlLogic _logic",
-            "void init(lv_obj_t* parent",
-            "void update()",
+            "void init(lv_obj_t* parent)",
+            "void show(EdgeControlSide side, int value)",
+            "void hide()",
             "void shutdown()",
-            "bool last_release_consumed() const",
+            "EdgeControlSide _visible_side",
+            "int _current_value",
         ):
             self.assertIn(token, header)
 
         for token in (
-            "GetHAL().setBackLightBrightness",
-            "GetHAL().setSpeakerVolume",
-            "GetHAL().getBackLightBrightness",
-            "GetHAL().getSpeakerVolume",
+            "LV_EVENT_DRAW_MAIN_BEGIN",
+            "lv_obj_remove_event_cb_with_user_data",
+            "draw_sun_icon",
+            "draw_speaker_icon",
+            "draw_percent_label",
+            "_control_arc_radius - _control_arc_width / 2",
+        ):
+            self.assertIn(token, source)
+
+        for forbidden in (
+            "EdgeControlLogic _logic",
+            "GetHAL()",
+            "lv_indev_get_state",
             "_logic.press",
             "_logic.move",
             "_logic.release",
             "_logic.tick",
-            "LV_EVENT_DRAW_MAIN_BEGIN",
-            "lv_obj_remove_event_cb_with_user_data",
-            "_last_release_consumed",
-            "_on_active_changed(true)",
-            "_on_active_changed(false)",
-            "update.value, update.persist",
-            "draw_sun_icon",
-            "draw_speaker_icon",
-            "draw_percent_label",
+        ):
+            self.assertNotIn(forbidden, header + source)
+
+    def test_global_service_owns_touch_and_persists_hal_values(self):
+        edge_control_root = ROOT / "main" / "apps" / "common" / "edge_control"
+        header = (edge_control_root / "global_edge_control_service.h").read_text(
+            encoding="utf-8"
+        )
+        source = (edge_control_root / "global_edge_control_service.cpp").read_text(
+            encoding="utf-8"
+        )
+
+        for token in (
+            "class GlobalEdgeControlService",
+            "bool init()",
+            "void update()",
+            "bool ownsTouch() const",
+            "bool lastReleaseConsumed() const",
+            "uint32_t brightnessRevision() const",
+            "uint32_t volumeRevision() const",
+            "GlobalEdgeControlService& GetGlobalEdgeControlService()",
+        ):
+            self.assertIn(token, header)
+
+        for token in (
+            "lv_layer_top()",
+            "lv_indev_wait_release(indev)",
+            "lv_indev_reset(indev, nullptr)",
+            "GetHAL().setBackLightBrightness(update.value, update.persist)",
+            "GetHAL().setSpeakerVolume(update.value, update.persist)",
+            "_brightness_revision++",
+            "_volume_revision++",
         ):
             self.assertIn(token, source)
 
-    def test_launcher_uses_shared_overlay_and_preserves_horizontal_swipes(self):
+    def test_global_service_updates_before_mooncake_apps(self):
+        main = (ROOT / "main" / "main.cpp").read_text(encoding="utf-8")
+        self.assertIn("GetGlobalEdgeControlService().init()", main)
+        edge_update = main.index("GetGlobalEdgeControlService().update()")
+        mooncake_update = main.index("GetMooncake().update()")
+        self.assertLess(edge_update, mooncake_update)
+
+    def test_launcher_uses_global_ownership_and_preserves_horizontal_swipes(self):
         launcher_root = ROOT / "main" / "apps" / "app_launcher" / "view"
         header = (launcher_root / "view.h").read_text(encoding="utf-8")
         source = (launcher_root / "view.cpp").read_text(encoding="utf-8")
         launcher = header + source
 
-        self.assertIn(
-            "#include <apps/common/edge_control/edge_control_overlay.h>", header
-        )
-        self.assertIn("std::unique_ptr<EdgeControlOverlay> _edge_controls", header)
+        self.assertNotIn("std::unique_ptr<EdgeControlOverlay>", launcher)
         for token in (
+            "GetGlobalEdgeControlService()",
+            "ownsTouch()",
+            "lastReleaseConsumed()",
+            "_edge_control_active",
             "_swipe_start_point",
             "_swipe_start_scroll_x",
             "_swipe_start_ms",
             "handle_horizontal_swipe_release",
-            "_edge_controls->update()",
-            "_edge_controls->last_release_consumed()",
         ):
             self.assertIn(token, launcher)
-
-        callback_start = source.index("_edge_controls->init")
-        callback_end = source.index("});", callback_start)
-        callback = source[callback_start:callback_end]
-        self.assertEqual(
-            callback.count(
-                "_suppress_click_until_ms = GetHAL().millis() + 350;"
-            ),
-            2,
-        )
 
         for legacy in (
             "std::unique_ptr<uitk::lvgl_cpp::Container> _control_overlay",
@@ -87,23 +116,101 @@ class EdgeControlFirmwareContractTests(unittest.TestCase):
         ):
             self.assertNotIn(legacy, launcher)
 
-    def test_codex_uses_shared_overlay_and_full_boot_sound(self):
+    def test_codex_relies_on_global_overlay_and_keeps_boot_sound(self):
         codex_root = ROOT / "main" / "apps" / "app_codex_status"
         header = (codex_root / "app_codex_status.h").read_text(encoding="utf-8")
         source = (codex_root / "app_codex_status.cpp").read_text(encoding="utf-8")
 
+        self.assertNotIn("EdgeControlOverlay", header + source)
+        self.assertIn("GetHAL().playBootSfx()", source)
+        self.assertNotIn("audio::play_tone(660", source)
+
+    def test_watch_face_cancels_raw_gesture_when_global_touch_is_owned(self):
+        source = (
+            ROOT / "main" / "apps" / "app_watch_face" / "view" / "watch_face_manager.cpp"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("GetGlobalEdgeControlService()", source)
         self.assertIn(
-            "#include <apps/common/edge_control/edge_control_overlay.h>", header
+            "controls.ownsTouch() || controls.lastReleaseConsumed()", source
         )
-        self.assertIn("std::unique_ptr<EdgeControlOverlay> _edge_controls", header)
+        self.assertIn("_gesture_pressing = false", source)
+
+    def test_settings_workers_follow_global_brightness_and_volume_changes(self):
+        workers_root = ROOT / "main" / "apps" / "app_setup" / "workers"
+        header = (workers_root / "workers.h").read_text(encoding="utf-8")
+        source = (workers_root / "device.cpp").read_text(encoding="utf-8")
+
+        self.assertIn("void setCurrentValue(int value)", source)
+        self.assertGreaterEqual(header.count("uint32_t _global_revision"), 2)
         for token in (
-            "_edge_controls->init(_panel)",
-            "_edge_controls->update()",
-            "_edge_controls->shutdown()",
-            "GetHAL().playBootSfx()",
+            "GetGlobalEdgeControlService()",
+            "brightnessRevision()",
+            "volumeRevision()",
+            "GetHAL().getBackLightBrightness()",
+            "GetHAL().getSpeakerVolume()",
+            "_view->setCurrentValue",
         ):
             self.assertIn(token, source)
-        self.assertNotIn("audio::play_tone(660", source)
+
+    def test_global_volume_queues_assistant_volume_and_mute_sync(self):
+        service = (
+            ROOT
+            / "main"
+            / "apps"
+            / "common"
+            / "edge_control"
+            / "global_edge_control_service.cpp"
+        ).read_text(encoding="utf-8")
+        supervisor = (ROOT / "main" / "runtime" / "runtime_supervisor.cpp").read_text(
+            encoding="utf-8"
+        )
+        runtime = (
+            ROOT / "main" / "runtime" / "assistant" / "assistant_runtime.cpp"
+        ).read_text(encoding="utf-8")
+        policy = (
+            ROOT
+            / "main"
+            / "runtime"
+            / "assistant"
+            / "assistant_output_sync_policy.cpp"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("requestAssistantVolumeSync(update.value)", service)
+        self.assertIn("requestOutputVolumeSync(volume)", supervisor)
+        self.assertIn("AssistantRuntimeState::Starting", supervisor)
+        self.assertIn("AssistantOutputSyncPolicy output_sync", runtime)
+        self.assertIn("output_sync.request(volume)", runtime)
+        self.assertIn("output_sync.begin(", runtime)
+        self.assertIn("output_sync.markVolumeResult", runtime)
+        self.assertIn("output_sync.markMuteResult", runtime)
+        self.assertIn("SubmitAssistantOutputSyncPair", runtime)
+        self.assertIn("submission.volume_threw", runtime)
+        self.assertIn("submission.mute_threw", runtime)
+        self.assertIn("result.success", runtime)
+        self.assertIn("AudioHelper::call_function_async", runtime)
+        self.assertIn("AudioHelper::FunctionId::SetVolume", runtime)
+        self.assertIn("AudioHelper::FunctionId::SetMute", runtime)
+        self.assertIn("volume <= 0", runtime)
+        self.assertIn("CompletionTimeoutMs", policy)
+        self.assertIn("RetryDelayMs", policy)
+        self.assertIn("compare_exchange_strong", policy)
+
+    def test_offline_runner_executes_edge_and_output_sync_host_tests(self):
+        runner = (ROOT / "scripts" / "run_unified_offline_validation.sh").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("Assistant output sync policy host test", runner)
+        self.assertIn("tests/assistant_output_sync_policy_test.cpp", runner)
+        self.assertIn(
+            "main/runtime/assistant/assistant_output_sync_policy.cpp", runner
+        )
+        self.assertIn("Global edge control host test", runner)
+        self.assertIn("tests/edge_control_logic_test.cpp", runner)
+        self.assertIn(
+            "main/apps/common/edge_control/edge_control_logic.cpp", runner
+        )
 
 
 if __name__ == "__main__":

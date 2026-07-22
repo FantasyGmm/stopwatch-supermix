@@ -4,9 +4,7 @@
 #include <assets/assets.h>
 #include <cmath>
 #include <cstdio>
-#include <hal/hal.h>
 #include <smooth_lvgl.hpp>
-#include <utility>
 
 using smooth_ui_toolkit::lvgl_cpp::Container;
 
@@ -157,14 +155,9 @@ EdgeControlOverlay::~EdgeControlOverlay()
     shutdown();
 }
 
-void EdgeControlOverlay::init(lv_obj_t* parent, ActiveChanged on_active_changed)
+void EdgeControlOverlay::init(lv_obj_t* parent)
 {
     shutdown();
-
-    _on_active_changed      = std::move(on_active_changed);
-    _last_touch_state       = LV_INDEV_STATE_REL;
-    _last_release_consumed  = false;
-    _logic.reset();
 
     if (parent == nullptr) {
         return;
@@ -185,100 +178,35 @@ void EdgeControlOverlay::init(lv_obj_t* parent, ActiveChanged on_active_changed)
     lv_obj_refresh_ext_draw_size(_overlay->get());
 }
 
-void EdgeControlOverlay::update()
+void EdgeControlOverlay::show(EdgeControlSide side, int value)
 {
-    if (_overlay == nullptr) {
+    if (_overlay == nullptr || side == EdgeControlSide::None) {
         return;
     }
 
-    lv_indev_t* indev = GetHAL().lvTouchpad;
-    if (indev == nullptr) {
-        return;
+    _visible_side  = side;
+    _current_value = value;
+    _overlay->setHidden(false);
+    _overlay->moveForeground();
+    invalidate();
+}
+
+void EdgeControlOverlay::hide()
+{
+    if (_overlay != nullptr) {
+        _overlay->setHidden(true);
     }
-
-    const lv_indev_state_t state = lv_indev_get_state(indev);
-    const uint32_t now_ms        = GetHAL().millis();
-
-    if (state == LV_INDEV_STATE_PR) {
-        lv_point_t point;
-        lv_indev_get_point(indev, &point);
-
-        if (_last_touch_state == LV_INDEV_STATE_REL) {
-            if (_logic.visible_side() != EdgeControlSide::None) {
-                _overlay->setHidden(true);
-            }
-            _logic.press(point.x, point.y, GetHAL().getBackLightBrightness(), GetHAL().getSpeakerVolume(), now_ms);
-        }
-
-        apply(_logic.move(point.x, point.y, now_ms));
-    } else if (_last_touch_state == LV_INDEV_STATE_PR) {
-        const EdgeControlUpdate release = _logic.release(now_ms);
-        _last_release_consumed          = release.consumed;
-        apply(release);
-    } else {
-        apply(_logic.tick(now_ms));
-    }
-
-    _last_touch_state = state;
+    _visible_side = EdgeControlSide::None;
 }
 
 void EdgeControlOverlay::shutdown()
 {
     if (_overlay != nullptr) {
-        if (_logic.active()) {
-            const EdgeControlUpdate release = _logic.release(GetHAL().millis());
-            _last_release_consumed          = release.consumed;
-            apply(release);
-        }
-
         lv_obj_remove_event_cb_with_user_data(_overlay->get(), draw_event_cb, this);
         _overlay.reset();
     }
-
-    _logic.reset();
-    _on_active_changed     = {};
-    _last_touch_state      = LV_INDEV_STATE_REL;
-    _last_release_consumed = false;
-}
-
-bool EdgeControlOverlay::last_release_consumed() const
-{
-    return _last_release_consumed;
-}
-
-void EdgeControlOverlay::apply(const EdgeControlUpdate& update)
-{
-    if (_overlay == nullptr) {
-        return;
-    }
-
-    if (update.activated) {
-        _overlay->setHidden(false);
-        _overlay->moveForeground();
-        if (_on_active_changed) {
-            _on_active_changed(true);
-        }
-    }
-
-    if (update.side != EdgeControlSide::None && (update.activated || update.consumed)) {
-        invalidate();
-    }
-
-    if (update.apply) {
-        if (update.side == EdgeControlSide::Brightness) {
-            GetHAL().setBackLightBrightness(update.value, update.persist);
-        } else if (update.side == EdgeControlSide::Volume) {
-            GetHAL().setSpeakerVolume(update.value, update.persist);
-        }
-    }
-
-    if (update.persist && update.consumed && _on_active_changed) {
-        _on_active_changed(false);
-    }
-
-    if (update.hide) {
-        _overlay->setHidden(true);
-    }
+    _visible_side  = EdgeControlSide::None;
+    _current_value = 0;
 }
 
 void EdgeControlOverlay::invalidate()
@@ -306,7 +234,7 @@ void EdgeControlOverlay::draw_event_cb(lv_event_t* event)
         return;
     }
 
-    const EdgeControlSide side = overlay->_logic.visible_side();
+    const EdgeControlSide side = overlay->_visible_side;
     if (code != LV_EVENT_DRAW_MAIN_BEGIN || side == EdgeControlSide::None) {
         return;
     }
@@ -321,7 +249,7 @@ void EdgeControlOverlay::draw_event_cb(lv_event_t* event)
         static_cast<lv_coord_t>(coords.y1 + _control_center),
     };
 
-    const int value = overlay->_logic.current_value();
+    const int value = overlay->_current_value;
     if (side == EdgeControlSide::Brightness) {
         const int start_angle = 135;
         const int end_angle   = 225;
@@ -334,7 +262,8 @@ void EdgeControlOverlay::draw_event_cb(lv_event_t* event)
         draw_arc(layer, center, _control_arc_radius, start_angle, value_angle, _control_arc_width, _brightness_color,
                  LV_OPA_COVER);
 
-        lv_point_t knob = point_on_arc(center.x, center.y, _control_arc_radius, static_cast<float>(value_angle));
+        const int marker_radius = _control_arc_radius - _control_arc_width / 2;
+        lv_point_t knob = point_on_arc(center.x, center.y, marker_radius, static_cast<float>(value_angle));
         draw_circle(layer, knob, 9, _brightness_color, LV_OPA_COVER);
         draw_circle(layer, knob, 4, 0xB7D7FF, LV_OPA_COVER);
 
@@ -352,7 +281,8 @@ void EdgeControlOverlay::draw_event_cb(lv_event_t* event)
         draw_arc(layer, center, _control_arc_radius, value_angle, track_end, _control_arc_width, _volume_color,
                  LV_OPA_COVER);
 
-        lv_point_t knob = point_on_arc(center.x, center.y, _control_arc_radius, static_cast<float>(value_angle));
+        const int marker_radius = _control_arc_radius - _control_arc_width / 2;
+        lv_point_t knob = point_on_arc(center.x, center.y, marker_radius, static_cast<float>(value_angle));
         draw_circle(layer, knob, 9, _volume_color, LV_OPA_COVER);
         draw_circle(layer, knob, 4, 0xC6FFFF, LV_OPA_COVER);
 

@@ -31,6 +31,7 @@ public:
 
     AssistantStartResult start();
     bool requestStop();
+    bool requestOutputVolumeSync(int volume);
     void update(uint32_t now_ms);
     AssistantRuntimeState state() const;
     uint64_t sessionId() const;
