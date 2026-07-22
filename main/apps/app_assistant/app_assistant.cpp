@@ -292,5 +292,7 @@ void AppAssistant::applyRuntimeEvent(const AssistantEvent& event,
             _view->setPrimaryText("Emotion");
             _view->setSecondaryText(event.text.c_str());
             break;
+        case AssistantEventKind::UpdateAvailable:
+            break;
     }
 }

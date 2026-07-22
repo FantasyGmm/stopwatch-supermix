@@ -1,10 +1,34 @@
 import pathlib
+import re
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
 class FirmwareUpdateNoticeContractTests(unittest.TestCase):
+    def test_app_event_switch_is_exhaustive_and_update_notice_is_a_no_op(self):
+        mailbox_h = (ROOT / "main/runtime/assistant/assistant_event_mailbox.h").read_text(encoding="utf-8")
+        app = (ROOT / "main/apps/app_assistant/app_assistant.cpp").read_text(encoding="utf-8")
+
+        enum_body = re.search(r"enum class AssistantEventKind[^\{]*\{(?P<body>.*?)\};", mailbox_h, re.S)
+        self.assertIsNotNone(enum_body)
+        event_kinds = {
+            entry.strip().split("=")[0].strip()
+            for entry in enum_body.group("body").split(",")
+            if entry.strip()
+        }
+
+        function_start = app.index("void AppAssistant::applyRuntimeEvent")
+        function_body = app[function_start:]
+        handled_kinds = set(re.findall(r"case AssistantEventKind::(\w+):", function_body))
+
+        self.assertEqual(handled_kinds, event_kinds)
+        self.assertNotIn("default:", function_body)
+        self.assertRegex(
+            function_body,
+            r"case AssistantEventKind::UpdateAvailable:\s*break;",
+        )
+
     def test_notice_uses_product_nvs_and_a_persistent_mailbox_slot(self):
         store = (ROOT / "main/runtime/assistant/assistant_update_notice_store.cpp").read_text(encoding="utf-8")
         mailbox_h = (ROOT / "main/runtime/assistant/assistant_event_mailbox.h").read_text(encoding="utf-8")

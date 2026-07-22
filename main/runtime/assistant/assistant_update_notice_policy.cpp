@@ -100,11 +100,18 @@ AssistantUpdateStorageAction AssistantUpdateNoticeModel::restore(
 
     const auto stored = ParseFirmwareVersion(*stored_version);
     const auto local = _local_version ? ParseCanonicalFirmwareVersion(*_local_version) : std::nullopt;
-    if (!stored || !local || !IsNewer(*stored, *local)) {
+    if (!stored) {
         return AssistantUpdateStorageAction::Clear;
     }
 
     _pending_version = FormatFirmwareVersion(*stored);
+    if (!local) {
+        return AssistantUpdateStorageAction::None;
+    }
+    if (!IsNewer(*stored, *local)) {
+        _pending_version.clear();
+        return AssistantUpdateStorageAction::Clear;
+    }
     return AssistantUpdateStorageAction::None;
 }
 

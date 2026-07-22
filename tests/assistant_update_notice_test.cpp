@@ -40,6 +40,20 @@ int main()
            AssistantUpdateStorageAction::None);
     assert(offline_reopen.displayText() == "发现新版本 v0.6.0");
 
+    AssistantUpdateNoticeModel malformed_local("not-a-version");
+    assert(malformed_local.restore(std::optional<std::string>("v0.6")) ==
+           AssistantUpdateStorageAction::None);
+    assert(malformed_local.pendingVersion() == "0.6.0");
+
+    AssistantUpdateNoticeModel unavailable_local("");
+    assert(unavailable_local.restore(std::optional<std::string>("v0.6")) ==
+           AssistantUpdateStorageAction::None);
+    assert(unavailable_local.pendingVersion() == "0.6.0");
+
+    AssistantUpdateNoticeModel no_local_remote_notice("");
+    assert(no_local_remote_notice.observe("v9.9.9") == AssistantUpdateStorageAction::None);
+    assert(!no_local_remote_notice.hasPending());
+
     auto& bridge = GetAssistantUpdateNoticeBridge();
     bridge.beginSession(7);
     auto session_token = stopwatch_capture_firmware_update_session_token();
