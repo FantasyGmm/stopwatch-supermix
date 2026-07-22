@@ -28,6 +28,6 @@ python3 "$ROOT/scripts/report_firmware_metrics.py" \
     --partition-table "$ROOT/partitions.csv" \
     --assets-bin "$BUILD_DIR/generated_assets.bin" \
     --max-app-bytes 0x660000 \
-    --max-assets-bytes 0x400000 \
+    --max-assets-bytes 0xA0000 \
     --source unified-release-candidate \
     --output "$BUILD_DIR/unified-runtime-metrics.json"
