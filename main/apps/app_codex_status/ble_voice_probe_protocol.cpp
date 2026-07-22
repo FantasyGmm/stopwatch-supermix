@@ -82,7 +82,8 @@ bool decode_control(const uint8_t* bytes, size_t length, ControlCommand& command
 size_t encode_notification(const Notification& packet, uint8_t* output, size_t capacity)
 {
     const size_t total = kNotificationHeaderSize + packet.payload_length;
-    if (output == nullptr || packet.payload_length > packet.payload.size() ||
+    if (output == nullptr || packet.session == 0 ||
+        packet.payload_length > packet.payload.size() ||
         total > capacity) {
         return 0;
     }

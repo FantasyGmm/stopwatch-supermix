@@ -21,6 +21,63 @@ int main()
     assert(command.duration_ms == 60000);
     assert(!decode_control(start.data(), start.size() - 1, command));
 
+    auto invalid = start;
+    invalid[3] = 1;
+    assert(!decode_control(invalid.data(), invalid.size(), command));
+    invalid = start;
+    invalid[1] = 3;
+    assert(!decode_control(invalid.data(), invalid.size(), command));
+    invalid = start;
+    invalid[2] = 3;
+    assert(!decode_control(invalid.data(), invalid.size(), command));
+    invalid = start;
+    invalid[4] = 0;
+    invalid[5] = 0;
+    assert(!decode_control(invalid.data(), invalid.size(), command));
+
+    invalid = start;
+    invalid[6] = 0xff;
+    invalid[7] = 0x03;
+    invalid[8] = 0;
+    invalid[9] = 0;
+    assert(!decode_control(invalid.data(), invalid.size(), command));
+    invalid = start;
+    invalid[6] = 0x01;
+    invalid[7] = 0x80;
+    invalid[8] = 0;
+    invalid[9] = 0;
+    assert(!decode_control(invalid.data(), invalid.size(), command));
+
+    invalid = start;
+    invalid[2] = static_cast<uint8_t>(Mode::MicrophoneAdpcm);
+    invalid[6] = 0x01;
+    invalid[7] = 0x20;
+    invalid[8] = 0;
+    invalid[9] = 0;
+    assert(!decode_control(invalid.data(), invalid.size(), command));
+
+    invalid = start;
+    invalid[10] = 0xe7;
+    invalid[11] = 0x03;
+    invalid[12] = 0;
+    invalid[13] = 0;
+    assert(!decode_control(invalid.data(), invalid.size(), command));
+    invalid = start;
+    invalid[10] = 0xc1;
+    invalid[11] = 0xd4;
+    invalid[12] = 0x01;
+    invalid[13] = 0;
+    assert(!decode_control(invalid.data(), invalid.size(), command));
+
+    invalid = start;
+    invalid[1] = static_cast<uint8_t>(Command::Stop);
+    invalid[6] = 1;
+    assert(!decode_control(invalid.data(), invalid.size(), command));
+    invalid = start;
+    invalid[1] = static_cast<uint8_t>(Command::Stop);
+    invalid[10] = 1;
+    assert(!decode_control(invalid.data(), invalid.size(), command));
+
     Notification packet;
     packet.kind = Kind::Data;
     packet.session = 0x1234;
@@ -35,6 +92,20 @@ int main()
     assert(encoded[2] == 0x34 && encoded[3] == 0x12);
     assert(encoded[4] == 0x04 && encoded[7] == 0x01);
     assert(encoded[14] == 0x04 && encoded[15] == 0x05 && encoded[16] == 0x06);
+    packet.session = 0;
+    assert(encode_notification(packet, encoded.data(), encoded.size()) == 0);
+    packet.session = 0x1234;
+    assert(encode_notification(packet, nullptr, encoded.size()) == 0);
+    assert(encode_notification(packet, encoded.data(), length - 1) == 0);
+
+    std::array<uint8_t, kStartAckSize> ack = {};
+    assert(encode_start_ack(256, Mode::MicrophoneAdpcm, 8192, ack.data(), ack.size()) ==
+           kStartAckSize);
+    assert(ack[0] == 0x00 && ack[1] == 0x01);
+    assert(ack[2] == 0x02 && ack[3] == 0x00);
+    assert(ack[4] == 0x00 && ack[5] == 0x20 && ack[6] == 0x00 && ack[7] == 0x00);
+    assert(encode_start_ack(256, Mode::Synthetic, 8192, nullptr, ack.size()) == 0);
+    assert(encode_start_ack(256, Mode::Synthetic, 8192, ack.data(), ack.size() - 1) == 0);
 
     StopSummary summary;
     summary.generated_data_packets = 10;
@@ -50,4 +121,14 @@ int main()
            kStopSummarySize);
     assert(summary_bytes[0] == 10 && summary_bytes[4] == 9);
     assert(summary_bytes[28] == 0x00 && summary_bytes[29] == 0x01);
+    assert(encode_stop_summary(summary, nullptr, summary_bytes.size()) == 0);
+    assert(encode_stop_summary(summary, summary_bytes.data(), summary_bytes.size() - 1) == 0);
+
+    std::array<uint8_t, kErrorPayloadSize> error = {};
+    assert(encode_error(ErrorCode::Busy, 0x1234, error.data(), error.size()) ==
+           kErrorPayloadSize);
+    assert(error[0] == 0x02 && error[1] == 0x00);
+    assert(error[2] == 0x34 && error[3] == 0x12);
+    assert(encode_error(ErrorCode::Busy, 0x1234, nullptr, error.size()) == 0);
+    assert(encode_error(ErrorCode::Busy, 0x1234, error.data(), error.size() - 1) == 0);
 }
