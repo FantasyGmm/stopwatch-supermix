@@ -28,15 +28,26 @@ class PartitionEntry:
     offset: int
     size: int
     flags: int
+    raw_name: bytes
+
+
+def canonical_raw_name(name):
+    return name.encode("ascii").ljust(16, b"\0")
+
+
+def expected_entry(name, kind, subtype, offset, size):
+    return PartitionEntry(
+        name, kind, subtype, offset, size, 0, canonical_raw_name(name)
+    )
 
 
 STOPWATCH_SINGLE_SYSTEM_ENTRIES = (
-    PartitionEntry("nvs", 1, 2, 0x9000, 0x10000, 0),
-    PartitionEntry("phy_init", 1, 1, 0x19000, 0x1000, 0),
-    PartitionEntry("app", 0, 0, 0x20000, 0xDC0000, 0),
-    PartitionEntry("storage", 1, 0x81, 0xDE0000, 0x100000, 0),
-    PartitionEntry("assets", 1, 0x82, 0xEE0000, 0xC0000, 0),
-    PartitionEntry("coredump", 1, 3, 0xFA0000, 0x10000, 0),
+    expected_entry("nvs", 1, 2, 0x9000, 0x10000),
+    expected_entry("phy_init", 1, 1, 0x19000, 0x1000),
+    expected_entry("app", 0, 0, 0x20000, 0xDC0000),
+    expected_entry("storage", 1, 0x81, 0xDE0000, 0x100000),
+    expected_entry("assets", 1, 0x82, 0xEE0000, 0xC0000),
+    expected_entry("coredump", 1, 3, 0xFA0000, 0x10000),
 )
 
 
@@ -47,7 +58,8 @@ def profile_mismatch(profile, detail):
 def format_entry(entry):
     return (
         f"{entry.name}(type=0x{entry.type:x}, subtype=0x{entry.subtype:x}, "
-        f"offset=0x{entry.offset:x}, size=0x{entry.size:x}, flags=0x{entry.flags:x})"
+        f"offset=0x{entry.offset:x}, size=0x{entry.size:x}, flags=0x{entry.flags:x}, "
+        f"raw_name={entry.raw_name.hex()})"
     )
 
 
@@ -108,7 +120,9 @@ def read_partition_table(path, profile=None):
             raise PartitionTableError(f"invalid entry magic at byte 0x{index:x}")
         digest.update(chunk)
         name = raw_name.split(b"\0", 1)[0].decode("utf-8")
-        entries.append(PartitionEntry(name, kind, subtype, offset, size, flags))
+        entries.append(
+            PartitionEntry(name, kind, subtype, offset, size, flags, raw_name)
+        )
     if not md5_seen:
         raise PartitionTableError("partition table MD5 record is missing")
     if profile is not None:

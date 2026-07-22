@@ -103,6 +103,26 @@ class PartitionTableReaderTests(unittest.TestCase):
                 self.assertIn(PROFILE_MISMATCH, result.stderr)
                 self.assertIn("entry", result.stderr)
 
+    def test_profile_rejects_noncanonical_raw_label_after_nul(self):
+        data = bytearray(self.table.read_bytes())
+        app_entry_start = ENTRY.size * 2
+        raw_label_start = app_entry_start + 12
+        data[raw_label_start:raw_label_start + 16] = b"app\0NONCANONICAL"
+        md5_start = ENTRY.size * ROW_COUNT
+        data[md5_start + 16:md5_start + ENTRY.size] = hashlib.md5(
+            data[:md5_start]
+        ).digest()
+        self.table.write_bytes(data)
+
+        generic_result = self.run_reader("app", "offset")
+        profile_result = self.run_reader("app", "offset", profile=PROFILE)
+
+        self.assertEqual(generic_result.returncode, 0, generic_result.stderr)
+        self.assertEqual(generic_result.stdout.strip(), "0x20000")
+        self.assertNotEqual(profile_result.returncode, 0)
+        self.assertIn(PROFILE_MISMATCH, profile_result.stderr)
+        self.assertIn("entry", profile_result.stderr)
+
     def test_profile_rejects_wrong_type_subtype_or_flags(self):
         for row_index, replacement in (
             (2, (1, 0, 0x20000, 0xDC0000, "app")),
