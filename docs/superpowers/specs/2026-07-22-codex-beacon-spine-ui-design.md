@@ -12,6 +12,7 @@ The implementation follows the approved second-round mockup, not the previous Pr
 - Keep connection state and host centered below the brand.
 - Reuse the original 96 × 104 pet frames, frame order, durations, and disabled antialiasing.
 - Render the pet at `110 × 120` without a surrounding frame, preserving its center and leaving an 11 px gap to the spine.
+- Shift the pet, spine, and telemetry group 24 px right from the previous revision so its visible content reads as centered.
 - Use one 2 px violet-blue vertical spine between the pet and telemetry.
 - Stack `MODEL` and `EFFORT` on the right, left-aligned on one shared axis.
 - Give the model value enough width for `gpt-5.6-sol` before ellipsis.
@@ -30,9 +31,9 @@ Coordinates use the 466 × 466 screen's top-left origin.
 - Brand text: `x=218, y=32`.
 - Connection status: centered at `y=63`, width `180`.
 - Host: centered at `y=84`, width `320`.
-- Pet image: `x=49, y=104, w=110, h=120`; no dock, border, card, or backdrop.
-- Beacon spine: `x=170, y=112, w=2, h=104`.
-- Telemetry column: `x=190, w=224`.
+- Pet image: `x=73, y=104, w=110, h=120`; no dock, border, card, or backdrop.
+- Beacon spine: `x=194, y=112, w=2, h=104`.
+- Telemetry column: `x=214, w=200`; right edge remains fixed at `x=414`.
 - Model caption/value: `y=114 / 136`.
 - Effort caption/value: `y=170 / 192`.
 - Quota band: `x=55, w=356`.
@@ -44,7 +45,7 @@ Coordinates use the 466 × 466 screen's top-left origin.
 
 ## Visual Tokens
 
-- Instrument black `#070A0F`: background.
+- Pure black `#000000`: background.
 - Panel graphite `#27303E`: divider and quota tracks.
 - Beacon violet `#7C9DFF`: connection state, spine, and project.
 - Signal white `#F2F6F8`: primary values and percentages.
@@ -63,6 +64,7 @@ The redesign changes only widget construction and coordinates. BLE/Wi-Fi handlin
 
 - Native layout-contract test locks exact bounds, ordering, and the model-width requirement.
 - The layout contract verifies that the enlarged pet stays clear of the spine and that quota percentages follow their progress tracks.
+- The layout contract verifies the shifted group coordinates and preserves the telemetry right edge at `x=414`.
 - Existing Codex model and carousel tests must still pass.
 - Full ESP-IDF firmware build must pass.
 - Source inspection must confirm the original logo and pet descriptors are still used.
