@@ -295,5 +295,14 @@ void AppAssistant::applyRuntimeEvent(const AssistantEvent& event,
         case AssistantEventKind::UpdateAvailable:
             _view->setUpdateVersion(event.text.c_str());
             break;
+        case AssistantEventKind::ListeningStatus:
+            if (event.active) {
+                _view->setState(AssistantViewState::Listening);
+            }
+            break;
+        case AssistantEventKind::SpeakingStatus:
+            _view->setState(event.active ? AssistantViewState::Speaking
+                                         : AssistantViewState::Listening);
+            break;
     }
 }

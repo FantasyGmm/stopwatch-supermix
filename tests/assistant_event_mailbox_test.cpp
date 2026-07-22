@@ -66,5 +66,27 @@ int main()
     assert(events[0].text == "Running");
     assert(events[1].kind == AssistantEventKind::UpdateAvailable);
     assert(events[1].text == "0.6.0");
+
+    AssistantEventMailbox statuses(0);
+    statuses.publish({1, AssistantEventKind::State, "Running"});
+    statuses.publish({1, AssistantEventKind::ListeningStatus, {}, true});
+    statuses.publish({1, AssistantEventKind::SpeakingStatus, {}, true});
+    statuses.publish({1, AssistantEventKind::ListeningStatus, {}, false});
+    events = drain(statuses);
+    assert(events.size() == 3);
+    assert(events[0].kind == AssistantEventKind::State);
+    assert(events[1].kind == AssistantEventKind::SpeakingStatus);
+    assert(events[1].active);
+    assert(events[2].kind == AssistantEventKind::ListeningStatus);
+    assert(!events[2].active);
+
+    statuses.publish({1, AssistantEventKind::ListeningStatus, {}, true});
+    statuses.publish({1, AssistantEventKind::SpeakingStatus, {}, true});
+    statuses.publish({2, AssistantEventKind::State, "Starting"});
+    statuses.discardSessionsBefore(2);
+    events = drain(statuses);
+    assert(events.size() == 1);
+    assert(events[0].session_id == 2);
+    assert(events[0].kind == AssistantEventKind::State);
     return 0;
 }

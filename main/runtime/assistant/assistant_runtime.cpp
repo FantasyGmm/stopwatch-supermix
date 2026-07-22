@@ -739,6 +739,7 @@ bool AssistantRuntime::Impl::subscribe(uint64_t session_id)
                              AssistantTraceEvent::Conversation, state.state(),
                              AssistantTraceDetail::Listening, AssistantTraceResult::Accepted,
                              listening ? 1 : 0);
+                mailbox.publish({session_id, AssistantEventKind::ListeningStatus, {}, listening});
             }
         });
     speaking_status = ManagerHelper::subscribe_event(
@@ -751,6 +752,7 @@ bool AssistantRuntime::Impl::subscribe(uint64_t session_id)
                              AssistantTraceEvent::Conversation, state.state(),
                              AssistantTraceDetail::Speaking, AssistantTraceResult::Accepted,
                              speaking ? 1 : 0);
+                mailbox.publish({session_id, AssistantEventKind::SpeakingStatus, {}, speaking});
             }
         });
     emote = ManagerHelper::subscribe_event(
