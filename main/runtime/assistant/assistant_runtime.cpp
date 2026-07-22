@@ -17,6 +17,7 @@
 #include "runtime/service_runtime.h"
 #include "runtime/services/shared_wifi_service.h"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstdint>
@@ -218,6 +219,7 @@ class AssistantRuntime::Impl {
 public:
     AssistantStartResult start();
     bool requestStop();
+    bool requestOutputVolumeSync(int volume);
     void update(uint32_t now_ms);
 
     AssistantStateMachine state;
@@ -241,6 +243,7 @@ public:
     std::atomic<bool> callback_xiaozhi_selected{false};
     std::atomic<uint32_t> control_bits{0};
     std::atomic<bool> stop_submitted{false};
+    std::atomic<int> pending_output_volume{-1};
     uint32_t stop_started_ms = 0;
     uint32_t wifi_connect_started_ms = 0;
     TaskHandle_t runtime_task = nullptr;
@@ -308,6 +311,7 @@ AssistantStartResult AssistantRuntime::Impl::start()
     callback_xiaozhi_selected.store(false);
     control_bits.store(0);
     stop_submitted.store(false);
+    pending_output_volume.store(-1);
     GetAssistantUpdateNoticeBridge().beginSession(session);
     mailbox.discardSessionsBefore(session);
     mailbox.publish({session, AssistantEventKind::State, "Starting"});
@@ -421,6 +425,15 @@ bool AssistantRuntime::Impl::requestStop()
     return true;
 }
 
+bool AssistantRuntime::Impl::requestOutputVolumeSync(int volume)
+{
+    if (!onRuntimeThread() || state.state() != AssistantRuntimeState::Running) {
+        return false;
+    }
+    pending_output_volume.store(std::clamp(volume, 0, 100));
+    return true;
+}
+
 void AssistantRuntime::Impl::update(uint32_t now_ms)
 {
     if (state.state() == AssistantRuntimeState::Stopped && runtime_task == nullptr) {
@@ -474,6 +487,17 @@ void AssistantRuntime::Impl::update(uint32_t now_ms)
         if (!submitSleep(session)) {
             failStart(session, "Initial sleep submission failed");
             return;
+        }
+    }
+
+    const int volume = pending_output_volume.exchange(-1);
+    if (volume >= 0 && state.state() == AssistantRuntimeState::Running) {
+        const bool volume_submitted = AudioHelper::call_function_async(
+            AudioHelper::FunctionId::SetVolume, static_cast<double>(volume));
+        const bool mute_submitted = AudioHelper::call_function_async(
+            AudioHelper::FunctionId::SetMute, volume <= 0);
+        if (!volume_submitted || !mute_submitted) {
+            ESP_LOGW(tag, "failed to submit output volume sync: volume=%d", volume);
         }
     }
 
@@ -938,6 +962,7 @@ void AssistantRuntime::Impl::releaseSession(uint64_t session_id)
     GetResourceSupervisor().unblock();
     stop_submitted.store(false);
     control_bits.store(0);
+    pending_output_volume.store(-1);
     state.markStopped(session_id);
     mailbox.publish({session_id, AssistantEventKind::State, "Stopped"});
     const auto resources = GetResourceSupervisor().snapshot();
@@ -990,6 +1015,11 @@ AssistantStartResult AssistantRuntime::start()
 bool AssistantRuntime::requestStop()
 {
     return _impl->requestStop();
+}
+
+bool AssistantRuntime::requestOutputVolumeSync(int volume)
+{
+    return _impl->requestOutputVolumeSync(volume);
 }
 
 void AssistantRuntime::update(uint32_t now_ms)

@@ -15,6 +15,7 @@ public:
     bool start();
     AssistantStartResult startAssistant();
     bool requestStopAssistant();
+    bool requestAssistantVolumeSync(int volume);
     void update(uint32_t now_ms);
     AssistantRuntimeState assistantState() const;
     bool pollAssistantEvent(AssistantEvent& event);

@@ -153,6 +153,30 @@ class EdgeControlFirmwareContractTests(unittest.TestCase):
         ):
             self.assertIn(token, source)
 
+    def test_global_volume_queues_assistant_volume_and_mute_sync(self):
+        service = (
+            ROOT
+            / "main"
+            / "apps"
+            / "common"
+            / "edge_control"
+            / "global_edge_control_service.cpp"
+        ).read_text(encoding="utf-8")
+        supervisor = (ROOT / "main" / "runtime" / "runtime_supervisor.cpp").read_text(
+            encoding="utf-8"
+        )
+        runtime = (
+            ROOT / "main" / "runtime" / "assistant" / "assistant_runtime.cpp"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("requestAssistantVolumeSync(update.value)", service)
+        self.assertIn("requestOutputVolumeSync(volume)", supervisor)
+        self.assertIn("pending_output_volume", runtime)
+        self.assertIn("AudioHelper::call_function_async", runtime)
+        self.assertIn("AudioHelper::FunctionId::SetVolume", runtime)
+        self.assertIn("AudioHelper::FunctionId::SetMute", runtime)
+        self.assertIn("volume <= 0", runtime)
+
 
 if __name__ == "__main__":
     unittest.main()

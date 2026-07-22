@@ -105,6 +105,17 @@ bool RuntimeSupervisor::requestStopAssistant()
     return _started && onRuntimeThread() && GetAssistantRuntime().requestStop();
 }
 
+bool RuntimeSupervisor::requestAssistantVolumeSync(int volume)
+{
+    if (!_started || !onRuntimeThread()) {
+        return false;
+    }
+    if (GetAssistantRuntime().state() != AssistantRuntimeState::Running) {
+        return true;
+    }
+    return GetAssistantRuntime().requestOutputVolumeSync(volume);
+}
+
 void RuntimeSupervisor::update(uint32_t now_ms)
 {
     if (!_started || !onRuntimeThread()) {

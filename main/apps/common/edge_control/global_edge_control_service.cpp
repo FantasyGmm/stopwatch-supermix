@@ -1,6 +1,7 @@
 #include "global_edge_control_service.h"
 
 #include <hal/hal.h>
+#include <runtime/runtime_supervisor.h>
 
 namespace {
 GlobalEdgeControlService global_edge_control_service;
@@ -114,6 +115,9 @@ void GlobalEdgeControlService::apply(const EdgeControlUpdate& update, lv_indev_t
     } else if (update.apply && update.side == EdgeControlSide::Volume) {
         GetHAL().setSpeakerVolume(update.value, update.persist);
         _volume_revision++;
+        if (update.persist) {
+            GetRuntimeSupervisor().requestAssistantVolumeSync(update.value);
+        }
     }
 
     if (update.persist && update.consumed) {
