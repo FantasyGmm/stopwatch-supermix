@@ -39,6 +39,7 @@ VOICE_CONTROL_UUID = "7a230003-5474-4f50-5741-544348434f44"
 VOICE_TX_UUID = "7a230004-5474-4f50-5741-544348434f44"
 _AGENT_PROCESS_PATTERN = "StopWatch Codex Agent.app/Contents/MacOS/StopWatchCodexAgent"
 _MICROPHONE_SAMPLES_PER_BLOCK = 320
+CLEANUP_TIMEOUT_SECONDS = 1.0
 
 
 class ProbeError(RuntimeError):
@@ -132,7 +133,9 @@ class VoiceProbeClient:
         summary = None
         pcm_samples: list[int] = []
         exception_text = ""
-        previous_sequence: Optional[int] = None
+        cancelled_error: Optional[asyncio.CancelledError] = None
+        report_error: Optional[Exception] = None
+        expected_sequence = 0
         loop = asyncio.get_running_loop()
         notifications: asyncio.Queue[Any] = asyncio.Queue()
 
@@ -210,18 +213,27 @@ class VoiceProbeClient:
                 if start_ack is None:
                     if notification.kind != START_ACK:
                         raise ProbeError("received data before matching start acknowledgment")
+                    if notification.sequence != expected_sequence:
+                        raise ProbeError(
+                            f"StartAck sequence {notification.sequence}; "
+                            f"expected {expected_sequence}"
+                        )
                     start_ack = decode_start_ack(notification.payload)
                     if (
                         start_ack.mode != profile.mode
                         or start_ack.target_bps != profile.target_bps
                     ):
                         raise ProbeError("start acknowledgment does not match requested profile")
+                    expected_sequence += 1
                     continue
 
                 if notification.kind == DATA:
-                    if previous_sequence is not None and notification.sequence <= previous_sequence:
-                        raise ProbeError("sequence regression in data notification")
-                    previous_sequence = notification.sequence
+                    if notification.sequence != expected_sequence:
+                        raise ProbeError(
+                            f"Data sequence {notification.sequence}; "
+                            f"expected {expected_sequence}"
+                        )
+                    expected_sequence += 1
                     metrics.observe(notification, arrival_ns)
                     if profile.mode == MICROPHONE_ADPCM:
                         pcm_samples.extend(
@@ -232,10 +244,20 @@ class VoiceProbeClient:
                     continue
 
                 if notification.kind == STOP_SUMMARY:
+                    if notification.sequence != expected_sequence:
+                        raise ProbeError(
+                            f"StopSummary sequence {notification.sequence}; "
+                            f"expected {expected_sequence}"
+                        )
                     summary = StopSummary.from_payload(notification.payload)
                     continue
 
                 if notification.kind == ERROR:
+                    if notification.sequence != expected_sequence:
+                        raise ProbeError(
+                            f"Error sequence {notification.sequence}; "
+                            f"expected {expected_sequence}"
+                        )
                     code, detail = decode_error(notification.payload)
                     raise ProbeError(f"watch reported probe error {code} (detail {detail})")
 
@@ -243,32 +265,51 @@ class VoiceProbeClient:
 
             if start_ack is None:
                 raise ProbeError("incomplete probe: start acknowledgment was not received")
-        except BaseException as error:
+        except asyncio.CancelledError as error:
+            cancelled_error = error
+            exception_text = "probe cancelled"
+        except Exception as error:
             exception_text = str(error) or error.__class__.__name__
         finally:
-            if client is not None and bool(getattr(client, "is_connected", False)):
+            cleanup_errors = []
+
+            async def bounded_cleanup(label: str, awaitable: Any) -> None:
+                nonlocal cancelled_error
                 try:
-                    await client.write_gatt_char(
+                    await asyncio.wait_for(awaitable, CLEANUP_TIMEOUT_SECONDS)
+                except asyncio.TimeoutError:
+                    cleanup_errors.append(f"{label} cleanup timed out")
+                except asyncio.CancelledError as error:
+                    if cancelled_error is None:
+                        cancelled_error = error
+                    cleanup_errors.append(f"{label} cleanup cancelled")
+                except Exception as error:
+                    cleanup_errors.append(f"{label} cleanup failed: {error}")
+
+            if client is not None and bool(getattr(client, "is_connected", False)):
+                await bounded_cleanup(
+                    "stop command",
+                    client.write_gatt_char(
                         self.voice_control_uuid,
                         encode_stop(profile.session),
                         response=True,
-                    )
-                except BaseException as error:
-                    if not exception_text:
-                        exception_text = f"failed to write stop command: {error}"
+                    ),
+                )
             if client is not None and notifications_started:
-                try:
-                    await client.stop_notify(self.voice_tx_uuid)
-                except BaseException as error:
-                    if not exception_text:
-                        exception_text = f"failed to stop notifications: {error}"
+                await bounded_cleanup(
+                    "stop notifications", client.stop_notify(self.voice_tx_uuid)
+                )
             if client is not None and bool(getattr(client, "is_connected", False)):
-                try:
-                    cleanup_disconnect = True
-                    await client.disconnect()
-                except BaseException as error:
-                    if not exception_text:
-                        exception_text = f"failed to disconnect: {error}"
+                cleanup_disconnect = True
+                await bounded_cleanup("disconnect", client.disconnect())
+
+            if cleanup_errors:
+                cleanup_text = "; ".join(cleanup_errors)
+                exception_text = (
+                    f"{exception_text}; {cleanup_text}"
+                    if exception_text
+                    else cleanup_text
+                )
 
             try:
                 self._write_wav(wav_path, pcm_samples)
@@ -301,8 +342,15 @@ class VoiceProbeClient:
                 "exception": exception_text or None,
                 "wav_path": str(wav_path) if wav_path is not None else None,
             }
-            self._write_report(report_path, report)
+            try:
+                self._write_report(report_path, report)
+            except Exception as error:
+                report_error = error
 
+        if cancelled_error is not None:
+            raise cancelled_error
+        if report_error is not None:
+            raise report_error
         return 0 if not exception_text and metrics_result["automated_pass"] else 1
 
     @staticmethod
@@ -403,7 +451,6 @@ def _build_parser() -> argparse.ArgumentParser:
         command.add_argument("--wav", type=pathlib.Path, required=wav_required)
         command.add_argument("--device-name", default=DEVICE_NAME)
         command.add_argument("--firmware-revision", default="")
-        command.add_argument("--allow-running-agent", action="store_true", help=argparse.SUPPRESS)
 
     return parser
 
@@ -422,7 +469,6 @@ async def _run_cli(arguments: argparse.Namespace) -> int:
         report_path=arguments.report,
         wav_path=arguments.wav,
         firmware_revision=arguments.firmware_revision,
-        allow_running_agent=arguments.allow_running_agent,
     )
 
 
