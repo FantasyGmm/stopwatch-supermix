@@ -9,7 +9,7 @@ Replace the current symmetric instrument-frame layout on the 466 × 466 Codex st
 The implementation follows the approved second-round mockup, not the previous Precision Console spec.
 
 - Keep the existing Codex logo asset, scale, and compact centered brand block.
-- Keep connection state and host centered below the brand.
+- Keep the connection state centered below the brand and do not render the configured host name.
 - Reuse the original 96 × 104 pet frames, frame order, durations, and disabled antialiasing.
 - Render the pet at `110 × 120` without a surrounding frame, preserving its center and leaving an 11 px gap to the spine.
 - Shift the pet, spine, and telemetry group 24 px right from the previous revision so its visible content reads as centered.
@@ -30,7 +30,7 @@ Coordinates use the 466 × 466 screen's top-left origin.
 - Logo: `x=168, y=22`, existing scale `170`.
 - Brand text: `x=218, y=32`.
 - Connection status: centered at `y=63`, width `180`.
-- Host: centered at `y=84`, width `320`.
+- Host name: not rendered; no placeholder or replacement text.
 - Pet image: `x=73, y=104, w=110, h=120`; no dock, border, card, or backdrop.
 - Beacon spine: `x=194, y=112, w=2, h=104`.
 - Telemetry column: `x=214, w=200`; right edge remains fixed at `x=414`.
@@ -58,13 +58,14 @@ No gradients, shadows, glow, rounded cards, or decorative red model frame are al
 
 ## Behavior Preservation
 
-The redesign changes only widget construction and coordinates. BLE/Wi-Fi handling, JSON parsing, quota mapping, alert carousel ordering, edge controls, screen-off behavior, battery updates, and pet timer behavior remain untouched.
+The redesign changes only widget construction and coordinates. BLE/Wi-Fi handling, configured host storage, JSON parsing, quota mapping, alert carousel ordering, edge controls, screen-off behavior, battery updates, and pet timer behavior remain untouched. Host updates may still occur internally but have no visible label.
 
 ## Verification
 
 - Native layout-contract test locks exact bounds, ordering, and the model-width requirement.
 - The layout contract verifies that the enlarged pet stays clear of the spine and that quota percentages follow their progress tracks.
 - The layout contract verifies the shifted group coordinates and preserves the telemetry right edge at `x=414`.
+- The source contract verifies that no host-name label is constructed while connection status remains visible.
 - Existing Codex model and carousel tests must still pass.
 - Full ESP-IDF firmware build must pass.
 - Source inspection must confirm the original logo and pet descriptors are still used.
