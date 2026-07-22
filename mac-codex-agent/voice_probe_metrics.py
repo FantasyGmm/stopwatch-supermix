@@ -212,7 +212,7 @@ class ProbeMetrics:
         )
         if not all(self._is_nonnegative_int(value) for value in numeric_fields):
             return False
-        if summary.elapsed_ms == 0 or summary.negotiated_mtu < 23:
+        if summary.elapsed_ms == 0 or not 23 <= summary.negotiated_mtu <= 527:
             return False
         if summary.accepted_data_packets > summary.generated_data_packets:
             return False
@@ -224,12 +224,13 @@ class ProbeMetrics:
             if summary.generated_data_packets > 0 and summary.captured_pcm_samples == 0:
                 return False
             expected_pcm_samples = summary.elapsed_ms * 16
-            duration_error_percent = (
-                abs(summary.captured_pcm_samples - expected_pcm_samples)
-                / expected_pcm_samples
-                * 100
+            capture_delta_samples = abs(
+                summary.captured_pcm_samples - expected_pcm_samples
             )
-            if duration_error_percent > 1:
+            # Allow 1% clock/duration error plus one discarded 320-sample final block:
+            # abs(captured - elapsed_ms * 16) <= elapsed_ms * 16 * 0.01 + 320.
+            capture_tolerance_samples = expected_pcm_samples * 0.01 + 320
+            if capture_delta_samples > capture_tolerance_samples:
                 return False
         return True
 

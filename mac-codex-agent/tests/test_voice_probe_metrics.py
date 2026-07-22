@@ -400,6 +400,54 @@ class VoiceProbeMetricsTests(unittest.TestCase):
                 self.assertFalse(result["summary_semantically_valid"])
                 self.assertIn("invalid_summary", result["failure_reasons"])
 
+    def test_microphone_summary_allows_one_final_block_of_capture_quantization(self):
+        metrics = ProbeMetrics(
+            session=9,
+            mode=MICROPHONE_ADPCM,
+            target_bps=8192,
+        )
+        for sequence, timestamp_ms in ((1, 0), (2, 100)):
+            metrics.observe(
+                Notification(DATA, 9, sequence, timestamp_ms, bytes(164)),
+                arrival_ns=timestamp_ms * 1_000_000,
+            )
+        result = metrics.finish(
+            summary=StopSummary(2, 2, 0, 0, 1019, 328, 16000, 256),
+            disconnected=False,
+            decoded_pcm_samples=16000,
+        )
+        self.assertTrue(result["summary_semantically_valid"])
+        self.assertNotIn("invalid_summary", result["failure_reasons"])
+
+    def test_summary_enforces_nimble_att_mtu_upper_bound(self):
+        for mtu, expected_valid in ((527, True), (528, False)):
+            with self.subTest(mtu=mtu):
+                metrics = ProbeMetrics(session=9, mode=SYNTHETIC, target_bps=8192)
+                for sequence, size in ((1, 4096), (2, 4096)):
+                    timestamp_ms = (sequence - 1) * 100
+                    metrics.observe(
+                        Notification(
+                            DATA,
+                            9,
+                            sequence,
+                            timestamp_ms,
+                            expected_synthetic_payload(sequence, size),
+                        ),
+                        arrival_ns=timestamp_ms * 1_000_000,
+                    )
+                result = metrics.finish(
+                    summary=StopSummary(2, 2, 0, 0, 1000, 8192, 0, mtu),
+                    disconnected=False,
+                )
+                self.assertEqual(
+                    result["summary_semantically_valid"],
+                    expected_valid,
+                )
+                self.assertEqual(
+                    "invalid_summary" in result["failure_reasons"],
+                    not expected_valid,
+                )
+
 
 if __name__ == "__main__":
     unittest.main()
