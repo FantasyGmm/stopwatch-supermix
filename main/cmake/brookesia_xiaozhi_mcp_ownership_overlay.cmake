@@ -5,6 +5,19 @@ function(apply_brookesia_xiaozhi_mcp_ownership_overlay)
         espressif__brookesia_agent_xiaozhi COMPONENT_DIR)
 
     set(upstream_xiaozhi_agent "${xiaozhi_agent_dir}/src/agent_xiaozhi.cpp")
+    set(xiaozhi_info_include [=[#include "esp_xiaozhi_info.h"]=])
+    set(xiaozhi_info_include_with_version_bridge [=[#include "esp_xiaozhi_info.h"
+
+extern "C" char* stopwatch_duplicate_firmware_version();
+extern "C" void stopwatch_report_remote_firmware_version(const char* version);]=])
+    set(unversioned_info_request [=[        esp_xiaozhi_chat_info_t info{};
+        auto ret = esp_xiaozhi_chat_get_info(&info);]=])
+    set(versioned_info_request [=[        esp_xiaozhi_chat_info_t info{};
+        info.current_version = stopwatch_duplicate_firmware_version();
+        auto ret = esp_xiaozhi_chat_get_info(&info);
+        if (ret == ESP_OK && info.firmware_version != nullptr) {
+            stopwatch_report_remote_firmware_version(info.firmware_version);
+        }]=])
     set(borrowed_mcp_engine [=[    chat_config.mcp_engine = mcp_engine;
     auto ret_init = esp_xiaozhi_chat_init(&chat_config, &chat_handle_);]=])
     set(owned_mcp_engine [=[    chat_config.mcp_engine = mcp_engine;
@@ -70,6 +83,22 @@ function(apply_brookesia_xiaozhi_mcp_ownership_overlay)
             // path that invokes on_wakeup() and opens the audio channel.]=])
 
     file(READ "${upstream_xiaozhi_agent}" xiaozhi_agent_source)
+    string(FIND "${xiaozhi_agent_source}" "${xiaozhi_info_include}"
+        xiaozhi_info_include_position)
+    if(xiaozhi_info_include_position EQUAL -1)
+        message(FATAL_ERROR
+            "Brookesia XiaoZhi includes changed; review the version bridge overlay")
+    endif()
+    string(REPLACE "${xiaozhi_info_include}" "${xiaozhi_info_include_with_version_bridge}"
+        xiaozhi_agent_source "${xiaozhi_agent_source}")
+    string(FIND "${xiaozhi_agent_source}" "${unversioned_info_request}"
+        info_request_position)
+    if(info_request_position EQUAL -1)
+        message(FATAL_ERROR
+            "Brookesia XiaoZhi info request changed; review the version bridge overlay")
+    endif()
+    string(REPLACE "${unversioned_info_request}" "${versioned_info_request}"
+        xiaozhi_agent_source "${xiaozhi_agent_source}")
     string(FIND "${xiaozhi_agent_source}" "${borrowed_mcp_engine}"
         ownership_position)
     if(ownership_position EQUAL -1)
