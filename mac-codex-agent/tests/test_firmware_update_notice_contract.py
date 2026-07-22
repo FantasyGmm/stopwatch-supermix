@@ -1,3 +1,4 @@
+import csv
 import pathlib
 import re
 import unittest
@@ -6,6 +7,46 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
 class FirmwareUpdateNoticeContractTests(unittest.TestCase):
+    def test_remote_install_is_structurally_disabled(self):
+        rows = []
+        with (ROOT / "partitions.csv").open(newline="", encoding="utf-8") as handle:
+            for row in csv.reader(handle):
+                values = [value.strip() for value in row]
+                if values and values[0] and not values[0].startswith("#"):
+                    rows.append(values)
+        apps = [row for row in rows if len(row) >= 3 and row[1] == "app"]
+        self.assertEqual([(row[0], row[2]) for row in apps], [("app", "factory")])
+        self.assertFalse(any(row[0] == "otadata" for row in rows))
+        self.assertFalse(any(row[2] in ("ota_0", "ota_1") for row in apps))
+
+    def test_product_sources_have_no_remote_install_path(self):
+        forbidden = re.compile(
+            r"esp_https_ota|esp_ota_begin|esp_ota_write|"
+            r"esp_ota_end|esp_ota_set_boot_partition|esp_restart"
+        )
+        offenders = []
+        roots = (
+            ROOT / "main/runtime/assistant",
+            ROOT / "main/apps/app_assistant",
+            ROOT / "main/cmake",
+        )
+        for root in roots:
+            for path in root.rglob("*"):
+                if path.suffix in {".c", ".cc", ".cpp", ".h", ".hpp", ".cmake"}:
+                    if forbidden.search(path.read_text(encoding="utf-8")):
+                        offenders.append(path.relative_to(ROOT).as_posix())
+        self.assertEqual(offenders, [])
+
+    def test_bootstrap_endpoint_remains_metadata_only(self):
+        defaults = (ROOT / "sdkconfig.defaults").read_text(encoding="utf-8")
+        self.assertIn(
+            'CONFIG_XIAOZHI_OTA_URL="https://api.tenclass.net/xiaozhi/ota/"',
+            defaults,
+        )
+        overlay = (ROOT / "main/cmake/brookesia_xiaozhi_mcp_ownership_overlay.cmake").read_text(encoding="utf-8")
+        self.assertIn("info.firmware_version", overlay)
+        self.assertNotIn("info.firmware_url", overlay)
+
     def test_app_event_switch_is_exhaustive_and_routes_update_notice_to_view(self):
         mailbox_h = (ROOT / "main/runtime/assistant/assistant_event_mailbox.h").read_text(encoding="utf-8")
         app = (ROOT / "main/apps/app_assistant/app_assistant.cpp").read_text(encoding="utf-8")
