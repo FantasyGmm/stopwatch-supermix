@@ -42,29 +42,32 @@ int main()
 
     auto& bridge = GetAssistantUpdateNoticeBridge();
     bridge.beginSession(7);
-    stopwatch_report_remote_firmware_version("v0.6.0");
+    auto session_token = stopwatch_capture_firmware_update_session_token();
+    assert(session_token != 0);
+    stopwatch_report_remote_firmware_version(session_token, "v0.6.0");
     auto report = bridge.consume();
     assert(report.has_value());
     assert(report->session_id == 7);
     assert(report->version == "v0.6.0");
 
     bridge.endSession(7);
-    stopwatch_report_remote_firmware_version("v9.9.9");
+    stopwatch_report_remote_firmware_version(session_token, "v9.9.9");
     assert(!bridge.consume());
 
     bridge.beginSession(8);
-    stopwatch_report_remote_firmware_version(nullptr);
-    stopwatch_report_remote_firmware_version("");
+    session_token = stopwatch_capture_firmware_update_session_token();
+    stopwatch_report_remote_firmware_version(session_token, nullptr);
+    stopwatch_report_remote_firmware_version(session_token, "");
     assert(!bridge.consume());
-    stopwatch_report_remote_firmware_version("v0.6.0");
-    stopwatch_report_remote_firmware_version("v0.7.0");
+    stopwatch_report_remote_firmware_version(session_token, "v0.6.0");
+    stopwatch_report_remote_firmware_version(session_token, "v0.7.0");
     report = bridge.consume();
     assert(report.has_value());
     assert(report->session_id == 8);
     assert(report->version == "v0.7.0");
     assert(!bridge.consume());
 
-    stopwatch_report_remote_firmware_version("v0.8.0");
+    stopwatch_report_remote_firmware_version(session_token, "v0.8.0");
     bridge.endSession(9);
     report = bridge.consume();
     assert(report.has_value());
@@ -72,9 +75,24 @@ int main()
     bridge.endSession(8);
 
     bridge.beginSession(10);
-    stopwatch_report_remote_firmware_version("v1.0.0");
+    session_token = stopwatch_capture_firmware_update_session_token();
+    stopwatch_report_remote_firmware_version(session_token, "v1.0.0");
     bridge.endSession(10);
     assert(!bridge.consume());
+
+    bridge.beginSession(11);
+    const auto stale_session_token = stopwatch_capture_firmware_update_session_token();
+    bridge.beginSession(12);
+    const auto active_session_token = stopwatch_capture_firmware_update_session_token();
+    assert(stale_session_token != active_session_token);
+    stopwatch_report_remote_firmware_version(stale_session_token, "v8.8.8");
+    assert(!bridge.consume());
+    stopwatch_report_remote_firmware_version(active_session_token, "v0.9.0");
+    report = bridge.consume();
+    assert(report.has_value());
+    assert(report->session_id == 12);
+    assert(report->version == "v0.9.0");
+    bridge.endSession(12);
 
     char* local = stopwatch_duplicate_firmware_version();
     assert(local != nullptr);

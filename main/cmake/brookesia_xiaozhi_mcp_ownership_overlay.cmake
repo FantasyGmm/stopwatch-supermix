@@ -8,15 +8,39 @@ function(apply_brookesia_xiaozhi_mcp_ownership_overlay)
     set(xiaozhi_info_include [=[#include "esp_xiaozhi_info.h"]=])
     set(xiaozhi_info_include_with_version_bridge [=[#include "esp_xiaozhi_info.h"
 
+#include <stdint.h>
+
 extern "C" char* stopwatch_duplicate_firmware_version();
-extern "C" void stopwatch_report_remote_firmware_version(const char* version);]=])
+extern "C" uint64_t stopwatch_capture_firmware_update_session_token();
+extern "C" void stopwatch_report_remote_firmware_version(uint64_t session_token, const char* version);]=])
     set(unversioned_info_request [=[        esp_xiaozhi_chat_info_t info{};
-        auto ret = esp_xiaozhi_chat_get_info(&info);]=])
+        auto ret = esp_xiaozhi_chat_get_info(&info);
+        BROOKESIA_CHECK_ESP_ERR_RETURN(
+            ret, true, "Failed to get info, retry in %1% ms", BROOKESIA_AGENT_XIAOZHI_GET_HTTP_INFO_INTERVAL_MS
+        );
+
+        lib_utils::FunctionGuard free_info_guard([this, &info]() {
+            BROOKESIA_LOG_TRACE_GUARD_WITH_THIS();
+            esp_xiaozhi_chat_free_info(&info);
+        });]=])
     set(versioned_info_request [=[        esp_xiaozhi_chat_info_t info{};
+        const auto update_notice_session_token = stopwatch_capture_firmware_update_session_token();
         info.current_version = stopwatch_duplicate_firmware_version();
         auto ret = esp_xiaozhi_chat_get_info(&info);
+        if (ret != ESP_OK) {
+            esp_xiaozhi_chat_free_info(&info);
+        }
+        BROOKESIA_CHECK_ESP_ERR_RETURN(
+            ret, true, "Failed to get info, retry in %1% ms", BROOKESIA_AGENT_XIAOZHI_GET_HTTP_INFO_INTERVAL_MS
+        );
+
+        lib_utils::FunctionGuard free_info_guard([this, &info]() {
+            BROOKESIA_LOG_TRACE_GUARD_WITH_THIS();
+            esp_xiaozhi_chat_free_info(&info);
+        });
+
         if (ret == ESP_OK && info.firmware_version != nullptr) {
-            stopwatch_report_remote_firmware_version(info.firmware_version);
+            stopwatch_report_remote_firmware_version(update_notice_session_token, info.firmware_version);
         }]=])
     set(borrowed_mcp_engine [=[    chat_config.mcp_engine = mcp_engine;
     auto ret_init = esp_xiaozhi_chat_init(&chat_config, &chat_handle_);]=])
