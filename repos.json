@@ -2,49 +2,72 @@
     {
         "url": "https://github.com/Forairaaaaa/mooncake.git",
         "path": "components/mooncake",
-        "branch": "v2.3.3"
+        "revision": "572a7e488641f1c3f22e85d65c27f095ecf27d12",
+        "release": "v2.3.3",
+        "with_submodules": false
     },
     {
         "url": "https://github.com/Forairaaaaa/mooncake_log.git",
         "path": "components/mooncake_log",
-        "branch": "v1.5.0"
+        "revision": "554d55cd8c6e551b911b99cad274a46929f05bae",
+        "release": "v1.5.0",
+        "with_submodules": false
     },
     {
         "url": "https://github.com/Forairaaaaa/smooth_ui_toolkit.git",
         "path": "components/smooth_ui_toolkit",
-        "branch": "v2.12.1"
+        "revision": "2c8b6c572192047636c78ea3ae95dc5be4955fce",
+        "release": "v2.12.1",
+        "with_submodules": false
     },
     {
         "url": "https://github.com/m5stack/M5GFX.git",
         "path": "components/M5GFX",
-        "branch": "0.2.19"
+        "revision": "53a7184601f3667b030ba141c58b87ce2acfaa2a",
+        "release": "0.2.19",
+        "with_submodules": false
     },
     {
         "url": "https://github.com/bblanchon/ArduinoJson.git",
         "path": "components/ArduinoJson",
-        "branch": "v7.4.3"
+        "revision": "77771d3c07668e01d8f52acb03910c1110bb373f",
+        "release": "v7.4.3",
+        "with_submodules": false
     },
     {
         "url": "https://github.com/lvgl/lvgl.git",
         "path": "components/lvgl",
-        "branch": "v9.5.0"
+        "revision": "85aa60d18b3d5e5588d7b247abf90198f07c8a63",
+        "release": "v9.5.0",
+        "with_submodules": false
     },
     {
         "url": "https://github.com/m5stack/M5IOE1",
         "path": "components/M5IOE1",
-        "branch": "1.0.8",
-        "patch": "patches/M5IOE1.patch"
+        "revision": "37db04861687858b6748f5dbd1a84439a6635c46",
+        "release": "1.0.8",
+        "with_submodules": false,
+        "patch": {
+            "path": "patches/M5IOE1.patch",
+            "sha256": "5b2bd8fd54742c9f9968124d188c32dac98f8a15916af08b31f829d6b3f84778"
+        }
     },
     {
         "url": "https://github.com/m5stack/M5PM1",
         "path": "components/M5PM1",
-        "branch": "1.0.6",
-        "patch": "patches/M5PM1.patch"
+        "revision": "8f1f1a60b3040088cd0ca2b9eb9d024ccc4d907f",
+        "release": "1.0.6",
+        "with_submodules": false,
+        "patch": {
+            "path": "patches/M5PM1.patch",
+            "sha256": "7b4bffc382a49ecdd8520b67c15ebfa4f83572ced94faa27f4df2e799d7bc9a5"
+        }
     },
     {
         "url": "https://github.com/lbuque/BMI270_BMM150_Sensor.git",
         "path": "components/BMI270_BMM150_Sensor",
-        "branch": "0.1.2",
+        "revision": "ae8bc480bca638d3458e65d5e9a4fff4270c1430",
+        "release": "0.1.2",
         "with_submodules": true
     }
 ]

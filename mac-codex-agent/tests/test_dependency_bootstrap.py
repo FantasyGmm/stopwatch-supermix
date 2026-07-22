@@ -21,6 +21,7 @@ from dependency_bootstrap import (  # noqa: E402
     PatchSpec,
     RepoSpec,
     content_tree_hash,
+    load_manifest,
     materialize_all,
     parse_manifest,
     verify_all,
@@ -72,6 +73,26 @@ def create_local_upstream(root, name="upstream", content="before\n"):
 
 
 class DependencyManifestTests(unittest.TestCase):
+    def test_production_manifest_uses_verified_revisions(self):
+        expected = {
+            "components/mooncake": "572a7e488641f1c3f22e85d65c27f095ecf27d12",
+            "components/mooncake_log": "554d55cd8c6e551b911b99cad274a46929f05bae",
+            "components/smooth_ui_toolkit": "2c8b6c572192047636c78ea3ae95dc5be4955fce",
+            "components/M5GFX": "53a7184601f3667b030ba141c58b87ce2acfaa2a",
+            "components/ArduinoJson": "77771d3c07668e01d8f52acb03910c1110bb373f",
+            "components/lvgl": "85aa60d18b3d5e5588d7b247abf90198f07c8a63",
+            "components/M5IOE1": "37db04861687858b6748f5dbd1a84439a6635c46",
+            "components/M5PM1": "8f1f1a60b3040088cd0ca2b9eb9d024ccc4d907f",
+            "components/BMI270_BMM150_Sensor": "ae8bc480bca638d3458e65d5e9a4fff4270c1430",
+        }
+
+        actual = {
+            spec.path.relative_to(ROOT).as_posix(): spec.revision
+            for spec in load_manifest(ROOT)
+        }
+
+        self.assertEqual(actual, expected)
+
     def test_parses_exact_revision_and_patch_hash(self):
         specs = parse_manifest([valid_entry()], ROOT)
 
