@@ -25,6 +25,39 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         self.assertIn("event->mtu.value", source)
         self.assertIn("negotiated_mtu - 3", source)
 
+    def test_controller_is_bounded_and_not_attached_to_a_button(self):
+        controller = (
+            ROOT / "main/apps/app_codex_status/ble_voice_probe_controller.cpp"
+        ).read_text()
+        app = (ROOT / "main/apps/app_codex_status/app_codex_status.cpp").read_text()
+        self.assertIn("xQueueCreate(kVoicePacketQueueDepth", controller)
+        self.assertIn("kMaxConsecutiveQueueFailures", controller)
+        self.assertIn("fill_synthetic_payload", controller)
+        self.assertIn("retry_start_ack", controller)
+        self.assertIn("_start_ack_pending", controller)
+        self.assertIn("_summary_prepared", controller)
+        self.assertIn("take_voice_control", app)
+        self.assertIn("notify_voice", app)
+        self.assertIn("handle_disconnect", app)
+        self.assertIn("shutdown", app)
+        self.assertNotIn("Typeless", controller)
+        self.assertNotIn("KeyEvent::Right", controller)
+        self.assertNotIn("start_session(key_event", app)
+
+    def test_controller_shutdown_is_bounded_and_owns_worker_deletion(self):
+        controller = (
+            ROOT / "main/apps/app_codex_status/ble_voice_probe_controller.cpp"
+        ).read_text()
+        shutdown = controller.split("void BleVoiceProbeController::shutdown()", 1)[1].split(
+            "void BleVoiceProbeController::producer_entry", 1
+        )[0]
+        self.assertIn("kProducerStopTimeout", shutdown)
+        self.assertIn(
+            "vTaskDelete(static_cast<TaskHandle_t>(_producer_task))", shutdown
+        )
+        self.assertNotIn("portMAX_DELAY", shutdown)
+        self.assertIn("vTaskSuspend(nullptr)", controller)
+
 
 if __name__ == "__main__":
     unittest.main()

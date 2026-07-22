@@ -6,6 +6,7 @@
 #include "app_codex_status.h"
 #include "assets/codex_pet_assets.h"
 #include "codex_ble_transport.h"
+#include "ble_voice_probe_controller.h"
 #include "codex_status_ui_layout.h"
 #include "codex_status_model.h"
 #include <assets/assets.h>
@@ -15,6 +16,7 @@
 #include <esp_websocket_client.h>
 #include <mooncake_log.h>
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstdio>
 #include <cstring>
@@ -253,6 +255,10 @@ void AppCodexStatus::onOpen()
     if (_transport_mode != "wifi") {
         _ble_transport = std::make_unique<CodexBleTransport>();
         if (_ble_transport->start(_ble_name)) {
+            _voice_probe = std::make_unique<BleVoiceProbeController>();
+            if (!_voice_probe->initialize()) {
+                _voice_probe.reset();
+            }
             set_status("BLE PAIR", kTextDim);
             set_host_text(_ble_name.c_str());
         } else {
@@ -295,6 +301,27 @@ void AppCodexStatus::onRunning()
     const bool ble_connected = _ble_transport && _ble_transport->connected();
     if (_ble_transport) {
         _ble_transport->poll(now);
+        if (_voice_probe) {
+            CodexBleVoiceControl control;
+            while (_ble_transport->take_voice_control(control)) {
+                _voice_probe->handle_control(
+                    control,
+                    _ble_transport->voice_subscribed(),
+                    _ble_transport->negotiated_mtu(),
+                    now);
+            }
+            _voice_probe->poll(now);
+            ble_voice_probe::Notification notification;
+            while (_voice_probe->take_notification(notification)) {
+                std::array<uint8_t, ble_voice_probe::kMaxNotificationSize> bytes = {};
+                const size_t length = ble_voice_probe::encode_notification(
+                    notification, bytes.data(), bytes.size());
+                _voice_probe->record_notify_result(
+                    notification.kind,
+                    _ble_transport->notify_voice(bytes.data(), length),
+                    now);
+            }
+        }
         CodexBleMessage message;
         while (_ble_transport->take_message(message)) {
             const bool handled = handle_status_json(
@@ -313,6 +340,9 @@ void AppCodexStatus::onRunning()
             set_status("BLE WAIT", kTextDim);
             set_host_text(_ble_name.c_str());
         } else if (!ble_connected && _ble_was_connected) {
+            if (_voice_probe) {
+                _voice_probe->handle_disconnect();
+            }
             _ble_was_connected = false;
             _ble_wait_started_ms = now;
             set_status("BLE PAIR", kTextDim);
@@ -357,6 +387,10 @@ void AppCodexStatus::onClose()
         wake_screen();
     }
     stop_network_fallback();
+    if (_voice_probe) {
+        _voice_probe->shutdown();
+        _voice_probe.reset();
+    }
     if (_ble_transport) {
         _ble_transport->stop();
         _ble_transport.reset();

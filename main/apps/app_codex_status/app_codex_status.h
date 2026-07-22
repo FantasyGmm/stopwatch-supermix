@@ -16,6 +16,7 @@
 #include "runtime/services/shared_wifi_service.h"
 
 class CodexBleTransport;
+class BleVoiceProbeController;
 struct esp_websocket_event_data;
 typedef struct esp_websocket_client* esp_websocket_client_handle_t;
 
@@ -50,6 +51,7 @@ private:
     lv_timer_t* _pet_timer       = nullptr;
     esp_websocket_client_handle_t _ws_client = nullptr;
     std::unique_ptr<CodexBleTransport> _ble_transport;
+    std::unique_ptr<BleVoiceProbeController> _voice_probe;
     WifiStaLease _wifi_lease;
     std::string _server_host;
     std::string _transport_mode;
