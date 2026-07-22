@@ -140,13 +140,30 @@ class UnifiedRuntimeFirmwareContractTest(unittest.TestCase):
             self.assertNotIn(forbidden, view_header.lower())
             self.assertNotIn(forbidden, view_source.lower())
 
-    def test_default_partition_table_has_one_factory_application(self):
+    def test_default_partition_table_has_approved_single_system_layout(self):
         rows = parse_partition_csv("partitions.csv")
-        app_rows = [row for row in rows if len(row) >= 3 and row[1] == "app"]
         self.assertEqual(
-            [(row[0], row[2], row[3], row[4]) for row in app_rows],
-            [("app", "factory", "0x20000", "0x780000")],
+            [(row[0], row[1], row[2], row[3], row[4]) for row in rows],
+            [
+                ("nvs", "data", "nvs", "0x9000", "0x10000"),
+                ("phy_init", "data", "phy", "0x19000", "0x1000"),
+                ("app", "app", "factory", "0x20000", "0xDC0000"),
+                ("storage", "data", "fat", "0xDE0000", "0x100000"),
+                ("assets", "data", "spiffs", "0xEE0000", "0xC0000"),
+                ("coredump", "data", "coredump", "0xFA0000", "0x10000"),
+            ],
         )
+        app_rows = [row for row in rows if len(row) >= 3 and row[1] == "app"]
+        self.assertEqual([(row[0], row[2]) for row in app_rows], [("app", "factory")])
+
+        previous_end = 0
+        for row in rows:
+            offset = int(row[3], 0)
+            size = int(row[4], 0)
+            self.assertGreaterEqual(offset, previous_end, row[0])
+            previous_end = offset + size
+        self.assertEqual(previous_end, 0xFB0000)
+        self.assertEqual(0x1000000 - previous_end, 0x50000)
 
     def test_brookesia_dependencies_are_pinned_to_zero_seven(self):
         manifest = read("main/idf_component.yml")
