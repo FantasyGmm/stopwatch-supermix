@@ -58,6 +58,19 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         self.assertNotIn("portMAX_DELAY", shutdown)
         self.assertIn("vTaskSuspend(nullptr)", controller)
 
+    def test_microphone_resources_are_acquired_and_released(self):
+        controller = (
+            ROOT / "main/apps/app_codex_status/ble_voice_probe_controller.cpp"
+        ).read_text()
+        self.assertIn("acquireCapture(RuntimeOwner::Codex)", controller)
+        self.assertIn("releaseCapture(RuntimeOwner::Codex)", controller)
+        self.assertIn("openRecorder(44100, 16, 1)", controller)
+        self.assertIn("closeRecorder()", controller)
+        self.assertIn("esp_ae_rate_cvt_open", controller)
+        self.assertIn("esp_ae_rate_cvt_close", controller)
+        self.assertIn("encode_ima_adpcm_block", controller)
+        self.assertIn("record_captured_samples", controller)
+
 
 if __name__ == "__main__":
     unittest.main()

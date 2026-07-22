@@ -6,6 +6,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <vector>
 
 class BleVoiceProbeController {
 public:
@@ -29,6 +30,14 @@ private:
                        uint16_t negotiated_mtu, uint32_t now_ms);
     void request_stop(bool emit_summary, ble_voice_probe::ErrorCode reason);
     bool enqueue_packet(ble_voice_probe::Notification& packet);
+    bool queue_start_ack_locked(uint16_t negotiated_mtu,
+                                ble_voice_probe::Mode mode,
+                                uint32_t target_bps,
+                                uint32_t now_ms);
+    bool setup_microphone_resources(ble_voice_probe::ErrorCode& error);
+    bool capture_microphone_packet(ble_voice_probe::ErrorCode& error);
+    void fail_microphone_session(ble_voice_probe::ErrorCode error);
+    void release_audio_resources();
     void retry_start_ack();
     void finalize_stop(uint32_t now_ms);
 
@@ -43,12 +52,17 @@ private:
     void* _producer_stopped = nullptr;
     // The controller is the only owner allowed to delete the producer task.
     void* _producer_task = nullptr;
+    void* _resampler = nullptr;
     ble_voice_probe::Session _session;
     ble_voice_probe::Notification _pending_start_ack = {};
     ble_voice_probe::Notification _pending_data = {};
     ble_voice_probe::Notification _pending_summary = {};
     std::atomic<bool> _shutdown_requested{false};
+    std::vector<int16_t> _resampler_output;
+    std::vector<int16_t> _microphone_pcm;
     uint16_t _notification_payload_capacity = 0;
+    uint16_t _negotiated_mtu = 0;
+    uint32_t _resampler_output_capacity = 0;
     uint8_t _consecutive_failures = 0;
     bool _producer_enabled = false;
     bool _stop_requested = false;
@@ -57,6 +71,10 @@ private:
     bool _summary_queued = false;
     bool _summary_prepared = false;
     bool _pending_data_valid = false;
+    bool _microphone_setup_pending = false;
+    bool _microphone_cleanup_pending = false;
+    bool _capture_owned = false;
+    bool _recorder_open = false;
     bool _link_active = false;
     bool _initialized = false;
 };
