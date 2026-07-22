@@ -124,11 +124,26 @@ class TaskAlertTrackerTests(unittest.TestCase):
             ("当前停在配置步骤，需要进一步指令。", "waiting"),
             ("Please provide the missing token.", "waiting"),
             ("The log previously asked 'continue?'.\n\nThe repair is complete.", "completed"),
+            ("方案确认后已继续实现，当前工作已经完成。", "completed"),
             ("", "completed"),
         )
         for message, expected in cases:
             with self.subTest(message=message):
                 self.assertEqual(classify_outcome(message), expected)
+
+    def test_waiting_classification_ignores_trailing_codex_directive(self):
+        message = (
+            "规格已经更新。\n\n"
+            "请回复确认后继续。\n\n"
+            '::git-commit{cwd="/workspace/stopwatch"}'
+        )
+
+        self.assertEqual(classify_outcome(message), "waiting")
+
+    def test_review_then_continue_is_waiting(self):
+        message = "请复核更新后的设计规格。确认后我继续实现。"
+
+        self.assertEqual(classify_outcome(message), "waiting")
 
     def test_first_refresh_baselines_existing_history_without_alerting(self):
         append_event(self.rollout, "task_complete", "2026-07-11T23:59:00Z")
