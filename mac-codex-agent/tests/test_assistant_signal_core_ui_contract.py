@@ -102,8 +102,9 @@ class AssistantSignalCoreUiContractTests(unittest.TestCase):
         self.assertIsNotNone(awake_branch)
         self.assertRegex(
             awake_branch.group("body"),
+            r"if \(!unexpected\) \{\s*"
             r"mailbox\.publish\(\{session_id,\s*AssistantEventKind::WakeDetected,\s*"
-            r"\{\},\s*false\}\)",
+            r"\{\},\s*false\}\);",
         )
 
     def test_close_suppression_includes_listening_and_speaking_status(self):

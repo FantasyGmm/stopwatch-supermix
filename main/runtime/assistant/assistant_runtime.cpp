@@ -745,7 +745,9 @@ bool AssistantRuntime::Impl::subscribe(uint64_t session_id)
                 detail = AssistantTraceDetail::Running;
             } else if (event == event_name(ManagerHelper::GeneralEvent::Awake)) {
                 detail = AssistantTraceDetail::Listening;
-                mailbox.publish({session_id, AssistantEventKind::WakeDetected, {}, false});
+                if (!unexpected) {
+                    mailbox.publish({session_id, AssistantEventKind::WakeDetected, {}, false});
+                }
             } else if (event == event_name(ManagerHelper::GeneralEvent::Stopped)) {
                 bits |= Stopped;
                 detail = AssistantTraceDetail::Stopped;
