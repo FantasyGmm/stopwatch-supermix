@@ -5,6 +5,8 @@
  */
 #include "assistant_view.h"
 
+#include <string>
+
 #include <assets/assets.h>
 
 LV_FONT_DECLARE(font_puhui_14_1)
@@ -56,6 +58,14 @@ void AssistantView::init(lv_obj_t* parent)
     _hint_label->setTextFont(&lv_font_montserrat_14);
     _hint_label->setTextColor(lv_color_hex(0x768197));
     _hint_label->align(LV_ALIGN_BOTTOM_MID, 0, -66);
+
+    _update_label = std::make_unique<Label>(_panel->get());
+    _update_label->setWidth(text_width);
+    _update_label->setTextAlign(LV_TEXT_ALIGN_CENTER);
+    _update_label->setTextFont(&font_puhui_14_1);
+    _update_label->setTextColor(lv_color_hex(0xAEB7C8));
+    _update_label->align(LV_ALIGN_BOTTOM_MID, 0, -38);
+    _update_label->setText("");
 
     setState(AssistantViewState::Connecting);
 }
@@ -118,8 +128,22 @@ void AssistantView::setSecondaryText(const char* text)
     }
 }
 
+void AssistantView::setUpdateVersion(const char* canonical_version)
+{
+    if (!_update_label) {
+        return;
+    }
+    if (canonical_version == nullptr || canonical_version[0] == '\0') {
+        _update_label->setText("");
+        return;
+    }
+    const std::string text = std::string("发现新版本 v") + canonical_version;
+    _update_label->setText(text);
+}
+
 void AssistantView::destroy()
 {
+    _update_label.reset();
     _hint_label.reset();
     _secondary_label.reset();
     _primary_label.reset();

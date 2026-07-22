@@ -26,6 +26,7 @@ public:
     void setState(AssistantViewState state);
     void setPrimaryText(const char* text);
     void setSecondaryText(const char* text);
+    void setUpdateVersion(const char* canonical_version);
     void destroy();
 
 private:
@@ -34,4 +35,5 @@ private:
     std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Label> _primary_label;
     std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Label> _secondary_label;
     std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Label> _hint_label;
+    std::unique_ptr<smooth_ui_toolkit::lvgl_cpp::Label> _update_label;
 };

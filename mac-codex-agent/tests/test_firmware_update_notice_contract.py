@@ -6,7 +6,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
 class FirmwareUpdateNoticeContractTests(unittest.TestCase):
-    def test_app_event_switch_is_exhaustive_and_update_notice_is_a_no_op(self):
+    def test_app_event_switch_is_exhaustive_and_routes_update_notice_to_view(self):
         mailbox_h = (ROOT / "main/runtime/assistant/assistant_event_mailbox.h").read_text(encoding="utf-8")
         app = (ROOT / "main/apps/app_assistant/app_assistant.cpp").read_text(encoding="utf-8")
 
@@ -26,8 +26,21 @@ class FirmwareUpdateNoticeContractTests(unittest.TestCase):
         self.assertNotIn("default:", function_body)
         self.assertRegex(
             function_body,
-            r"case AssistantEventKind::UpdateAvailable:\s*break;",
+            r"case AssistantEventKind::UpdateAvailable:\s*_view->setUpdateVersion\(event\.text\.c_str\(\)\);\s*break;",
         )
+
+    def test_assistant_page_renders_exact_noninteractive_notice(self):
+        view_h = (ROOT / "main/apps/app_assistant/view/assistant_view.h").read_text(encoding="utf-8")
+        view_cpp = (ROOT / "main/apps/app_assistant/view/assistant_view.cpp").read_text(encoding="utf-8")
+        app = (ROOT / "main/apps/app_assistant/app_assistant.cpp").read_text(encoding="utf-8")
+        self.assertIn("setUpdateVersion", view_h)
+        self.assertIn("_update_label", view_h)
+        self.assertIn("发现新版本 v", view_cpp)
+        self.assertIn("LV_ALIGN_BOTTOM_MID", view_cpp)
+        self.assertIn("AssistantEventKind::UpdateAvailable", app)
+        self.assertIn("setUpdateVersion(event.text.c_str())", app)
+        for forbidden in ("Update now", "立即升级", "esp_restart", "esp_ota_"):
+            self.assertNotIn(forbidden, view_cpp + app)
 
     def test_notice_uses_product_nvs_and_a_persistent_mailbox_slot(self):
         store = (ROOT / "main/runtime/assistant/assistant_update_notice_store.cpp").read_text(encoding="utf-8")
