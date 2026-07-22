@@ -1,3 +1,4 @@
+import json
 import pathlib
 import sys
 import unittest
@@ -215,6 +216,109 @@ class VoiceProbeMetricsTests(unittest.TestCase):
         )
         self.assertFalse(result["automated_pass"])
         self.assertIn("throughput_error_percent", result["failure_reasons"])
+
+    def test_required_profiles_need_at_least_two_matching_data_packets(self):
+        cases = (
+            (
+                "synthetic_zero",
+                SYNTHETIC,
+                (),
+                synthetic_summary(packets=0, payload_bytes=0),
+                None,
+            ),
+            (
+                "synthetic_one",
+                SYNTHETIC,
+                (Notification(DATA, 9, 1, 0, expected_synthetic_payload(1, 8192)),),
+                synthetic_summary(packets=1),
+                None,
+            ),
+            (
+                "microphone_zero",
+                MICROPHONE_ADPCM,
+                (),
+                StopSummary(0, 0, 0, 0, 2000, 0, 0, 256),
+                None,
+            ),
+            (
+                "microphone_one",
+                MICROPHONE_ADPCM,
+                (Notification(DATA, 9, 1, 0, bytes(164)),),
+                StopSummary(1, 1, 0, 0, 2000, 164, 32000, 256),
+                32000,
+            ),
+        )
+        for name, mode, notifications, summary, decoded_samples in cases:
+            with self.subTest(name=name):
+                metrics = ProbeMetrics(session=9, mode=mode, target_bps=8192)
+                for notification in notifications:
+                    metrics.observe(notification, arrival_ns=0)
+                result = metrics.finish(
+                    summary=summary,
+                    disconnected=False,
+                    decoded_pcm_samples=decoded_samples,
+                )
+                self.assertTrue(result["required_profile"])
+                self.assertFalse(result["automated_pass"])
+                self.assertIn("insufficient_data_packets", result["failure_reasons"])
+
+    def test_synthetic_receiver_payload_bytes_must_match_sender_summary(self):
+        metrics = ProbeMetrics(session=9, mode=SYNTHETIC, target_bps=8192)
+        metrics.observe(
+            Notification(DATA, 9, 1, 0, expected_synthetic_payload(1, 4096)),
+            arrival_ns=0,
+        )
+        metrics.observe(
+            Notification(DATA, 9, 2, 100, expected_synthetic_payload(2, 4095)),
+            arrival_ns=100_000_000,
+        )
+        result = metrics.finish(
+            summary=synthetic_summary(packets=2, payload_bytes=8192),
+            disconnected=False,
+        )
+        self.assertEqual(result["receiver_payload_bytes"], 8191)
+        self.assertFalse(result["sender_receiver_payload_byte_parity"])
+        self.assertIn("payload_byte_parity", result["failure_reasons"])
+
+    def test_non_finite_arrival_timing_fails_closed_and_stays_strict_json(self):
+        metrics = ProbeMetrics(session=9, mode=SYNTHETIC, target_bps=8192)
+        metrics.observe(
+            Notification(DATA, 9, 1, 0, expected_synthetic_payload(1, 4096)),
+            arrival_ns=0,
+        )
+        metrics.observe(
+            Notification(DATA, 9, 2, 100, expected_synthetic_payload(2, 4096)),
+            arrival_ns=float("nan"),
+        )
+        metrics.observe(
+            Notification(DATA, 9, 3, 200, expected_synthetic_payload(3, 0)),
+            arrival_ns=200_000_000,
+        )
+        result = metrics.finish(
+            summary=synthetic_summary(packets=3, payload_bytes=8192),
+            disconnected=False,
+        )
+        self.assertFalse(result["automated_pass"])
+        self.assertIn("invalid_arrival_timing", result["failure_reasons"])
+        self.assertEqual(result["sequence_gaps"], 0)
+        json.dumps(result, allow_nan=False)
+
+    def test_contradictory_summary_is_rejected(self):
+        metrics = ProbeMetrics(session=9, mode=SYNTHETIC, target_bps=8192)
+        metrics.observe(
+            Notification(DATA, 9, 1, 0, expected_synthetic_payload(1, 4096)),
+            arrival_ns=0,
+        )
+        metrics.observe(
+            Notification(DATA, 9, 2, 100, expected_synthetic_payload(2, 4096)),
+            arrival_ns=100_000_000,
+        )
+        result = metrics.finish(
+            summary=StopSummary(1, 2, 0, 0, 1000, 8192, 0, 256),
+            disconnected=False,
+        )
+        self.assertFalse(result["summary_semantically_valid"])
+        self.assertIn("invalid_summary", result["failure_reasons"])
 
 
 if __name__ == "__main__":
