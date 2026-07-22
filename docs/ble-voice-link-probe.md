@@ -123,9 +123,11 @@ recorded for capacity information and is not a required BLE acceptance gate.
 ## Cleanup And Recovery
 
 After every probe, close the watch Codex app. Open **Assistant** and verify it
-can acquire the microphone. Then reopen Codex and confirm its status BLE
-connection reconnects. Keep reports, WAV files, and logs under the evidence
-directory for diagnosis.
+can acquire the microphone. Then reopen Codex, manually launch the normal
+**StopWatch Codex Agent**, and verify that status BLE reconnects. Fully quit the
+Agent again before running any subsequent standalone probe; leaving it running
+will create two processes competing for the same watch BLE service. Keep
+reports, WAV files, and logs under the evidence directory for diagnosis.
 
 An offline build or a successful firmware flash only proves that the image was
 built or written. It does not prove BLE transport, microphone ownership,
