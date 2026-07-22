@@ -149,6 +149,8 @@ retain a checksum-verified complete 16 MiB Flash backup.
 The first migration initializes the relocated Storage partition as a clean FAT
 filesystem. Existing Storage files are not copied automatically. NVS keeps its
 starting offset, but settings preservation must be verified after migration.
+Rollback explicitly means restoring the checksum-verified complete 16 MiB Flash
+backup over USB; there is no automatic rollback slot.
 
 ## Navigation
 
@@ -240,6 +242,9 @@ Build the isolated unified candidate and enforce its capacity gates:
 ```
 
 The release output is written to `build-unified/`. A normal root `idf.py build` now uses the same default single-application partition table, while the release script additionally enforces application/assets capacity gates and emits reproducible metrics.
+The active App regression gate remains `0x660000`. Any intentional future
+increase requires explicit review and must never exceed `0xC40000` (12.25 MiB),
+preserving at least 1.5 MiB inside the App partition.
 
 ## Flash
 
