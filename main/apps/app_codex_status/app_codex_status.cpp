@@ -285,9 +285,6 @@ void AppCodexStatus::onRunning()
 
     {
         LvglLockGuard lock;
-        if (!_screen_off && _edge_controls) {
-            _edge_controls->update();
-        }
         if (_alert_carousel.update(now)) {
             render_alert();
         }
@@ -494,17 +491,10 @@ void AppCodexStatus::create_view()
     lv_obj_align(_battery_label, LV_ALIGN_TOP_MID, 0, kBatteryY);
     update_battery();
 
-    _edge_controls = std::make_unique<EdgeControlOverlay>();
-    _edge_controls->init(_panel);
 }
 
 void AppCodexStatus::destroy_view()
 {
-    if (_edge_controls) {
-        _edge_controls->shutdown();
-        _edge_controls.reset();
-    }
-
     if (_pet_timer != nullptr) {
         lv_timer_delete(_pet_timer);
         _pet_timer = nullptr;

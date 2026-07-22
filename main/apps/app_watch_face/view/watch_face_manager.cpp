@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 #include "watch_face.h"
+#include <apps/common/edge_control/global_edge_control_service.h>
 #include <hal/hal.h>
 #include <string_view>
 #include <mooncake_log.h>
@@ -116,6 +117,12 @@ void WatchFaceManager::goPrevious()
 
 void WatchFaceManager::update_gesture()
 {
+    auto& controls = GetGlobalEdgeControlService();
+    if (controls.ownsTouch() || controls.lastReleaseConsumed()) {
+        _gesture_pressing = false;
+        return;
+    }
+
     lv_indev_t* indev = GetHAL().lvTouchpad;
     if (indev == nullptr) {
         return;

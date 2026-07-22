@@ -86,35 +86,24 @@ class EdgeControlFirmwareContractTests(unittest.TestCase):
         mooncake_update = main.index("GetMooncake().update()")
         self.assertLess(edge_update, mooncake_update)
 
-    def test_launcher_uses_shared_overlay_and_preserves_horizontal_swipes(self):
+    def test_launcher_uses_global_ownership_and_preserves_horizontal_swipes(self):
         launcher_root = ROOT / "main" / "apps" / "app_launcher" / "view"
         header = (launcher_root / "view.h").read_text(encoding="utf-8")
         source = (launcher_root / "view.cpp").read_text(encoding="utf-8")
         launcher = header + source
 
-        self.assertIn(
-            "#include <apps/common/edge_control/edge_control_overlay.h>", header
-        )
-        self.assertIn("std::unique_ptr<EdgeControlOverlay> _edge_controls", header)
+        self.assertNotIn("std::unique_ptr<EdgeControlOverlay>", launcher)
         for token in (
+            "GetGlobalEdgeControlService()",
+            "ownsTouch()",
+            "lastReleaseConsumed()",
+            "_edge_control_active",
             "_swipe_start_point",
             "_swipe_start_scroll_x",
             "_swipe_start_ms",
             "handle_horizontal_swipe_release",
-            "_edge_controls->update()",
-            "_edge_controls->last_release_consumed()",
         ):
             self.assertIn(token, launcher)
-
-        callback_start = source.index("_edge_controls->init")
-        callback_end = source.index("});", callback_start)
-        callback = source[callback_start:callback_end]
-        self.assertEqual(
-            callback.count(
-                "_suppress_click_until_ms = GetHAL().millis() + 350;"
-            ),
-            2,
-        )
 
         for legacy in (
             "std::unique_ptr<uitk::lvgl_cpp::Container> _control_overlay",
@@ -127,23 +116,25 @@ class EdgeControlFirmwareContractTests(unittest.TestCase):
         ):
             self.assertNotIn(legacy, launcher)
 
-    def test_codex_uses_shared_overlay_and_full_boot_sound(self):
+    def test_codex_relies_on_global_overlay_and_keeps_boot_sound(self):
         codex_root = ROOT / "main" / "apps" / "app_codex_status"
         header = (codex_root / "app_codex_status.h").read_text(encoding="utf-8")
         source = (codex_root / "app_codex_status.cpp").read_text(encoding="utf-8")
 
-        self.assertIn(
-            "#include <apps/common/edge_control/edge_control_overlay.h>", header
-        )
-        self.assertIn("std::unique_ptr<EdgeControlOverlay> _edge_controls", header)
-        for token in (
-            "_edge_controls->init(_panel)",
-            "_edge_controls->update()",
-            "_edge_controls->shutdown()",
-            "GetHAL().playBootSfx()",
-        ):
-            self.assertIn(token, source)
+        self.assertNotIn("EdgeControlOverlay", header + source)
+        self.assertIn("GetHAL().playBootSfx()", source)
         self.assertNotIn("audio::play_tone(660", source)
+
+    def test_watch_face_cancels_raw_gesture_when_global_touch_is_owned(self):
+        source = (
+            ROOT / "main" / "apps" / "app_watch_face" / "view" / "watch_face_manager.cpp"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("GetGlobalEdgeControlService()", source)
+        self.assertIn(
+            "controls.ownsTouch() || controls.lastReleaseConsumed()", source
+        )
+        self.assertIn("_gesture_pressing = false", source)
 
 
 if __name__ == "__main__":

@@ -230,10 +230,6 @@ static constexpr uint32_t _hold_scroll_repeat_period_ms = 170;
 
 LauncherView::~LauncherView()
 {
-    if (_edge_controls) {
-        _edge_controls->shutdown();
-        _edge_controls.reset();
-    }
     _icon_images.clear();
     _icon_image_by_panel.clear();
     _icon_panels.clear();
@@ -370,20 +366,6 @@ void LauncherView::init(std::vector<mooncake::AppProps_t> appPorps)
     /* --------------------------- Dynamic icon label --------------------------- */
     _dynamic_icon_label = std::make_unique<DynamicIconLabel>();
     _dynamic_icon_label->init(icon_label_texts, _icon_gap, _panel->get());
-
-    /* -------------------------- Quick control overlay ------------------------- */
-    _edge_controls = std::make_unique<EdgeControlOverlay>();
-    _edge_controls->init(_panel->get(), [this](bool active) {
-        if (active) {
-            _panel->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
-            set_lr_indicators_hidden(true);
-            _suppress_click_until_ms = GetHAL().millis() + 350;
-        } else {
-            _panel->addFlag(LV_OBJ_FLAG_SCROLLABLE);
-            set_lr_indicators_hidden(false);
-            _suppress_click_until_ms = GetHAL().millis() + 350;
-        }
-    });
 
     /* ---------------------------------- Clock --------------------------------- */
     _clock = std::make_unique<view::ArcTopClock>(_panel->get());
@@ -683,14 +665,28 @@ void LauncherView::handle_state_startup()
 
 void LauncherView::handle_state_normal()
 {
-    if (_edge_controls) {
-        _edge_controls->update();
+    auto& controls = GetGlobalEdgeControlService();
+    const bool edge_active = controls.ownsTouch();
+    if (edge_active != _edge_control_active) {
+        _edge_control_active = edge_active;
+        _suppress_click_until_ms = GetHAL().millis() + 350;
+        if (edge_active) {
+            _panel->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
+            set_lr_indicators_hidden(true);
+            _clicked_app_id = -1;
+            stop_hold_scroll(HOLD_SCROLL_TOUCH);
+        } else {
+            _panel->addFlag(LV_OBJ_FLAG_SCROLLABLE);
+            set_lr_indicators_hidden(false);
+        }
     }
 
     lv_indev_t* indev = GetHAL().lvTouchpad;
     if (indev != nullptr) {
         const lv_indev_state_t state = lv_indev_get_state(indev);
-        if (state != _last_swipe_touch_state) {
+        if (controls.ownsTouch()) {
+            _last_swipe_touch_state = state;
+        } else if (state != _last_swipe_touch_state) {
             lv_point_t point;
             lv_indev_get_point(indev, &point);
 
@@ -698,11 +694,11 @@ void LauncherView::handle_state_normal()
                 _swipe_start_point    = point;
                 _swipe_start_scroll_x = _panel->getScrollX();
                 _swipe_start_ms       = GetHAL().millis();
-            } else if (!_edge_controls || !_edge_controls->last_release_consumed()) {
+            } else if (!controls.lastReleaseConsumed()) {
                 handle_horizontal_swipe_release(point);
             }
+            _last_swipe_touch_state = state;
         }
-        _last_swipe_touch_state = state;
     }
 
     update_hold_scroll();

@@ -5,7 +5,7 @@
  */
 #pragma once
 #include <apps/common/arc_top_clock/arc_top_clock.h>
-#include <apps/common/edge_control/edge_control_overlay.h>
+#include <apps/common/edge_control/global_edge_control_service.h>
 #include <apps/common/key_manager/key_manager.h>
 #include <mooncake.h>
 #include <smooth_ui_toolkit.hpp>
@@ -48,7 +48,6 @@ private:
     std::vector<uitk::lvgl_cpp::Image*> _icon_image_by_panel;
     std::vector<std::unique_ptr<uitk::lvgl_cpp::Container>> _lr_indicator_panels;
     std::vector<std::unique_ptr<uitk::lvgl_cpp::Image>> _lr_indicators_images;
-    std::unique_ptr<EdgeControlOverlay> _edge_controls;
     std::unique_ptr<view::ArcTopClock> _clock;
     std::unique_ptr<input::KeyManager> _key_manager;
 
@@ -69,6 +68,7 @@ private:
     bool _hold_scroll_repeated         = false;
     bool _ignore_next_lr_click         = false;
     bool _ignore_next_button_click     = false;
+    bool _edge_control_active          = false;
 
     void scroll_to_nearby_icon(int direction);
     void scroll_to_icon_index(int targetIndex);
