@@ -103,11 +103,11 @@ private:
     void fail_microphone_session(ble_voice_probe::ErrorCode error);
     void release_audio_resources();
     void retry_start_ack();
-    void retry_preserved_packet();
     void retry_terminal_error();
     void finalize_stop(uint32_t now_ms);
     void prepare_terminal_error_locked(ble_voice_probe::ErrorCode code,
                                        uint16_t detail, uint32_t now_ms);
+    void replace_terminal_error_sequence_locked(ble_voice_probe::Kind kind);
 
     void enqueue_error(ble_voice_probe::ErrorCode code, uint16_t session,
                        uint16_t detail, uint32_t now_ms, uint32_t sequence = 0);
@@ -137,13 +137,10 @@ private:
     bool _stop_requested = false;
     bool _start_ack_pending = false;
     bool _start_ack_queued = false;
-    bool _start_ack_ever_queued = false;
     bool _summary_queued = false;
     bool _summary_prepared = false;
-    bool _summary_ever_queued = false;
     bool _pending_data_valid = false;
     bool _pending_data_queued = false;
-    bool _pending_data_ever_queued = false;
     bool _pending_data_counted = false;
     bool _terminal_error_pending = false;
     bool _terminal_error_queued = false;

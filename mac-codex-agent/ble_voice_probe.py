@@ -211,6 +211,16 @@ class VoiceProbeClient:
                     )
 
                 if start_ack is None:
+                    if notification.kind == ERROR:
+                        if notification.sequence != expected_sequence:
+                            raise ProbeError(
+                                f"Error sequence {notification.sequence}; "
+                                f"expected {expected_sequence}"
+                            )
+                        code, detail = decode_error(notification.payload)
+                        raise ProbeError(
+                            f"watch reported probe error {code} (detail {detail})"
+                        )
                     if notification.kind != START_ACK:
                         raise ProbeError("received data before matching start acknowledgment")
                     if notification.sequence != expected_sequence:

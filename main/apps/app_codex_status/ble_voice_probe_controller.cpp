@@ -192,7 +192,6 @@ void BleVoiceProbeController::handle_control(
 void BleVoiceProbeController::poll(uint32_t now_ms)
 {
     retry_start_ack();
-    retry_preserved_packet();
     retry_terminal_error();
     finalize_stop(now_ms);
 }
@@ -227,7 +226,6 @@ void BleVoiceProbeController::record_notify_result(
             if (kind == ble_voice_probe::Kind::StartAck && _start_ack_queued) {
                 _start_ack_queued = false;
                 _start_ack_pending = false;
-                _start_ack_ever_queued = false;
                 wake_producer = true;
             }
             if (kind == ble_voice_probe::Kind::Data && _pending_data_queued &&
@@ -236,7 +234,6 @@ void BleVoiceProbeController::record_notify_result(
                 _pending_data = {};
                 _pending_data_valid = false;
                 _pending_data_queued = false;
-                _pending_data_ever_queued = false;
                 _pending_data_counted = false;
                 wake_producer = true;
             }
@@ -245,7 +242,6 @@ void BleVoiceProbeController::record_notify_result(
                     _pending_summary = {};
                     _summary_queued = false;
                     _summary_prepared = false;
-                    _summary_ever_queued = false;
                 } else {
                     reset_session_locked();
                 }
@@ -273,9 +269,14 @@ void BleVoiceProbeController::record_notify_result(
                 _terminal_error_queued = false;
                 wake_producer = true;
             } else if (retryable_packet) {
-                ++_consecutive_failures;
-                stop_for_congestion =
-                    _consecutive_failures >= kMaxConsecutiveQueueFailures;
+                if (_terminal_error_pending) {
+                    replace_terminal_error_sequence_locked(kind);
+                    wake_producer = true;
+                } else {
+                    ++_consecutive_failures;
+                    stop_for_congestion =
+                        _consecutive_failures >= kMaxConsecutiveQueueFailures;
+                }
             }
         }
     }
@@ -407,7 +408,6 @@ void BleVoiceProbeController::producer_loop()
                                 payload_length);
                             _pending_data_valid = true;
                             _pending_data_queued = false;
-                            _pending_data_ever_queued = false;
                             _pending_data_counted = false;
                             have_packet = true;
                         }
@@ -506,7 +506,6 @@ void BleVoiceProbeController::producer_loop()
                 enqueued = enqueue_packet(packet);
                 if (enqueued) {
                     _pending_data_queued = true;
-                    _pending_data_ever_queued = true;
                     if (!_pending_data_counted) {
                         _session.record_generated(packet.payload_length);
                         if (microphone_packet) {
@@ -567,10 +566,8 @@ bool BleVoiceProbeController::queue_start_ack_locked(
     }
 
     _start_ack_pending = true;
-    _start_ack_ever_queued = false;
     if (enqueue_packet(_pending_start_ack)) {
         _start_ack_queued = true;
-        _start_ack_ever_queued = true;
     } else {
         _session.record_queue_overflow();
         ++_consecutive_failures;
@@ -687,7 +684,6 @@ bool BleVoiceProbeController::prepare_microphone_packet(ble_voice_probe::ErrorCo
         std::copy(encoded.begin(), encoded.end(), _pending_data.payload.begin());
         _pending_data_valid = true;
         _pending_data_queued = false;
-        _pending_data_ever_queued = false;
         _pending_data_counted = false;
     }
     return true;
@@ -817,7 +813,6 @@ void BleVoiceProbeController::retry_start_ack()
         }
         if (enqueue_packet(_pending_start_ack)) {
             _start_ack_queued = true;
-            _start_ack_ever_queued = true;
         } else {
             _session.record_queue_overflow();
             ++_consecutive_failures;
@@ -826,35 +821,6 @@ void BleVoiceProbeController::retry_start_ack()
     }
     if (stop_for_congestion) {
         request_stop(false, ble_voice_probe::ErrorCode::QueueCongested);
-    }
-}
-
-void BleVoiceProbeController::retry_preserved_packet()
-{
-    StateLock lock(_state_mutex);
-    if (!lock.locked() || !_session.active() || !_terminal_error_pending ||
-        _terminal_error_queued || _packet_queue == nullptr ||
-        uxQueueMessagesWaiting(static_cast<QueueHandle_t>(_packet_queue)) != 0) {
-        return;
-    }
-
-    if (_start_ack_pending) {
-        if (!_start_ack_queued && enqueue_packet(_pending_start_ack)) {
-            _start_ack_queued = true;
-            _start_ack_ever_queued = true;
-        }
-        return;
-    }
-    if (_pending_data_valid) {
-        if (!_pending_data_queued && enqueue_packet(_pending_data)) {
-            _pending_data_queued = true;
-            _pending_data_ever_queued = true;
-        }
-        return;
-    }
-    if (_summary_prepared && !_summary_queued && enqueue_packet(_pending_summary)) {
-        _summary_queued = true;
-        _summary_ever_queued = true;
     }
 }
 
@@ -902,7 +868,6 @@ void BleVoiceProbeController::finalize_stop(uint32_t now_ms)
                 return;
             }
             _summary_prepared = true;
-            _summary_ever_queued = false;
         }
         if (!enqueue_packet(_pending_summary)) {
             _session.record_queue_overflow();
@@ -910,7 +875,6 @@ void BleVoiceProbeController::finalize_stop(uint32_t now_ms)
             stop_for_congestion = _consecutive_failures >= kMaxConsecutiveQueueFailures;
         } else {
             _summary_queued = true;
-            _summary_ever_queued = true;
         }
     }
     if (stop_for_congestion) {
@@ -929,11 +893,11 @@ void BleVoiceProbeController::prepare_terminal_error_locked(
     }
 
     const bool replace_pending_data =
-        _pending_data_valid && !_pending_data_ever_queued;
+        _pending_data_valid && !_pending_data_queued;
     const bool replace_pending_start_ack =
-        _start_ack_pending && !_start_ack_ever_queued;
+        _start_ack_pending && !_start_ack_queued;
     const bool replace_pending_summary =
-        _summary_prepared && !_summary_ever_queued;
+        _summary_prepared && !_summary_queued;
 
     uint32_t sequence = 0;
     if (replace_pending_data) {
@@ -963,23 +927,50 @@ void BleVoiceProbeController::prepare_terminal_error_locked(
         _pending_start_ack = {};
         _start_ack_pending = false;
         _start_ack_queued = false;
-        _start_ack_ever_queued = false;
     }
     if (replace_pending_data) {
         _pending_data = {};
         _pending_data_valid = false;
         _pending_data_queued = false;
-        _pending_data_ever_queued = false;
         _pending_data_counted = false;
     }
     if (replace_pending_summary) {
         _pending_summary = {};
         _summary_prepared = false;
         _summary_queued = false;
-        _summary_ever_queued = false;
     }
     _terminal_error_pending = _pending_error.payload_length != 0;
     _terminal_error_queued = false;
+}
+
+void BleVoiceProbeController::replace_terminal_error_sequence_locked(
+    ble_voice_probe::Kind kind
+)
+{
+    if (!_terminal_error_pending || _terminal_error_queued) {
+        return;
+    }
+    if (kind == ble_voice_probe::Kind::StartAck && _start_ack_pending &&
+        !_start_ack_queued) {
+        _pending_error.sequence = _pending_start_ack.sequence;
+        _pending_start_ack = {};
+        _start_ack_pending = false;
+        return;
+    }
+    if (kind == ble_voice_probe::Kind::Data && _pending_data_valid &&
+        !_pending_data_queued) {
+        _pending_error.sequence = _pending_data.sequence;
+        _pending_data = {};
+        _pending_data_valid = false;
+        _pending_data_counted = false;
+        return;
+    }
+    if (kind == ble_voice_probe::Kind::StopSummary && _summary_prepared &&
+        !_summary_queued) {
+        _pending_error.sequence = _pending_summary.sequence;
+        _pending_summary = {};
+        _summary_prepared = false;
+    }
 }
 
 void BleVoiceProbeController::enqueue_error(
@@ -1040,13 +1031,10 @@ void BleVoiceProbeController::reset_session_locked()
     _stop_requested = false;
     _start_ack_pending = false;
     _start_ack_queued = false;
-    _start_ack_ever_queued = false;
     _summary_queued = false;
     _summary_prepared = false;
-    _summary_ever_queued = false;
     _pending_data_valid = false;
     _pending_data_queued = false;
-    _pending_data_ever_queued = false;
     _pending_data_counted = false;
     _terminal_error_pending = false;
     _terminal_error_queued = false;

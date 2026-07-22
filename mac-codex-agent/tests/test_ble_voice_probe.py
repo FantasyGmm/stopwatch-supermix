@@ -17,6 +17,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 from ble_voice_probe import Profile, VoiceProbeClient, _build_parser
 from voice_probe_protocol import (
     DATA,
+    ERROR,
     MICROPHONE_ADPCM,
     START_ACK,
     STOP_SUMMARY,
@@ -100,6 +101,16 @@ def start_ack(session, mode, target_bps, mtu=256, sequence=0):
         sequence,
         0,
         struct.pack("<HBBI", mtu, mode, 0, target_bps),
+    )
+
+
+def watch_error(session, code, detail=0, sequence=0):
+    return pack_notification(
+        ERROR,
+        session,
+        sequence,
+        0,
+        struct.pack("<HH", code, detail),
     )
 
 
@@ -220,6 +231,75 @@ class BleVoiceProbeTests(unittest.TestCase):
         self.assertEqual(exit_code, 1)
         self.assertIn("StartAck sequence", saved["exception"])
         self.assertIn("expected 0", saved["exception"])
+
+    def test_reports_matching_watch_error_before_start_ack(self):
+        fake = FakeClient([watch_error(7, code=6, detail=44)])
+        runner = make_runner(fake)
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = pathlib.Path(temporary)
+            exit_code = self.run_probe(
+                runner,
+                Profile(session=7, mode=SYNTHETIC, target_bps=8192, duration_ms=1000),
+                directory,
+            )
+            saved = json.loads((directory / "report.json").read_text())
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(
+            saved["exception"], "watch reported probe error 6 (detail 44)"
+        )
+        self.assertFalse(saved["metrics"]["automated_pass"])
+
+    def test_rejects_wrong_error_sequence_before_start_ack(self):
+        fake = FakeClient([watch_error(7, code=6, sequence=1)])
+        runner = make_runner(fake)
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = pathlib.Path(temporary)
+            exit_code = self.run_probe(
+                runner,
+                Profile(session=7, mode=SYNTHETIC, target_bps=8192, duration_ms=1000),
+                directory,
+            )
+            saved = json.loads((directory / "report.json").read_text())
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("Error sequence 1", saved["exception"])
+        self.assertIn("expected 0", saved["exception"])
+        self.assertNotIn("watch reported probe error", saved["exception"])
+
+    def test_still_rejects_data_and_summary_before_start_ack(self):
+        premature_notifications = (
+            pack_notification(DATA, 7, 0, 0, b"payload"),
+            pack_notification(
+                STOP_SUMMARY,
+                7,
+                0,
+                0,
+                StopSummary(0, 0, 0, 0, 1, 0, 0, 256).pack(),
+            ),
+        )
+        for notification in premature_notifications:
+            with self.subTest(kind=notification[1]):
+                fake = FakeClient([notification])
+                runner = make_runner(fake)
+                with tempfile.TemporaryDirectory() as temporary:
+                    directory = pathlib.Path(temporary)
+                    exit_code = self.run_probe(
+                        runner,
+                        Profile(
+                            session=7,
+                            mode=SYNTHETIC,
+                            target_bps=8192,
+                            duration_ms=1000,
+                        ),
+                        directory,
+                    )
+                    saved = json.loads((directory / "report.json").read_text())
+
+                self.assertEqual(exit_code, 1)
+                self.assertIn(
+                    "before matching start acknowledgment", saved["exception"]
+                )
 
     def test_rejects_data_sequence_gap(self):
         fake = FakeClient(

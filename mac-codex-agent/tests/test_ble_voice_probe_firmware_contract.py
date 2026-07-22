@@ -85,7 +85,7 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         self.assertIn("bytes_read", read)
         self.assertNotIn("esp_codec_dev_read", read)
 
-    def test_terminal_error_preserves_packet_sequence_and_queue_order(self):
+    def test_terminal_error_replaces_rejected_packet_without_false_summary_success(self):
         controller = (
             ROOT / "main/apps/app_codex_status/ble_voice_probe_controller.cpp"
         ).read_text()
@@ -101,19 +101,18 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         self.assertIn("prepare_terminal_error_locked", microphone_failure)
         self.assertIn("retry_terminal_error", controller)
         self.assertIn("_pending_data_queued", controller)
-        self.assertIn("_pending_data_ever_queued", controller)
         self.assertIn("Kind::Data && _pending_data_queued", controller)
         terminal_error = controller.split(
             "void BleVoiceProbeController::prepare_terminal_error_locked", 1
         )[1].split("void BleVoiceProbeController::enqueue_error", 1)[0]
         self.assertIn(
-            "_pending_data_valid && !_pending_data_ever_queued", terminal_error
+            "_pending_data_valid && !_pending_data_queued", terminal_error
         )
         self.assertIn(
-            "_start_ack_pending && !_start_ack_ever_queued", terminal_error
+            "_start_ack_pending && !_start_ack_queued", terminal_error
         )
         self.assertIn(
-            "_summary_prepared && !_summary_ever_queued", terminal_error
+            "_summary_prepared && !_summary_queued", terminal_error
         )
         retry_error = controller.split(
             "void BleVoiceProbeController::retry_terminal_error", 1
@@ -127,7 +126,20 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
             "_summary_queued",
         ):
             self.assertIn(tracked_state, retry_error)
-        self.assertIn("retry_preserved_packet", controller)
+        self.assertNotIn("retry_preserved_packet", controller)
+        self.assertNotIn("ever_queued", controller)
+        rejected_packet = controller.split(
+            "void BleVoiceProbeController::replace_terminal_error_sequence_locked", 1
+        )[1].split("void BleVoiceProbeController::enqueue_error", 1)[0]
+        self.assertIn("Kind::StopSummary", rejected_packet)
+        self.assertIn(
+            "_pending_error.sequence = _pending_summary.sequence", rejected_packet
+        )
+        self.assertIn("_summary_prepared = false", rejected_packet)
+        notify_result = controller.split(
+            "void BleVoiceProbeController::record_notify_result", 1
+        )[1].split("void BleVoiceProbeController::handle_disconnect", 1)[0]
+        self.assertIn("replace_terminal_error_sequence_locked(kind)", notify_result)
 
     def test_microphone_producer_drains_complete_pcm_before_more_reads(self):
         controller = (
