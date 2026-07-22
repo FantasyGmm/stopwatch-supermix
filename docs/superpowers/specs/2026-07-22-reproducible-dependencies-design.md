@@ -1,7 +1,7 @@
 # Reproducible Firmware Dependencies Design
 
 Date: 2026-07-22
-Status: Approved for implementation
+Status: Implemented and clean-checkout verified
 
 ## Purpose
 
@@ -267,6 +267,31 @@ release.
 The ignored local `third_party/xiaozhi-esp32/` directory may remain on a
 developer machine for reference, but it has no role in supported builds and is
 safe to delete after migration verification.
+
+## Implementation Verification
+
+Verified on 2026-07-22 from tracked source commit
+`46509d1c48cd4e607020bb761cc3e3a8662f4a65` with ESP-IDF 5.5.4. The
+`scripts/validate_reproducible_checkout.sh` gate cloned only tracked project
+files into a temporary directory, confirmed that generated dependency and build
+directories were absent, restored all locked source and managed components, and
+completed a clean unified firmware build.
+
+The resulting capacity and provenance evidence was:
+
+- application image: 6,022,432 bytes;
+- application partition: 7,864,320 bytes;
+- application headroom: 1,841,888 bytes (23.42%);
+- generated assets: 291,198 bytes;
+- application SHA256:
+  `3da6b25a1b1df7ebb668af1cc58f2d8c4cbf61b4864aa70109924e2f2faa1f11`;
+- generated-assets SHA256:
+  `93b87d059d1c2a31f1dd65bbdfa4d5b7275774f6f12e82eb84a1737acad3723f`;
+- capacity gate: passed.
+
+This verification did not flash hardware. Hardware acceptance remains a
+separate release gate and requires the user to place the watch in download mode
+before any write.
 
 ## Acceptance Criteria
 
