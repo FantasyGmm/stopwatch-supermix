@@ -1,7 +1,7 @@
 # Assistant Signal Core UI Design
 
 **Date:** 2026-07-22
-**Status:** Approved visual direction, pending implementation plan
+**Status:** Implemented, pending hardware validation
 **Branch:** `codex/assistant-ui-signal-core`
 
 ## Objective
@@ -12,11 +12,12 @@ This is a presentation and event-routing change. It must not change Assistant ac
 
 ## Approved Direction
 
-The interface uses one full-screen black surface with three fixed visual zones:
+The interface uses one full-screen black surface with four fixed visual zones:
 
-1. a compact status row for connectivity, update metadata, and battery;
-2. a nine-bar waveform as the primary voice-state signal;
-3. a title and at most two lines of current conversation text.
+1. a compact top status row for connectivity and update metadata;
+2. a fifteen-bar waveform as the primary voice-state signal;
+3. a title and at most two lines of current conversation text;
+4. a hardware hint followed by the bottom battery label.
 
 The words "实时字幕" are not displayed. Recognized user text and Assistant text appear directly below the divider.
 
@@ -35,13 +36,14 @@ The LVGL root remains a fixed `466 x 466` non-scrollable panel centered on the p
 
 All critical content stays inside these conservative bounds:
 
-- top status row: `y = 30..55`, horizontal inset at least `52 px`;
+- top status row: `y = 30..55`, with critical content inside `x = 102..354`;
 - phase label: centered near `y = 68`;
 - waveform: centered within `y = 88..220`;
 - primary title: centered near `y = 228`;
 - divider: `x = 60..406`, near `y = 276`;
 - conversation text: `x = 48..418`, `y = 294..354`;
-- hardware hint: centered near `y = 408`, at least `42 px` above the panel edge.
+- hardware hint: centered above the battery near `y = 380`;
+- battery: centered at `y = 419`, matching the Codex application.
 
 No text, scrolling ticker, or control may be placed against the circular edge. Dynamic text is limited to two centered lines. Overflow uses LVGL ellipsis or clipping at the view boundary; it never scrolls horizontally.
 
@@ -72,18 +74,18 @@ No new full CJK font is added. Fixed headings may use English when the existing 
 
 ### Waveform
 
-The waveform consists of nine rounded LVGL rectangles. It is rendered from native objects, not a GIF, bitmap sequence, FFT, or new audio-analysis pipeline.
+The waveform consists of fifteen narrow rounded LVGL rectangles within the original exact `222 px` waveform width. Each bar is `8 px`; integer `7/8 px` gaps are distributed across the row. It is rendered from native objects, not a GIF, bitmap sequence, FFT, or separate audio-capture pipeline.
 
-`AssistantView::update(now_ms)` advances a small deterministic frame table:
+`AssistantView::update(now_ms)` combines the existing PCM input level with small deterministic frame tables:
 
 - waiting: static, low gray bars;
-- listening: cyan/teal bars, approximately `100-120 ms` per frame;
+- listening: cyan/teal bars driven by fifteen temporal envelope slices of the existing microphone PCM buffer, sampled approximately every `60 ms`;
 - thinking: compact indigo inward/outward pulse, approximately `150-180 ms` per frame;
 - speaking: teal/green bars, approximately `100-120 ms` per frame;
 - connecting/activating/closing: slow low-amplitude pulse;
 - failed/timeout: static low red bars.
 
-The app loop drives animation. The view does not create a task, FreeRTOS timer, LVGL timer, or audio callback, which keeps shutdown ownership unchanged.
+The audio backend records fifteen atomic envelope values after each successful existing recorder read. It combines mean absolute and peak magnitude, following the existing Audio.FFT app's noise-floor, dynamic-normalization, attack, and release behavior without taking a second recorder read. The app loop samples only those values before taking the LVGL lock and drives animation. The view does not create a task, FreeRTOS timer, LVGL timer, second recorder, or FFT, which keeps shutdown ownership unchanged.
 
 ## State Presentation
 
@@ -116,9 +118,10 @@ The app loop drives animation. The view does not create a task, FreeRTOS timer, 
 ### Listening
 
 - entered only from the real `GeneralEvent::Awake` callback after WakeNet opens the audio channel;
-- `ListeningStatusChanged(true)` confirms an already awake cycle but cannot leave Waiting For Wake on its own;
+- before the first real wake, `ListeningStatusChanged(true)` cannot leave Waiting For Wake on its own;
+- after the first real wake in the current app session, `ListeningStatusChanged(true)` may re-enter Listening for XiaoZhi continuous conversation;
 - status: `正在聆听`;
-- waveform: active cyan/teal;
+- waveform: cyan/teal and proportional to the existing microphone PCM input level;
 - title: `我在听`;
 - content: the latest user recognition text when available, otherwise `请说`.
 
@@ -138,7 +141,7 @@ The app loop drives animation. The view does not create a task, FreeRTOS timer, 
 - title: `小智助手`;
 - content: the latest Assistant text, without a subtitle label.
 
-When `SpeakingStatusChanged(false)` is received, the screen returns to Waiting For Wake and clears stale conversation text. The XiaoZhi producer immediately emits `ListeningStatusChanged(true)` after speech completion; that automatic event must not leave Waiting For Wake. A new real `GeneralEvent::Awake` starts the next visible listening cycle. A late inactive-listening event must not overwrite Thinking or Speaking.
+When `SpeakingStatusChanged(false)` is received, the screen temporarily returns to Waiting For Wake and clears stale conversation text. The XiaoZhi producer then emits `ListeningStatusChanged(true)` after speech completion; after the initial real wake this event re-enters Listening for the next continuous turn. Reopening the app resets the wake latch, so a new app session still requires a real `GeneralEvent::Awake`. A late inactive-listening event must not overwrite Thinking or Speaking.
 
 ### Failure
 
@@ -165,13 +168,13 @@ When `SpeakingStatusChanged(false)` is received, the screen returns to Waiting F
 - content: the runtime timeout detail;
 - footer: `右键再次停止`.
 
-## Status Row
+## Status And Battery
 
-The top row is informational and non-interactive.
+The top row and bottom battery label are informational and non-interactive.
 
-- Left: a small status dot and `在线` after Wi-Fi setup reaches activation; gray `连接中` before that.
-- Center: compact amber `vX.Y.Z 可用` only when the existing metadata-only update notice is present. It does not install firmware and does not become a button.
-- Right: a compact battery outline with the integer percentage inside. Charging may use the existing lightning treatment.
+- Top left: a small status dot and `在线` after Wi-Fi setup reaches activation; gray `连接中` before that. The dot starts at `x = 102` so the complete indicator remains inside the round-screen safe region.
+- Top right: compact amber `vX.Y.Z 可用` only when the existing metadata-only update notice is present. It does not install firmware and does not become a button.
+- Bottom center: the same Montserrat 14 battery-symbol and integer-percentage label used by the Codex app at `y = 419`, including green charging and red low-battery colors.
 
 Battery is refreshed at most once per second from `GetHAL().getBatteryLevel()`. The view must not poll hardware directly; `AppAssistant` reads telemetry outside the LVGL lock and applies it inside one short lock.
 
@@ -183,11 +186,11 @@ Required presentation rules:
 
 1. `Running` maps to Waiting For Wake, not Listening.
 2. `GeneralEvent::Awake` maps Waiting For Wake to Listening.
-3. `ListeningStatusChanged(true)` only confirms an already active listening cycle; it cannot leave Waiting For Wake.
+3. Before the first real wake, `ListeningStatusChanged(true)` cannot leave Waiting For Wake; after that wake it may start the next continuous listening turn.
 4. User text maps to Thinking and replaces the conversation line.
 5. Assistant text maps to Speaking and replaces the conversation line.
 6. `SpeakingStatusChanged(false)` maps back to Waiting For Wake.
-7. Automatic listening status after speaking completion cannot leave Waiting For Wake.
+7. Automatic listening status after speaking completion returns the active conversation to Listening.
 8. Inactive listening events do not demote Thinking or Speaking.
 9. Closing, failure, and timeout states override conversation events.
 10. Events from stale sessions continue to be discarded by the existing mailbox/session boundary.
@@ -213,8 +216,8 @@ Continues to own Assistant lifecycle and service events. Its only UI-related add
 - no new bitmap or GIF assets;
 - no new full font;
 - no new task or timer;
-- no audio FFT or amplitude-copy path;
-- approximately nine waveform objects plus the status/text/battery objects;
+- no Assistant-side audio FFT, second recorder, or PCM-buffer copy;
+- fifteen atomic envelope values and approximately fifteen waveform objects plus the status/text/battery objects;
 - deterministic frame tables stored as small constants;
 - no unbounded text history and no transcript list.
 

@@ -32,7 +32,11 @@ class AssistantPresentationModel {
 public:
     AssistantVisualState state() const { return _state; }
 
-    void reset() { _state = AssistantVisualState::Connecting; }
+    void reset()
+    {
+        _state = AssistantVisualState::Connecting;
+        _wake_detected = false;
+    }
 
     void apply(AssistantPresentationSignal signal, bool active = true)
     {
@@ -61,14 +65,18 @@ public:
                 break;
             case AssistantPresentationSignal::Running:
                 _state = AssistantVisualState::WaitingWake;
+                _wake_detected = false;
                 break;
             case AssistantPresentationSignal::WakeDetected:
                 if (_state == AssistantVisualState::WaitingWake) {
+                    _wake_detected = true;
                     _state = AssistantVisualState::Listening;
                 }
                 break;
             case AssistantPresentationSignal::ListeningChanged:
-                if (!active && _state == AssistantVisualState::Listening) {
+                if (active && _wake_detected && _state == AssistantVisualState::WaitingWake) {
+                    _state = AssistantVisualState::Listening;
+                } else if (!active && _state == AssistantVisualState::Listening) {
                     _state = AssistantVisualState::WaitingWake;
                 }
                 break;
@@ -99,4 +107,5 @@ public:
 
 private:
     AssistantVisualState _state = AssistantVisualState::Connecting;
+    bool _wake_detected = false;
 };

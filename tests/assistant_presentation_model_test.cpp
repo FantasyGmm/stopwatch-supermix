@@ -37,6 +37,8 @@ int main()
     model.apply(AssistantPresentationSignal::SpeakingChanged, false);
     assert(model.state() == AssistantVisualState::WaitingWake);
     model.apply(AssistantPresentationSignal::ListeningChanged, true);
+    assert(model.state() == AssistantVisualState::Listening);
+    model.apply(AssistantPresentationSignal::ListeningChanged, false);
     assert(model.state() == AssistantVisualState::WaitingWake);
     model.apply(AssistantPresentationSignal::SpeakingChanged, false);
     assert(model.state() == AssistantVisualState::WaitingWake);

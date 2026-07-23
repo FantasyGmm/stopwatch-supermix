@@ -5,6 +5,8 @@
  */
 #include "stopwatch_audio_backend.h"
 #include "audio_backend_lifecycle.h"
+#include "pcm_level.h"
+#include <atomic>
 #include <driver/i2s_std.h>
 #include <esp_codec_dev.h>
 #include <esp_codec_dev_defaults.h>
@@ -31,10 +33,47 @@ bool validFormat(uint32_t sample_rate, uint8_t bits, uint8_t channels)
 }  // namespace
 
 struct StopWatchAudioBackend::Impl {
+    Impl()
+    {
+        for (auto& level : input_levels) {
+            level.store(0, std::memory_order_relaxed);
+        }
+    }
+
+    void publishInputLevels(const StopWatchAudioBackend::InputLevels& levels)
+    {
+        input_levels_generation.fetch_add(1, std::memory_order_acq_rel);
+        for (std::size_t index = 0; index < levels.size(); ++index) {
+            input_levels[index].store(levels[index], std::memory_order_relaxed);
+        }
+        input_levels_generation.fetch_add(1, std::memory_order_release);
+    }
+
+    StopWatchAudioBackend::InputLevels snapshotInputLevels() const
+    {
+        StopWatchAudioBackend::InputLevels levels{};
+        for (int attempt = 0; attempt < 3; ++attempt) {
+            const uint32_t before = input_levels_generation.load(std::memory_order_acquire);
+            if ((before & 1U) != 0U) {
+                continue;
+            }
+            for (std::size_t index = 0; index < levels.size(); ++index) {
+                levels[index] = input_levels[index].load(std::memory_order_relaxed);
+            }
+            const uint32_t after = input_levels_generation.load(std::memory_order_acquire);
+            if (before == after) {
+                break;
+            }
+        }
+        return levels;
+    }
+
     mutable std::mutex control_mutex;
     mutable std::mutex recorder_io_mutex;
     mutable std::mutex player_io_mutex;
     AudioBackendLifecycle lifecycle;
+    std::array<std::atomic<uint16_t>, StopWatchAudioBackend::inputLevelCount> input_levels{};
+    std::atomic<uint32_t> input_levels_generation{0};
     i2s_chan_handle_t tx_handle              = nullptr;
     i2s_chan_handle_t rx_handle              = nullptr;
     esp_codec_dev_handle_t codec_dev         = nullptr;
@@ -156,6 +195,7 @@ bool StopWatchAudioBackend::openRecorder(uint32_t sample_rate, uint8_t bits, uin
         _impl->lifecycle.closeRecorder();
         return false;
     }
+    _impl->publishInputLevels({});
     return true;
 }
 
@@ -166,6 +206,7 @@ void StopWatchAudioBackend::closeRecorder()
     if (_impl->lifecycle.closeRecorder() == AudioCloseResult::Closed) {
         i2s_channel_disable(_impl->rx_handle);
     }
+    _impl->publishInputLevels({});
 }
 
 std::size_t StopWatchAudioBackend::read(void* data, std::size_t bytes, TickType_t timeout)
@@ -178,7 +219,19 @@ std::size_t StopWatchAudioBackend::read(void* data, std::size_t bytes, TickType_
             return 0;
         }
     }
-    return esp_codec_dev_read(_impl->codec_dev, data, bytes) == ESP_CODEC_DEV_OK ? bytes : 0;
+    if (esp_codec_dev_read(_impl->codec_dev, data, bytes) != ESP_CODEC_DEV_OK) {
+        return 0;
+    }
+    const auto* samples = static_cast<const int16_t*>(data);
+    const auto levels = MeasurePcmEnvelopeLevels<inputLevelCount>(
+        samples, bytes / sizeof(int16_t));
+    _impl->publishInputLevels(levels);
+    return bytes;
+}
+
+StopWatchAudioBackend::InputLevels StopWatchAudioBackend::inputLevels() const
+{
+    return _impl->snapshotInputLevels();
 }
 
 bool StopWatchAudioBackend::openPlayer(uint32_t sample_rate, uint8_t bits, uint8_t channels)

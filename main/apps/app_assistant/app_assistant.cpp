@@ -6,6 +6,7 @@
 #include "app_assistant.h"
 #include <assets/assets.h>
 #include <hal/hal.h>
+#include <hal/audio/stopwatch_audio_backend.h>
 #include <mooncake_log.h>
 #include <runtime/assistant/assistant_runtime.h>
 #include <runtime/assistant/assistant_trace.h>
@@ -81,9 +82,11 @@ void AppAssistant::onOpen()
 void AppAssistant::onRunning()
 {
     const uint32_t now = GetHAL().millis();
+    const auto input_levels = GetStopWatchAudioBackend().inputLevels();
     {
         LvglLockGuard lock;
         if (_view) {
+            _view->setInputLevels(input_levels);
             _view->update(now);
         }
     }

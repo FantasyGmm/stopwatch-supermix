@@ -88,9 +88,10 @@ class FirmwareUpdateNoticeContractTests(unittest.TestCase):
         self.assertIn("setUpdateVersion", view_h)
         self.assertIn("_update_label", view_h)
         self.assertIn('std::string("v") + canonical_version + " 可用"', view_cpp)
+        self.assertIn("_update_label->setSize(160, status_line_height)", view_cpp)
         self.assertRegex(
             view_cpp,
-            r"_update_label->align\(LV_ALIGN_TOP_MID,\s*0,\s*status_y\)",
+            r"_update_label->align\(LV_ALIGN_TOP_RIGHT,\s*-112,\s*status_y\)",
         )
         self.assertIn("AssistantEventKind::UpdateAvailable", app)
         self.assertIn("setUpdateVersion(event.text.c_str())", app)

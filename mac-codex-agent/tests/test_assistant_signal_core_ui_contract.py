@@ -138,9 +138,12 @@ class AssistantSignalCoreUiContractTests(unittest.TestCase):
             "divider_y": 276,
             "content_y": 294,
             "content_height": 60,
-            "hint_bottom": -48,
-            "wave_bar_width": 14,
-            "wave_bar_gap": 12,
+            "hint_bottom": -74,
+            "battery_y": 419,
+            "network_dot_x": 102,
+            "network_label_x": 116,
+            "wave_bar_width": 8,
+            "wave_total_width": 222,
         }
         constants = {
             name: int(value)
@@ -151,7 +154,7 @@ class AssistantSignalCoreUiContractTests(unittest.TestCase):
             expected_geometry,
         )
 
-        self.assertIn("std::array<lv_obj_t*, 9>", header)
+        self.assertIn("std::array<lv_obj_t*, 15>", header)
         wave_create = init.index("_wave_container = lv_obj_create(_panel->get());")
         wave_size = init.index(
             "lv_obj_set_size(_wave_container, panel_size, wave_height);"
@@ -160,10 +163,6 @@ class AssistantSignalCoreUiContractTests(unittest.TestCase):
         self.assertLess(wave_create, wave_size)
         self.assertLess(wave_size, wave_position)
         self.assertIn("lv_obj_set_width(_wave_bars[index], wave_bar_width);", init)
-        self.assertIn(
-            "static_cast<int>(index) * (wave_bar_width + wave_bar_gap)",
-            init,
-        )
         self.assertIn("_phase_label->align(LV_ALIGN_TOP_MID, 0, phase_y);", init)
         self.assertIn("_title_label->align(LV_ALIGN_TOP_MID, 0, title_y);", init)
         self.assertIn("lv_obj_set_pos(_divider, 60, divider_y);", init)
@@ -173,27 +172,38 @@ class AssistantSignalCoreUiContractTests(unittest.TestCase):
         )
         self.assertIn("_content_label->align(LV_ALIGN_TOP_MID, 0, content_y);", init)
         self.assertIn("_hint_label->align(LV_ALIGN_BOTTOM_MID, 0, hint_bottom);", init)
+        self.assertRegex(
+            init,
+            r"static_cast<int>\(index\)\s*\*\s*"
+            r"\(wave_total_width - wave_bar_width\)\s*/\s*"
+            r"static_cast<int>\(_wave_bars\.size\(\) - 1\)",
+        )
+        self.assertIn("lv_obj_set_pos(_network_dot, network_dot_x, status_y + 7);", init)
+        self.assertIn(
+            "_network_label->align(LV_ALIGN_TOP_LEFT, network_label_x, status_y);",
+            init,
+        )
 
         self.assertEqual(
             self.wave_frame(source, "inactive_wave"),
-            (22, 22, 35, 22, 48, 22, 35, 22, 22),
+            (16, 18, 16, 24, 18, 32, 22, 44, 22, 32, 18, 24, 16, 18, 16),
         )
         self.assertEqual(
             self.wave_frames(source, "active_wave"),
             (
-                (24, 49, 80, 61, 103, 61, 80, 49, 24),
-                (42, 77, 45, 92, 64, 101, 52, 70, 31),
-                (61, 35, 96, 54, 84, 47, 103, 42, 65),
-                (31, 68, 52, 101, 59, 88, 43, 75, 26),
+                (18, 28, 42, 58, 76, 66, 88, 104, 88, 66, 76, 58, 42, 28, 18),
+                (28, 46, 68, 44, 82, 58, 96, 72, 102, 64, 86, 48, 70, 36, 24),
+                (44, 30, 76, 52, 94, 62, 84, 108, 78, 98, 56, 88, 46, 64, 34),
+                (22, 40, 58, 80, 50, 92, 68, 100, 74, 88, 54, 76, 48, 34, 20),
             ),
         )
         self.assertEqual(
             self.wave_frames(source, "thinking_wave"),
             (
-                (9, 16, 25, 35, 45, 35, 25, 16, 9),
-                (12, 21, 32, 44, 55, 44, 32, 21, 12),
-                (16, 27, 39, 52, 63, 52, 39, 27, 16),
-                (12, 21, 32, 44, 55, 44, 32, 21, 12),
+                (8, 10, 13, 17, 22, 28, 35, 44, 35, 28, 22, 17, 13, 10, 8),
+                (10, 13, 17, 22, 28, 35, 44, 55, 44, 35, 28, 22, 17, 13, 10),
+                (13, 17, 22, 28, 35, 44, 54, 66, 54, 44, 35, 28, 22, 17, 13),
+                (10, 13, 17, 22, 28, 35, 44, 55, 44, 35, 28, 22, 17, 13, 10),
             ),
         )
 
@@ -209,6 +219,7 @@ class AssistantSignalCoreUiContractTests(unittest.TestCase):
         self.assertRegex(
             update,
             r"case AssistantVisualState::Listening:\s*"
+            r"interval_ms = 60;\s*break;\s*"
             r"case AssistantVisualState::Speaking:\s*interval_ms = 120;",
         )
         self.assertRegex(
@@ -224,12 +235,40 @@ class AssistantSignalCoreUiContractTests(unittest.TestCase):
             r"case AssistantVisualState::Failed:\s*"
             r"case AssistantVisualState::StopTimedOut:\s*return;",
         )
-        self.assertIn("_update_label->setSize(170, status_line_height);", init)
+        self.assertIn("_update_label->setSize(160, status_line_height);", init)
         self.assertIn(
             "lv_label_set_long_mode(_update_label->get(), LV_LABEL_LONG_MODE_DOTS);",
             init,
         )
-        self.assertIn("_update_label->align(LV_ALIGN_TOP_MID, 0, status_y);", init)
+        self.assertIn("_update_label->align(LV_ALIGN_TOP_RIGHT, -112, status_y);", init)
+
+    def test_battery_matches_codex_bottom_label_style(self):
+        header = (ROOT / "main/apps/app_assistant/view/assistant_view.h").read_text()
+        source = (ROOT / "main/apps/app_assistant/view/assistant_view.cpp").read_text()
+        init = self.cpp_function_body(source, "void AssistantView::init")
+        setter = self.cpp_function_body(source, "void AssistantView::setBattery")
+
+        self.assertIn("constexpr int battery_y = 419;", source)
+        self.assertIn("_battery_label = lv_label_create(_panel->get());", init)
+        self.assertIn(
+            "lv_obj_set_style_text_font(_battery_label, &lv_font_montserrat_14, 0);",
+            init,
+        )
+        self.assertIn("lv_obj_set_width(_battery_label, 150);", init)
+        self.assertIn(
+            "lv_obj_set_style_text_align(_battery_label, LV_TEXT_ALIGN_CENTER, 0);",
+            init,
+        )
+        self.assertIn(
+            "lv_obj_align(_battery_label, LV_ALIGN_TOP_MID, 0, battery_y);",
+            init,
+        )
+        self.assertNotIn("_battery_body", header + source)
+        self.assertNotIn("_battery_tip", header + source)
+        self.assertIn("LV_SYMBOL_CHARGE", setter)
+        self.assertIn("battery_symbol(clamped)", setter)
+        self.assertIn("0x3CB371", source)
+        self.assertIn("0xE74C3C", source)
 
     def test_fixed_titles_use_montserrat_ascii_fallback(self):
         source = (ROOT / "main/apps/app_assistant/view/assistant_view.cpp").read_text()
@@ -300,8 +339,6 @@ class AssistantSignalCoreUiContractTests(unittest.TestCase):
             "_wave_container",
             "_divider",
             "_network_dot",
-            "_battery_body",
-            "_battery_tip",
             "_battery_label",
         ):
             self.assertLess(destroy.index(f"{raw_handle} = nullptr;"), panel_reset)
@@ -325,6 +362,25 @@ class AssistantSignalCoreUiContractTests(unittest.TestCase):
         lock = function.index("LvglLockGuard")
         self.assertLess(sample, lock)
         self.assertIn("_view->setBattery", function[lock:])
+
+    def test_listening_wave_uses_existing_pcm_input_outside_lvgl_lock(self):
+        app = (ROOT / "main/apps/app_assistant/app_assistant.cpp").read_text()
+        view = (ROOT / "main/apps/app_assistant/view/assistant_view.cpp").read_text()
+        backend = (ROOT / "main/hal/audio/stopwatch_audio_backend.cpp").read_text()
+        running = self.cpp_function_body(app, "void AppAssistant::onRunning")
+        update = self.cpp_function_body(view, "void AssistantView::update")
+        read = self.cpp_function_body(backend, "std::size_t StopWatchAudioBackend::read")
+
+        sample = running.index("GetStopWatchAudioBackend().inputLevels()")
+        lock = running.index("LvglLockGuard")
+        self.assertLess(sample, lock)
+        self.assertIn("_view->setInputLevels(input_levels);", running[lock:])
+        self.assertIn(
+            "applyWaveHeights(_input_waveform.update(_input_levels));",
+            update,
+        )
+        self.assertIn("MeasurePcmEnvelopeLevels", read)
+        self.assertIn("_impl->publishInputLevels(levels)", read)
 
     def test_presentation_bridge_renders_only_real_state_transitions(self):
         app = (ROOT / "main/apps/app_assistant/app_assistant.cpp").read_text()

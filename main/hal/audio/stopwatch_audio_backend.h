@@ -5,6 +5,7 @@
  */
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -15,6 +16,8 @@ public:
     static constexpr uint32_t sampleRate = 44100;
     static constexpr uint8_t bitsPerSample = 16;
     static constexpr uint8_t channelCount = 1;
+    static constexpr std::size_t inputLevelCount = 15;
+    using InputLevels = std::array<uint16_t, inputLevelCount>;
 
     StopWatchAudioBackend();
     ~StopWatchAudioBackend();
@@ -28,6 +31,7 @@ public:
                       uint8_t channels = channelCount);
     void closeRecorder();
     std::size_t read(void* data, std::size_t bytes, TickType_t timeout = portMAX_DELAY);
+    InputLevels inputLevels() const;
 
     bool openPlayer(uint32_t sample_rate = sampleRate, uint8_t bits = bitsPerSample,
                     uint8_t channels = channelCount);
