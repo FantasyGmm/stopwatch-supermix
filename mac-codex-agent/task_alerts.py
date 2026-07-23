@@ -199,7 +199,7 @@ def classify_outcome(message: Any) -> str:
         return "completed"
     final = paragraphs[-1]
     lowered = final.casefold()
-    if final.endswith(("?", "？")) or any(
+    if any(mark in final for mark in ("?", "？")) or any(
         phrase in lowered for phrase in WAITING_PHRASES
     ):
         return "waiting"

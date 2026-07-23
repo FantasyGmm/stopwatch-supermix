@@ -145,6 +145,14 @@ class TaskAlertTrackerTests(unittest.TestCase):
 
         self.assertEqual(classify_outcome(message), "waiting")
 
+    def test_question_followed_by_recommendation_is_waiting(self):
+        message = (
+            "先确认一个布局选择：提醒区下移时，是否把分割线也一起下移？"
+            "我建议一起移动，这样两个区域仍保持完整分组。"
+        )
+
+        self.assertEqual(classify_outcome(message), "waiting")
+
     def test_first_refresh_baselines_existing_history_without_alerting(self):
         append_event(self.rollout, "task_complete", "2026-07-11T23:59:00Z")
 
