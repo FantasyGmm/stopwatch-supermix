@@ -98,14 +98,21 @@ class FirmwareFontContractTests(unittest.TestCase):
             "_status_label, lv_color_hex(kCodexBlue), 0);",
             app,
         )
+        self.assertRegex(
+            app,
+            r"set_status\s*\(\s*"
+            r'_ws_connected\s*\?\s*"LIVE"\s*:\s*"CONNECT"\s*,\s*'
+            r"_ws_connected\s*\?\s*kCodexBlue\s*:\s*kTextDim\s*"
+            r"\);",
+        )
         self.assertIn(
             '_panel, "--", kAlertProjectY, &lv_font_montserrat_22, '
             "kBeaconViolet",
             app,
         )
-        self.assertNotIn(
-            "lv_obj_set_style_text_color(_alert_project",
+        self.assertNotRegex(
             app,
+            r"lv_obj_set_style_text_color\s*\(\s*_alert_project\b",
         )
         self.assertIn("kCompletedGreen", app)
         self.assertIn('return "COMPLETED";', carousel)
