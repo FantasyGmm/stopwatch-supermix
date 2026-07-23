@@ -67,14 +67,44 @@ class FirmwareFontContractTests(unittest.TestCase):
             encoding="utf-8"
         )
 
-        self.assertIn(
-            "constexpr uint32_t kRunningCyan = 0x49C9EE", layout
+        self.assertRegex(
+            layout,
+            r"constexpr\s+uint32_t\s+kRunningCyan\s*=\s*0x49C9EE;",
         )
-        self.assertIn("CodexTaskState::Running", app)
-        self.assertIn("state_color = kRunningCyan;", app)
+        render_alert = re.search(
+            r"void AppCodexStatus::render_alert\(\)\s*\{"
+            r"(?P<body>.*?)"
+            r"\n\}\n\nvoid AppCodexStatus::sync_pending_glow\(\)",
+            app,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(render_alert)
+        running_branch = re.search(
+            r"else if \(alert->state == CodexTaskState::Running\)\s*\{"
+            r"(?P<body>.*?)"
+            r"\n    \}",
+            render_alert.group("body"),
+            re.DOTALL,
+        )
+        self.assertIsNotNone(running_branch)
+        self.assertIn("state_color = kRunningCyan;", running_branch.group("body"))
+        self.assertEqual(app.count("kRunningCyan"), 1)
+        self.assertIn(
+            "constexpr uint32_t kCodexBlue = kBeaconViolet;",
+            app,
+        )
+        self.assertIn(
+            "lv_obj_set_style_text_color("
+            "_status_label, lv_color_hex(kCodexBlue), 0);",
+            app,
+        )
         self.assertIn(
             '_panel, "--", kAlertProjectY, &lv_font_montserrat_22, '
             "kBeaconViolet",
+            app,
+        )
+        self.assertNotIn(
+            "lv_obj_set_style_text_color(_alert_project",
             app,
         )
         self.assertIn("kCompletedGreen", app)
