@@ -26,6 +26,7 @@ class InstallScriptTests(unittest.TestCase):
             "app_state.py",
             "agent.py",
             "codex_adapter.py",
+            "completion_classifier.py",
             "task_alerts.py",
             "protocol.py",
         ):
