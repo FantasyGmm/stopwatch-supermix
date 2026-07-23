@@ -16,6 +16,8 @@ import threading
 import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
+from completion_classifier import classify_completion
+
 
 UTC = datetime.timezone.utc
 DEFAULT_STATE_DB = pathlib.Path.home() / ".codex" / "state_5.sqlite"
@@ -24,39 +26,12 @@ DEFAULT_CODEX_BINARIES = (
     pathlib.Path("/Applications/ChatGPT.app/Contents/Resources/codex"),
     pathlib.Path("/Applications/Codex.app/Contents/Resources/codex"),
 )
-LEDGER_VERSION = 2
+LEDGER_VERSION = 3
 RETENTION_DAYS = 7
 MAX_DISCOVERED_THREADS = 50
 THREAD_LIST_LIMIT = 200
 THREAD_NAME_REFRESH_SECONDS = 30.0
 APP_SERVER_TIMEOUT_SECONDS = 2.0
-WAITING_PHRASES = (
-    "请确认",
-    "请回复",
-    "请提供",
-    "请选择",
-    "需要你",
-    "可以吗",
-    "请重新",
-    "请复核",
-    "告诉我",
-    "确认后继续",
-    "确认后我继续",
-    "确认后我会继续",
-    "等待你的",
-    "等待回复",
-    "等待确认",
-    "需要进一步指令",
-    "无法继续",
-    "let me know",
-    "please confirm",
-    "please reply",
-    "please provide",
-    "please choose",
-    "need your",
-    "waiting for your",
-    "cannot continue",
-)
 
 
 LOGGER = logging.getLogger(__name__)
@@ -190,20 +165,7 @@ def load_codex_thread_names() -> Dict[str, str]:
 
 
 def classify_outcome(message: Any) -> str:
-    if not isinstance(message, str):
-        return "completed"
-    paragraphs = [part.strip() for part in message.split("\n\n") if part.strip()]
-    while paragraphs and paragraphs[-1].startswith("::"):
-        paragraphs.pop()
-    if not paragraphs:
-        return "completed"
-    final = paragraphs[-1]
-    lowered = final.casefold()
-    if final.endswith(("?", "？")) or any(
-        phrase in lowered for phrase in WAITING_PHRASES
-    ):
-        return "waiting"
-    return "completed"
+    return classify_completion(message).outcome
 
 
 @dataclasses.dataclass(frozen=True)
@@ -439,6 +401,7 @@ class TaskAlertTracker:
             "revision": 0,
             "cursors": cursors,
             "alerts": [],
+            "turn_signals": {},
         }
 
     def _scan_threads(self, threads: List[_ThreadInfo]) -> bool:
@@ -517,13 +480,10 @@ class TaskAlertTracker:
             item = json.loads(line)
         except (UnicodeDecodeError, json.JSONDecodeError):
             return False
-        if not isinstance(item, dict) or item.get("type") != "event_msg":
+        if not isinstance(item, dict):
             return False
         payload = item.get("payload")
         if not isinstance(payload, dict):
-            return False
-        event_type = payload.get("type")
-        if event_type not in ("task_started", "task_complete", "user_message"):
             return False
         timestamp_text = item.get("timestamp") or payload.get("timestamp")
         timestamp = _parse_timestamp(timestamp_text)
@@ -531,10 +491,31 @@ class TaskAlertTracker:
             return False
         timestamp_text = _iso(timestamp)
 
+        if item.get("type") == "response_item":
+            return self._reduce_response_item(thread, payload)
+        if item.get("type") != "event_msg":
+            return False
+
+        event_type = payload.get("type")
+        if event_type not in ("task_started", "task_complete", "user_message"):
+            return False
+
         if event_type == "task_started":
+            turn_id = payload.get("turn_id")
+            signal_changed = False
+            if isinstance(turn_id, str) and turn_id:
+                signals = self._state.setdefault("turn_signals", {})
+                next_signal = {
+                    "turn_id": turn_id,
+                    "unfinished_plan": False,
+                    "input_calls": [],
+                }
+                if signals.get(thread.id) != next_signal:
+                    signals[thread.id] = next_signal
+                    signal_changed = True
             alert_id = "{}:{}".format(thread.id, timestamp_text)
             if any(entry.get("id") == alert_id for entry in self._state["alerts"]):
-                return False
+                return signal_changed
             self._state["alerts"].append(
                 {
                     "id": alert_id,
@@ -552,7 +533,17 @@ class TaskAlertTracker:
             return True
 
         if event_type == "task_complete":
-            outcome = classify_outcome(payload.get("last_agent_message"))
+            signals = self._state.setdefault("turn_signals", {})
+            turn_signal = signals.get(thread.id, {})
+            turn_id = payload.get("turn_id")
+            if turn_signal.get("turn_id") != turn_id:
+                turn_signal = {}
+            classification = classify_completion(
+                payload.get("last_agent_message"),
+                unfinished_plan=bool(turn_signal.get("unfinished_plan", False)),
+                unresolved_input=bool(turn_signal.get("input_calls")),
+            )
+            outcome = classification.outcome
             state = "pending" if outcome == "waiting" else "completed"
             running = []
             for entry in self._state["alerts"]:
@@ -576,6 +567,7 @@ class TaskAlertTracker:
                         "state": state,
                         "watch_notified": state != "pending",
                         "outcome": outcome,
+                        "reason": classification.reason,
                     }
                 )
             else:
@@ -595,8 +587,20 @@ class TaskAlertTracker:
                         "state": state,
                         "watch_notified": state != "pending",
                         "outcome": outcome,
+                        "reason": classification.reason,
                     }
                 )
+            if (
+                thread.id in signals
+                and signals[thread.id].get("turn_id") == turn_id
+            ):
+                del signals[thread.id]
+            LOGGER.info(
+                "Task alert classified: thread=%s outcome=%s reason=%s",
+                thread.id,
+                outcome,
+                classification.reason,
+            )
             self._state["revision"] = int(self._state.get("revision", 0)) + 1
             return True
 
@@ -613,10 +617,74 @@ class TaskAlertTracker:
                 entry["outcome"] = "completed"
                 entry["handled_at"] = timestamp_text
                 entry["watch_notified"] = True
+                entry["reason"] = "user_replied"
                 changed = True
         if changed:
             self._state["revision"] = int(self._state.get("revision", 0)) + 1
         return changed
+
+    def _reduce_response_item(
+        self,
+        thread: _ThreadInfo,
+        payload: Dict[str, Any],
+    ) -> bool:
+        metadata = payload.get("internal_chat_message_metadata_passthrough")
+        turn_id = metadata.get("turn_id") if isinstance(metadata, dict) else None
+
+        signals = self._state.setdefault("turn_signals", {})
+        signal = signals.get(thread.id)
+        if not isinstance(signal, dict):
+            return False
+        if (
+            isinstance(turn_id, str)
+            and turn_id
+            and signal.get("turn_id") != turn_id
+        ):
+            return False
+
+        item_type = payload.get("type")
+        if item_type == "function_call":
+            name = payload.get("name")
+            if name == "update_plan":
+                arguments = payload.get("arguments")
+                if isinstance(arguments, str):
+                    try:
+                        arguments = json.loads(arguments)
+                    except json.JSONDecodeError:
+                        return False
+                if not isinstance(arguments, dict):
+                    return False
+                plan = arguments.get("plan")
+                if not isinstance(plan, list):
+                    return False
+                unfinished = any(
+                    isinstance(item, dict)
+                    and item.get("status") in ("in_progress", "pending")
+                    for item in plan
+                )
+                if signal.get("unfinished_plan") == unfinished:
+                    return False
+                signal["unfinished_plan"] = unfinished
+                return True
+
+            if name == "request_user_input":
+                call_id = payload.get("call_id")
+                if not isinstance(call_id, str) or not call_id:
+                    return False
+                calls = signal.setdefault("input_calls", [])
+                if call_id in calls:
+                    return False
+                calls.append(call_id)
+                return True
+
+        if item_type == "function_call_output":
+            call_id = payload.get("call_id")
+            calls = signal.setdefault("input_calls", [])
+            if call_id not in calls:
+                return False
+            calls.remove(call_id)
+            return True
+        return False
 
     def _prune_old_alerts(self) -> bool:
         cutoff = self._now().astimezone(self._local_timezone).date() - datetime.timedelta(
@@ -640,10 +708,11 @@ class TaskAlertTracker:
         latest_by_thread = {}
         for item in self._state["alerts"]:
             timestamp = _parse_timestamp(item.get("progress_at"))
-            if timestamp is None or timestamp.astimezone(self._local_timezone).date() != today:
-                continue
             state = item.get("state")
-            if state not in ("pending", "running", "completed"):
+            if timestamp is None or state not in ("pending", "running", "completed"):
+                continue
+            is_today = timestamp.astimezone(self._local_timezone).date() == today
+            if state != "pending" and not is_today:
                 continue
             thread_id = str(item.get("thread_id") or "")
             existing = latest_by_thread.get(thread_id)
@@ -705,7 +774,7 @@ class TaskAlertTracker:
             state = json.loads(self.ledger_path.read_text(encoding="utf-8"))
             if (
                 not isinstance(state, dict)
-                or state.get("version") not in (1, LEDGER_VERSION)
+                or state.get("version") not in (1, 2, LEDGER_VERSION)
                 or not isinstance(state.get("cursors"), dict)
                 or not isinstance(state.get("alerts"), list)
             ):
@@ -735,6 +804,9 @@ class TaskAlertTracker:
                         self._needs_save = True
                 else:
                     raise ValueError("invalid alert ledger state")
+            if not isinstance(state.get("turn_signals"), dict):
+                state["turn_signals"] = {}
+                self._needs_save = True
             if state.get("version") != LEDGER_VERSION:
                 state["version"] = LEDGER_VERSION
                 self._needs_save = True

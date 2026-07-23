@@ -63,11 +63,18 @@ def update_thread_metadata(state_db, thread_id, cwd, title, updated_at_ms):
 
 
 def append_event(
-    path, event_type, timestamp, complete_line=True, last_agent_message=None
+    path,
+    event_type,
+    timestamp,
+    complete_line=True,
+    last_agent_message=None,
+    turn_id=None,
 ):
     payload = {"type": event_type}
     if last_agent_message is not None:
         payload["last_agent_message"] = last_agent_message
+    if turn_id is not None:
+        payload["turn_id"] = turn_id
     item = {
         "timestamp": timestamp,
         "type": "event_msg",
@@ -77,6 +84,59 @@ def append_event(
         stream.write(json.dumps(item).encode("utf-8"))
         if complete_line:
             stream.write(b"\n")
+
+
+def append_function_call(
+    path,
+    timestamp,
+    turn_id,
+    name,
+    arguments,
+    call_id,
+    include_turn_metadata=True,
+):
+    payload = {
+        "type": "function_call",
+        "name": name,
+        "arguments": json.dumps(arguments),
+        "call_id": call_id,
+    }
+    if include_turn_metadata:
+        payload["internal_chat_message_metadata_passthrough"] = {
+            "turn_id": turn_id
+        }
+    item = {
+        "timestamp": timestamp,
+        "type": "response_item",
+        "payload": payload,
+    }
+    with path.open("ab") as stream:
+        stream.write(json.dumps(item).encode("utf-8") + b"\n")
+
+
+def append_function_output(
+    path,
+    timestamp,
+    turn_id,
+    call_id,
+    include_turn_metadata=True,
+):
+    payload = {
+        "type": "function_call_output",
+        "call_id": call_id,
+        "output": "answered",
+    }
+    if include_turn_metadata:
+        payload["internal_chat_message_metadata_passthrough"] = {
+            "turn_id": turn_id
+        }
+    item = {
+        "timestamp": timestamp,
+        "type": "response_item",
+        "payload": payload,
+    }
+    with path.open("ab") as stream:
+        stream.write(json.dumps(item).encode("utf-8") + b"\n")
 
 
 class TaskAlertTrackerTests(unittest.TestCase):
@@ -144,6 +204,229 @@ class TaskAlertTrackerTests(unittest.TestCase):
         message = "请复核更新后的设计规格。确认后我继续实现。"
 
         self.assertEqual(classify_outcome(message), "waiting")
+
+    def test_question_followed_by_recommendation_is_waiting(self):
+        message = (
+            "先确认一个布局选择：提醒区下移时，是否把分割线也一起下移？"
+            "我建议一起移动，这样两个区域仍保持完整分组。"
+        )
+
+        self.assertEqual(classify_outcome(message), "waiting")
+
+    def test_unfinished_plan_completion_is_pending_with_reason(self):
+        tracker = self.tracker()
+        tracker.refresh()
+        append_event(
+            self.rollout,
+            "task_started",
+            "2026-07-12T00:00:10Z",
+            turn_id="turn-a",
+        )
+        append_function_call(
+            self.rollout,
+            "2026-07-12T00:00:20Z",
+            "turn-a",
+            "update_plan",
+            {
+                "plan": [
+                    {"step": "Show designs", "status": "completed"},
+                    {"step": "Wait for selection", "status": "in_progress"},
+                    {"step": "Implement selection", "status": "pending"},
+                ]
+            },
+            "plan-a",
+        )
+        append_event(
+            self.rollout,
+            "task_complete",
+            "2026-07-12T00:00:30Z",
+            last_agent_message="A, B, and C designs are ready.",
+            turn_id="turn-a",
+        )
+
+        snapshot = tracker.refresh()
+
+        self.assertEqual(snapshot.pending_count, 1)
+        saved = json.loads(self.ledger.read_text(encoding="utf-8"))
+        alert = saved["alerts"][-1]
+        self.assertEqual(alert["reason"], "structured_unfinished_plan")
+        self.assertEqual(saved["turn_signals"], {})
+
+    def test_latest_completed_plan_overrides_earlier_unfinished_plan(self):
+        tracker = self.tracker()
+        tracker.refresh()
+        append_event(
+            self.rollout,
+            "task_started",
+            "2026-07-12T00:00:10Z",
+            turn_id="turn-a",
+        )
+        append_function_call(
+            self.rollout,
+            "2026-07-12T00:00:20Z",
+            "turn-a",
+            "update_plan",
+            {"plan": [{"step": "Implement", "status": "in_progress"}]},
+            "plan-a",
+        )
+        append_function_call(
+            self.rollout,
+            "2026-07-12T00:00:25Z",
+            "turn-a",
+            "update_plan",
+            {"plan": [{"step": "Implement", "status": "completed"}]},
+            "plan-b",
+        )
+        append_event(
+            self.rollout,
+            "task_complete",
+            "2026-07-12T00:00:30Z",
+            last_agent_message="Implementation and tests are complete.",
+            turn_id="turn-a",
+        )
+
+        snapshot = tracker.refresh()
+
+        self.assertEqual(snapshot.pending_count, 0)
+        self.assertEqual(snapshot.completed_count, 1)
+
+    def test_turn_signals_survive_tracker_restart(self):
+        tracker = self.tracker()
+        tracker.refresh()
+        append_event(
+            self.rollout,
+            "task_started",
+            "2026-07-12T00:00:10Z",
+            turn_id="turn-a",
+        )
+        append_function_call(
+            self.rollout,
+            "2026-07-12T00:00:20Z",
+            "turn-a",
+            "update_plan",
+            {"plan": [{"step": "Wait for approval", "status": "pending"}]},
+            "plan-a",
+        )
+        tracker.refresh()
+
+        saved = json.loads(self.ledger.read_text(encoding="utf-8"))
+        self.assertTrue(saved["turn_signals"]["thread-a"]["unfinished_plan"])
+
+        append_event(
+            self.rollout,
+            "task_complete",
+            "2026-07-12T00:00:30Z",
+            last_agent_message="Specification is available.",
+            turn_id="turn-a",
+        )
+        restarted = self.tracker().refresh()
+
+        self.assertEqual(restarted.pending_count, 1)
+
+    def test_unresolved_input_call_is_pending(self):
+        tracker = self.tracker()
+        tracker.refresh()
+        append_event(
+            self.rollout,
+            "task_started",
+            "2026-07-12T00:00:10Z",
+            turn_id="turn-a",
+        )
+        append_function_call(
+            self.rollout,
+            "2026-07-12T00:00:20Z",
+            "turn-a",
+            "request_user_input",
+            {"questions": []},
+            "input-a",
+        )
+        append_event(
+            self.rollout,
+            "task_complete",
+            "2026-07-12T00:00:30Z",
+            last_agent_message="Waiting.",
+            turn_id="turn-a",
+        )
+
+        tracker.refresh()
+        saved = json.loads(self.ledger.read_text(encoding="utf-8"))
+
+        self.assertEqual(saved["alerts"][-1]["state"], "pending")
+        self.assertEqual(saved["alerts"][-1]["reason"], "structured_input_request")
+
+    def test_resolved_input_call_does_not_force_pending(self):
+        tracker = self.tracker()
+        tracker.refresh()
+        append_event(
+            self.rollout,
+            "task_started",
+            "2026-07-12T00:00:10Z",
+            turn_id="turn-a",
+        )
+        append_function_call(
+            self.rollout,
+            "2026-07-12T00:00:20Z",
+            "turn-a",
+            "request_user_input",
+            {"questions": []},
+            "input-a",
+        )
+        append_function_output(
+            self.rollout,
+            "2026-07-12T00:00:25Z",
+            "turn-a",
+            "input-a",
+        )
+        append_event(
+            self.rollout,
+            "task_complete",
+            "2026-07-12T00:00:30Z",
+            last_agent_message="The selected option was implemented.",
+            turn_id="turn-a",
+        )
+
+        snapshot = tracker.refresh()
+
+        self.assertEqual(snapshot.pending_count, 0)
+        self.assertEqual(snapshot.completed_count, 1)
+
+    def test_input_call_without_turn_metadata_uses_current_turn(self):
+        tracker = self.tracker()
+        tracker.refresh()
+        append_event(
+            self.rollout,
+            "task_started",
+            "2026-07-12T00:00:10Z",
+            turn_id="turn-a",
+        )
+        append_function_call(
+            self.rollout,
+            "2026-07-12T00:00:20Z",
+            "turn-a",
+            "request_user_input",
+            {"questions": []},
+            "input-a",
+            include_turn_metadata=False,
+        )
+        append_function_output(
+            self.rollout,
+            "2026-07-12T00:00:25Z",
+            "turn-a",
+            "input-a",
+            include_turn_metadata=False,
+        )
+        append_event(
+            self.rollout,
+            "task_complete",
+            "2026-07-12T00:00:30Z",
+            last_agent_message="The selected option was implemented.",
+            turn_id="turn-a",
+        )
+
+        snapshot = tracker.refresh()
+
+        self.assertEqual(snapshot.pending_count, 0)
+        self.assertEqual(snapshot.completed_count, 1)
 
     def test_first_refresh_baselines_existing_history_without_alerting(self):
         append_event(self.rollout, "task_complete", "2026-07-11T23:59:00Z")
@@ -262,9 +545,24 @@ class TaskAlertTrackerTests(unittest.TestCase):
         self.assertEqual(migrated.handled_at, "2026-07-12T00:04:00Z")
         self.assertTrue(migrated.watch_notified)
         persisted = json.loads(self.ledger.read_text(encoding="utf-8"))
-        self.assertEqual(persisted["version"], 2)
+        self.assertEqual(persisted["version"], 3)
+        self.assertEqual(persisted["turn_signals"], {})
         self.assertEqual(persisted["alerts"][0]["state"], "completed")
         self.assertEqual(persisted["alerts"][0]["outcome"], "completed")
+
+    def test_version_two_ledger_adds_empty_turn_signals(self):
+        tracker = self.tracker()
+        tracker.refresh()
+        saved = json.loads(self.ledger.read_text(encoding="utf-8"))
+        saved["version"] = 2
+        saved.pop("turn_signals", None)
+        self.ledger.write_text(json.dumps(saved), encoding="utf-8")
+
+        self.tracker().refresh()
+
+        persisted = json.loads(self.ledger.read_text(encoding="utf-8"))
+        self.assertEqual(persisted["version"], 3)
+        self.assertEqual(persisted["turn_signals"], {})
 
     def test_existing_alert_synchronizes_live_project_and_title_once(self):
         tracker = self.tracker()
@@ -513,6 +811,46 @@ class TaskAlertTrackerTests(unittest.TestCase):
 
         self.assertEqual(snapshot.alerts, ())
         self.assertTrue(list(self.root.glob("alerts.json.corrupt-*")))
+
+    def test_unhandled_pending_survives_midnight_but_completed_does_not(self):
+        self.clock.value = datetime.datetime(2026, 7, 12, 23, 58, tzinfo=UTC)
+        completed_rollout = self.root / "completed.jsonl"
+        completed_rollout.touch()
+        add_thread(
+            self.state_db,
+            "thread-completed",
+            "/workspace/docs",
+            "Completed task",
+            completed_rollout,
+            2,
+        )
+        tracker = self.tracker()
+        tracker.refresh()
+        append_event(
+            self.rollout,
+            "task_complete",
+            "2026-07-12T23:59:00Z",
+            last_agent_message="Please confirm.",
+        )
+        append_event(
+            completed_rollout,
+            "task_complete",
+            "2026-07-12T23:59:10Z",
+            last_agent_message="All work is complete.",
+        )
+        self.assertEqual(tracker.refresh().pending_count, 1)
+        self.assertEqual(tracker.refresh().completed_count, 1)
+
+        self.clock.value = datetime.datetime(2026, 7, 13, 0, 1, tzinfo=UTC)
+        next_day = tracker.refresh()
+
+        self.assertEqual(next_day.pending_count, 1)
+        self.assertEqual(next_day.completed_count, 0)
+        self.assertEqual([alert.state for alert in next_day.alerts], ["pending"])
+        self.assertEqual(
+            tracker.pending_watch_notification_ids(),
+            ("thread-a:2026-07-12T23:59:00Z",),
+        )
 
     def test_alerts_older_than_seven_local_days_are_pruned(self):
         self.clock.value = datetime.datetime(2026, 7, 3, 0, 0, tzinfo=UTC)
