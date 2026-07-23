@@ -812,6 +812,46 @@ class TaskAlertTrackerTests(unittest.TestCase):
         self.assertEqual(snapshot.alerts, ())
         self.assertTrue(list(self.root.glob("alerts.json.corrupt-*")))
 
+    def test_unhandled_pending_survives_midnight_but_completed_does_not(self):
+        self.clock.value = datetime.datetime(2026, 7, 12, 23, 58, tzinfo=UTC)
+        completed_rollout = self.root / "completed.jsonl"
+        completed_rollout.touch()
+        add_thread(
+            self.state_db,
+            "thread-completed",
+            "/workspace/docs",
+            "Completed task",
+            completed_rollout,
+            2,
+        )
+        tracker = self.tracker()
+        tracker.refresh()
+        append_event(
+            self.rollout,
+            "task_complete",
+            "2026-07-12T23:59:00Z",
+            last_agent_message="Please confirm.",
+        )
+        append_event(
+            completed_rollout,
+            "task_complete",
+            "2026-07-12T23:59:10Z",
+            last_agent_message="All work is complete.",
+        )
+        self.assertEqual(tracker.refresh().pending_count, 1)
+        self.assertEqual(tracker.refresh().completed_count, 1)
+
+        self.clock.value = datetime.datetime(2026, 7, 13, 0, 1, tzinfo=UTC)
+        next_day = tracker.refresh()
+
+        self.assertEqual(next_day.pending_count, 1)
+        self.assertEqual(next_day.completed_count, 0)
+        self.assertEqual([alert.state for alert in next_day.alerts], ["pending"])
+        self.assertEqual(
+            tracker.pending_watch_notification_ids(),
+            ("thread-a:2026-07-12T23:59:00Z",),
+        )
+
     def test_alerts_older_than_seven_local_days_are_pruned(self):
         self.clock.value = datetime.datetime(2026, 7, 3, 0, 0, tzinfo=UTC)
         tracker = self.tracker()

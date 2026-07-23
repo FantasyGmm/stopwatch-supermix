@@ -708,10 +708,11 @@ class TaskAlertTracker:
         latest_by_thread = {}
         for item in self._state["alerts"]:
             timestamp = _parse_timestamp(item.get("progress_at"))
-            if timestamp is None or timestamp.astimezone(self._local_timezone).date() != today:
-                continue
             state = item.get("state")
-            if state not in ("pending", "running", "completed"):
+            if timestamp is None or state not in ("pending", "running", "completed"):
+                continue
+            is_today = timestamp.astimezone(self._local_timezone).date() == today
+            if state != "pending" and not is_today:
                 continue
             thread_id = str(item.get("thread_id") or "")
             existing = latest_by_thread.get(thread_id)
