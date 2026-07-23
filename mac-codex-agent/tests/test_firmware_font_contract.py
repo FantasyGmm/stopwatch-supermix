@@ -27,7 +27,7 @@ class FirmwareFontContractTests(unittest.TestCase):
         self.assertIn("LV_FONT_DECLARE(font_puhui_14_1)", app)
         self.assertIn("bool is_ascii_text(const char* text)", app)
         self.assertIn("is_ascii_text(alert->project.c_str())", app)
-        self.assertIn("? &MontserratSemiBold26", app)
+        self.assertIn("? &lv_font_montserrat_22", app)
         self.assertIn(": &font_puhui_14_1", app)
         self.assertIn("lv_obj_set_style_text_font(_alert_detail, &font_puhui_14_1", app)
         self.assertIn("kSecondaryText", app)
@@ -99,7 +99,7 @@ class FirmwareFontContractTests(unittest.TestCase):
         self.assertIn("_effort_value = make_telemetry_label(", app)
         self.assertIn("kEffortCaptionY", app)
         self.assertIn("kEffortValueY", app)
-        self.assertGreaterEqual(app.count("&MontserratSemiBold26"), 7)
+        self.assertGreaterEqual(app.count("&MontserratSemiBold26"), 3)
         self.assertIn(
             '_model_value = make_telemetry_label(\n'
             '        _panel,\n'
@@ -121,16 +121,24 @@ class FirmwareFontContractTests(unittest.TestCase):
             app,
         )
         self.assertIn(
-            "lv_obj_set_style_text_font(pct, &MontserratSemiBold26, 0)", app
+            "lv_obj_set_style_text_font(pct, &lv_font_montserrat_22, 0)", app
         )
         self.assertIn(
-            '_panel, "NO ALERTS", kAlertHeadingY, &MontserratSemiBold26, kEtchedGray',
+            "lv_obj_set_style_text_letter_space(pct, 0, 0);", app
+        )
+        self.assertIn(
+            '_panel, "NO ALERTS", kAlertHeadingY, &lv_font_montserrat_20, kEtchedGray',
             app,
         )
         self.assertIn(
-            '_panel, "--", kAlertProjectY, &MontserratSemiBold26, kBeaconViolet',
+            '_panel, "--", kAlertProjectY, &lv_font_montserrat_22, kBeaconViolet',
             app,
         )
+        self.assertIn(
+            "lv_obj_set_style_text_font(_alert_project, &lv_font_montserrat_22, 0)",
+            app,
+        )
+        self.assertIn("? &lv_font_montserrat_22", app)
         self.assertIn("lv_color_hex(kQuotaMint)", app)
         self.assertIn("constexpr uint32_t kInstrumentBlack = 0x000000", layout)
         self.assertIn("constexpr Rect kBeaconSpine{194, 96, 2, 104}", layout)
@@ -146,7 +154,7 @@ class FirmwareFontContractTests(unittest.TestCase):
         self.assertIn("lv_image_set_antialias(_pet_image, false)", app)
         self.assertIn("lv_image_set_scale(_pet_image, kPetScale)", app)
         self.assertIn("lv_obj_set_pos(_pet_image, kPetX, kPetY)", app)
-        self.assertIn("lv_obj_set_pos(pct, kQuotaPercentX, y - 7)", app)
+        self.assertIn("lv_obj_set_pos(pct, kQuotaPercentX, y - 5)", app)
         self.assertIn(
             "lv_obj_set_style_text_align(pct, LV_TEXT_ALIGN_RIGHT, 0)", app
         )
@@ -155,23 +163,28 @@ class FirmwareFontContractTests(unittest.TestCase):
         self.assertIn("make_line(_panel, kAlertDividerX, kAlertDividerY, kAlertDividerWidth)", app)
         self.assertIn("lv_label_set_long_mode(label, LV_LABEL_LONG_MODE_DOTS)", app)
 
-    def test_quota_percentages_use_single_line_compression_and_fit_bundled_font(self):
+    def test_quota_percentages_fit_bundled_22px_font_without_compression(self):
         app = (self.codex_root / "app_codex_status.cpp").read_text(encoding="utf-8")
         quota_row = app.split("QuotaWidgets make_quota_row", 1)[1].split(
             "lv_obj_t* make_line", 1
         )[0]
 
-        letter_space_px = -3
+        letter_space_px = 0
         box_width_px = 60
         self.assertIn(
-            "lv_obj_set_style_text_letter_space(pct, -3, 0);", quota_row
+            "lv_obj_set_style_text_letter_space(pct, 0, 0);", quota_row
         )
         self.assertIn(
             "lv_label_set_long_mode(pct, LV_LABEL_LONG_MODE_CLIP);", quota_row
         )
 
         font = (
-            ROOT / "main" / "assets" / "fonts" / "MontserratSemiBold26.c"
+            ROOT
+            / "components"
+            / "lvgl"
+            / "src"
+            / "font"
+            / "lv_font_montserrat_22.c"
         ).read_text(encoding="utf-8")
         glyph_block = re.search(
             r"static const lv_font_fmt_txt_glyph_dsc_t glyph_dsc\[\] = \{"
@@ -199,9 +212,9 @@ class FirmwareFontContractTests(unittest.TestCase):
         self.assertEqual(range_start, 0x20)
 
         expected_metrics = {
-            "--%": ([160, 160, 358], 582, 36),
-            "99%": ([261, 261, 358], 784, 48),
-            "100%": ([158, 280, 280, 358], 932, 59),
+            "--%": ([135, 135, 297], 567, 35),
+            "99%": ([217, 217, 297], 731, 47),
+            "100%": ([130, 235, 235, 297], 897, 57),
         }
 
         def measure_text(text):

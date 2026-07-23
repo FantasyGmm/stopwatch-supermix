@@ -142,13 +142,13 @@ QuotaWidgets make_quota_row(lv_obj_t* parent, int y, const char* label_text)
 
     lv_obj_t* pct = lv_label_create(parent);
     lv_label_set_text(pct, "--%");
-    lv_obj_set_style_text_font(pct, &MontserratSemiBold26, 0);
-    lv_obj_set_style_text_letter_space(pct, -3, 0);
+    lv_obj_set_style_text_font(pct, &lv_font_montserrat_22, 0);
+    lv_obj_set_style_text_letter_space(pct, 0, 0);
     lv_obj_set_style_text_color(pct, lv_color_hex(kSignalWhite), 0);
     lv_obj_set_width(pct, kQuotaPercentWidth);
     lv_label_set_long_mode(pct, LV_LABEL_LONG_MODE_CLIP);
     lv_obj_set_style_text_align(pct, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_obj_set_pos(pct, kQuotaPercentX, y - 7);
+    lv_obj_set_pos(pct, kQuotaPercentX, y - 5);
 
     return {pct, bar};
 }
@@ -463,10 +463,10 @@ void AppCodexStatus::create_view()
     make_line(_panel, kAlertDividerX, kAlertDividerY, kAlertDividerWidth);
 
     _activity_title = make_center_label(
-        _panel, "NO ALERTS", kAlertHeadingY, &MontserratSemiBold26, kEtchedGray
+        _panel, "NO ALERTS", kAlertHeadingY, &lv_font_montserrat_20, kEtchedGray
     );
     _alert_project = make_center_label(
-        _panel, "--", kAlertProjectY, &MontserratSemiBold26, kBeaconViolet
+        _panel, "--", kAlertProjectY, &lv_font_montserrat_22, kBeaconViolet
     );
     _alert_detail = make_center_label(
         _panel, "", kAlertDetailY, &lv_font_montserrat_14, kSecondaryText
@@ -725,7 +725,7 @@ void AppCodexStatus::render_alert()
     lv_label_set_text(_activity_title, heading.c_str());
     if (alert == nullptr) {
         lv_label_set_text(_alert_project, "--");
-        lv_obj_set_style_text_font(_alert_project, &MontserratSemiBold26, 0);
+        lv_obj_set_style_text_font(_alert_project, &lv_font_montserrat_22, 0);
         lv_label_set_text(_alert_detail, "");
         lv_obj_set_style_text_color(_activity_title, lv_color_hex(kTextDim), 0);
         sync_pending_glow();
@@ -747,7 +747,7 @@ void AppCodexStatus::render_alert()
     lv_obj_set_style_text_font(
         _alert_project,
         is_ascii_text(alert->project.c_str())
-            ? &MontserratSemiBold26
+            ? &lv_font_montserrat_22
             : &font_puhui_14_1,
         0
     );
