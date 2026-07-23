@@ -46,6 +46,10 @@ const ble_uuid128_t kServiceUuid = BLE_UUID128_INIT(
     0x44, 0x4f, 0x43, 0x48, 0x43, 0x54, 0x41, 0x57,
     0x50, 0x4f, 0x74, 0x54, 0x01, 0x00, 0x23, 0x7a
 );
+const ble_uuid128_t kVoiceServiceUuid = BLE_UUID128_INIT(
+    0x44, 0x4f, 0x43, 0x48, 0x43, 0x54, 0x41, 0x57,
+    0x50, 0x4f, 0x74, 0x54, 0x05, 0x00, 0x23, 0x7a
+);
 const ble_uuid128_t kStatusRxUuid = BLE_UUID128_INIT(
     0x44, 0x4f, 0x43, 0x48, 0x43, 0x54, 0x41, 0x57,
     0x50, 0x4f, 0x74, 0x54, 0x02, 0x00, 0x23, 0x7a
@@ -124,7 +128,7 @@ int voice_tx_access(
     return BLE_ATT_ERR_REQ_NOT_SUPPORTED;
 }
 
-const ble_gatt_chr_def kCharacteristics[] = {
+const ble_gatt_chr_def kStatusCharacteristics[] = {
     {
         &kStatusRxUuid.u,
         gatt_access,
@@ -135,6 +139,10 @@ const ble_gatt_chr_def kCharacteristics[] = {
         nullptr,
         nullptr,
     },
+    {},
+};
+
+const ble_gatt_chr_def kVoiceCharacteristics[] = {
     {
         &kVoiceControlUuid.u,
         voice_control_access,
@@ -163,7 +171,13 @@ const ble_gatt_svc_def kServices[] = {
         BLE_GATT_SVC_TYPE_PRIMARY,
         &kServiceUuid.u,
         nullptr,
-        kCharacteristics,
+        kStatusCharacteristics,
+    },
+    {
+        BLE_GATT_SVC_TYPE_PRIMARY,
+        &kVoiceServiceUuid.u,
+        nullptr,
+        kVoiceCharacteristics,
     },
     {},
 };
@@ -221,7 +235,7 @@ int start_advertising()
 {
     ble_hs_adv_fields advertising = {};
     advertising.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
-    advertising.uuids128 = const_cast<ble_uuid128_t*>(&kServiceUuid);
+    advertising.uuids128 = const_cast<ble_uuid128_t*>(&kVoiceServiceUuid);
     advertising.num_uuids128 = 1;
     advertising.uuids128_is_complete = 1;
     int result = ble_gap_adv_set_fields(&advertising);

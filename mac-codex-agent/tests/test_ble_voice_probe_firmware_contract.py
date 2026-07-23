@@ -8,6 +8,8 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
     def test_gatt_has_isolated_encrypted_voice_characteristics(self):
         source = (ROOT / "main/apps/app_codex_status/codex_ble_transport.cpp").read_text()
+        probe = (ROOT / "mac-codex-agent/ble_voice_probe.py").read_text()
+        self.assertIn("kVoiceServiceUuid", source)
         self.assertIn("kVoiceControlUuid", source)
         self.assertIn("kVoiceTxUuid", source)
         self.assertIn("BLE_GATT_CHR_F_WRITE_ENC", source)
@@ -15,6 +17,21 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         self.assertIn("BLE_GAP_EVENT_SUBSCRIBE", source)
         self.assertIn("BLE_GAP_EVENT_MTU", source)
         self.assertIn("ble_gatts_notify_custom", source)
+        self.assertIn(
+            'SERVICE_UUID = "7a230005-5474-4f50-5741-544348434f44"',
+            probe,
+        )
+        services = source.split("const ble_gatt_svc_def kServices[]", 1)[1].split(
+            "int start_advertising", 1
+        )[0]
+        self.assertIn("&kServiceUuid.u", services)
+        self.assertIn("kStatusCharacteristics", services)
+        self.assertIn("&kVoiceServiceUuid.u", services)
+        self.assertIn("kVoiceCharacteristics", services)
+        advertising = source.split("int start_advertising()", 2)[2].split(
+            "void on_reset", 1
+        )[0]
+        self.assertIn("&kVoiceServiceUuid", advertising)
         voice_tx_definition = source.split("&kVoiceTxUuid.u", 1)[1].split("},", 1)[0]
         self.assertIn("voice_tx_access", voice_tx_definition)
         self.assertNotIn("nullptr,\n        nullptr,\n        nullptr,", voice_tx_definition)
