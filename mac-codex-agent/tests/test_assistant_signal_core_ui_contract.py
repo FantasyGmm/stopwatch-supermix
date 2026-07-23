@@ -379,8 +379,10 @@ class AssistantSignalCoreUiContractTests(unittest.TestCase):
             "applyWaveHeights(_input_waveform.update(_input_levels));",
             update,
         )
-        self.assertIn("MeasurePcmEnvelopeLevels", read)
-        self.assertIn("_impl->publishInputLevels(levels)", read)
+        self.assertIn("MeasurePcmSparseLevel", read)
+        self.assertIn("_impl->publishInputLevel(level)", read)
+        self.assertNotIn("MeasurePcmEnvelopeLevels", read)
+        self.assertNotIn("std::pow", view)
 
     def test_presentation_bridge_renders_only_real_state_transitions(self):
         app = (ROOT / "main/apps/app_assistant/app_assistant.cpp").read_text()

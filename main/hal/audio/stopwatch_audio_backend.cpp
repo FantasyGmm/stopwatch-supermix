@@ -35,45 +35,53 @@ bool validFormat(uint32_t sample_rate, uint8_t bits, uint8_t channels)
 struct StopWatchAudioBackend::Impl {
     Impl()
     {
-        for (auto& level : input_levels) {
+        for (auto& level : input_level_history) {
             level.store(0, std::memory_order_relaxed);
         }
     }
 
-    void publishInputLevels(const StopWatchAudioBackend::InputLevels& levels)
+    void clearInputLevels()
     {
-        input_levels_generation.fetch_add(1, std::memory_order_acq_rel);
-        for (std::size_t index = 0; index < levels.size(); ++index) {
-            input_levels[index].store(levels[index], std::memory_order_relaxed);
+        for (auto& level : input_level_history) {
+            level.store(0, std::memory_order_relaxed);
         }
-        input_levels_generation.fetch_add(1, std::memory_order_release);
+        input_level_write_count.store(0, std::memory_order_release);
+    }
+
+    void publishInputLevel(uint16_t level)
+    {
+        const uint32_t write_count =
+            input_level_write_count.load(std::memory_order_relaxed);
+        input_level_history[write_count % input_level_history.size()].store(
+            level, std::memory_order_relaxed);
+        input_level_write_count.store(write_count + 1, std::memory_order_release);
     }
 
     StopWatchAudioBackend::InputLevels snapshotInputLevels() const
     {
-        StopWatchAudioBackend::InputLevels levels{};
+        StopWatchAudioBackend::InputLevels slots{};
+        uint32_t write_count = 0;
         for (int attempt = 0; attempt < 3; ++attempt) {
-            const uint32_t before = input_levels_generation.load(std::memory_order_acquire);
-            if ((before & 1U) != 0U) {
-                continue;
+            const uint32_t before = input_level_write_count.load(std::memory_order_acquire);
+            for (std::size_t index = 0; index < slots.size(); ++index) {
+                slots[index] = input_level_history[index].load(std::memory_order_relaxed);
             }
-            for (std::size_t index = 0; index < levels.size(); ++index) {
-                levels[index] = input_levels[index].load(std::memory_order_relaxed);
-            }
-            const uint32_t after = input_levels_generation.load(std::memory_order_acquire);
+            const uint32_t after = input_level_write_count.load(std::memory_order_acquire);
+            write_count = before;
             if (before == after) {
                 break;
             }
         }
-        return levels;
+        return OrderPcmLevelHistory(slots, write_count);
     }
 
     mutable std::mutex control_mutex;
     mutable std::mutex recorder_io_mutex;
     mutable std::mutex player_io_mutex;
     AudioBackendLifecycle lifecycle;
-    std::array<std::atomic<uint16_t>, StopWatchAudioBackend::inputLevelCount> input_levels{};
-    std::atomic<uint32_t> input_levels_generation{0};
+    std::array<std::atomic<uint16_t>, StopWatchAudioBackend::inputLevelCount>
+        input_level_history{};
+    std::atomic<uint32_t> input_level_write_count{0};
     i2s_chan_handle_t tx_handle              = nullptr;
     i2s_chan_handle_t rx_handle              = nullptr;
     esp_codec_dev_handle_t codec_dev         = nullptr;
@@ -195,7 +203,7 @@ bool StopWatchAudioBackend::openRecorder(uint32_t sample_rate, uint8_t bits, uin
         _impl->lifecycle.closeRecorder();
         return false;
     }
-    _impl->publishInputLevels({});
+    _impl->clearInputLevels();
     return true;
 }
 
@@ -206,7 +214,7 @@ void StopWatchAudioBackend::closeRecorder()
     if (_impl->lifecycle.closeRecorder() == AudioCloseResult::Closed) {
         i2s_channel_disable(_impl->rx_handle);
     }
-    _impl->publishInputLevels({});
+    _impl->clearInputLevels();
 }
 
 std::size_t StopWatchAudioBackend::read(void* data, std::size_t bytes, TickType_t timeout)
@@ -223,9 +231,9 @@ std::size_t StopWatchAudioBackend::read(void* data, std::size_t bytes, TickType_
         return 0;
     }
     const auto* samples = static_cast<const int16_t*>(data);
-    const auto levels = MeasurePcmEnvelopeLevels<inputLevelCount>(
+    const uint16_t level = MeasurePcmSparseLevel<64>(
         samples, bytes / sizeof(int16_t));
-    _impl->publishInputLevels(levels);
+    _impl->publishInputLevel(level);
     return bytes;
 }
 

@@ -79,13 +79,13 @@ The waveform consists of fifteen narrow rounded LVGL rectangles within the origi
 `AssistantView::update(now_ms)` combines the existing PCM input level with small deterministic frame tables:
 
 - waiting: static, low gray bars;
-- listening: cyan/teal bars driven by fifteen temporal envelope slices of the existing microphone PCM buffer, sampled approximately every `60 ms`;
+- listening: cyan/teal bars driven by the latest fifteen microphone frame levels, sampled approximately every `60 ms`;
 - thinking: compact indigo inward/outward pulse, approximately `150-180 ms` per frame;
 - speaking: teal/green bars, approximately `100-120 ms` per frame;
 - connecting/activating/closing: slow low-amplitude pulse;
 - failed/timeout: static low red bars.
 
-The audio backend records fifteen atomic envelope values after each successful existing recorder read. It combines mean absolute and peak magnitude, following the existing Audio.FFT app's noise-floor, dynamic-normalization, attack, and release behavior without taking a second recorder read. The app loop samples only those values before taking the LVGL lock and drives animation. The view does not create a task, FreeRTOS timer, LVGL timer, second recorder, or FFT, which keeps shutdown ownership unchanged.
+After each successful existing recorder read, the audio backend sparsely samples at most 64 evenly distributed PCM values, combines mean absolute and peak magnitude into one level, and appends it to a fifteen-frame atomic history. This keeps full-buffer scans and repeated divisions out of the recorder hot path. The view follows the existing Audio.FFT app's noise-floor, dynamic-normalization, attack, and release behavior using bounded multiply/add operations. The app loop snapshots the history before taking the LVGL lock and drives animation. The view does not create a task, FreeRTOS timer, LVGL timer, second recorder, FFT, or high-cost power function, which keeps shutdown ownership unchanged.
 
 ## State Presentation
 
@@ -217,7 +217,7 @@ Continues to own Assistant lifecycle and service events. Its only UI-related add
 - no new full font;
 - no new task or timer;
 - no Assistant-side audio FFT, second recorder, or PCM-buffer copy;
-- fifteen atomic envelope values and approximately fifteen waveform objects plus the status/text/battery objects;
+- one atomic level write per recorder frame, a fifteen-value atomic history, and approximately fifteen waveform objects plus the status/text/battery objects;
 - deterministic frame tables stored as small constants;
 - no unbounded text history and no transcript list.
 

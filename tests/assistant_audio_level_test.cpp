@@ -22,16 +22,19 @@ int main()
     assert(MeasurePcmMeanAbsoluteLevel(loud.data(), loud.size()) == 7000);
     assert(MeasurePcmMeanAbsoluteLevel(limits.data(), limits.size()) == 32767);
 
-    constexpr std::array<int16_t, 30> envelope_samples{
+    constexpr std::array<int16_t, 30> sampled_levels{
         -100, 100, -200, 200, -300, 300, -400, 400, -500, 500,
         -600, 600, -700, 700, -800, 800, -900, 900, -1000, 1000,
         -1100, 1100, -1200, 1200, -1300, 1300, -1400, 1400, -1500, 1500,
     };
-    const auto envelope = MeasurePcmEnvelopeLevels<15>(
-        envelope_samples.data(), envelope_samples.size());
-    for (std::size_t index = 0; index < envelope.size(); ++index) {
-        assert(envelope[index] == static_cast<uint16_t>((index + 1) * 100));
-    }
+    assert(MeasurePcmSparseLevel<64>(sampled_levels.data(), sampled_levels.size()) == 1164);
+
+    constexpr std::array<uint16_t, 5> partial_history{100, 200, 300, 0, 0};
+    assert((OrderPcmLevelHistory<5>(partial_history, 3) ==
+            std::array<uint16_t, 5>{0, 0, 100, 200, 300}));
+    constexpr std::array<uint16_t, 5> wrapped_history{600, 700, 300, 400, 500};
+    assert((OrderPcmLevelHistory<5>(wrapped_history, 7) ==
+            std::array<uint16_t, 5>{300, 400, 500, 600, 700}));
 
     AssistantInputWaveform waveform;
     const AssistantInputWaveform::InputLevels silent_levels{};
