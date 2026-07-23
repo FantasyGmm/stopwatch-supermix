@@ -577,9 +577,12 @@ git commit -m "Centralize runtime Wi-Fi ownership"
 - Create: `main/cmake/check_binary_size.cmake`
 - Modify: `main/CMakeLists.txt`
 - Create: `docs/superpowers/reports/brookesia-xiaozhi-compatibility.md`
-- Create: `main/runtime/assistant/assistant_probe.h`
-- Create: `main/runtime/assistant/assistant_probe.cpp`
-- Create: `mac-codex-agent/tests/test_xiaozhi_probe_firmware_contract.py`
+- Create: `mac-codex-agent/tests/test_xiaozhi_runtime_firmware_contract.py`
+
+Post-migration cleanup (2026-07-22): the temporary compatibility probe was
+removed after the production `AssistantRuntime` and connected-watch lifecycle
+gates passed. The maintained contract now validates the production runtime
+directly.
 
 - [x] **Step 1: Add only the required Agent dependencies**
 
@@ -662,7 +665,7 @@ Continue to Task 8 only if every required row passes. If any required row fails,
 - [ ] **Step 6: Commit the passing probe/report**
 
 ```bash
-git add main/idf_component.yml sdkconfig.defaults dependencies.lock main/cmake/unified_assets.cmake main/CMakeLists.txt main/runtime/assistant/assistant_probe.cpp docs/superpowers/reports/brookesia-xiaozhi-compatibility.md
+git add main/idf_component.yml sdkconfig.defaults dependencies.lock main/cmake/unified_assets.cmake main/CMakeLists.txt mac-codex-agent/tests/test_xiaozhi_runtime_firmware_contract.py docs/superpowers/reports/brookesia-xiaozhi-compatibility.md
 git commit -m "Validate Brookesia Xiaozhi compatibility"
 ```
 

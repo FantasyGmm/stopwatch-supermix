@@ -27,7 +27,6 @@ LV_IMG_DECLARE(classic_hour_hand);
 LV_IMG_DECLARE(classic_minute_hand);
 LV_IMG_DECLARE(classic_second_hand);
 LV_IMG_DECLARE(alarm_icon);
-LV_IMG_DECLARE(icon_edit_badge);
 LV_IMG_DECLARE(go_home_guide);
 LV_IMG_DECLARE(icon_bat_lightning);
 

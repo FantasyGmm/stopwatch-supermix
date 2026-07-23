@@ -63,6 +63,19 @@ class UnifiedRuntimeFirmwareContractTest(unittest.TestCase):
         definitions = find_definitions(r'extern\s+"C"\s+void\s+app_main\s*\(')
         self.assertEqual(definitions, ["main/main.cpp"])
 
+    def test_production_tree_has_no_uninstalled_template_app(self):
+        self.assertFalse((ROOT / "main/apps/app_template").exists())
+        for relative_path in ("main/main.cpp", "main/apps/apps.h"):
+            source = read(relative_path)
+            self.assertNotIn("AppTemplate", source)
+            self.assertNotIn("app_template", source)
+
+    def test_asset_tree_has_no_unreferenced_badge_edit_icon(self):
+        self.assertFalse(
+            (ROOT / "main/assets/images/icon_edit_badge.c").exists()
+        )
+        self.assertNotIn("icon_edit_badge", read("main/assets/assets.h"))
+
     def test_assistant_does_not_switch_partitions_or_restart(self):
         source = read("main/apps/app_assistant/app_assistant.cpp")
         self.assertNotIn("esp_ota_set_boot_partition", source)

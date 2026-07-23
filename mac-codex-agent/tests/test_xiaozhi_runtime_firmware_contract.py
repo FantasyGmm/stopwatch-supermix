@@ -6,7 +6,7 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
-class XiaozhiProbeFirmwareContractTests(unittest.TestCase):
+class XiaozhiRuntimeFirmwareContractTests(unittest.TestCase):
     def test_agent_dependencies_are_pinned_to_zero_seven(self):
         manifest = (ROOT / "main" / "idf_component.yml").read_text(
             encoding="utf-8"
@@ -68,12 +68,9 @@ class XiaozhiProbeFirmwareContractTests(unittest.TestCase):
         self.assertNotIn("--emoji_collection", assets_cmake)
         self.assertIn("include(cmake/unified_assets.cmake)", main_cmake)
 
-    def test_production_runtime_owns_async_lifecycle_and_probe_is_thin(self):
+    def test_production_runtime_owns_async_lifecycle_without_migration_probe(self):
         runtime = (
             ROOT / "main" / "runtime" / "assistant" / "assistant_runtime.cpp"
-        ).read_text(encoding="utf-8")
-        probe = (
-            ROOT / "main" / "runtime" / "assistant" / "assistant_probe.cpp"
         ).read_text(encoding="utf-8")
 
         self.assertIn("AssistantStateMachine", runtime)
@@ -100,8 +97,12 @@ class XiaozhiProbeFirmwareContractTests(unittest.TestCase):
         self.assertIn("disconnect", runtime)
         self.assertIn("stop_started_ms = GetHAL().millis()", runtime)
         self.assertNotIn("stop_started_ms = last_update_ms", runtime)
-        self.assertIn("GetAssistantRuntime()", probe)
-        self.assertNotIn("std::vector<std::shared_ptr", probe)
+        self.assertFalse(
+            (ROOT / "main/runtime/assistant/assistant_probe.cpp").exists()
+        )
+        self.assertFalse(
+            (ROOT / "main/runtime/assistant/assistant_probe.h").exists()
+        )
 
     def test_runtime_keeps_pumping_until_forced_app_close_finishes_stop(self):
         main = (ROOT / "main" / "main.cpp").read_text(encoding="utf-8")

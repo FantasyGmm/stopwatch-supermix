@@ -504,7 +504,7 @@ Run:
 python3 -m unittest \
   mac-codex-agent/tests/test_reproducible_dependencies_firmware_contract.py \
   mac-codex-agent/tests/test_firmware_font_contract.py \
-  mac-codex-agent/tests/test_xiaozhi_probe_firmware_contract.py -v
+  mac-codex-agent/tests/test_xiaozhi_runtime_firmware_contract.py -v
 ```
 
 Expected: all tests pass.

@@ -4,14 +4,11 @@
  * SPDX-License-Identifier: MIT
  */
 #include <smooth_ui_toolkit.hpp>
-#include <uitk/short_namespace.hpp>
 #include <mooncake_log.h>
 #include <mooncake.h>
 #include <apps/apps.h>
 #include <apps/common/edge_control/global_edge_control_service.h>
 #include <hal/hal.h>
-#include <lv_demos.h>
-#include <apps/common/audio/audio.h>
 #include <runtime/service_runtime.h>
 #include <runtime/runtime_supervisor.h>
 #include <sdkconfig.h>
@@ -61,7 +58,6 @@ extern "C" void app_main(void)
     GetMooncake().installApp(std::make_unique<AppImu>());
     GetMooncake().installApp(std::make_unique<AppFft>());
     GetMooncake().installApp(std::make_unique<AppSetup>());
-    // GetMooncake().installApp(std::make_unique<AppTemplate>());
 
     // Main loop
     while (1) {
