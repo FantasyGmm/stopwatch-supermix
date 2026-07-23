@@ -739,7 +739,7 @@ void AppCodexStatus::render_alert()
         state_color = kCodexRed;
     } else if (alert->state == CodexTaskState::Running) {
         state_label = "正在处理";
-        state_color = kCodexBlue;
+        state_color = kRunningCyan;
     }
     const std::string detail =
         std::string(state_label) + " \xC2\xB7 " + alert->title;

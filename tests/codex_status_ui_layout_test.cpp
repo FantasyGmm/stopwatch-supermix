@@ -70,6 +70,7 @@ int main()
 
     assert(kPanelGraphite == 0x27303E);
     assert(kBeaconViolet == 0x7C9DFF);
+    assert(kRunningCyan == 0x49C9EE);
     assert(kQuotaMint == 0x53D7A4);
     assert(kSignalWhite == 0xF2F6F8);
     assert(kEtchedGray == 0x788391);

@@ -57,14 +57,26 @@ class FirmwareFontContractTests(unittest.TestCase):
         self.assertNotIn('alert->time + " \\xC2\\xB7 "', app)
 
     def test_codex_alert_heading_uses_distinct_summary_colors(self):
-        app = (self.codex_root / "app_codex_status.cpp").read_text(encoding="utf-8")
+        app = (self.codex_root / "app_codex_status.cpp").read_text(
+            encoding="utf-8"
+        )
+        layout = (self.codex_root / "codex_status_ui_layout.h").read_text(
+            encoding="utf-8"
+        )
         carousel = (self.codex_root / "codex_alert_carousel.cpp").read_text(
             encoding="utf-8"
         )
 
-        self.assertIn("kCompletedGreen", app)
+        self.assertIn(
+            "constexpr uint32_t kRunningCyan = 0x49C9EE", layout
+        )
         self.assertIn("CodexTaskState::Running", app)
-        self.assertIn("kCodexBlue", app)
+        self.assertIn("state_color = kRunningCyan;", app)
+        self.assertIn(
+            '_panel, "--", kAlertProjectY, &lv_font_montserrat_22, '
+            "kBeaconViolet",
+            app,
+        )
         self.assertIn("kCompletedGreen", app)
         self.assertIn('return "COMPLETED";', carousel)
         self.assertIn('? "PENDING" : "RUNNING"', carousel)
