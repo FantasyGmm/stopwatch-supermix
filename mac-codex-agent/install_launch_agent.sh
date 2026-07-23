@@ -44,6 +44,7 @@ for module in \
     app_state.py \
     agent.py \
     codex_adapter.py \
+    completion_classifier.py \
     task_alerts.py \
     protocol.py; do
     cp "$ROOT_DIR/$module" "$APP_CODE/$module"

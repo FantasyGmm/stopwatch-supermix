@@ -71,16 +71,18 @@ manually when synchronization is needed again.
 ## Task Alerts
 
 The agent watches local Codex rollout events. `task_started` makes a conversation
-Running. The single `task_complete` event is classified locally: responses that
-require user input become Pending and chime once; normal responses become
-Completed without a chime. A later user message completes older Pending records
-in that conversation without affecting another conversation.
+Running. When the turn completes, the classifier first checks structured rollout
+signals: unfinished plan items and unresolved input requests become Pending and
+chime once. It then checks the final response structure for questions, explicit
+choice handoffs, and required user actions. Normal responses become Completed
+without a chime. A later user message completes older Pending records in that
+conversation without affecting another conversation.
 
-Completed and Waiting for Instruction are outcomes of a Codex turn. The agent
-classifies only the final paragraph of `last_agent_message`: direct questions,
-requests for confirmation or information, and required user actions become
-Waiting for Instruction; other completions become Completed. This is a local
-heuristic and does not send the response text to the watch.
+Classification stays entirely local and does not send response text to the
+watch. Each completed alert stores an explainable reason such as
+`structured_unfinished_plan`, `structured_input_request`, `text_question`, or
+`completion_only`, so incorrect classifications can be diagnosed from the
+ledger and log without exposing prompt or response content.
 
 The project name is derived from the conversation working directory, and the
 conversation title is refreshed through Codex's local app-server so generated
