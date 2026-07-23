@@ -37,11 +37,15 @@ echo "[2/20] Assistant state machine host test"
     -o "$HOST_TEST_DIR/assistant_state_machine_test"
 "$HOST_TEST_DIR/assistant_state_machine_test"
 
-echo "[3/20] Assistant presentation model host test"
+echo "[3/20] Assistant presentation and lifecycle event policy host tests"
 "$CXX" -std=c++17 -Wall -Wextra -Werror -Imain \
     tests/assistant_presentation_model_test.cpp \
     -o "$HOST_TEST_DIR/assistant_presentation_model_test"
 "$HOST_TEST_DIR/assistant_presentation_model_test"
+"$CXX" -std=c++17 -Wall -Wextra -Werror -Imain \
+    tests/assistant_lifecycle_event_policy_test.cpp \
+    -o "$HOST_TEST_DIR/assistant_lifecycle_event_policy_test"
+"$HOST_TEST_DIR/assistant_lifecycle_event_policy_test"
 
 echo "[4/20] Assistant audio level host test"
 "$CXX" -std=c++17 -Wall -Wextra -Werror -Imain \

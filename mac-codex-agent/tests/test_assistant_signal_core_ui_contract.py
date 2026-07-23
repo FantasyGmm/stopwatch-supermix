@@ -93,6 +93,7 @@ class AssistantSignalCoreUiContractTests(unittest.TestCase):
         runtime = (ROOT / "main/runtime/assistant/assistant_runtime.cpp").read_text()
 
         self.assertIn("WakeDetected", mailbox)
+        self.assertIn("EvaluateAssistantLifecycleEvent", runtime)
         awake_branch = re.search(
             r"event == event_name\(ManagerHelper::GeneralEvent::Awake\)\) \{"
             r"(?P<body>.*?)\n\s*\}",
@@ -100,9 +101,13 @@ class AssistantSignalCoreUiContractTests(unittest.TestCase):
             re.S,
         )
         self.assertIsNotNone(awake_branch)
-        self.assertRegex(
+        self.assertIn(
+            "event_kind = AssistantLifecycleEventKind::Awake",
             awake_branch.group("body"),
-            r"if \(!unexpected\) \{\s*"
+        )
+        self.assertRegex(
+            runtime,
+            r"if \(decision\.publish_wake\) \{\s*"
             r"mailbox\.publish\(\{session_id,\s*AssistantEventKind::WakeDetected,\s*"
             r"\{\},\s*false\}\);",
         )

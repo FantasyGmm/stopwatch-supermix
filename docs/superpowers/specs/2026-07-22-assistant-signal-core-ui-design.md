@@ -182,6 +182,13 @@ Battery is refreshed at most once per second from `GetHAL().getBatteryLevel()`. 
 
 The existing runtime callbacks receive the WakeNet-driven `GeneralEvent::Awake` plus listening and speaking changes. The implementation forwards them to the app mailbox so the UI does not infer microphone or speaker state from elapsed time. `Awake` is the authoritative transition out of Waiting For Wake because the XiaoZhi producer does not emit `ListeningStatusChanged(true)` when the first audio channel opens.
 
+Brookesia can mark `Awake` or `Slept` as unexpected when its internal action
+flag lags a real AFE conversation transition. The manager force-synchronizes
+those events to the correct stable state, so the StopWatch adapter treats them
+as recoverable conversation synchronization: `Awake` still publishes
+`WakeDetected`, and neither event opens the fatal `UNAVAILABLE` page.
+Unexpected activation, start, or stop lifecycle events remain errors.
+
 Required presentation rules:
 
 1. `Running` maps to Waiting For Wake, not Listening.
@@ -239,7 +246,8 @@ The firmware build must remain below the existing application capacity gate. The
 
 - `Running` renders Waiting For Wake.
 - Real awake, listening, and speaking callbacks are forwarded through the mailbox.
-- the production sequence `Speaking(false) -> Listening(true)` remains Waiting For Wake until the next Awake event.
+- after the first real wake, `Speaking(false) -> Listening(true)` returns the continuous conversation to Listening.
+- unexpected `Awake` and `Slept` synchronization events do not enter Failure; unexpected start and stop lifecycle events remain errors.
 - inactive listening cannot overwrite Thinking/Speaking.
 - speaking completion returns to Waiting For Wake.
 - update metadata remains non-interactive and visible across state changes.

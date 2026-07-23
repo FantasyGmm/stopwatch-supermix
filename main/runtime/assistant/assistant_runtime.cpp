@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 #include "assistant_runtime.h"
+#include "assistant_lifecycle_event_policy.h"
 #include "assistant_output_sync_policy.h"
 #include "assistant_stop_policy.h"
 #include "assistant_trace.h"
@@ -735,28 +736,45 @@ bool AssistantRuntime::Impl::subscribe(uint64_t session_id)
                              AssistantTraceResult::Rejected);
                 return;
             }
-            uint32_t bits = unexpected ? static_cast<uint32_t>(UnexpectedLifecycle) : 0U;
+            AssistantLifecycleEventKind event_kind = AssistantLifecycleEventKind::Other;
             AssistantTraceDetail detail = AssistantTraceDetail::Unexpected;
             if (event == event_name(ManagerHelper::GeneralEvent::Activated)) {
-                bits |= Activated;
+                event_kind = AssistantLifecycleEventKind::Activated;
                 detail = AssistantTraceDetail::Activate;
             } else if (event == event_name(ManagerHelper::GeneralEvent::Started)) {
-                bits |= Started;
+                event_kind = AssistantLifecycleEventKind::Started;
                 detail = AssistantTraceDetail::Running;
             } else if (event == event_name(ManagerHelper::GeneralEvent::Awake)) {
+                event_kind = AssistantLifecycleEventKind::Awake;
                 detail = AssistantTraceDetail::Listening;
-                if (!unexpected) {
-                    mailbox.publish({session_id, AssistantEventKind::WakeDetected, {}, false});
-                }
+            } else if (event == event_name(ManagerHelper::GeneralEvent::Slept)) {
+                event_kind = AssistantLifecycleEventKind::Slept;
+                detail = AssistantTraceDetail::Listening;
             } else if (event == event_name(ManagerHelper::GeneralEvent::Stopped)) {
-                bits |= Stopped;
+                event_kind = AssistantLifecycleEventKind::Stopped;
                 detail = AssistantTraceDetail::Stopped;
             }
-            if (bits != 0) {
+
+            const auto decision = EvaluateAssistantLifecycleEvent(event_kind, unexpected);
+            uint32_t bits =
+                decision.report_unexpected ? static_cast<uint32_t>(UnexpectedLifecycle) : 0U;
+            if (event_kind == AssistantLifecycleEventKind::Activated) {
+                bits |= Activated;
+            } else if (event_kind == AssistantLifecycleEventKind::Started) {
+                bits |= Started;
+            } else if (event_kind == AssistantLifecycleEventKind::Stopped) {
+                bits |= Stopped;
+            }
+            if (decision.publish_wake) {
+                mailbox.publish({session_id, AssistantEventKind::WakeDetected, {}, false});
+            }
+            if (bits != 0 || unexpected) {
                 record_trace(session_id, AssistantTraceComponent::Callback,
                              AssistantTraceEvent::Callback, state.state(), detail,
-                             unexpected ? AssistantTraceResult::Rejected
-                                        : AssistantTraceResult::Accepted);
+                             decision.report_unexpected ? AssistantTraceResult::Rejected
+                                                        : AssistantTraceResult::Accepted);
+            }
+            if (bits != 0) {
                 control_bits.fetch_or(bits);
             }
         });
