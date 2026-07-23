@@ -42,6 +42,15 @@ _FENCED_CODE_RE = re.compile(r"```.*?```", re.DOTALL)
 _INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
 _MARKDOWN_LINK_TARGET_RE = re.compile(r"\]\([^)\n]*\)")
 _URL_RE = re.compile(r"https?://\S+")
+_QUOTED_QUESTION_RE = re.compile(
+    r"(?:"
+    r"“[^”\n]*[?？][^”\n]*”|"
+    r"‘[^’\n]*[?？][^’\n]*’|"
+    r"\"[^\"\n]*[?？][^\"\n]*\"|"
+    r"'[^'\n]*[?？][^'\n]*'"
+    r")"
+)
+_NON_PROSE_LINE_RE = re.compile(r"^\s*(?:#{1,6}\s+|>)")
 _OPTION_RE = re.compile(
     r"^\s*(?:[-*]\s*)?([A-Z]|[1-9])\s*[.、:：)）]\s*\S+",
     re.MULTILINE,
@@ -74,6 +83,14 @@ def _paragraphs(message: str) -> List[str]:
     while paragraphs and paragraphs[-1].startswith("::"):
         paragraphs.pop()
     return paragraphs
+
+
+def _has_prose_question(paragraph: str) -> bool:
+    prose = "\n".join(
+        line for line in paragraph.splitlines() if not _NON_PROSE_LINE_RE.match(line)
+    )
+    prose = _QUOTED_QUESTION_RE.sub("", prose)
+    return "?" in prose or "？" in prose
 
 
 def _has_choice_handoff(message: str, final: str) -> bool:
@@ -113,8 +130,10 @@ def classify_completion(
         return CompletionClassification("completed", "completion_only")
 
     final = paragraphs[-1]
-    if "?" in final or "？" in final:
+    if _has_prose_question(final):
         return CompletionClassification("waiting", "text_question")
+    if len(paragraphs) >= 2 and _has_prose_question(paragraphs[-2]):
+        return CompletionClassification("waiting", "text_question_before_epilogue")
     if _has_choice_handoff("\n\n".join(paragraphs), final):
         return CompletionClassification("waiting", "text_choice")
 

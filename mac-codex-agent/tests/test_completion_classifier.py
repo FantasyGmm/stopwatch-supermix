@@ -37,6 +37,26 @@ class CompletionClassifierTests(unittest.TestCase):
         self.assertEqual(result.outcome, "waiting")
         self.assertEqual(result.reason, "text_question")
 
+    def test_confirmation_question_before_trailing_guidance_is_waiting(self):
+        result = classify_completion(
+            "测试待确认场景：\n\n"
+            "我准备删除旧版固件缓存并重新生成发布包。"
+            "此操作可能需要几分钟，是否确认继续？\n\n"
+            "请先不要回复，观察手表上的 Pending 动画。"
+        )
+
+        self.assertEqual(result.outcome, "waiting")
+        self.assertEqual(result.reason, "text_question_before_epilogue")
+
+    def test_question_mark_in_markdown_heading_is_not_waiting(self):
+        result = classify_completion(
+            "### Assessment - Ready to merge?\n\n"
+            "Yes. All current-head software gates pass."
+        )
+
+        self.assertEqual(result.outcome, "completed")
+        self.assertEqual(result.reason, "completion_only")
+
     def test_chinese_letter_choice_group_is_waiting(self):
         result = classify_completion(
             "- A：层级最均衡，我推荐。\n"
