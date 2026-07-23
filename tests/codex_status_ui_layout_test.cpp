@@ -54,13 +54,18 @@ int main()
     assert(kAlertDividerX == 82);
     assert(kAlertDividerY == 304);
     assert(kAlertDividerWidth == 302);
-    assert(kAlertHeadingY == 315);
+    assert(kAlertHeadingY == 328);
     assert(kAlertHeadingWidth == 310);
-    assert(kAlertProjectY == 346);
+    assert(kAlertProjectY == 357);
     assert(kAlertProjectWidth == 340);
-    assert(kAlertDetailY == 382);
+    assert(kAlertDetailY == 389);
     assert(kAlertDetailWidth == 320);
     assert(kBatteryY == 438);
+
+    assert(kAlertHeadingY - kAlertDividerY == 24);
+    assert(kAlertProjectY - kAlertHeadingY == 29);
+    assert(kAlertDetailY - kAlertProjectY == 32);
+    assert(kBatteryY - kAlertDetailY == 49);
     assert(kBatteryY < kScreenSize);
 
     assert(kPanelGraphite == 0x27303E);

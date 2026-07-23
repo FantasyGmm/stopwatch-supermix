@@ -56,11 +56,11 @@ constexpr int kWeekY = 260;
 constexpr int kAlertDividerX = 82;
 constexpr int kAlertDividerY = 304;
 constexpr int kAlertDividerWidth = 302;
-constexpr int kAlertHeadingY = 315;
+constexpr int kAlertHeadingY = 328;
 constexpr int kAlertHeadingWidth = 310;
-constexpr int kAlertProjectY = 346;
+constexpr int kAlertProjectY = 357;
 constexpr int kAlertProjectWidth = 340;
-constexpr int kAlertDetailY = 382;
+constexpr int kAlertDetailY = 389;
 constexpr int kAlertDetailWidth = 320;
 constexpr int kBatteryY = 438;
 
