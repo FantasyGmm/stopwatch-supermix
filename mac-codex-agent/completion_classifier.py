@@ -122,4 +122,3 @@ def classify_completion(
     if any(phrase in lowered for phrase in WAITING_PHRASES):
         return CompletionClassification("waiting", "text_required_action")
     return CompletionClassification("completed", "completion_only")
-
