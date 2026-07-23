@@ -15,6 +15,9 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         self.assertIn("BLE_GAP_EVENT_SUBSCRIBE", source)
         self.assertIn("BLE_GAP_EVENT_MTU", source)
         self.assertIn("ble_gatts_notify_custom", source)
+        voice_tx_definition = source.split("&kVoiceTxUuid.u", 1)[1].split("},", 1)[0]
+        self.assertIn("voice_tx_access", voice_tx_definition)
+        self.assertNotIn("nullptr,\n        nullptr,\n        nullptr,", voice_tx_definition)
 
     def test_transport_bounds_control_queue_and_mtu_payload(self):
         header = (ROOT / "main/apps/app_codex_status/codex_ble_transport.h").read_text()

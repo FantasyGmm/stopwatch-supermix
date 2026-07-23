@@ -114,6 +114,16 @@ int voice_control_access(
                : BLE_ATT_ERR_INSUFFICIENT_RES;
 }
 
+int voice_tx_access(
+    uint16_t,
+    uint16_t,
+    ble_gatt_access_ctxt*,
+    void*
+)
+{
+    return BLE_ATT_ERR_REQ_NOT_SUPPORTED;
+}
+
 const ble_gatt_chr_def kCharacteristics[] = {
     {
         &kStatusRxUuid.u,
@@ -137,7 +147,7 @@ const ble_gatt_chr_def kCharacteristics[] = {
     },
     {
         &kVoiceTxUuid.u,
-        nullptr,
+        voice_tx_access,
         nullptr,
         nullptr,
         BLE_GATT_CHR_F_NOTIFY | BLE_GATT_CHR_F_NOTIFY_INDICATE_ENC,
