@@ -151,6 +151,15 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         self.assertIn("i2s_channel_read", read)
         self.assertNotIn("timed_mutex", backend)
 
+    def test_audio_backend_logs_recorder_open_failure_cause(self):
+        backend = (ROOT / "main/hal/audio/stopwatch_audio_backend.cpp").read_text()
+        open_recorder = backend.split(
+            "bool StopWatchAudioBackend::openRecorder", 1
+        )[1].split("void StopWatchAudioBackend::closeRecorder", 1)[0]
+        self.assertIn("recorder open rejected", open_recorder)
+        self.assertIn("recorder enable failed", open_recorder)
+        self.assertIn("esp_err_to_name", open_recorder)
+
     def test_forced_audio_cleanup_never_takes_worker_state_mutex(self):
         controller = (
             ROOT / "main/apps/app_codex_status/ble_voice_probe_controller.cpp"

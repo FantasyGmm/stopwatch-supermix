@@ -8,6 +8,7 @@
 #include <driver/i2s_std.h>
 #include <esp_codec_dev.h>
 #include <esp_codec_dev_defaults.h>
+#include <esp_err.h>
 #include <mooncake_log.h>
 #include <mutex>
 #include <string_view>
@@ -146,13 +147,28 @@ bool StopWatchAudioBackend::openRecorder(uint32_t sample_rate, uint8_t bits, uin
 {
     std::lock_guard<std::mutex> io_lock(_impl->recorder_io_mutex);
     std::lock_guard<std::mutex> control_lock(_impl->control_mutex);
-    if (!_impl->initialized || !validFormat(sample_rate, bits, channels)) {
+    const bool format_valid = validFormat(sample_rate, bits, channels);
+    if (!_impl->initialized || !format_valid) {
+        mclog::tagError(
+            Tag,
+            "recorder open rejected: initialized={} format_valid={} rate={} bits={} channels={}",
+            _impl->initialized,
+            format_valid,
+            sample_rate,
+            bits,
+            channels);
         return false;
     }
     if (_impl->lifecycle.openRecorder() == AudioOpenResult::AlreadyOpen) {
         return true;
     }
-    if (i2s_channel_enable(_impl->rx_handle) != ESP_OK) {
+    const esp_err_t enable_result = i2s_channel_enable(_impl->rx_handle);
+    if (enable_result != ESP_OK) {
+        mclog::tagError(
+            Tag,
+            "recorder enable failed: {} ({})",
+            esp_err_to_name(enable_result),
+            enable_result);
         _impl->lifecycle.closeRecorder();
         return false;
     }
