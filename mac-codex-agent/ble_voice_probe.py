@@ -14,11 +14,15 @@ import time
 import wave
 from typing import Any, Callable, Optional
 
+from cryptography.exceptions import InvalidTag
+
+from voice_probe_crypto import decrypt, derive_nonce
 from voice_probe_metrics import ProbeMetrics
 from voice_probe_protocol import (
     DATA,
     ERROR,
     MICROPHONE_ADPCM,
+    MICROPHONE_ADPCM_AES_CCM,
     START_ACK,
     STOP_SUMMARY,
     SYNTHETIC,
@@ -30,6 +34,7 @@ from voice_probe_protocol import (
     decode_start_ack,
     encode_start,
     encode_stop,
+    notification_aad,
 )
 
 
@@ -136,6 +141,8 @@ class VoiceProbeClient:
         cancelled_error: Optional[asyncio.CancelledError] = None
         report_error: Optional[Exception] = None
         expected_sequence = 0
+        invalid_tags = 0
+        encrypted_value_sizes: set[int] = set()
         loop = asyncio.get_running_loop()
         notifications: asyncio.Queue[Any] = asyncio.Queue()
 
@@ -244,16 +251,43 @@ class VoiceProbeClient:
                             f"expected {expected_sequence}"
                         )
                     sequence_gap = notification.sequence > expected_sequence
+                    decode_payload = notification.payload
+                    if profile.mode == MICROPHONE_ADPCM_AES_CCM:
+                        encrypted_value_sizes.add(
+                            14 + len(notification.payload)
+                        )
+                        try:
+                            decode_payload = decrypt(
+                                notification_aad(notification),
+                                notification.payload,
+                                derive_nonce(
+                                    notification.session,
+                                    notification.sequence,
+                                    notification.watch_ms,
+                                ),
+                            )
+                        except InvalidTag as error:
+                            invalid_tags += 1
+                            raise ProbeError(
+                                "invalid AES-CCM authentication tag"
+                            ) from error
+                        except ValueError as error:
+                            raise ProbeError(
+                                f"invalid encrypted microphone packet: {error}"
+                            ) from error
                     metrics.observe(
                         notification,
                         arrival_ns,
                         expected_sequence=expected_sequence,
                     )
                     expected_sequence = notification.sequence + 1
-                    if profile.mode == MICROPHONE_ADPCM and not sequence_gap:
+                    if profile.mode in (
+                        MICROPHONE_ADPCM,
+                        MICROPHONE_ADPCM_AES_CCM,
+                    ) and not sequence_gap:
                         pcm_samples.extend(
                             decode_ima_adpcm_block(
-                                notification.payload, _MICROPHONE_SAMPLES_PER_BLOCK
+                                decode_payload, _MICROPHONE_SAMPLES_PER_BLOCK
                             )
                         )
                     continue
@@ -264,7 +298,9 @@ class VoiceProbeClient:
                             f"StopSummary sequence {notification.sequence}; "
                             f"expected {expected_sequence}"
                         )
-                    summary = StopSummary.from_payload(notification.payload)
+                    summary = StopSummary.from_payload(
+                        notification.payload, mode=profile.mode
+                    )
                     continue
 
                 if notification.kind == ERROR:
@@ -333,13 +369,25 @@ class VoiceProbeClient:
                     exception_text = f"failed to write WAV: {error}"
             try:
                 metrics_result = self._metrics_result(
-                    metrics, summary, disconnected, pcm_samples, exception_text
+                    metrics,
+                    summary,
+                    disconnected,
+                    pcm_samples,
+                    exception_text,
+                    invalid_tags,
+                    encrypted_value_sizes,
                 )
             except Exception as error:
                 if not exception_text:
                     exception_text = f"failed to finalize metrics: {error}"
                 metrics_result = self._metrics_result(
-                    metrics, None, disconnected, pcm_samples, exception_text
+                    metrics,
+                    None,
+                    disconnected,
+                    pcm_samples,
+                    exception_text,
+                    invalid_tags,
+                    encrypted_value_sizes,
                 )
             report = {
                 "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -353,7 +401,10 @@ class VoiceProbeClient:
                 ),
                 "metrics": metrics_result,
                 "automated_pass": bool(metrics_result["automated_pass"]),
-                "manual_audio_review_required": profile.mode == MICROPHONE_ADPCM,
+                "manual_audio_review_required": profile.mode in (
+                    MICROPHONE_ADPCM,
+                    MICROPHONE_ADPCM_AES_CCM,
+                ),
                 "exception": exception_text or None,
                 "wav_path": str(wav_path) if wav_path is not None else None,
             }
@@ -386,6 +437,8 @@ class VoiceProbeClient:
         disconnected: bool,
         pcm_samples: list[int],
         exception_text: str,
+        invalid_tags: int,
+        encrypted_value_sizes: set[int],
     ) -> dict:
         if summary is not None:
             result = metrics.finish(
@@ -401,12 +454,17 @@ class VoiceProbeClient:
                 result["acceptance_decision"] = (
                     "fail" if result["required_profile"] else "exploratory_fail"
                 )
-            return result
+            return VoiceProbeClient._add_crypto_report_fields(
+                result,
+                metrics.mode,
+                invalid_tags,
+                encrypted_value_sizes,
+            )
 
         required_profile = not (
             metrics.mode == SYNTHETIC and metrics.target_bps == 32768
         )
-        return {
+        result = {
             "session": metrics.session,
             "mode": metrics.mode,
             "target_bps": metrics.target_bps,
@@ -416,6 +474,11 @@ class VoiceProbeClient:
             "receiver_payload_bytes": metrics._receiver_payload_bytes,
             "queue_overflows": None,
             "encode_failures": None,
+            "crypto_packets": None,
+            "crypto_failures": None,
+            "crypto_total_us": None,
+            "crypto_max_us": None,
+            "crypto_p99_us": None,
             "elapsed_ms": None,
             "generated_payload_bytes": None,
             "captured_pcm_samples": None,
@@ -438,9 +501,50 @@ class VoiceProbeClient:
             "failure_reasons": ["incomplete_summary"],
             "automated_pass": False,
             "required_profile": required_profile,
-            "manual_audio_review_required": metrics.mode == MICROPHONE_ADPCM,
+            "manual_audio_review_required": metrics.mode in (
+                MICROPHONE_ADPCM,
+                MICROPHONE_ADPCM_AES_CCM,
+            ),
             "acceptance_decision": "fail" if required_profile else "exploratory_fail",
         }
+        return VoiceProbeClient._add_crypto_report_fields(
+            result,
+            metrics.mode,
+            invalid_tags,
+            encrypted_value_sizes,
+        )
+
+    @staticmethod
+    def _add_crypto_report_fields(
+        result: dict,
+        mode: int,
+        invalid_tags: int,
+        encrypted_value_sizes: set[int],
+    ) -> dict:
+        encrypted_value_bytes = (
+            next(iter(encrypted_value_sizes))
+            if len(encrypted_value_sizes) == 1
+            else None
+        )
+        result["invalid_tags"] = invalid_tags
+        result["encrypted_characteristic_value_bytes"] = encrypted_value_bytes
+        if mode != MICROPHONE_ADPCM_AES_CCM:
+            return result
+
+        failure_reasons = list(result["failure_reasons"])
+        if invalid_tags and "invalid_tags" not in failure_reasons:
+            failure_reasons.append("invalid_tags")
+        if (
+            encrypted_value_bytes != 186
+            and "encrypted_characteristic_value_bytes" not in failure_reasons
+        ):
+            failure_reasons.append("encrypted_characteristic_value_bytes")
+        result["failure_reasons"] = failure_reasons
+        result["automated_pass"] = not failure_reasons
+        result["acceptance_decision"] = (
+            "pass" if result["automated_pass"] else "fail"
+        )
+        return result
 
     @staticmethod
     def _write_report(path: pathlib.Path, report: dict) -> None:
@@ -458,6 +562,12 @@ def _build_parser() -> argparse.ArgumentParser:
     for name, mode, choices, wav_required in (
         ("synthetic", SYNTHETIC, (8192, 16384, 32768), False),
         ("microphone", MICROPHONE_ADPCM, (8192,), True),
+        (
+            "microphone-encrypted",
+            MICROPHONE_ADPCM_AES_CCM,
+            (8192,),
+            True,
+        ),
     ):
         command = subcommands.add_parser(name)
         command.set_defaults(protocol_mode=mode)

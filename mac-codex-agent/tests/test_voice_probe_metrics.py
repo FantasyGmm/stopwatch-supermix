@@ -10,6 +10,7 @@ from voice_probe_metrics import ProbeMetrics
 from voice_probe_protocol import (
     DATA,
     MICROPHONE_ADPCM,
+    MICROPHONE_ADPCM_AES_CCM,
     SYNTHETIC,
     Notification,
     StopSummary,
@@ -40,6 +41,75 @@ def synthetic_summary(
 
 
 class VoiceProbeMetricsTests(unittest.TestCase):
+    def test_encrypted_microphone_uses_ciphertext_size_and_crypto_gate(self):
+        metrics = ProbeMetrics(
+            session=9,
+            mode=MICROPHONE_ADPCM_AES_CCM,
+            target_bps=8192,
+        )
+        for sequence, timestamp_ms in ((1, 0), (2, 20)):
+            metrics.observe(
+                Notification(DATA, 9, sequence, timestamp_ms, bytes(172)),
+                arrival_ns=timestamp_ms * 1_000_000,
+            )
+        result = metrics.finish(
+            summary=StopSummary(
+                2,
+                2,
+                0,
+                0,
+                40,
+                344,
+                640,
+                256,
+                crypto_packets=2,
+                crypto_failures=0,
+                crypto_total_us=30,
+                crypto_max_us=20,
+                crypto_p99_us=20,
+            ),
+            disconnected=False,
+            decoded_pcm_samples=640,
+        )
+        self.assertTrue(result["microphone_block_byte_parity"])
+        self.assertEqual(result["crypto_packets"], 2)
+        self.assertEqual(result["crypto_p99_us"], 20)
+        self.assertNotIn("crypto_failures", result["failure_reasons"])
+
+    def test_encrypted_microphone_rejects_crypto_failure_and_p99_over_gate(self):
+        metrics = ProbeMetrics(
+            session=9,
+            mode=MICROPHONE_ADPCM_AES_CCM,
+            target_bps=8192,
+        )
+        for sequence, timestamp_ms in ((1, 0), (2, 20)):
+            metrics.observe(
+                Notification(DATA, 9, sequence, timestamp_ms, bytes(172)),
+                arrival_ns=timestamp_ms * 1_000_000,
+            )
+        result = metrics.finish(
+            summary=StopSummary(
+                2,
+                2,
+                0,
+                0,
+                40,
+                344,
+                640,
+                256,
+                crypto_packets=3,
+                crypto_failures=1,
+                crypto_total_us=1200,
+                crypto_max_us=1100,
+                crypto_p99_us=1100,
+            ),
+            disconnected=False,
+            decoded_pcm_samples=640,
+        )
+        self.assertFalse(result["automated_pass"])
+        self.assertIn("crypto_failures", result["failure_reasons"])
+        self.assertIn("crypto_p99_us", result["failure_reasons"])
+
     def test_clean_required_profile_passes_at_requested_rate(self):
         metrics = ProbeMetrics(session=9, mode=SYNTHETIC, target_bps=8192)
         sizes = [234] * 34 + [236]

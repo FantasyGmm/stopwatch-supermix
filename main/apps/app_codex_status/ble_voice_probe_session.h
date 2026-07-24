@@ -3,6 +3,7 @@
 #include "ble_voice_probe_protocol.h"
 
 #include <cstdint>
+#include <vector>
 
 namespace ble_voice_probe {
 
@@ -23,6 +24,7 @@ public:
     void record_queue_overflow();
     void record_encode_failure();
     void record_captured_samples(uint32_t samples);
+    void record_crypto_result(uint32_t elapsed_us, bool succeeded);
     StopSummary summary(uint32_t now_ms) const;
 
 private:
@@ -30,6 +32,7 @@ private:
     uint32_t _started_ms = 0;
     uint32_t _next_sequence = 0;
     StopSummary _summary = {};
+    std::vector<uint32_t> _crypto_elapsed_us;
     bool _active = false;
 };
 

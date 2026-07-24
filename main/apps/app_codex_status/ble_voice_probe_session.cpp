@@ -19,6 +19,7 @@ bool Session::start(const ControlCommand& command, uint32_t now_ms, uint16_t neg
     _started_ms = now_ms;
     _next_sequence = 0;
     _summary = {};
+    _crypto_elapsed_us.clear();
     _summary.negotiated_mtu = negotiated_mtu;
     _active = true;
     return true;
@@ -30,6 +31,7 @@ void Session::reset()
     _started_ms = 0;
     _next_sequence = 0;
     _summary = {};
+    _crypto_elapsed_us.clear();
     _active = false;
 }
 
@@ -133,10 +135,32 @@ void Session::record_captured_samples(uint32_t samples)
     }
 }
 
+void Session::record_crypto_result(uint32_t elapsed_us, bool succeeded)
+{
+    if (!_active) {
+        return;
+    }
+    ++_summary.crypto_packets;
+    if (!succeeded) {
+        ++_summary.crypto_failures;
+    }
+    _summary.crypto_total_us += elapsed_us;
+    _summary.crypto_max_us = std::max(_summary.crypto_max_us, elapsed_us);
+    _crypto_elapsed_us.push_back(elapsed_us);
+}
+
 StopSummary Session::summary(uint32_t now_ms) const
 {
     StopSummary result = _summary;
     result.elapsed_ms = static_cast<uint32_t>(now_ms - _started_ms);
+    if (!_crypto_elapsed_us.empty()) {
+        std::vector<uint32_t> timings = _crypto_elapsed_us;
+        const size_t rank = (timings.size() * 99U + 99U) / 100U;
+        std::nth_element(
+            timings.begin(), timings.begin() + static_cast<std::ptrdiff_t>(rank - 1U),
+            timings.end());
+        result.crypto_p99_us = timings[rank - 1U];
+    }
     return result;
 }
 

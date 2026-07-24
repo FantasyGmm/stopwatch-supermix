@@ -1,5 +1,6 @@
 #include "ble_voice_probe_controller.h"
 #include "ima_adpcm_codec.h"
+#include "voice_probe_crypto.h"
 
 #include <hal/hal.h>
 #include <hal/audio/stopwatch_audio_backend.h>
@@ -39,8 +40,29 @@ constexpr size_t kOutputSamplesPerBlock = 320;
 constexpr size_t kAdpcmBytesPerBlock = 164;
 constexpr uint16_t kMicrophoneNotificationLimit =
     ble_voice_probe::kNotificationHeaderSize + kAdpcmBytesPerBlock;
+constexpr uint16_t kEncryptedMicrophoneNotificationLimit =
+    ble_voice_probe::kNotificationHeaderSize +
+    ble_voice_probe::crypto::kCiphertextSize;
 constexpr uint32_t kMaxResamplerOutputSamples = 512;
 constexpr uint16_t kFallbackErrorSession = 0xffff;
+
+bool is_microphone_mode(ble_voice_probe::Mode mode)
+{
+    return mode == ble_voice_probe::Mode::MicrophoneAdpcm ||
+           mode == ble_voice_probe::Mode::MicrophoneAdpcmAesCcm;
+}
+
+bool is_encrypted_microphone_mode(ble_voice_probe::Mode mode)
+{
+    return mode == ble_voice_probe::Mode::MicrophoneAdpcmAesCcm;
+}
+
+uint16_t microphone_notification_limit(ble_voice_probe::Mode mode)
+{
+    return is_encrypted_microphone_mode(mode)
+               ? kEncryptedMicrophoneNotificationLimit
+               : kMicrophoneNotificationLimit;
+}
 
 class StateLock {
 public:
@@ -160,7 +182,7 @@ void BleVoiceProbeController::handle_control(
         return;
     }
     if (command.mode != ble_voice_probe::Mode::Synthetic &&
-        command.mode != ble_voice_probe::Mode::MicrophoneAdpcm) {
+        !is_microphone_mode(command.mode)) {
         enqueue_error(
             ble_voice_probe::ErrorCode::InvalidCommand,
             command.session,
@@ -176,8 +198,9 @@ void BleVoiceProbeController::handle_control(
             now_ms);
         return;
     }
-    if (command.mode == ble_voice_probe::Mode::MicrophoneAdpcm &&
-        notification_limit(negotiated_mtu) < kMicrophoneNotificationLimit) {
+    if (is_microphone_mode(command.mode) &&
+        notification_limit(negotiated_mtu) <
+            microphone_notification_limit(command.mode)) {
         enqueue_error(
             ble_voice_probe::ErrorCode::MtuTooSmall,
             command.session,
@@ -392,7 +415,7 @@ void BleVoiceProbeController::producer_loop()
                 } else if (_pending_data_valid) {
                     have_packet = !_pending_data_queued;
                     wait_for_state_change = _pending_data_queued;
-                } else if (_session.mode() == ble_voice_probe::Mode::MicrophoneAdpcm &&
+                } else if (is_microphone_mode(_session.mode()) &&
                            _microphone_pcm.has_complete_block()) {
                     prepare_microphone = true;
                 } else if (_stop_requested) {
@@ -446,7 +469,7 @@ void BleVoiceProbeController::producer_loop()
                 {
                     StateLock lock(_state_mutex);
                     if (!lock.locked() || !_session.active() || !_producer_enabled || _stop_requested ||
-                        _session.mode() != ble_voice_probe::Mode::MicrophoneAdpcm ||
+                        !is_microphone_mode(_session.mode()) ||
                         !queue_start_ack_locked(
                             _negotiated_mtu,
                             _session.mode(),
@@ -469,7 +492,8 @@ void BleVoiceProbeController::producer_loop()
                 ble_voice_probe::ErrorCode error = ble_voice_probe::ErrorCode::EncoderFailed;
                 if (!prepare_microphone_packet(error)) {
                     StateLock lock(_state_mutex);
-                    if (lock.locked() && _session.active()) {
+                    if (lock.locked() && _session.active() &&
+                        error == ble_voice_probe::ErrorCode::EncoderFailed) {
                         _session.record_encode_failure();
                     }
                     fail_microphone_session(error);
@@ -512,8 +536,11 @@ void BleVoiceProbeController::producer_loop()
                 }
                 packet = _pending_data;
                 const bool microphone_packet =
-                    _session.mode() == ble_voice_probe::Mode::MicrophoneAdpcm &&
-                    packet.payload_length == kAdpcmBytesPerBlock;
+                    is_microphone_mode(_session.mode()) &&
+                    packet.payload_length ==
+                        (is_encrypted_microphone_mode(_session.mode())
+                             ? ble_voice_probe::crypto::kCiphertextSize
+                             : kAdpcmBytesPerBlock);
                 enqueued = enqueue_packet(packet);
                 if (enqueued) {
                     _pending_data_queued = true;
@@ -683,7 +710,7 @@ bool BleVoiceProbeController::prepare_microphone_packet(ble_voice_probe::ErrorCo
         StateLock lock(_state_mutex);
         if (!lock.locked() || !_session.active() || !_producer_enabled ||
             _terminal_error_pending || _pending_data_valid ||
-            _session.mode() != ble_voice_probe::Mode::MicrophoneAdpcm) {
+            !is_microphone_mode(_session.mode())) {
             return true;
         }
         _pending_data = {};
@@ -691,8 +718,43 @@ bool BleVoiceProbeController::prepare_microphone_packet(ble_voice_probe::ErrorCo
         _pending_data.session = _session.id();
         _pending_data.sequence = _session.allocate_sequence();
         _pending_data.watch_ms = GetHAL().millis();
-        _pending_data.payload_length = kAdpcmBytesPerBlock;
-        std::copy(encoded.begin(), encoded.end(), _pending_data.payload.begin());
+        if (is_encrypted_microphone_mode(_session.mode())) {
+            _pending_data.payload_length =
+                ble_voice_probe::crypto::kCiphertextSize;
+            std::array<uint8_t, ble_voice_probe::kNotificationHeaderSize> aad = {};
+            ble_voice_probe::crypto::Nonce nonce = {};
+            ble_voice_probe::crypto::Ciphertext ciphertext = {};
+            uint32_t elapsed_us = 0;
+            const bool encrypted =
+                ble_voice_probe::encode_notification_header(
+                    _pending_data, aad.data(), aad.size()) == aad.size() &&
+                ble_voice_probe::crypto::derive_nonce(
+                    _pending_data.session,
+                    _pending_data.sequence,
+                    _pending_data.watch_ms,
+                    nonce) &&
+                ble_voice_probe::crypto::encrypt(
+                    aad.data(),
+                    aad.size(),
+                    encoded.data(),
+                    encoded.size(),
+                    nonce,
+                    ciphertext,
+                    elapsed_us);
+            _session.record_crypto_result(elapsed_us, encrypted);
+            if (!encrypted) {
+                _pending_data = {};
+                error = ble_voice_probe::ErrorCode::CryptoFailed;
+                return false;
+            }
+            std::copy(
+                ciphertext.begin(),
+                ciphertext.end(),
+                _pending_data.payload.begin());
+        } else {
+            _pending_data.payload_length = kAdpcmBytesPerBlock;
+            std::copy(encoded.begin(), encoded.end(), _pending_data.payload.begin());
+        }
         _pending_data_valid = true;
         _pending_data_queued = false;
         _pending_data_counted = false;
@@ -705,7 +767,7 @@ void BleVoiceProbeController::fail_microphone_session(ble_voice_probe::ErrorCode
     {
         StateLock lock(_state_mutex);
         if (lock.locked() && _session.active() &&
-            _session.mode() == ble_voice_probe::Mode::MicrophoneAdpcm) {
+            is_microphone_mode(_session.mode())) {
             prepare_terminal_error_locked(error, 0, GetHAL().millis());
         }
     }
@@ -769,7 +831,7 @@ bool BleVoiceProbeController::start_session(
             notification_limit(negotiated_mtu) - ble_voice_probe::kNotificationHeaderSize);
         _negotiated_mtu = negotiated_mtu;
         _producer_enabled = true;
-        if (command.mode == ble_voice_probe::Mode::MicrophoneAdpcm) {
+        if (is_microphone_mode(command.mode)) {
             _microphone_setup_pending = true;
             _microphone_cleanup_pending = true;
         } else if (!queue_start_ack_locked(
@@ -882,6 +944,7 @@ void BleVoiceProbeController::finalize_stop(uint32_t now_ms)
             _pending_summary.watch_ms = now_ms;
             _pending_summary.payload_length = ble_voice_probe::encode_stop_summary(
                 _session.summary(now_ms),
+                _session.mode(),
                 _pending_summary.payload.data(),
                 _pending_summary.payload.size());
             if (_pending_summary.payload_length == 0) {

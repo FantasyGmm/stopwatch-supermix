@@ -15,10 +15,12 @@ from unittest import mock
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from ble_voice_probe import Profile, VoiceProbeClient, _build_parser
+from voice_probe_crypto import derive_nonce, encrypt
 from voice_probe_protocol import (
     DATA,
     ERROR,
     MICROPHONE_ADPCM,
+    MICROPHONE_ADPCM_AES_CCM,
     START_ACK,
     STOP_SUMMARY,
     SYNTHETIC,
@@ -149,6 +151,46 @@ def synthetic_events(session=7, target_bps=8192, packets=35, payload_bytes=None)
                 0,
                 256,
             ).pack(),
+        )
+    )
+    return events
+
+
+def encrypted_microphone_events(session=7, packets=50):
+    events = [start_ack(session, MICROPHONE_ADPCM_AES_CCM, 8192)]
+    for index in range(packets):
+        sequence = index + 1
+        watch_ms = index * 20
+        aad = struct.pack("<BBHIIH", 1, DATA, session, sequence, watch_ms, 172)
+        ciphertext = encrypt(
+            aad,
+            bytes(164),
+            derive_nonce(session, sequence, watch_ms),
+        )
+        events.append(
+            pack_notification(DATA, session, sequence, watch_ms, ciphertext)
+        )
+    events.append(
+        pack_notification(
+            STOP_SUMMARY,
+            session,
+            packets + 1,
+            1000,
+            StopSummary(
+                packets,
+                packets,
+                0,
+                0,
+                1000,
+                packets * 172,
+                packets * 320,
+                256,
+                crypto_packets=packets,
+                crypto_failures=0,
+                crypto_total_us=packets * 20,
+                crypto_max_us=20,
+                crypto_p99_us=20,
+            ).pack(MICROPHONE_ADPCM_AES_CCM),
         )
     )
     return events
@@ -581,6 +623,81 @@ class BleVoiceProbeTests(unittest.TestCase):
         self.assertTrue(saved["metrics"]["automated_pass"])
         self.assertEqual(saved["wav_path"], str(wav_path))
         self.assertTrue(saved["manual_audio_review_required"])
+
+    def test_encrypted_microphone_authenticates_then_decodes_and_reports_crypto(self):
+        fake = FakeClient(encrypted_microphone_events())
+        runner = make_runner(fake)
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = pathlib.Path(temporary)
+            wav_path = directory / "microphone-encrypted.wav"
+            exit_code = self.run_probe(
+                runner,
+                Profile(
+                    session=7,
+                    mode=MICROPHONE_ADPCM_AES_CCM,
+                    target_bps=8192,
+                    duration_ms=1000,
+                ),
+                directory,
+                wav_path=wav_path,
+            )
+            saved = json.loads((directory / "report.json").read_text())
+            with wave.open(str(wav_path), "rb") as wav:
+                self.assertEqual(wav.getnframes(), 16000)
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(saved["metrics"]["crypto_packets"], 50)
+        self.assertEqual(saved["metrics"]["crypto_failures"], 0)
+        self.assertEqual(saved["metrics"]["invalid_tags"], 0)
+        self.assertEqual(
+            saved["metrics"]["encrypted_characteristic_value_bytes"], 186
+        )
+        self.assertEqual(saved["metrics"]["crypto_p99_us"], 20)
+
+    def test_encrypted_microphone_invalid_tag_fails_before_decoder(self):
+        events = encrypted_microphone_events(packets=2)[:2]
+        corrupted = bytearray(events[-1])
+        corrupted[-1] ^= 0x01
+        events[-1] = bytes(corrupted)
+        fake = FakeClient(events)
+        runner = make_runner(fake)
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = pathlib.Path(temporary)
+            wav_path = directory / "invalid-tag.wav"
+            exit_code = self.run_probe(
+                runner,
+                Profile(
+                    session=7,
+                    mode=MICROPHONE_ADPCM_AES_CCM,
+                    target_bps=8192,
+                    duration_ms=1000,
+                ),
+                directory,
+                wav_path=wav_path,
+            )
+            saved = json.loads((directory / "report.json").read_text())
+            with wave.open(str(wav_path), "rb") as wav:
+                self.assertEqual(wav.getnframes(), 0)
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(saved["metrics"]["invalid_tags"], 1)
+        self.assertIn("authentication tag", saved["exception"])
+
+    def test_cli_exposes_encrypted_microphone_profile(self):
+        arguments = _build_parser().parse_args(
+            [
+                "microphone-encrypted",
+                "--target-bps",
+                "8192",
+                "--duration",
+                "30",
+                "--report",
+                "report.json",
+                "--wav",
+                "capture.wav",
+            ]
+        )
+        self.assertEqual(arguments.protocol_mode, MICROPHONE_ADPCM_AES_CCM)
 
     def test_device_initiated_disconnect_fails_and_reports_partial_state(self):
         fake = DeviceDisconnectClient([start_ack(7, SYNTHETIC, 8192)])

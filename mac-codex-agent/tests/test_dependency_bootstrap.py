@@ -35,6 +35,18 @@ REVISION = "37db04861687858b6748f5dbd1a84439a6635c46"
 PATCH_SHA256 = "5b2bd8fd54742c9f9968124d188c32dac98f8a15916af08b31f829d6b3f84778"
 
 
+class AgentPythonDependencyTests(unittest.TestCase):
+    def test_requirements_pin_importable_aesccm(self):
+        requirements = (ROOT / "mac-codex-agent" / "requirements.txt").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("cryptography>=45,<47", requirements.splitlines())
+
+        from cryptography.hazmat.primitives.ciphers.aead import AESCCM
+
+        self.assertIsNotNone(AESCCM)
+
+
 def valid_entry():
     return {
         "url": "https://github.com/m5stack/M5IOE1.git",

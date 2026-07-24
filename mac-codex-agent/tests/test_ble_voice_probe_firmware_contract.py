@@ -303,9 +303,15 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
     def test_offline_validation_and_probe_docs_cover_pcm_and_checkout_evidence(self):
         runner = (ROOT / "scripts/run_unified_offline_validation.sh").read_text()
         docs = (ROOT / "docs/ble-voice-link-probe.md").read_text()
-        self.assertIn("[17/20] BLE voice probe PCM buffer host test", runner)
+        self.assertIn("[16/21] BLE voice probe crypto host test", runner)
+        self.assertIn("tests/voice_probe_crypto_test.cpp", runner)
+        self.assertIn("[18/21] BLE voice probe PCM buffer host test", runner)
         self.assertIn("tests/ble_voice_probe_pcm_buffer_test.cpp", runner)
-        self.assertIn("[20/20] Whitespace error check", runner)
+        self.assertIn("[21/21] Whitespace error check", runner)
+        self.assertLess(
+            runner.index("tests/voice_probe_crypto_test.cpp"),
+            runner.index("./scripts/build_unified_candidate.sh --clean"),
+        )
         self.assertLess(
             runner.index("tests/ble_voice_probe_pcm_buffer_test.cpp"),
             runner.index("./scripts/build_unified_candidate.sh --clean"),

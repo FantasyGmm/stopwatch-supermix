@@ -28,6 +28,10 @@ int main()
     session.record_queue_overflow();
     session.record_encode_failure();
     session.record_captured_samples(320);
+    for (uint32_t elapsed_us : {9U, 4U, 7U, 2U}) {
+        session.record_crypto_result(elapsed_us, true);
+    }
+    session.record_crypto_result(11, false);
     assert(!session.duration_reached(60999));
     assert(session.duration_reached(61000));
 
@@ -40,6 +44,11 @@ int main()
     assert(summary.generated_payload_bytes == 200);
     assert(summary.captured_pcm_samples == 320);
     assert(summary.negotiated_mtu == 256);
+    assert(summary.crypto_packets == 5);
+    assert(summary.crypto_failures == 1);
+    assert(summary.crypto_total_us == 33);
+    assert(summary.crypto_max_us == 11);
+    assert(summary.crypto_p99_us == 11);
 
     Session wrapped;
     assert(wrapped.start(command, UINT32_MAX - 20U, 185));

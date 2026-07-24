@@ -36,7 +36,14 @@ void write_u32(uint8_t* bytes, uint32_t value)
 bool is_valid_mode(uint8_t value)
 {
     return value == static_cast<uint8_t>(Mode::Synthetic) ||
-           value == static_cast<uint8_t>(Mode::MicrophoneAdpcm);
+           value == static_cast<uint8_t>(Mode::MicrophoneAdpcm) ||
+           value == static_cast<uint8_t>(Mode::MicrophoneAdpcmAesCcm);
+}
+
+bool is_microphone_mode(Mode mode)
+{
+    return mode == Mode::MicrophoneAdpcm ||
+           mode == Mode::MicrophoneAdpcmAesCcm;
 }
 
 }  // namespace
@@ -67,7 +74,7 @@ bool decode_control(const uint8_t* bytes, size_t length, ControlCommand& command
     } else if (duration_ms < 1000 || duration_ms > 120000 ||
                (parsed_mode == Mode::Synthetic &&
                 (target_bps < 1024 || target_bps > 32768)) ||
-               (parsed_mode == Mode::MicrophoneAdpcm && target_bps != 8192)) {
+               (is_microphone_mode(parsed_mode) && target_bps != 8192)) {
         return false;
     }
 
@@ -79,12 +86,15 @@ bool decode_control(const uint8_t* bytes, size_t length, ControlCommand& command
     return true;
 }
 
-size_t encode_notification(const Notification& packet, uint8_t* output, size_t capacity)
+size_t encode_notification_header(
+    const Notification& packet,
+    uint8_t* output,
+    size_t capacity
+)
 {
-    const size_t total = kNotificationHeaderSize + packet.payload_length;
     if (output == nullptr || packet.session == 0 ||
         packet.payload_length > packet.payload.size() ||
-        total > capacity) {
+        capacity < kNotificationHeaderSize) {
         return 0;
     }
     output[0] = kProtocolVersion;
@@ -93,6 +103,17 @@ size_t encode_notification(const Notification& packet, uint8_t* output, size_t c
     write_u32(output + 4, packet.sequence);
     write_u32(output + 8, packet.watch_ms);
     write_u16(output + 12, packet.payload_length);
+    return kNotificationHeaderSize;
+}
+
+size_t encode_notification(const Notification& packet, uint8_t* output, size_t capacity)
+{
+    const size_t total = kNotificationHeaderSize + packet.payload_length;
+    if (total > capacity ||
+        encode_notification_header(packet, output, capacity) !=
+            kNotificationHeaderSize) {
+        return 0;
+    }
     std::copy_n(packet.payload.data(), packet.payload_length, output + kNotificationHeaderSize);
     return total;
 }
@@ -124,6 +145,28 @@ size_t encode_stop_summary(const StopSummary& summary, uint8_t* output, size_t c
     write_u32(output + 24, summary.captured_pcm_samples);
     write_u16(output + 28, summary.negotiated_mtu);
     return kStopSummarySize;
+}
+
+size_t encode_stop_summary(
+    const StopSummary& summary,
+    Mode mode,
+    uint8_t* output,
+    size_t capacity
+)
+{
+    if (mode != Mode::MicrophoneAdpcmAesCcm) {
+        return encode_stop_summary(summary, output, capacity);
+    }
+    if (output == nullptr || capacity < kEncryptedStopSummarySize ||
+        encode_stop_summary(summary, output, capacity) != kStopSummarySize) {
+        return 0;
+    }
+    write_u32(output + 30, summary.crypto_packets);
+    write_u32(output + 34, summary.crypto_failures);
+    write_u32(output + 38, summary.crypto_total_us);
+    write_u32(output + 42, summary.crypto_max_us);
+    write_u32(output + 46, summary.crypto_p99_us);
+    return kEncryptedStopSummarySize;
 }
 
 size_t encode_error(ErrorCode code, uint16_t detail, uint8_t* output, size_t capacity)

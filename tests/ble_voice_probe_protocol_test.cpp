@@ -28,7 +28,7 @@ int main()
     invalid[1] = 3;
     assert(!decode_control(invalid.data(), invalid.size(), command));
     invalid = start;
-    invalid[2] = 3;
+    invalid[2] = 4;
     assert(!decode_control(invalid.data(), invalid.size(), command));
     invalid = start;
     invalid[4] = 0;
@@ -47,6 +47,11 @@ int main()
     invalid[8] = 0;
     invalid[9] = 0;
     assert(!decode_control(invalid.data(), invalid.size(), command));
+
+    auto encrypted = start;
+    encrypted[2] = static_cast<uint8_t>(Mode::MicrophoneAdpcmAesCcm);
+    assert(decode_control(encrypted.data(), encrypted.size(), command));
+    assert(command.mode == Mode::MicrophoneAdpcmAesCcm);
 
     invalid = start;
     invalid[2] = static_cast<uint8_t>(Mode::MicrophoneAdpcm);
@@ -92,6 +97,10 @@ int main()
     assert(encoded[2] == 0x34 && encoded[3] == 0x12);
     assert(encoded[4] == 0x04 && encoded[7] == 0x01);
     assert(encoded[14] == 0x04 && encoded[15] == 0x05 && encoded[16] == 0x06);
+    std::array<uint8_t, kNotificationHeaderSize> header = {};
+    assert(encode_notification_header(packet, header.data(), header.size()) ==
+           kNotificationHeaderSize);
+    assert(std::equal(header.begin(), header.end(), encoded.begin()));
     packet.session = 0;
     assert(encode_notification(packet, encoded.data(), encoded.size()) == 0);
     packet.session = 0x1234;
@@ -123,6 +132,29 @@ int main()
     assert(summary_bytes[28] == 0x00 && summary_bytes[29] == 0x01);
     assert(encode_stop_summary(summary, nullptr, summary_bytes.size()) == 0);
     assert(encode_stop_summary(summary, summary_bytes.data(), summary_bytes.size() - 1) == 0);
+
+    summary.crypto_packets = 10;
+    summary.crypto_failures = 1;
+    summary.crypto_total_us = 500;
+    summary.crypto_max_us = 75;
+    summary.crypto_p99_us = 70;
+    std::array<uint8_t, kEncryptedStopSummarySize> encrypted_summary_bytes = {};
+    assert(encode_stop_summary(
+               summary,
+               Mode::MicrophoneAdpcmAesCcm,
+               encrypted_summary_bytes.data(),
+               encrypted_summary_bytes.size()) == kEncryptedStopSummarySize);
+    assert(std::equal(
+        summary_bytes.begin(), summary_bytes.end(), encrypted_summary_bytes.begin()));
+    assert(encrypted_summary_bytes[30] == 10);
+    assert(encrypted_summary_bytes[34] == 1);
+    assert(encrypted_summary_bytes[38] == 0xf4);
+    assert(encrypted_summary_bytes[39] == 0x01);
+    assert(encode_stop_summary(
+               summary,
+               Mode::MicrophoneAdpcmAesCcm,
+               encrypted_summary_bytes.data(),
+               encrypted_summary_bytes.size() - 1) == 0);
 
     std::array<uint8_t, kErrorPayloadSize> error = {};
     assert(encode_error(ErrorCode::Busy, 0x1234, error.data(), error.size()) ==

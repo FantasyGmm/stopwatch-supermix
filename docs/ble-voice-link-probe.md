@@ -7,10 +7,16 @@ input feature itself.
 
 ## Security Boundary
 
-This hardware run is a transport-only capacity probe. The isolated voice
-control and notification characteristics are intentionally unencrypted so the
-measurement can proceed independently of pairing. The normal status
-characteristic remains encrypted.
+This hardware run is a transport and diagnostic crypto capacity probe. Modes 1
+and 2 remain transport-only, intentionally unencrypted, and byte-compatible
+with the original probe. Mode 3 encrypts only the 164-byte ADPCM microphone block with
+AES-128-CCM and an 8-byte tag; its 172-byte payload authenticates the existing
+14-byte notification header and produces a 186-byte characteristic value.
+The normal status characteristic remains encrypted.
+
+Mode 3 uses a fixed diagnostic key solely to isolate crypto performance from
+pairing, enrollment, and key storage. It is not a production key and must
+never be used by the installed Agent or production voice path.
 
 Three physical runs already showed that macOS CoreBluetooth could discover and
 connect to the custom service, but the encrypted characteristic handshake
@@ -141,6 +147,31 @@ true: every generated packet is one 164-byte ADPCM block and sender payload
 bytes must equal receiver payload bytes. `wav_duration_error_percent` must also
 be at most 1% against `captured_pcm_samples`. The manual listening review
 remains required even when these automated checks pass.
+
+## Encrypted Microphone Profile
+
+Run the isolated AES-CCM microphone mode adjacent to its unencrypted baseline:
+
+```bash
+"$PYTHON" mac-codex-agent/ble_voice_probe.py \
+  microphone-encrypted --target-bps 8192 --duration 30 \
+  --firmware-revision "$REVISION" \
+  --report "$EVIDENCE/microphone-encrypted.json" \
+  --wav "$EVIDENCE/microphone-encrypted.wav" \
+  > "$EVIDENCE/microphone-encrypted.log" 2>&1
+```
+
+The encrypted report adds `crypto_packets`, `crypto_failures`,
+`crypto_total_us`, `crypto_max_us`, `crypto_p99_us`, `invalid_tags`, and
+`encrypted_characteristic_value_bytes`. A run fails closed if authentication
+fails: the invalid block never reaches ADPCM decoding. Automated acceptance
+also requires zero crypto failures and invalid tags, p99 watch encryption time
+at most 1 ms, and every encrypted characteristic value to be exactly 186
+bytes. The same WAV duration and manual Mandarin listening checks still apply.
+
+The wire protocol currently defines only encrypted microphone mode 3. It does
+not define an encrypted synthetic source mode; do not label a mode 3 microphone
+run as encrypted synthetic evidence.
 
 The 32768 B/s result is labeled `exploratory_pass` or `exploratory_fail`; it is
 recorded for capacity information and is not a required BLE acceptance gate.

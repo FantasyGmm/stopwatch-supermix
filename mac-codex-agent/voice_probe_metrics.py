@@ -1,7 +1,15 @@
 import math
 from typing import Optional
 
-from voice_probe_protocol import DATA, MICROPHONE_ADPCM, SYNTHETIC, Notification, StopSummary, expected_synthetic_payload
+from voice_probe_protocol import (
+    DATA,
+    MICROPHONE_ADPCM,
+    MICROPHONE_ADPCM_AES_CCM,
+    SYNTHETIC,
+    Notification,
+    StopSummary,
+    expected_synthetic_payload,
+)
 
 
 class ProbeMetrics:
@@ -86,7 +94,7 @@ class ProbeMetrics:
         max_arrival_gap_ms = max(self._arrival_gaps_ms, default=0.0)
         summary_semantically_valid = self._summary_is_semantically_valid(summary)
         decoded_pcm_samples_valid = (
-            self.mode != MICROPHONE_ADPCM
+            not self._is_microphone_mode()
             or self._is_nonnegative_int(decoded_pcm_samples)
         )
         safe_decoded_pcm_samples = (
@@ -101,8 +109,8 @@ class ProbeMetrics:
             summary.generated_payload_bytes == self._receiver_payload_bytes
         )
         microphone_block_byte_parity = (
-            self.mode != MICROPHONE_ADPCM
-            or summary.generated_data_packets * 164
+            not self._is_microphone_mode()
+            or summary.generated_data_packets * self._microphone_block_bytes()
             == summary.generated_payload_bytes
         )
         throughput_bps, throughput_error_percent = self._synthetic_throughput(summary)
@@ -126,6 +134,13 @@ class ProbeMetrics:
             failure_reasons.append("queue_overflows")
         if summary.encode_failures:
             failure_reasons.append("encode_failures")
+        if self.mode == MICROPHONE_ADPCM_AES_CCM and summary.crypto_failures:
+            failure_reasons.append("crypto_failures")
+        if (
+            self.mode == MICROPHONE_ADPCM_AES_CCM
+            and summary.crypto_p99_us > 1000
+        ):
+            failure_reasons.append("crypto_p99_us")
         if not counter_parity:
             failure_reasons.append("counter_parity")
         if not payload_byte_parity:
@@ -147,7 +162,7 @@ class ProbeMetrics:
         if not decoded_pcm_samples_valid:
             failure_reasons.append("invalid_decoded_pcm_samples")
         if (
-            self.mode == MICROPHONE_ADPCM
+            self._is_microphone_mode()
             and (wav_duration_error_percent is None or wav_duration_error_percent > 1)
         ):
             failure_reasons.append("wav_duration_error_percent")
@@ -174,6 +189,11 @@ class ProbeMetrics:
             "decoded_pcm_samples": safe_decoded_pcm_samples,
             "decoded_pcm_samples_valid": decoded_pcm_samples_valid,
             "negotiated_mtu": summary.negotiated_mtu,
+            "crypto_packets": summary.crypto_packets,
+            "crypto_failures": summary.crypto_failures,
+            "crypto_total_us": summary.crypto_total_us,
+            "crypto_max_us": summary.crypto_max_us,
+            "crypto_p99_us": summary.crypto_p99_us,
             "disconnected": disconnected,
             "sequence_gaps": self._sequence_gaps,
             "sequence_regressions": self._sequence_regressions,
@@ -191,7 +211,7 @@ class ProbeMetrics:
             "failure_reasons": failure_reasons,
             "automated_pass": automated_pass,
             "required_profile": required_profile,
-            "manual_audio_review_required": self.mode == MICROPHONE_ADPCM,
+            "manual_audio_review_required": self._is_microphone_mode(),
             "acceptance_decision": acceptance_decision,
         }
 
@@ -227,6 +247,11 @@ class ProbeMetrics:
             summary.generated_payload_bytes,
             summary.captured_pcm_samples,
             summary.negotiated_mtu,
+            summary.crypto_packets,
+            summary.crypto_failures,
+            summary.crypto_total_us,
+            summary.crypto_max_us,
+            summary.crypto_p99_us,
         )
         if not all(self._is_nonnegative_int(value) for value in numeric_fields):
             return False
@@ -238,7 +263,32 @@ class ProbeMetrics:
             return False
         if summary.generated_data_packets > 0 and summary.generated_payload_bytes == 0:
             return False
-        if self.mode == MICROPHONE_ADPCM:
+        if self.mode == MICROPHONE_ADPCM_AES_CCM:
+            if summary.crypto_failures > summary.crypto_packets:
+                return False
+            if summary.crypto_packets < summary.generated_data_packets:
+                return False
+            if summary.crypto_total_us < summary.crypto_max_us:
+                return False
+            if summary.crypto_p99_us > summary.crypto_max_us:
+                return False
+            if summary.crypto_packets == 0 and (
+                summary.crypto_total_us != 0
+                or summary.crypto_max_us != 0
+                or summary.crypto_p99_us != 0
+            ):
+                return False
+        elif any(
+            (
+                summary.crypto_packets,
+                summary.crypto_failures,
+                summary.crypto_total_us,
+                summary.crypto_max_us,
+                summary.crypto_p99_us,
+            )
+        ):
+            return False
+        if self._is_microphone_mode():
             if summary.generated_data_packets > 0 and summary.captured_pcm_samples == 0:
                 return False
             expected_pcm_samples = summary.elapsed_ms * 16
@@ -264,7 +314,7 @@ class ProbeMetrics:
         self, summary: StopSummary, decoded_pcm_samples: Optional[int]
     ) -> Optional[float]:
         if (
-            self.mode != MICROPHONE_ADPCM
+            not self._is_microphone_mode()
             or summary.captured_pcm_samples <= 0
             or decoded_pcm_samples is None
         ):
@@ -274,3 +324,9 @@ class ProbeMetrics:
             / summary.captured_pcm_samples
             * 100
         )
+
+    def _is_microphone_mode(self) -> bool:
+        return self.mode in (MICROPHONE_ADPCM, MICROPHONE_ADPCM_AES_CCM)
+
+    def _microphone_block_bytes(self) -> int:
+        return 172 if self.mode == MICROPHONE_ADPCM_AES_CCM else 164
