@@ -1473,6 +1473,8 @@ evidence identifies the final tested commit and binary hashes.
 - Create: `tests/voice_probe_crypto_test.cpp`
 - Create: `mac-codex-agent/voice_probe_crypto.py`
 - Create: `mac-codex-agent/tests/test_voice_probe_crypto.py`
+- Modify: `mac-codex-agent/requirements.txt`
+- Modify: `mac-codex-agent/tests/test_dependency_bootstrap.py`
 - Modify: `main/apps/app_codex_status/ble_voice_probe_protocol.h`
 - Modify: `main/apps/app_codex_status/ble_voice_probe_protocol.cpp`
 - Modify: `main/apps/app_codex_status/ble_voice_probe_controller.h`
@@ -1541,6 +1543,10 @@ domain, session, sequence, and watch timestamp. Reject nonce/session zero,
 plaintext lengths other than 164 for microphone mode, and ciphertext lengths
 other than 172.
 
+Add `cryptography>=45,<47` to `requirements.txt` and extend the dependency
+bootstrap test so a fresh Agent environment must import `AESCCM`; do not rely
+on a one-off package installed only in the current virtual environment.
+
 - [ ] **Step 4: Add encrypted probe mode and timing counters**
 
 Add `MICROPHONE_ADPCM_AES_CCM = 3`. For this mode, encrypt each encoded
@@ -1606,6 +1612,8 @@ git add main/apps/app_codex_status/voice_probe_crypto.* \
   mac-codex-agent/tests/test_voice_probe_crypto.py \
   mac-codex-agent/tests/test_voice_probe_protocol.py \
   mac-codex-agent/tests/test_ble_voice_probe.py \
+  mac-codex-agent/requirements.txt \
+  mac-codex-agent/tests/test_dependency_bootstrap.py \
   main/CMakeLists.txt scripts/run_unified_offline_validation.sh \
   docs/ble-voice-link-probe.md
 git commit -m "Add encrypted BLE voice performance probe"
