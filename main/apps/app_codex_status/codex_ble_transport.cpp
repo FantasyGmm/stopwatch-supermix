@@ -27,6 +27,7 @@ constexpr size_t kFrameQueueDepth = 32;
 constexpr size_t kVoiceControlQueueDepth = 8;
 constexpr size_t kMaxNotificationSize = 256;
 constexpr uint16_t kDefaultMtu = 23;
+constexpr uint8_t kVoiceProbeIdentityXor = 0x5a;
 
 struct QueuedFrame {
     uint16_t length = 0;
@@ -284,7 +285,7 @@ void on_sync()
         return;
     }
 
-    identity_address[0] ^= 0xa5;
+    identity_address[0] ^= kVoiceProbeIdentityXor;
     identity_address[5] = static_cast<uint8_t>((identity_address[5] & 0x3f) | 0xc0);
     if (ble_hs_id_set_rnd(identity_address) != 0 ||
         ble_hs_util_ensure_addr(1) != 0 ||

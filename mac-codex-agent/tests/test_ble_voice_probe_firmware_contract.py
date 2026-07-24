@@ -32,6 +32,14 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
             "void on_reset", 1
         )[0]
         self.assertIn("&kVoiceServiceUuid", advertising)
+        identity_setup = source.split("void on_sync()", 1)[1].split(
+            "void host_task", 1
+        )[0]
+        self.assertIn("kVoiceProbeIdentityXor", source)
+        self.assertIn(
+            "identity_address[0] ^= kVoiceProbeIdentityXor",
+            identity_setup,
+        )
         voice_tx_definition = source.split("&kVoiceTxUuid.u", 1)[1].split("},", 1)[0]
         self.assertIn("voice_tx_access", voice_tx_definition)
         self.assertNotIn("nullptr,\n        nullptr,\n        nullptr,", voice_tx_definition)
