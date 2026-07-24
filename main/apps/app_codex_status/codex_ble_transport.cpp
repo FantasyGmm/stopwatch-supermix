@@ -215,6 +215,20 @@ int gap_event(ble_gap_event* event, void*)
         case BLE_GAP_EVENT_MTU:
             g_transport->handle_mtu_update(event->mtu.conn_handle, event->mtu.value);
             return 0;
+        case BLE_GAP_EVENT_ENC_CHANGE:
+            ESP_LOGI(
+                kTag,
+                "encryption change, conn=%u status=%d",
+                event->enc_change.conn_handle,
+                event->enc_change.status);
+            return 0;
+        case BLE_GAP_EVENT_PASSKEY_ACTION:
+            ESP_LOGI(
+                kTag,
+                "passkey action, conn=%u action=%u",
+                event->passkey.conn_handle,
+                event->passkey.params.action);
+            return 0;
         case BLE_GAP_EVENT_ADV_COMPLETE:
             if (!g_transport->stopping()) {
                 start_advertising();

@@ -53,6 +53,15 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         self.assertIn("event->mtu.value", source)
         self.assertIn("negotiated_mtu - 3", source)
 
+    def test_gap_security_outcomes_are_logged_for_physical_diagnosis(self):
+        source = (ROOT / "main/apps/app_codex_status/codex_ble_transport.cpp").read_text()
+        self.assertIn("BLE_GAP_EVENT_ENC_CHANGE", source)
+        self.assertIn("event->enc_change.status", source)
+        self.assertIn("event->enc_change.conn_handle", source)
+        self.assertIn("BLE_GAP_EVENT_PASSKEY_ACTION", source)
+        self.assertIn("event->passkey.params.action", source)
+        self.assertIn("event->passkey.conn_handle", source)
+
     def test_controller_is_bounded_and_not_attached_to_a_button(self):
         controller = (
             ROOT / "main/apps/app_codex_status/ble_voice_probe_controller.cpp"
