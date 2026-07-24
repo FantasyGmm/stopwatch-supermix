@@ -405,10 +405,9 @@ void BleVoiceProbeController::producer_loop()
                     if (_session.duration_reached(now_ms)) {
                         stop_for_duration = true;
                     } else if (_session.mode() == ble_voice_probe::Mode::Synthetic) {
-                        const uint32_t due = _session.synthetic_bytes_due(now_ms);
-                        if (due != 0 && _notification_payload_capacity != 0) {
-                            const uint16_t payload_length = static_cast<uint16_t>(std::min<uint32_t>(
-                                due, _notification_payload_capacity));
+                        const uint16_t payload_length = _session.synthetic_payload_size(
+                            now_ms, _notification_payload_capacity);
+                        if (payload_length != 0) {
                             _pending_data = {};
                             _pending_data.kind = ble_voice_probe::Kind::Data;
                             _pending_data.session = _session.id();

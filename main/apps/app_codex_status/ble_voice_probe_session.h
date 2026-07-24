@@ -16,6 +16,7 @@ public:
     uint32_t target_bps() const;
     uint32_t allocate_sequence();
     uint32_t synthetic_bytes_due(uint32_t now_ms) const;
+    uint16_t synthetic_payload_size(uint32_t now_ms, uint16_t max_payload) const;
     bool duration_reached(uint32_t now_ms) const;
     void record_generated(uint16_t payload_bytes);
     void record_notify_accepted();

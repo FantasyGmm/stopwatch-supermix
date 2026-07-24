@@ -1,6 +1,14 @@
 #include "ble_voice_probe_session.h"
 
+#include <algorithm>
+
 namespace ble_voice_probe {
+
+namespace {
+
+constexpr uint32_t kSyntheticNotificationsPerSecond = 50;
+
+}  // namespace
 
 bool Session::start(const ControlCommand& command, uint32_t now_ms, uint16_t negotiated_mtu)
 {
@@ -60,6 +68,23 @@ uint32_t Session::synthetic_bytes_due(uint32_t now_ms) const
     return expected > _summary.generated_payload_bytes
                ? static_cast<uint32_t>(expected - _summary.generated_payload_bytes)
                : 0;
+}
+
+uint16_t Session::synthetic_payload_size(uint32_t now_ms, uint16_t max_payload) const
+{
+    if (max_payload == 0) {
+        return 0;
+    }
+
+    const uint32_t preferred_payload = std::min<uint32_t>(
+        max_payload,
+        (_command.target_bps + kSyntheticNotificationsPerSecond - 1U) /
+            kSyntheticNotificationsPerSecond);
+    const uint32_t due = synthetic_bytes_due(now_ms);
+    if (due < preferred_payload) {
+        return 0;
+    }
+    return static_cast<uint16_t>(std::min<uint32_t>(due, max_payload));
 }
 
 bool Session::duration_reached(uint32_t now_ms) const

@@ -18,6 +18,9 @@ int main()
     assert(session.allocate_sequence() == 0);
     assert(session.allocate_sequence() == 1);
     assert(session.synthetic_bytes_due(1000) == 0);
+    assert(session.synthetic_payload_size(1019, 239) == 0);
+    assert(session.synthetic_payload_size(1020, 239) == 0);
+    assert(session.synthetic_payload_size(1021, 239) == 172);
     assert(session.synthetic_bytes_due(1100) == 819);
     session.record_generated(200);
     assert(session.synthetic_bytes_due(1100) == 619);
@@ -41,4 +44,16 @@ int main()
     Session wrapped;
     assert(wrapped.start(command, UINT32_MAX - 20U, 185));
     assert(wrapped.synthetic_bytes_due(79) == 819);
+
+    Session medium_rate;
+    command.target_bps = 16384;
+    assert(medium_rate.start(command, 0, 256));
+    assert(medium_rate.synthetic_payload_size(14, 239) == 0);
+    assert(medium_rate.synthetic_payload_size(15, 239) == 239);
+
+    Session exploratory_rate;
+    command.target_bps = 32768;
+    assert(exploratory_rate.start(command, 0, 256));
+    assert(exploratory_rate.synthetic_payload_size(7, 239) == 0);
+    assert(exploratory_rate.synthetic_payload_size(8, 239) == 239);
 }
