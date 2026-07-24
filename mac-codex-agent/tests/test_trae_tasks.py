@@ -1,6 +1,8 @@
 import dataclasses
+import json
 import pathlib
 import sys
+import tempfile
 import unittest
 
 
@@ -8,6 +10,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from trae_tasks import (
     TraeTask,
+    TraeTaskTracker,
     apply_trae_log_event,
     parse_trae_log_event,
     select_transport_tasks,
@@ -120,6 +123,152 @@ class TraeTaskTests(unittest.TestCase):
 
         self.assertEqual(first, second)
         self.assertEqual([item.task_id for item in first], ["0", "1", "2", "3"])
+
+
+class TraeTaskTrackerTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = pathlib.Path(self.temporary.name)
+        self.log = self.root / "agent.log"
+        self.cursor = self.root / "cursor.json"
+        self.ledger = self.root / "ledger.json"
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def tracker(self):
+        return TraeTaskTracker(
+            cursor_path=self.cursor,
+            ledger_path=self.ledger,
+        )
+
+    def append(self, *lines, complete=True):
+        with self.log.open("ab") as stream:
+            for index, line in enumerate(lines):
+                stream.write(line.encode("utf-8"))
+                if complete or index < len(lines) - 1:
+                    stream.write(b"\n")
+
+    def test_first_observation_baselines_at_eof_without_replaying_history(self):
+        self.append(
+            "execute_task:start session_id=session-old task_id=task-old",
+            "ToolCall arrived name=AskUserQuestion "
+            "session_id=session-old task_id=task-old",
+        )
+
+        snapshot = self.tracker().refresh((self.log,), now=10.0)
+
+        self.assertEqual(snapshot.tasks, ())
+        cursor = json.loads(self.cursor.read_text(encoding="utf-8"))
+        self.assertEqual(cursor["path"], str(self.log))
+        self.assertEqual(cursor["offset"], self.log.stat().st_size)
+        self.assertEqual(cursor["inode"], self.log.stat().st_ino)
+        self.assertEqual(cursor["mtime_ns"], self.log.stat().st_mtime_ns)
+
+    def test_first_observation_scans_only_a_bounded_tail_for_latest_model_metadata(self):
+        old = (
+            'model_info: CustomModel { config_name: "old", '
+            'display_model_name: Some("Old Model"), '
+            'reasoning_effort: Some("low") }\n'
+        )
+        newest = (
+            'model_info: CustomModel { config_name: "new", '
+            'display_model_name: Some("New Model"), '
+            'reasoning_effort: Some("high") }\n'
+        )
+        self.log.write_bytes(
+            old.encode("utf-8")
+            + (b"x" * (257 * 1024))
+            + b"\nexecute_task:start session_id=session-old task_id=task-old\n"
+            + newest.encode("utf-8")
+        )
+
+        snapshot = self.tracker().refresh((self.log,), now=10.0)
+
+        self.assertEqual(snapshot.model, "New Model")
+        self.assertEqual(snapshot.effort, "high")
+        self.assertEqual(snapshot.tasks, ())
+
+    def test_refresh_reads_only_bytes_appended_after_cursor(self):
+        self.log.touch()
+        tracker = self.tracker()
+        baseline = tracker.refresh((self.log,), now=10.0)
+        self.append(
+            "execute_task:start session_id=session-a task_id=task-a",
+        )
+
+        updated = tracker.refresh((self.log,), now=11.0)
+
+        self.assertEqual(baseline.tasks, ())
+        self.assertEqual(len(updated.tasks), 1)
+        self.assertEqual(updated.tasks[0].task_id, "task-a")
+        self.assertEqual(updated.tasks[0].state, "running")
+        self.assertEqual(
+            json.loads(self.cursor.read_text(encoding="utf-8"))["offset"],
+            self.log.stat().st_size,
+        )
+
+    def test_cursor_survives_tracker_recreation(self):
+        self.log.touch()
+        self.tracker().refresh((self.log,), now=10.0)
+        self.append(
+            "execute_task:start session_id=session-a task_id=task-a",
+        )
+        first = self.tracker().refresh((self.log,), now=11.0)
+        self.append(
+            "ToolCall arrived name=AskUserQuestion "
+            "session_id=session-a task_id=task-a",
+        )
+
+        second = self.tracker().refresh((self.log,), now=12.0)
+
+        self.assertEqual(first.tasks[0].state, "running")
+        self.assertEqual(second.tasks[0].state, "pending")
+        self.assertGreater(second.revision, first.revision)
+
+    def test_truncation_or_inode_change_rebaselines_safely(self):
+        self.log.touch()
+        tracker = self.tracker()
+        tracker.refresh((self.log,), now=10.0)
+        self.append("execute_task:start session_id=session-a task_id=task-a")
+        tracker.refresh((self.log,), now=11.0)
+        replacement = self.root / "replacement.log"
+        replacement.write_text(
+            "execute_task:start session_id=session-b task_id=task-b\n",
+            encoding="utf-8",
+        )
+        replacement.replace(self.log)
+
+        rebaselined = tracker.refresh((self.log,), now=12.0)
+
+        self.assertEqual([item.task_id for item in rebaselined.tasks], ["task-a"])
+        self.append("progress_notice session_id=session-b task_id=task-b")
+        refreshed = tracker.refresh((self.log,), now=13.0)
+        self.assertEqual(
+            {item.task_id for item in refreshed.tasks},
+            {"task-a", "task-b"},
+        )
+
+    def test_ledger_contains_normalized_metadata_not_raw_prompt_or_log(self):
+        self.log.touch()
+        tracker = self.tracker()
+        tracker.refresh((self.log,), now=10.0)
+        self.append(
+            "execute_task:start session_id=session-a task_id=task-a "
+            "prompt=private-user-text tool_args=private-tool-data"
+        )
+
+        tracker.refresh((self.log,), now=11.0)
+
+        saved = json.loads(self.ledger.read_text(encoding="utf-8"))
+        serialized = json.dumps(saved, sort_keys=True)
+        self.assertEqual(saved["tasks"][0]["session_id"], "session-a")
+        self.assertEqual(saved["tasks"][0]["task_id"], "task-a")
+        self.assertEqual(saved["tasks"][0]["state"], "running")
+        self.assertNotIn("private-user-text", serialized)
+        self.assertNotIn("private-tool-data", serialized)
+        self.assertNotIn("raw", serialized)
+        self.assertLessEqual(len(saved["tasks"]), 32)
 
 
 if __name__ == "__main__":
