@@ -1,0 +1,6 @@
+2026-07-24 10:00:00 model_info: CustomModel { config_name: "model-a", display_model_name: Some("Model A"), reasoning_effort: Some("high") }
+2026-07-24 10:00:01 execute_task:start session_id=session-a task_id=task-a
+2026-07-24 10:00:02 [append_resume_listener] started session_id=session-a task_id=task-a
+2026-07-24 10:00:03 progress_notice session_id=session-a task_id=task-a
+2026-07-24 10:00:04 ToolCall arrived name=AskUserQuestion session_id=session-a task_id=task-a
+2026-07-24 10:00:05 [append_resume_listener] exiting session_id=session-a task_id=task-a
