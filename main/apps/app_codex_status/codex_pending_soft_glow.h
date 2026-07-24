@@ -5,7 +5,6 @@
  */
 #pragma once
 
-#include <array>
 #include <lvgl.h>
 
 class CodexPendingSoftGlow {
@@ -17,12 +16,15 @@ public:
     bool active() const;
 
 private:
-    std::array<lv_obj_t*, 3> _rings{};
+    lv_obj_t* _overlay = nullptr;
     lv_obj_t* _heading = nullptr;
+    lv_opa_t _opacity = LV_OPA_40;
     bool _active = false;
 
     void apply_phase(int32_t phase);
+    void invalidate_edges();
     void start();
     void stop();
     static void animation_cb(void* target, int32_t phase);
+    static void draw_event_cb(lv_event_t* event);
 };

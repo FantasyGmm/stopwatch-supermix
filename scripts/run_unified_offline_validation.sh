@@ -190,12 +190,16 @@ echo "[22/27] Codex status model compatibility host test"
     -o "$HOST_TEST_DIR/codex_status_model_test"
 "$HOST_TEST_DIR/codex_status_model_test"
 
-echo "[23/27] Status page swipe logic host test"
+echo "[23/27] Status page swipe and Pending glow logic host tests"
 "$CXX" -std=c++17 -Wall -Wextra -Werror -Imain \
     tests/status_page_swipe_logic_test.cpp \
     main/apps/app_codex_status/status_page_swipe_logic.cpp \
     -o "$HOST_TEST_DIR/status_page_swipe_logic_test"
 "$HOST_TEST_DIR/status_page_swipe_logic_test"
+"$CXX" -std=c++17 -Wall -Wextra -Werror -Imain \
+    tests/codex_pending_glow_logic_test.cpp \
+    -o "$HOST_TEST_DIR/codex_pending_glow_logic_test"
+"$HOST_TEST_DIR/codex_pending_glow_logic_test"
 
 echo "[24/27] Codex status UI layout host test"
 "$CXX" -std=c++17 -Wall -Wextra -Werror -Imain \

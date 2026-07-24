@@ -6,44 +6,83 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class CodexPendingGlowFirmwareContractTests(unittest.TestCase):
-    def test_soft_glow_component_uses_three_fixed_rings_and_one_opacity_animation(self):
+    def test_soft_glow_uses_one_custom_overlay_and_one_shared_phase(self):
         header = (
             ROOT / "main/apps/app_codex_status/codex_pending_soft_glow.h"
         ).read_text()
         source = (
             ROOT / "main/apps/app_codex_status/codex_pending_soft_glow.cpp"
         ).read_text()
+        logic = (
+            ROOT / "main/apps/app_codex_status/codex_pending_glow_logic.h"
+        ).read_text()
 
-        self.assertIn("std::array<lv_obj_t*, 3> _rings", header)
-        self.assertIn("void set_heading(lv_obj_t* label)", header)
-        self.assertIn("void set_active(bool active)", header)
-        self.assertIn("void shutdown()", header)
-        self.assertIn("_rings[0] = make_ring(parent, 1, 1, 464, 2)", source)
-        self.assertIn("_rings[1] = make_ring(parent, 5, 5, 456, 4)", source)
-        self.assertIn("_rings[2] = make_ring(parent, 11, 11, 444, 6)", source)
-        self.assertIn("lv_anim_set_duration(&animation, 900)", source)
-        self.assertIn("lv_anim_set_playback_duration(&animation, 900)", source)
+        self.assertIn("lv_obj_t* _overlay", header)
+        self.assertIn("lv_opa_t _opacity", header)
+        self.assertNotIn("std::array<lv_obj_t*, 3> _rings", header)
+        self.assertIn("static void draw_event_cb", header)
+        self.assertIn("void invalidate_edges()", header)
+        self.assertIn("LV_EVENT_DRAW_MAIN_BEGIN", source)
+        self.assertIn(
+            "for (const auto& ring : codex_pending_glow::kRings)", source
+        )
+        self.assertIn("lv_draw_rect(layer, &dsc, &area)", source)
+        self.assertEqual(source.count("_opacity ="), 1)
+        self.assertIn("codex_pending_glow::opacity_for_phase(phase)", source)
+        self.assertIn("constexpr int kHalfCycleMs = 600", logic)
+        self.assertIn(
+            "constexpr int kFullCycleMs = kHalfCycleMs * 2", logic
+        )
+        self.assertIn(
+            "lv_anim_set_duration(&animation, "
+            "codex_pending_glow::kHalfCycleMs)",
+            source,
+        )
+        self.assertIn(
+            "lv_anim_set_playback_duration(&animation, "
+            "codex_pending_glow::kHalfCycleMs)",
+            source,
+        )
         self.assertIn(
             "lv_anim_set_repeat_count(&animation, LV_ANIM_REPEAT_INFINITE)", source
         )
         self.assertIn(
             "lv_anim_set_path_cb(&animation, lv_anim_path_ease_in_out)", source
         )
-        self.assertIn("lv_obj_set_style_border_opa", source)
-        phase_body = source.split(
-            "void CodexPendingSoftGlow::apply_phase", 1
-        )[1]
-        phase_body = phase_body.split("void CodexPendingSoftGlow::start", 1)[0]
-        self.assertNotIn("lv_obj_set_size", phase_body)
-        self.assertNotIn("lv_obj_set_pos", phase_body)
-
-    def test_component_stops_animation_and_restores_heading_on_deactivation(self):
+    def test_animation_invalidates_only_edge_bands_and_restores_heading(self):
         source = (
             ROOT / "main/apps/app_codex_status/codex_pending_soft_glow.cpp"
         ).read_text()
 
+        self.assertIn(
+            "void CodexPendingSoftGlow::invalidate_edges()", source
+        )
+        invalidate_body = source.split(
+            "void CodexPendingSoftGlow::invalidate_edges()", 1
+        )[1]
+        invalidate_body = invalidate_body.split(
+            "void CodexPendingSoftGlow::start()", 1
+        )[0]
+        self.assertIn(
+            "codex_pending_glow::kInvalidationAreas", invalidate_body
+        )
+        self.assertIn(
+            "lv_obj_invalidate_area(_overlay, &area)", invalidate_body
+        )
+        self.assertNotIn("lv_obj_invalidate(_overlay)", invalidate_body)
+
+        phase_body = source.split(
+            "void CodexPendingSoftGlow::apply_phase", 1
+        )[1]
+        phase_body = phase_body.split(
+            "void CodexPendingSoftGlow::invalidate_edges", 1
+        )[0]
+        self.assertNotIn("lv_obj_set_style_border_opa", phase_body)
+        self.assertIn("invalidate_edges()", phase_body)
         self.assertIn("lv_anim_delete(this, animation_cb)", source)
-        self.assertIn("lv_obj_add_flag(ring, LV_OBJ_FLAG_HIDDEN)", source)
+        self.assertIn(
+            "lv_obj_add_flag(_overlay, LV_OBJ_FLAG_HIDDEN)", source
+        )
         self.assertIn("lv_obj_set_style_opa(_heading, LV_OPA_COVER, 0)", source)
 
     def test_latest_codex_page_owns_effect_below_content_and_preserves_geometry(self):
