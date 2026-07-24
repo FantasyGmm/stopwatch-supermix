@@ -60,12 +60,14 @@ int main()
     assert(kAlertProjectWidth == 340);
     assert(kAlertDetailY == 389);
     assert(kAlertDetailWidth == 320);
+    assert(kPageIndicatorY == 416);
     assert(kBatteryY == 438);
 
     assert(kAlertHeadingY - kAlertDividerY == 24);
     assert(kAlertProjectY - kAlertHeadingY == 29);
     assert(kAlertDetailY - kAlertProjectY == 32);
-    assert(kBatteryY - kAlertDetailY == 49);
+    assert(kPageIndicatorY - kAlertDetailY == 27);
+    assert(kBatteryY - kPageIndicatorY == 22);
     assert(kBatteryY < kScreenSize);
 
     assert(kPanelGraphite == 0x27303E);

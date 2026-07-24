@@ -9,6 +9,9 @@
 #include "codex_pending_glow_logic.h"
 #include "codex_status_ui_layout.h"
 #include "codex_status_model.h"
+#include "status_message_router.h"
+#include "trae_status_model.h"
+#include <apps/common/edge_control/global_edge_control_service.h>
 #include <assets/assets.h>
 #include <hal/hal.h>
 #include <hal/utils/settings/settings.h>
@@ -39,7 +42,10 @@ constexpr int kDefaultServerPort         = 8765;
 constexpr const char* kDefaultBleName    = "StopWatch-Codex";
 constexpr uint32_t kWifiFallbackDelayMs  = 15000;
 constexpr uint32_t kStatusStaleMs        = 10000;
+constexpr uint32_t kTraeStatusStaleMs    = 15000;
 constexpr uint32_t kScreenOffHoldMs      = 2000;
+constexpr int kPageWidth                 = 466;
+constexpr int kPageCount                 = 2;
 
 bool is_ascii_text(const char* text)
 {
@@ -168,6 +174,22 @@ lv_obj_t* make_line(lv_obj_t* parent, int x, int y, int width)
     return line;
 }
 
+lv_obj_t* make_page_dot(lv_obj_t* parent, int x)
+{
+    lv_obj_t* dot = lv_obj_create(parent);
+    lv_obj_set_size(dot, 8, 8);
+    lv_obj_set_x(dot, x);
+    lv_obj_set_y(dot, kPageIndicatorY);
+    lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_pad_all(dot, 0, 0);
+    lv_obj_set_style_border_width(dot, 1, 0);
+    lv_obj_set_style_border_color(dot, lv_color_hex(kEtchedGray), 0);
+    lv_obj_set_style_bg_color(dot, lv_color_hex(kSignalWhite), 0);
+    lv_obj_clear_flag(dot, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(dot, LV_OBJ_FLAG_SCROLLABLE);
+    return dot;
+}
+
 const char* battery_symbol(int percent)
 {
     if (percent >= 88) {
@@ -229,16 +251,23 @@ void AppCodexStatus::onOpen()
     _last_battery_ms = 0;
     _last_network_ms = 0;
     _last_status_payload_ms = 0;
+    _last_trae_status_payload_ms = 0;
     _screen_off_left_press_started_ms = 0;
     _screen_off_restore_brightness = std::max(10, GetHAL().getBackLightBrightness());
     _screen_off = false;
     _screen_off_wake_armed = true;
+    _trae_stale = false;
     _ws_connected    = false;
     _wifi_lease.reset();
     _wifi_started    = false;
     _wifi_fallback_started = false;
     _ble_was_connected = false;
     _alert_carousel.reset();
+    _trae_snapshot = {};
+    _trae_carousel.reset();
+    _page_swipe.cancel();
+    _current_page = 0;
+    _last_page_touch_state = LV_INDEV_STATE_REL;
     _server_host     = Settings("codex_status").GetString("host", kDefaultServerHost);
     _transport_mode  = Settings("codex_status").GetString("transport", "auto");
     _ble_name        = Settings("codex_status").GetString("ble_name", kDefaultBleName);
@@ -287,8 +316,18 @@ void AppCodexStatus::onRunning()
 
     {
         LvglLockGuard lock;
+        update_page_swipe(now);
         if (_alert_carousel.update(now)) {
             render_alert();
+        }
+        if (_trae_carousel.update(now)) {
+            render_trae_status();
+        }
+        if (_last_trae_status_payload_ms != 0 &&
+            now - _last_trae_status_payload_ms > kTraeStatusStaleMs) {
+            _last_trae_status_payload_ms = 0;
+            _trae_stale = true;
+            render_trae_status();
         }
     }
     const bool ble_connected = _ble_transport && _ble_transport->connected();
@@ -296,14 +335,11 @@ void AppCodexStatus::onRunning()
         _ble_transport->poll(now);
         CodexBleMessage message;
         while (_ble_transport->take_message(message)) {
-            const bool handled = handle_status_json(
-                    message.payload.data(),
-                    static_cast<int>(message.payload.size()),
-                    "BLE LIVE"
-                );
-            if (message.type == kCodexBleStatusMessage && handled) {
-                _last_status_payload_ms = now;
-            }
+            handle_status_json(
+                message.payload.data(),
+                static_cast<int>(message.payload.size()),
+                "BLE LIVE"
+            );
         }
 
         if (ble_connected && !_ble_was_connected) {
@@ -364,6 +400,8 @@ void AppCodexStatus::onClose()
     LvglLockGuard lock;
     destroy_view();
     _alert_carousel.reset();
+    _trae_carousel.reset();
+    _trae_snapshot = {};
 }
 
 void AppCodexStatus::create_view()
@@ -376,25 +414,53 @@ void AppCodexStatus::create_view()
     lv_obj_set_style_border_width(_panel, 0, 0);
     lv_obj_set_style_pad_all(_panel, 0, 0);
     lv_obj_set_style_bg_color(_panel, lv_color_hex(kInstrumentBlack), 0);
+    lv_obj_remove_flag(_panel, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
+
+    _page_strip = lv_obj_create(_panel);
+    lv_obj_set_size(_page_strip, 932, 466);
+    lv_obj_set_pos(_page_strip, 0, 0);
+    lv_obj_remove_flag(_page_strip, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_radius(_page_strip, 0, 0);
+    lv_obj_set_style_border_width(_page_strip, 0, 0);
+    lv_obj_set_style_pad_all(_page_strip, 0, 0);
+    lv_obj_set_style_bg_color(_page_strip, lv_color_hex(kInstrumentBlack), 0);
+
+    _codex_page = lv_obj_create(_page_strip);
+    lv_obj_set_size(_codex_page, 466, 466);
+    lv_obj_set_pos(_codex_page, 0, 0);
+    lv_obj_remove_flag(_codex_page, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_radius(_codex_page, 0, 0);
+    lv_obj_set_style_border_width(_codex_page, 0, 0);
+    lv_obj_set_style_pad_all(_codex_page, 0, 0);
+    lv_obj_set_style_bg_color(_codex_page, lv_color_hex(kInstrumentBlack), 0);
+
+    _trae_page_root = lv_obj_create(_page_strip);
+    lv_obj_set_size(_trae_page_root, 466, 466);
+    lv_obj_set_pos(_trae_page_root, 466, 0);
+    lv_obj_remove_flag(_trae_page_root, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_radius(_trae_page_root, 0, 0);
+    lv_obj_set_style_border_width(_trae_page_root, 0, 0);
+    lv_obj_set_style_pad_all(_trae_page_root, 0, 0);
+    lv_obj_set_style_bg_color(_trae_page_root, lv_color_hex(kInstrumentBlack), 0);
 
     _pending_glow = std::make_unique<CodexPendingSoftGlow>();
-    _pending_glow->init(_panel);
+    _pending_glow->init(_codex_page);
 
-    lv_obj_t* logo = lv_image_create(_panel);
+    lv_obj_t* logo = lv_image_create(_codex_page);
     lv_image_set_src(logo, &logo_codex);
     lv_image_set_scale(logo, kLogoScale);
     lv_obj_set_pos(logo, kLogoX, kLogoY);
 
-    make_label(_panel, "Codex", kBrandX, kBrandY, &MontserratSemiBold26, kSignalWhite);
+    make_label(_codex_page, "Codex", kBrandX, kBrandY, &MontserratSemiBold26, kSignalWhite);
 
-    _status_label = make_center_label(_panel, "START", kStatusY, &lv_font_montserrat_14, kEtchedGray);
+    _status_label = make_center_label(_codex_page, "START", kStatusY, &lv_font_montserrat_14, kEtchedGray);
     lv_obj_set_width(_status_label, 180);
     lv_obj_set_style_text_align(_status_label, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_long_mode(_status_label, LV_LABEL_LONG_MODE_DOTS);
     lv_obj_align(_status_label, LV_ALIGN_TOP_MID, 0, kStatusY);
 
     make_frame_segment(
-        _panel,
+        _codex_page,
         kBeaconSpine.x,
         kBeaconSpine.y,
         kBeaconSpine.w,
@@ -403,7 +469,7 @@ void AppCodexStatus::create_view()
     );
 
     lv_obj_t* model_caption = make_telemetry_label(
-        _panel,
+        _codex_page,
         kTelemetryX,
         kModelCaptionY,
         kTelemetryWidth,
@@ -413,7 +479,7 @@ void AppCodexStatus::create_view()
     );
     lv_obj_set_style_text_letter_space(model_caption, 3, 0);
     _model_value = make_telemetry_label(
-        _panel,
+        _codex_page,
         kTelemetryX,
         kModelValueY,
         kTelemetryWidth,
@@ -423,7 +489,7 @@ void AppCodexStatus::create_view()
     );
 
     lv_obj_t* effort_caption = make_telemetry_label(
-        _panel,
+        _codex_page,
         kTelemetryX,
         kEffortCaptionY,
         kTelemetryWidth,
@@ -433,7 +499,7 @@ void AppCodexStatus::create_view()
     );
     lv_obj_set_style_text_letter_space(effort_caption, 3, 0);
     _effort_value = make_telemetry_label(
-        _panel,
+        _codex_page,
         kTelemetryX,
         kEffortValueY,
         kTelemetryWidth,
@@ -442,7 +508,7 @@ void AppCodexStatus::create_view()
         kSignalWhite
     );
 
-    _pet_image = lv_image_create(_panel);
+    _pet_image = lv_image_create(_codex_page);
     lv_image_set_src(_pet_image, codex_pet_idle_frames[0]);
     lv_image_set_antialias(_pet_image, false);
     lv_image_set_scale(_pet_image, kPetScale);
@@ -453,23 +519,23 @@ void AppCodexStatus::create_view()
         _pet_timer = lv_timer_create(AppCodexStatus::pet_timer_cb, codex_pet_idle_durations_ms[0], this);
     }
 
-    QuotaWidgets five_hour = make_quota_row(_panel, kFiveHourY, "5H");
+    QuotaWidgets five_hour = make_quota_row(_codex_page, kFiveHourY, "5H");
     _five_hour_pct = five_hour.pct;
     _five_hour_bar = five_hour.bar;
-    QuotaWidgets week = make_quota_row(_panel, kWeekY, "7D");
+    QuotaWidgets week = make_quota_row(_codex_page, kWeekY, "7D");
     _week_pct = week.pct;
     _week_bar = week.bar;
 
-    make_line(_panel, kAlertDividerX, kAlertDividerY, kAlertDividerWidth);
+    make_line(_codex_page, kAlertDividerX, kAlertDividerY, kAlertDividerWidth);
 
     _activity_title = make_center_label(
-        _panel, "NO ALERTS", kAlertHeadingY, &lv_font_montserrat_20, kEtchedGray
+        _codex_page, "NO ALERTS", kAlertHeadingY, &lv_font_montserrat_20, kEtchedGray
     );
     _alert_project = make_center_label(
-        _panel, "--", kAlertProjectY, &lv_font_montserrat_22, kBeaconViolet
+        _codex_page, "--", kAlertProjectY, &lv_font_montserrat_22, kBeaconViolet
     );
     _alert_detail = make_center_label(
-        _panel, "", kAlertDetailY, &lv_font_montserrat_14, kSecondaryText
+        _codex_page, "", kAlertDetailY, &lv_font_montserrat_14, kSecondaryText
     );
     lv_obj_set_style_text_font(_alert_detail, &font_puhui_14_1, 0);
     const auto configure_alert_label = [](lv_obj_t* label, int y, int width) {
@@ -483,20 +549,35 @@ void AppCodexStatus::create_view()
     configure_alert_label(_alert_detail, kAlertDetailY, kAlertDetailWidth);
     _pending_glow->set_heading(_activity_title);
 
+    _trae_status_page = std::make_unique<TraeStatusPage>();
+    _trae_status_page->init(_trae_page_root);
+    render_trae_status();
+
+    _page_dot_codex = make_page_dot(_panel, 223);
+    _page_dot_trae = make_page_dot(_panel, 237);
+    update_page_indicator();
+
     _battery_label = lv_label_create(_panel);
     lv_obj_set_style_text_font(_battery_label, &lv_font_montserrat_14, 0);
     lv_obj_set_width(_battery_label, 150);
     lv_obj_set_style_text_align(_battery_label, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(_battery_label, LV_ALIGN_TOP_MID, 0, kBatteryY);
     update_battery();
-
 }
 
 void AppCodexStatus::destroy_view()
 {
+    lv_anim_delete(this, page_animation_cb);
+    _page_swipe.cancel();
+    _last_page_touch_state = LV_INDEV_STATE_REL;
+
     if (_pending_glow) {
         _pending_glow->shutdown();
         _pending_glow.reset();
+    }
+    if (_trae_status_page) {
+        _trae_status_page->shutdown();
+        _trae_status_page.reset();
     }
 
     if (_pet_timer != nullptr) {
@@ -510,6 +591,11 @@ void AppCodexStatus::destroy_view()
     }
 
     _model_value    = nullptr;
+    _page_strip     = nullptr;
+    _codex_page     = nullptr;
+    _trae_page_root = nullptr;
+    _page_dot_codex = nullptr;
+    _page_dot_trae  = nullptr;
     _effort_value   = nullptr;
     _five_hour_pct  = nullptr;
     _five_hour_bar  = nullptr;
@@ -669,6 +755,34 @@ void AppCodexStatus::set_host_text(const char* prefix)
 
 bool AppCodexStatus::handle_status_json(const char* data, int length, const char* live_status)
 {
+    const StatusMessageSource source = route_status_message(
+        data,
+        static_cast<size_t>(length)
+    );
+    if (source == StatusMessageSource::Unknown) {
+        return false;
+    }
+    if (source == StatusMessageSource::Trae) {
+        TraeStatusSnapshot snapshot;
+        const uint32_t now = GetHAL().millis();
+        if (!parse_trae_status_message(
+                data,
+                static_cast<size_t>(length),
+                now,
+                snapshot
+            )) {
+            return false;
+        }
+
+        LvglLockGuard lock;
+        _trae_snapshot = snapshot;
+        _last_trae_status_payload_ms = now;
+        _trae_stale = false;
+        _trae_carousel.apply(snapshot, now);
+        render_trae_status();
+        return true;
+    }
+
     CodexStatusSnapshot snapshot;
     const CodexMessageKind kind = parse_codex_message(data, static_cast<size_t>(length), snapshot);
     if (kind == CodexMessageKind::Invalid) {
@@ -711,6 +825,7 @@ bool AppCodexStatus::handle_status_json(const char* data, int length, const char
         lv_label_set_text(_status_label, live_status);
         lv_obj_set_style_text_color(_status_label, lv_color_hex(kCodexBlue), 0);
     }
+    _last_status_payload_ms = GetHAL().millis();
     return true;
 }
 
@@ -758,6 +873,109 @@ void AppCodexStatus::render_alert()
         0
     );
     sync_pending_glow();
+}
+
+void AppCodexStatus::render_trae_status()
+{
+    if (_trae_status_page == nullptr) {
+        return;
+    }
+    _trae_status_page->render(
+        _trae_snapshot,
+        _trae_carousel.current(),
+        _trae_stale
+    );
+}
+
+void AppCodexStatus::update_page_swipe(uint32_t now_ms)
+{
+    auto& controls = GetGlobalEdgeControlService();
+    if (_screen_off ||
+        controls.ownsTouch() || controls.lastReleaseConsumed()) {
+        _page_swipe.cancel();
+        _last_page_touch_state = LV_INDEV_STATE_REL;
+        return;
+    }
+
+    lv_indev_t* indev = GetHAL().lvTouchpad;
+    if (indev == nullptr) {
+        _page_swipe.cancel();
+        _last_page_touch_state = LV_INDEV_STATE_REL;
+        return;
+    }
+
+    const lv_indev_state_t state = lv_indev_get_state(indev);
+    lv_point_t point;
+    lv_indev_get_point(indev, &point);
+    if (state == LV_INDEV_STATE_PR) {
+        if (_last_page_touch_state == LV_INDEV_STATE_REL) {
+            _page_swipe.press(point.x, point.y, now_ms);
+        } else {
+            _page_swipe.move(point.x, point.y);
+        }
+    } else if (_last_page_touch_state == LV_INDEV_STATE_PR) {
+        const StatusPageSwipeResult result =
+            _page_swipe.release(now_ms, _current_page);
+        if (result == StatusPageSwipeResult::Codex) {
+            set_page(0, true);
+        } else if (result == StatusPageSwipeResult::Trae) {
+            set_page(1, true);
+        }
+    }
+    _last_page_touch_state = state;
+}
+
+void AppCodexStatus::set_page(int page, bool animate)
+{
+    if (_page_strip == nullptr) {
+        return;
+    }
+    page = std::clamp(page, 0, kPageCount - 1);
+    const int target_x = -page * kPageWidth;
+    const int current_x = lv_obj_get_x(_page_strip);
+    _current_page = page;
+    update_page_indicator();
+
+    lv_anim_delete(this, page_animation_cb);
+    if (!animate || current_x == target_x) {
+        lv_obj_set_x(_page_strip, target_x);
+        return;
+    }
+
+    lv_anim_t animation;
+    lv_anim_init(&animation);
+    lv_anim_set_var(&animation, this);
+    lv_anim_set_exec_cb(&animation, page_animation_cb);
+    lv_anim_set_values(&animation, current_x, target_x);
+    lv_anim_set_duration(&animation, 140);
+    lv_anim_set_path_cb(&animation, lv_anim_path_ease_out);
+    lv_anim_start(&animation);
+}
+
+void AppCodexStatus::update_page_indicator()
+{
+    if (_page_dot_codex == nullptr || _page_dot_trae == nullptr) {
+        return;
+    }
+    const bool codex_active = _current_page == 0;
+    lv_obj_set_style_bg_opa(
+        _page_dot_codex,
+        codex_active ? LV_OPA_COVER : LV_OPA_TRANSP,
+        0
+    );
+    lv_obj_set_style_bg_opa(
+        _page_dot_trae,
+        codex_active ? LV_OPA_TRANSP : LV_OPA_COVER,
+        0
+    );
+}
+
+void AppCodexStatus::page_animation_cb(void* target, int32_t x)
+{
+    auto* self = static_cast<AppCodexStatus*>(target);
+    if (self != nullptr && self->_page_strip != nullptr) {
+        lv_obj_set_x(self->_page_strip, x);
+    }
 }
 
 void AppCodexStatus::sync_pending_glow()
@@ -819,6 +1037,8 @@ void AppCodexStatus::enter_screen_off()
     _screen_off = true;
     {
         LvglLockGuard lock;
+        _page_swipe.cancel();
+        _last_page_touch_state = LV_INDEV_STATE_REL;
         sync_pending_glow();
     }
     _screen_off_wake_armed = false;
@@ -832,6 +1052,8 @@ void AppCodexStatus::wake_screen()
     _screen_off = false;
     {
         LvglLockGuard lock;
+        _page_swipe.cancel();
+        _last_page_touch_state = LV_INDEV_STATE_REL;
         sync_pending_glow();
     }
     _screen_off_wake_armed = true;

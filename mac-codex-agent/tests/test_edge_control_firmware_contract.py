@@ -124,6 +124,12 @@ class EdgeControlFirmwareContractTests(unittest.TestCase):
         self.assertNotIn("EdgeControlOverlay", header + source)
         self.assertIn("GetHAL().playBootSfx()", source)
         self.assertNotIn("audio::play_tone(660", source)
+        self.assertIn("GetGlobalEdgeControlService()", source)
+        self.assertIn(
+            "controls.ownsTouch() || controls.lastReleaseConsumed()", source
+        )
+        self.assertIn("_page_swipe.cancel()", source)
+        self.assertIn("_last_page_touch_state = LV_INDEV_STATE_REL", source)
 
     def test_watch_face_cancels_raw_gesture_when_global_touch_is_owned(self):
         source = (

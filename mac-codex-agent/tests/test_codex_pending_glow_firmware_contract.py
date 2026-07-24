@@ -62,8 +62,8 @@ class CodexPendingGlowFirmwareContractTests(unittest.TestCase):
         )
         self.assertIn("void sync_pending_glow()", header)
         self.assertLess(
-            app.index("_pending_glow->init(_panel)"),
-            app.index("lv_image_create(_panel)"),
+            app.index("_pending_glow->init(_codex_page)"),
+            app.index("lv_image_create(_codex_page)"),
         )
         self.assertLess(
             app.index("_pending_glow->set_heading(_activity_title)"),

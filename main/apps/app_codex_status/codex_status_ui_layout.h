@@ -63,6 +63,7 @@ constexpr int kAlertProjectY = 357;
 constexpr int kAlertProjectWidth = 340;
 constexpr int kAlertDetailY = 389;
 constexpr int kAlertDetailWidth = 320;
+constexpr int kPageIndicatorY = 416;
 constexpr int kBatteryY = 438;
 
 }  // namespace codex_status_ui

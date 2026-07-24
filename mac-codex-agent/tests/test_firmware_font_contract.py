@@ -74,7 +74,7 @@ class FirmwareFontContractTests(unittest.TestCase):
         render_alert = re.search(
             r"void AppCodexStatus::render_alert\(\)\s*\{"
             r"(?P<body>.*?)"
-            r"\n\}\n\nvoid AppCodexStatus::sync_pending_glow\(\)",
+            r"\n\}\n\nvoid AppCodexStatus::render_trae_status\(\)",
             app,
             re.DOTALL,
         )
@@ -106,7 +106,7 @@ class FirmwareFontContractTests(unittest.TestCase):
             r"\);",
         )
         self.assertIn(
-            '_panel, "--", kAlertProjectY, &lv_font_montserrat_22, '
+            '_codex_page, "--", kAlertProjectY, &lv_font_montserrat_22, '
             "kBeaconViolet",
             app,
         )
@@ -151,7 +151,7 @@ class FirmwareFontContractTests(unittest.TestCase):
         self.assertGreaterEqual(app.count("&MontserratSemiBold26"), 3)
         self.assertIn(
             '_model_value = make_telemetry_label(\n'
-            '        _panel,\n'
+            '        _codex_page,\n'
             '        kTelemetryX,\n'
             '        kModelValueY,\n'
             '        kTelemetryWidth,\n'
@@ -161,7 +161,7 @@ class FirmwareFontContractTests(unittest.TestCase):
         )
         self.assertIn(
             '_effort_value = make_telemetry_label(\n'
-            '        _panel,\n'
+            '        _codex_page,\n'
             '        kTelemetryX,\n'
             '        kEffortValueY,\n'
             '        kTelemetryWidth,\n'
@@ -176,11 +176,11 @@ class FirmwareFontContractTests(unittest.TestCase):
             "lv_obj_set_style_text_letter_space(pct, 0, 0);", app
         )
         self.assertIn(
-            '_panel, "NO ALERTS", kAlertHeadingY, &lv_font_montserrat_20, kEtchedGray',
+            '_codex_page, "NO ALERTS", kAlertHeadingY, &lv_font_montserrat_20, kEtchedGray',
             app,
         )
         self.assertIn(
-            '_panel, "--", kAlertProjectY, &lv_font_montserrat_22, kBeaconViolet',
+            '_codex_page, "--", kAlertProjectY, &lv_font_montserrat_22, kBeaconViolet',
             app,
         )
         self.assertIn(
@@ -209,7 +209,10 @@ class FirmwareFontContractTests(unittest.TestCase):
         )
         self.assertIn("codex_pet_idle_durations_ms[self->_pet_frame]", app)
         self.assertIn('"Codex", kBrandX, kBrandY, &MontserratSemiBold26, kSignalWhite', app)
-        self.assertIn("make_line(_panel, kAlertDividerX, kAlertDividerY, kAlertDividerWidth)", app)
+        self.assertIn(
+            "make_line(_codex_page, kAlertDividerX, kAlertDividerY, kAlertDividerWidth)",
+            app,
+        )
         self.assertIn("lv_label_set_long_mode(label, LV_LABEL_LONG_MODE_DOTS)", app)
 
     def test_quota_percentages_fit_bundled_22px_font_without_compression(self):
