@@ -196,9 +196,19 @@ std::size_t StopWatchAudioBackend::read(void* data, std::size_t bytes, TickType_
     const uint32_t timeout_ms = timeout == portMAX_DELAY
                                     ? UINT32_MAX
                                     : static_cast<uint32_t>(pdTICKS_TO_MS(timeout));
-    return i2s_channel_read(_impl->rx_handle, data, bytes, &bytes_read, timeout_ms) == ESP_OK
-               ? bytes_read
-               : 0;
+    const esp_err_t read_result =
+        i2s_channel_read(_impl->rx_handle, data, bytes, &bytes_read, timeout_ms);
+    if (read_result != ESP_OK || bytes_read != bytes) {
+        mclog::tagError(
+            Tag,
+            "recorder read failed: {} ({}) requested={} actual={} timeout_ms={}",
+            esp_err_to_name(read_result),
+            read_result,
+            bytes,
+            bytes_read,
+            timeout_ms);
+    }
+    return read_result == ESP_OK ? bytes_read : 0;
 }
 
 bool StopWatchAudioBackend::openPlayer(uint32_t sample_rate, uint8_t bits, uint8_t channels)

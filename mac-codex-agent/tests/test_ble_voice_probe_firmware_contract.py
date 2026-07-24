@@ -187,6 +187,8 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         self.assertIn("timeout == portMAX_DELAY", read)
         self.assertIn("UINT32_MAX", read)
         self.assertIn("bytes_read", read)
+        self.assertIn("recorder read failed", read)
+        self.assertIn("esp_err_to_name", read)
         self.assertNotIn("esp_codec_dev_read", read)
 
     def test_terminal_error_replaces_rejected_packet_without_false_summary_success(self):
