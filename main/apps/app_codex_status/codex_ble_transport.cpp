@@ -360,11 +360,11 @@ bool CodexBleTransport::start(const std::string& device_name)
     ble_hs_cfg.sync_cb = on_sync;
     ble_hs_cfg.store_status_cb = ble_store_util_status_rr;
     ble_hs_cfg.sm_io_cap = BLE_HS_IO_NO_INPUT_OUTPUT;
-    ble_hs_cfg.sm_bonding = 1;
+    ble_hs_cfg.sm_bonding = 0;
     ble_hs_cfg.sm_mitm = 0;
     ble_hs_cfg.sm_sc = 1;
-    ble_hs_cfg.sm_our_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
-    ble_hs_cfg.sm_their_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
+    ble_hs_cfg.sm_our_key_dist = 0;
+    ble_hs_cfg.sm_their_key_dist = 0;
 
     ble_svc_gap_init();
     ble_svc_gatt_init();

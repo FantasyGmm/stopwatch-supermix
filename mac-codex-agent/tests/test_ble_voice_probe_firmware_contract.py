@@ -62,6 +62,13 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         self.assertIn("event->passkey.params.action", source)
         self.assertIn("event->passkey.conn_handle", source)
 
+    def test_probe_security_uses_volatile_non_bonded_keys(self):
+        source = (ROOT / "main/apps/app_codex_status/codex_ble_transport.cpp").read_text()
+        unified_defaults = (ROOT / "sdkconfig.unified.defaults").read_text()
+        self.assertIn("ble_hs_cfg.sm_bonding = 0", source)
+        self.assertIn("CONFIG_BT_NIMBLE_NVS_PERSIST=n", unified_defaults)
+        self.assertNotIn("ble_store_ram_", source)
+
     def test_controller_is_bounded_and_not_attached_to_a_button(self):
         controller = (
             ROOT / "main/apps/app_codex_status/ble_voice_probe_controller.cpp"
