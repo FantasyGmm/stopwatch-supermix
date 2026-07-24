@@ -3,11 +3,11 @@
 
 import asyncio
 import datetime
+import hashlib
 import json
 import time
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Mapping, Optional
 
-from codex_adapter import CodexStateCollector
 from protocol import EVENT_MESSAGE, MAX_MESSAGE_SIZE, STATUS_MESSAGE, encode_message
 
 
@@ -21,6 +21,21 @@ FRAME_BURST_PAUSE_SECONDS = 0.02
 MAX_WATCH_ALERTS = 8
 MAX_PROJECT_LENGTH = 32
 MAX_TITLE_LENGTH = 48
+MAX_DETAIL_LENGTH = 72
+MAX_TRAE_TASKS = 4
+MAX_TRAE_MESSAGE_SIZE = 1024
+TRAE_HEARTBEAT_SECONDS = 6.0
+_CODEX_STATUS_KEYS = (
+    "codex_model",
+    "codex_effort",
+    "codex_5h_left_pct",
+    "codex_week_left_pct",
+    "codex_alert_pending",
+    "codex_alert_running",
+    "codex_alert_completed",
+    "codex_alert_revision",
+    "codex_alerts",
+)
 
 
 def _unix_time_ms() -> int:
@@ -35,15 +50,19 @@ def _utc_offset_minutes() -> int:
 class CodexStatusAgent:
     def __init__(
         self,
-        collector: CodexStateCollector,
+        collector: Any,
         transport: Any,
         time_ms: Callable[[], int] = _unix_time_ms,
         utc_offset_minutes: Callable[[], int] = _utc_offset_minutes,
+        monotonic: Callable[[], float] = time.monotonic,
     ):
         self.collector = collector
         self.transport = transport
         self._time_ms = time_ms
         self._utc_offset_minutes = utc_offset_minutes
+        self._monotonic = monotonic
+        self._last_trae_fingerprint = None
+        self._last_trae_sent_at = None
 
     async def sync_time(self) -> None:
         payload = {
@@ -58,10 +77,35 @@ class CodexStatusAgent:
     async def tick(self, status=None):
         if status is None:
             status = await asyncio.to_thread(self.collector.get_state)
-        watch_status = _watch_status(status)
+        watch_status = _watch_codex_status(status)
         await self.transport.send_json(
-            json.dumps(watch_status, separators=(",", ":")), STATUS_MESSAGE
+            json.dumps(
+                watch_status,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+            STATUS_MESSAGE,
         )
+
+        if any(str(key).startswith("trae_") for key in status):
+            trae_status = _watch_trae_status(status)
+            fingerprint = _trae_fingerprint(trae_status)
+            now = self._monotonic()
+            if (
+                fingerprint != self._last_trae_fingerprint
+                or self._last_trae_sent_at is None
+                or now - self._last_trae_sent_at >= TRAE_HEARTBEAT_SECONDS
+            ):
+                await self.transport.send_json(
+                    json.dumps(
+                        trae_status,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                    STATUS_MESSAGE,
+                )
+                self._last_trae_fingerprint = fingerprint
+                self._last_trae_sent_at = now
 
         alert_ids = await asyncio.to_thread(
             self.collector.pending_watch_notification_ids
@@ -80,8 +124,12 @@ class CodexStatusAgent:
         return status
 
 
-def _watch_status(status):
-    result = dict(status)
+def _watch_codex_status(status: Mapping[str, object]):
+    result = {
+        key: status[key]
+        for key in _CODEX_STATUS_KEYS
+        if key in status
+    }
     alerts = status.get("codex_alerts")
     if isinstance(alerts, list):
         result["codex_alerts"] = [
@@ -104,6 +152,84 @@ def _watch_status(status):
         ) > MAX_MESSAGE_SIZE:
             result["codex_alerts"].pop()
     return result
+
+
+def _watch_trae_status(status: Mapping[str, object]):
+    result = {
+        "type": "status",
+        "source": "trae",
+        "trae_online": status.get("trae_online") is True,
+        "trae_model": _bounded_text(status.get("trae_model"), 64) or "--",
+        "trae_effort": _bounded_text(status.get("trae_effort"), 32) or "--",
+        "trae_revision": _nonnegative_integer(status.get("trae_revision")),
+        "trae_tasks": [],
+    }
+    tasks = status.get("trae_tasks")
+    if isinstance(tasks, list):
+        result["trae_tasks"] = [
+            {
+                "project": _bounded_text(item.get("project"), MAX_PROJECT_LENGTH),
+                "title": _bounded_text(item.get("title"), MAX_TITLE_LENGTH),
+                "detail": _bounded_text(item.get("detail"), MAX_DETAIL_LENGTH),
+                "time": _bounded_text(item.get("time"), 8),
+                "state": (
+                    item.get("state")
+                    if item.get("state") in ("pending", "running", "completed")
+                    else "completed"
+                ),
+            }
+            for item in tasks[:MAX_TRAE_TASKS]
+            if isinstance(item, Mapping)
+        ]
+
+    while len(_compact_json_bytes(result)) > MAX_TRAE_MESSAGE_SIZE and len(
+        result["trae_tasks"]
+    ) > 1:
+        result["trae_tasks"].pop()
+    while len(_compact_json_bytes(result)) > MAX_TRAE_MESSAGE_SIZE:
+        shortened = False
+        for task in reversed(result["trae_tasks"]):
+            if task["detail"]:
+                task["detail"] = task["detail"][:-1]
+                shortened = True
+                break
+        if not shortened:
+            result["trae_tasks"].clear()
+            break
+    return result
+
+
+def _trae_fingerprint(payload: Mapping[str, object]) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _bounded_text(value: object, limit: int) -> str:
+    return str(value).strip()[:limit] if isinstance(value, str) else ""
+
+
+def _nonnegative_integer(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0
+    return max(0, int(value))
+
+
+def _compact_json_bytes(payload: Mapping[str, object]) -> bytes:
+    return json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def _watch_status(status):
+    return _watch_codex_status(status)
 
 
 class BleStatusTransport:

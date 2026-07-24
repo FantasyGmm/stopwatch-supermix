@@ -8,8 +8,13 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
-from agent import BleStatusTransport, CodexStatusAgent
-from protocol import EVENT_MESSAGE, STATUS_MESSAGE
+from agent import (
+    BleStatusTransport,
+    CodexStatusAgent,
+    _watch_codex_status,
+    _watch_trae_status,
+)
+from protocol import EVENT_MESSAGE, MAX_MESSAGE_SIZE, STATUS_MESSAGE, encode_message
 
 
 class FakeCollector:
@@ -39,6 +44,35 @@ class FakeTransport:
         if message_type == EVENT_MESSAGE and self.fail_event:
             raise ConnectionError("event write failed")
         self.messages.append((message_type, json.loads(payload)))
+
+
+class Clock:
+    def __init__(self, *values):
+        self.values = list(values)
+
+    def __call__(self):
+        return self.values.pop(0)
+
+
+def trae_status(model="Model A", detail="Building status"):
+    return {
+        "codex_model": "gpt-5.6-sol",
+        "trae_online": True,
+        "trae_model": model,
+        "trae_effort": "high",
+        "trae_revision": 4,
+        "trae_tasks": [
+            {
+                "session_id": "private-session",
+                "task_id": "private-task",
+                "project": "StopWatch",
+                "title": "Add Trae page",
+                "detail": detail,
+                "time": "10:00",
+                "state": "running",
+            }
+        ],
+    }
 
 
 class CodexStatusAgentTests(unittest.TestCase):
@@ -166,6 +200,153 @@ class CodexStatusAgentTests(unittest.TestCase):
         encoded = json.dumps(payload, separators=(",", ":")).encode("utf-8")
         self.assertLessEqual(len(encoded), 2048)
         self.assertLess(len(payload["codex_alerts"]), 8)
+
+    def test_codex_payload_excludes_all_trae_fields(self):
+        payload = _watch_codex_status(trae_status())
+
+        self.assertEqual(payload["codex_model"], "gpt-5.6-sol")
+        self.assertFalse(any(key.startswith("trae_") for key in payload))
+
+    def test_codex_payload_keeps_legacy_shape_without_source_tag(self):
+        payload = _watch_codex_status(
+            {
+                "codex_model": "gpt",
+                "codex_effort": "high",
+                "codex_fresh": True,
+                "codex_collected_at": 10.0,
+            }
+        )
+
+        self.assertEqual(payload, {"codex_model": "gpt", "codex_effort": "high"})
+        self.assertNotIn("source", payload)
+
+    def test_trae_payload_is_source_tagged_bounded_and_private_ids_are_removed(self):
+        payload = _watch_trae_status(trae_status(detail="进展" * 200))
+        encoded = json.dumps(
+            payload, ensure_ascii=False, separators=(",", ":")
+        ).encode("utf-8")
+
+        self.assertEqual(payload["type"], "status")
+        self.assertEqual(payload["source"], "trae")
+        self.assertLessEqual(len(encoded), 1024)
+        self.assertNotIn("session_id", payload["trae_tasks"][0])
+        self.assertNotIn("task_id", payload["trae_tasks"][0])
+        self.assertLessEqual(len(payload["trae_tasks"][0]["detail"]), 72)
+
+    def test_trae_payload_keeps_at_most_four_tasks(self):
+        status = trae_status()
+        status["trae_tasks"] = [
+            {
+                "project": "Project {}".format(index),
+                "title": "Task {}".format(index),
+                "detail": "Detail",
+                "time": "10:00",
+                "state": "running",
+            }
+            for index in range(8)
+        ]
+
+        payload = _watch_trae_status(status)
+
+        self.assertEqual(len(payload["trae_tasks"]), 4)
+
+    def test_unicode_truncation_produces_valid_utf8_json_and_valid_ble_frames(self):
+        payload = _watch_trae_status(trae_status(detail="状态🚀" * 300))
+        encoded = json.dumps(
+            payload, ensure_ascii=False, separators=(",", ":")
+        ).encode("utf-8")
+
+        frames = encode_message(
+            encoded,
+            message_type=STATUS_MESSAGE,
+            sequence=1,
+            max_write_size=20,
+        )
+
+        self.assertLessEqual(len(encoded), 1024)
+        self.assertLessEqual(len(encoded), MAX_MESSAGE_SIZE)
+        self.assertEqual(b"".join(frame[6:] for frame in frames), encoded)
+
+    def test_unchanged_trae_state_uses_six_second_heartbeat(self):
+        collector = FakeCollector()
+        collector.pending_ids = ()
+        transport = FakeTransport()
+        agent = CodexStatusAgent(
+            collector=collector,
+            transport=transport,
+            monotonic=Clock(0.0, 2.0, 6.0),
+        )
+        status = trae_status()
+
+        asyncio.run(agent.tick(status=status))
+        asyncio.run(agent.tick(status=status))
+        asyncio.run(agent.tick(status=status))
+
+        trae_messages = [
+            payload
+            for message_type, payload in transport.messages
+            if message_type == STATUS_MESSAGE and payload.get("source") == "trae"
+        ]
+        self.assertEqual(len(trae_messages), 2)
+
+    def test_changed_trae_state_sends_immediately(self):
+        collector = FakeCollector()
+        collector.pending_ids = ()
+        transport = FakeTransport()
+        agent = CodexStatusAgent(
+            collector=collector,
+            transport=transport,
+            monotonic=Clock(0.0, 1.0),
+        )
+
+        asyncio.run(agent.tick(status=trae_status(model="Model A")))
+        asyncio.run(agent.tick(status=trae_status(model="Model B")))
+
+        trae_messages = [
+            payload
+            for _, payload in transport.messages
+            if payload.get("source") == "trae"
+        ]
+        self.assertEqual(
+            [payload["trae_model"] for payload in trae_messages],
+            ["Model A", "Model B"],
+        )
+
+    def test_reconnect_order_is_time_then_codex_then_trae(self):
+        collector = FakeCollector()
+        collector.pending_ids = ()
+        transport = FakeTransport()
+        agent = CodexStatusAgent(
+            collector=collector,
+            transport=transport,
+            monotonic=Clock(0.0),
+        )
+
+        asyncio.run(agent.sync_time())
+        asyncio.run(agent.tick(status=trae_status()))
+
+        self.assertEqual(transport.messages[0][1]["type"], "time_sync")
+        self.assertNotIn("source", transport.messages[1][1])
+        self.assertEqual(transport.messages[2][1]["source"], "trae")
+
+    def test_trae_state_never_emits_a_chime_event(self):
+        collector = FakeCollector()
+        collector.pending_ids = ()
+        transport = FakeTransport()
+        agent = CodexStatusAgent(
+            collector=collector,
+            transport=transport,
+            monotonic=Clock(0.0),
+        )
+
+        asyncio.run(agent.tick(status=trae_status()))
+
+        self.assertFalse(
+            any(
+                message_type == EVENT_MESSAGE and payload.get("type") == "chime"
+                for message_type, payload in transport.messages
+            )
+        )
 
     def test_large_status_write_yields_before_watch_frame_queue_fills(self):
         class QueueLimitedClient:
