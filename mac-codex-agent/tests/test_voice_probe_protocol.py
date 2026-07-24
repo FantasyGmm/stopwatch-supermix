@@ -1,3 +1,4 @@
+import dataclasses
 import pathlib
 import struct
 import sys
@@ -13,6 +14,7 @@ from voice_probe_protocol import (
     START_ACK,
     STOP_SUMMARY,
     SYNTHETIC,
+    SYNTHETIC_AES_CCM,
     StopSummary,
     decode_ima_adpcm_block,
     decode_error,
@@ -40,13 +42,17 @@ class VoiceProbeProtocolTests(unittest.TestCase):
             encode_start(0x1234, MICROPHONE_ADPCM_AES_CCM, 8192, 60000),
             bytes.fromhex("0101030034120020000060ea0000"),
         )
+        self.assertEqual(
+            encode_start(0x1234, SYNTHETIC_AES_CCM, 16384, 60000),
+            bytes.fromhex("0101040034120040000060ea0000"),
+        )
 
     def test_rejects_control_values_forbidden_by_firmware(self):
         invalid_start_commands = (
             (0, SYNTHETIC, 8192, 60000),
             (0x10000, SYNTHETIC, 8192, 60000),
             (1, 0, 8192, 60000),
-            (1, 4, 8192, 60000),
+            (1, 5, 8192, 60000),
             (1, SYNTHETIC, 8192, 999),
             (1, SYNTHETIC, 8192, 120001),
             (1, SYNTHETIC, 1023, 60000),
@@ -55,6 +61,9 @@ class VoiceProbeProtocolTests(unittest.TestCase):
             (1, MICROPHONE_ADPCM, 8193, 60000),
             (1, MICROPHONE_ADPCM_AES_CCM, 8191, 60000),
             (1, MICROPHONE_ADPCM_AES_CCM, 8193, 60000),
+            (1, SYNTHETIC_AES_CCM, 8191, 60000),
+            (1, SYNTHETIC_AES_CCM, 16385, 60000),
+            (1, SYNTHETIC_AES_CCM, 32768, 60000),
         )
         for command in invalid_start_commands:
             with self.subTest(command=command), self.assertRaises(ValueError):
@@ -128,6 +137,27 @@ class VoiceProbeProtocolTests(unittest.TestCase):
             StopSummary.from_payload(
                 summary.pack(), mode=MICROPHONE_ADPCM_AES_CCM
             )
+
+        encrypted_synthetic_summary = dataclasses.replace(
+            encrypted_summary,
+            generated_payload_bytes=1800,
+            captured_pcm_samples=0,
+            generated_plaintext_bytes=1720,
+        )
+        encrypted_synthetic_payload = encrypted_synthetic_summary.pack(
+            SYNTHETIC_AES_CCM
+        )
+        self.assertEqual(len(encrypted_synthetic_payload), 54)
+        self.assertEqual(
+            encrypted_synthetic_payload[:50],
+            encrypted_synthetic_summary.pack(MICROPHONE_ADPCM_AES_CCM),
+        )
+        self.assertEqual(
+            StopSummary.from_payload(
+                encrypted_synthetic_payload, mode=SYNTHETIC_AES_CCM
+            ),
+            encrypted_synthetic_summary,
+        )
 
         for decoder, payload in ((decode_start_ack, b"\x00"), (decode_error, b"\x00")):
             with self.assertRaises(ValueError):

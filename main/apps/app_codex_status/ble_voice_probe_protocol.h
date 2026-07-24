@@ -12,6 +12,7 @@ constexpr size_t kNotificationHeaderSize = 14;
 constexpr size_t kStartAckSize = 8;
 constexpr size_t kStopSummarySize = 30;
 constexpr size_t kEncryptedStopSummarySize = 50;
+constexpr size_t kEncryptedSyntheticStopSummarySize = 54;
 constexpr size_t kErrorPayloadSize = 4;
 constexpr size_t kMaxNotificationSize = 256;
 constexpr size_t kMaxNotificationPayload =
@@ -22,6 +23,7 @@ enum class Mode : uint8_t {
     Synthetic = 1,
     MicrophoneAdpcm = 2,
     MicrophoneAdpcmAesCcm = 3,
+    SyntheticAesCcm = 4,
 };
 enum class Kind : uint8_t { StartAck = 1, Data = 2, StopSummary = 3, Error = 4 };
 enum class ErrorCode : uint16_t {
@@ -69,6 +71,7 @@ struct StopSummary {
     uint32_t crypto_total_us = 0;
     uint32_t crypto_max_us = 0;
     uint32_t crypto_p99_us = 0;
+    uint32_t generated_plaintext_bytes = 0;
 };
 
 bool decode_control(const uint8_t* bytes, size_t length, ControlCommand& command);

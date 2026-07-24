@@ -136,4 +136,53 @@ int main()
         ciphertext.size() - 1,
         expected_nonce,
         decrypted));
+
+    constexpr size_t kSyntheticPlaintextSize = 231;
+    std::array<uint8_t, kSyntheticPlaintextSize> synthetic_plaintext = {};
+    for (size_t index = 0; index < synthetic_plaintext.size(); ++index) {
+        synthetic_plaintext[index] = static_cast<uint8_t>((index + 7U) & 0xffU);
+    }
+    std::array<uint8_t, kSyntheticPlaintextSize + kTagSize>
+        synthetic_ciphertext = {};
+    size_t synthetic_ciphertext_len = 0;
+    elapsed_us = 0;
+    const auto synthetic_aad =
+        from_hex<kAadSize>("020207000100000064000000ef00");
+    assert(encrypt_synthetic(
+        synthetic_aad.data(),
+        synthetic_aad.size(),
+        synthetic_plaintext.data(),
+        synthetic_plaintext.size(),
+        expected_nonce,
+        synthetic_ciphertext.data(),
+        synthetic_ciphertext.size(),
+        synthetic_ciphertext_len,
+        elapsed_us));
+    assert(synthetic_ciphertext_len == synthetic_plaintext.size() + kTagSize);
+    assert(kAadSize + synthetic_ciphertext_len == 253);
+
+    std::array<uint8_t, kSyntheticPlaintextSize> synthetic_decrypted = {};
+    size_t synthetic_decrypted_len = 0;
+    assert(decrypt_synthetic(
+        synthetic_aad.data(),
+        synthetic_aad.size(),
+        synthetic_ciphertext.data(),
+        synthetic_ciphertext_len,
+        expected_nonce,
+        synthetic_decrypted.data(),
+        synthetic_decrypted.size(),
+        synthetic_decrypted_len));
+    assert(synthetic_decrypted_len == synthetic_plaintext.size());
+    assert(synthetic_decrypted == synthetic_plaintext);
+
+    synthetic_ciphertext.back() ^= 0x01;
+    assert(!decrypt_synthetic(
+        synthetic_aad.data(),
+        synthetic_aad.size(),
+        synthetic_ciphertext.data(),
+        synthetic_ciphertext_len,
+        expected_nonce,
+        synthetic_decrypted.data(),
+        synthetic_decrypted.size(),
+        synthetic_decrypted_len));
 }

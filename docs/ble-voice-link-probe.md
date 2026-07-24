@@ -9,13 +9,15 @@ input feature itself.
 
 This hardware run is a transport and diagnostic crypto capacity probe. Modes 1
 and 2 remain transport-only, intentionally unencrypted, and byte-compatible
-with the original probe. Mode 3 encrypts only the 164-byte ADPCM microphone block with
-AES-128-CCM and an 8-byte tag; its 172-byte payload authenticates the existing
-14-byte notification header and produces a 186-byte characteristic value.
-The normal status characteristic remains encrypted.
+with the original probe. Mode 3 encrypts only the 164-byte ADPCM microphone
+block with AES-128-CCM and an 8-byte tag; its 172-byte payload authenticates the
+existing 14-byte notification header and produces a 186-byte characteristic
+value. Mode 4 encrypts the deterministic synthetic source with the same
+diagnostic key, nonce derivation, AAD, and 8-byte tag. The normal status
+characteristic remains encrypted.
 
-Mode 3 uses a fixed diagnostic key solely to isolate crypto performance from
-pairing, enrollment, and key storage. It is not a production key and must
+Modes 3 and 4 use a fixed diagnostic key solely to isolate crypto performance
+from pairing, enrollment, and key storage. It is not a production key and must
 never be used by the installed Agent or production voice path.
 
 Three physical runs already showed that macOS CoreBluetooth could discover and
@@ -95,6 +97,38 @@ set -e
 printf '%s\n' "$EXPLORATORY_RC" > "$EVIDENCE/synthetic-32768.exit-code"
 ```
 
+## Encrypted Synthetic Profiles
+
+Run mode 4 adjacent to its unencrypted synthetic baseline. The CLI exposes only
+the gate's 8192 and 16384 B/s encrypted profiles:
+
+```bash
+"$PYTHON" mac-codex-agent/ble_voice_probe.py \
+  synthetic-encrypted --target-bps 8192 --duration 60 \
+  --firmware-revision "$REVISION" \
+  --report "$EVIDENCE/synthetic-encrypted-8192.json" \
+  > "$EVIDENCE/synthetic-encrypted-8192.log" 2>&1
+
+"$PYTHON" mac-codex-agent/ble_voice_probe.py \
+  synthetic-encrypted --target-bps 16384 --duration 60 \
+  --firmware-revision "$REVISION" \
+  --report "$EVIDENCE/synthetic-encrypted-16384.json" \
+  > "$EVIDENCE/synthetic-encrypted-16384.log" 2>&1
+```
+
+For mode 4, `target_bps` is the deterministic plaintext rate. Each notification
+adds an 8-byte tag as wire overhead. At the measured ATT MTU of 256, the
+characteristic-value limit is 253 bytes, so the largest mode-4 data packet is
+14 header bytes plus 231 plaintext bytes plus 8 tag bytes. A smaller negotiated
+limit reduces the plaintext cap so the complete encrypted notification always
+fits.
+
+The encrypted 8192 B/s result participates in the small-impact gate. The
+encrypted 16384 B/s result is capacity evidence and is reported as
+`exploratory_pass` or `exploratory_fail`; it does not classify encryption
+performance because the corresponding unencrypted margin profile already
+misses its timing gates.
+
 ## Microphone Profile
 
 Speak normal Mandarin continuously while the 30-second probe runs. The command
@@ -127,6 +161,15 @@ acceptance item; an automated transport pass does not establish audio quality.
 Every JSON report records the requested profile, firmware revision, negotiated
 MTU, sender counters, receiver counters, payload bytes, timing metrics, the
 automated decision, exception text, and the WAV path when applicable.
+
+Mode 4 reports `generated_plaintext_bytes` and
+`receiver_plaintext_payload_bytes` separately from
+`generated_encrypted_wire_bytes` and `receiver_encrypted_wire_bytes`.
+`encryption_overhead_bytes` is the tag overhead across generated packets.
+Sender/receiver wire parity compares the ciphertext/tag payload bytes.
+Synthetic throughput, plaintext parity, and deterministic-pattern validation
+use authenticated decrypted plaintext only. A tag failure is counted in
+`invalid_tags`, fails closed, and never reaches the pattern checker.
 
 For required 8192 and 16384 B/s synthetic profiles, pass requires all of the
 following:
@@ -169,9 +212,12 @@ also requires zero crypto failures and invalid tags, p99 watch encryption time
 at most 1 ms, and every encrypted characteristic value to be exactly 186
 bytes. The same WAV duration and manual Mandarin listening checks still apply.
 
-The wire protocol currently defines only encrypted microphone mode 3. It does
-not define an encrypted synthetic source mode; do not label a mode 3 microphone
-run as encrypted synthetic evidence.
+Stop summaries for modes 1 and 2 retain their original 30-byte layout. Mode 3
+retains its 50-byte layout: the 30-byte legacy prefix followed by five 32-bit
+crypto counters. Mode 4 uses the same 50-byte prefix and appends one 32-bit
+`generated_plaintext_bytes` field for a 54-byte summary. In mode 4, the legacy
+`generated_payload_bytes` field counts encrypted payload bytes
+(ciphertext plus tag, excluding the 14-byte notification header).
 
 The 32768 B/s result is labeled `exploratory_pass` or `exploratory_fail`; it is
 recorded for capacity information and is not a required BLE acceptance gate.

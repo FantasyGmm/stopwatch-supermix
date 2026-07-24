@@ -62,13 +62,16 @@ uint32_t Session::allocate_sequence()
 
 uint32_t Session::synthetic_bytes_due(uint32_t now_ms) const
 {
-    if (!_active || _command.mode != Mode::Synthetic) {
+    if (!_active ||
+        (_command.mode != Mode::Synthetic &&
+         _command.mode != Mode::SyntheticAesCcm)) {
         return 0;
     }
     const uint64_t elapsed = static_cast<uint32_t>(now_ms - _started_ms);
     const uint64_t expected = elapsed * _command.target_bps / 1000U;
-    return expected > _summary.generated_payload_bytes
-               ? static_cast<uint32_t>(expected - _summary.generated_payload_bytes)
+    return expected > _summary.generated_plaintext_bytes
+               ? static_cast<uint32_t>(
+                     expected - _summary.generated_plaintext_bytes)
                : 0;
 }
 
@@ -98,13 +101,15 @@ bool Session::duration_reached(uint32_t now_ms) const
     return elapsed >= _command.duration_ms;
 }
 
-void Session::record_generated(uint16_t payload_bytes)
+void Session::record_generated(uint16_t payload_bytes, uint16_t plaintext_bytes)
 {
     if (!_active) {
         return;
     }
     ++_summary.generated_data_packets;
     _summary.generated_payload_bytes += payload_bytes;
+    _summary.generated_plaintext_bytes +=
+        plaintext_bytes == 0 ? payload_bytes : plaintext_bytes;
 }
 
 void Session::record_notify_accepted()

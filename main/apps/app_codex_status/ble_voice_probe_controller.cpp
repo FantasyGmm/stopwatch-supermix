@@ -52,6 +52,17 @@ bool is_microphone_mode(ble_voice_probe::Mode mode)
            mode == ble_voice_probe::Mode::MicrophoneAdpcmAesCcm;
 }
 
+bool is_synthetic_mode(ble_voice_probe::Mode mode)
+{
+    return mode == ble_voice_probe::Mode::Synthetic ||
+           mode == ble_voice_probe::Mode::SyntheticAesCcm;
+}
+
+bool is_encrypted_synthetic_mode(ble_voice_probe::Mode mode)
+{
+    return mode == ble_voice_probe::Mode::SyntheticAesCcm;
+}
+
 bool is_encrypted_microphone_mode(ble_voice_probe::Mode mode)
 {
     return mode == ble_voice_probe::Mode::MicrophoneAdpcmAesCcm;
@@ -181,7 +192,7 @@ void BleVoiceProbeController::handle_control(
             now_ms);
         return;
     }
-    if (command.mode != ble_voice_probe::Mode::Synthetic &&
+    if (!is_synthetic_mode(command.mode) &&
         !is_microphone_mode(command.mode)) {
         enqueue_error(
             ble_voice_probe::ErrorCode::InvalidCommand,
@@ -190,7 +201,13 @@ void BleVoiceProbeController::handle_control(
             now_ms);
         return;
     }
-    if (notification_limit(negotiated_mtu) < kMinimumNotificationLimit) {
+    const uint16_t minimum_notification_limit =
+        is_encrypted_synthetic_mode(command.mode)
+            ? static_cast<uint16_t>(
+                  ble_voice_probe::kNotificationHeaderSize +
+                  ble_voice_probe::kEncryptedSyntheticStopSummarySize)
+            : kMinimumNotificationLimit;
+    if (notification_limit(negotiated_mtu) < minimum_notification_limit) {
         enqueue_error(
             ble_voice_probe::ErrorCode::MtuTooSmall,
             command.session,
@@ -426,25 +443,9 @@ void BleVoiceProbeController::producer_loop()
                     const uint32_t now_ms = GetHAL().millis();
                     if (_session.duration_reached(now_ms)) {
                         stop_for_duration = true;
-                    } else if (_session.mode() == ble_voice_probe::Mode::Synthetic) {
-                        const uint16_t payload_length = _session.synthetic_payload_size(
-                            now_ms, _notification_payload_capacity);
-                        if (payload_length != 0) {
-                            _pending_data = {};
-                            _pending_data.kind = ble_voice_probe::Kind::Data;
-                            _pending_data.session = _session.id();
-                            _pending_data.sequence = _session.allocate_sequence();
-                            _pending_data.watch_ms = now_ms;
-                            _pending_data.payload_length = payload_length;
-                            ble_voice_probe::fill_synthetic_payload(
-                                _pending_data.sequence,
-                                _pending_data.payload.data(),
-                                payload_length);
-                            _pending_data_valid = true;
-                            _pending_data_queued = false;
-                            _pending_data_counted = false;
-                            have_packet = true;
-                        }
+                    } else if (is_synthetic_mode(_session.mode())) {
+                        have_packet = prepare_synthetic_packet_locked(now_ms);
+                        producer_inactive = _terminal_error_pending;
                     } else {
                         capture_microphone = true;
                     }
@@ -545,7 +546,14 @@ void BleVoiceProbeController::producer_loop()
                 if (enqueued) {
                     _pending_data_queued = true;
                     if (!_pending_data_counted) {
-                        _session.record_generated(packet.payload_length);
+                        const uint16_t plaintext_length =
+                            is_encrypted_synthetic_mode(_session.mode())
+                                ? static_cast<uint16_t>(
+                                      packet.payload_length -
+                                      ble_voice_probe::crypto::kTagSize)
+                                : packet.payload_length;
+                        _session.record_generated(
+                            packet.payload_length, plaintext_length);
                         if (microphone_packet) {
                             _session.record_captured_samples(kOutputSamplesPerBlock);
                         }
@@ -575,6 +583,94 @@ void BleVoiceProbeController::producer_loop()
     for (;;) {
         vTaskSuspend(nullptr);
     }
+}
+
+bool BleVoiceProbeController::prepare_synthetic_packet_locked(uint32_t now_ms)
+{
+    if (!_session.active() || !is_synthetic_mode(_session.mode()) ||
+        _pending_data_valid || _terminal_error_pending) {
+        return false;
+    }
+
+    const bool encrypted = is_encrypted_synthetic_mode(_session.mode());
+    if (encrypted &&
+        _notification_payload_capacity <= ble_voice_probe::crypto::kTagSize) {
+        prepare_terminal_error_locked(
+            ble_voice_probe::ErrorCode::MtuTooSmall,
+            _negotiated_mtu,
+            now_ms);
+        return false;
+    }
+
+    const uint16_t plaintext_capacity = encrypted
+        ? static_cast<uint16_t>(
+              _notification_payload_capacity -
+              ble_voice_probe::crypto::kTagSize)
+        : _notification_payload_capacity;
+    const uint16_t plaintext_length =
+        _session.synthetic_payload_size(now_ms, plaintext_capacity);
+    if (plaintext_length == 0) {
+        return false;
+    }
+
+    _pending_data = {};
+    _pending_data.kind = ble_voice_probe::Kind::Data;
+    _pending_data.session = _session.id();
+    _pending_data.sequence = _session.allocate_sequence();
+    _pending_data.watch_ms = now_ms;
+    _pending_data.payload_length = encrypted
+        ? static_cast<uint16_t>(
+              plaintext_length + ble_voice_probe::crypto::kTagSize)
+        : plaintext_length;
+
+    if (encrypted) {
+        std::array<uint8_t, ble_voice_probe::kMaxNotificationPayload>
+            plaintext = {};
+        std::array<uint8_t, ble_voice_probe::kNotificationHeaderSize> aad = {};
+        ble_voice_probe::crypto::Nonce nonce = {};
+        size_t ciphertext_length = 0;
+        uint32_t elapsed_us = 0;
+        ble_voice_probe::fill_synthetic_payload(
+            _pending_data.sequence,
+            plaintext.data(),
+            plaintext_length);
+        const bool encrypted_ok =
+            ble_voice_probe::encode_notification_header(
+                _pending_data, aad.data(), aad.size()) == aad.size() &&
+            ble_voice_probe::crypto::derive_nonce(
+                _pending_data.session,
+                _pending_data.sequence,
+                _pending_data.watch_ms,
+                nonce) &&
+            ble_voice_probe::crypto::encrypt_synthetic(
+                aad.data(),
+                aad.size(),
+                plaintext.data(),
+                plaintext_length,
+                nonce,
+                _pending_data.payload.data(),
+                _pending_data.payload.size(),
+                ciphertext_length,
+                elapsed_us) &&
+            ciphertext_length == _pending_data.payload_length;
+        _session.record_crypto_result(elapsed_us, encrypted_ok);
+        if (!encrypted_ok) {
+            _pending_data_valid = true;
+            prepare_terminal_error_locked(
+                ble_voice_probe::ErrorCode::CryptoFailed, 0, now_ms);
+            return false;
+        }
+    } else {
+        ble_voice_probe::fill_synthetic_payload(
+            _pending_data.sequence,
+            _pending_data.payload.data(),
+            plaintext_length);
+    }
+
+    _pending_data_valid = true;
+    _pending_data_queued = false;
+    _pending_data_counted = false;
+    return true;
 }
 
 bool BleVoiceProbeController::queue_start_ack_locked(

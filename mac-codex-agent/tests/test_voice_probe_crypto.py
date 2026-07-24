@@ -11,8 +11,10 @@ from voice_probe_crypto import (  # noqa: E402
     CIPHERTEXT_BYTES,
     PLAINTEXT_BYTES,
     decrypt,
+    decrypt_synthetic,
     derive_nonce,
     encrypt,
+    encrypt_synthetic,
 )
 
 
@@ -73,6 +75,22 @@ class VoiceProbeCryptoTests(unittest.TestCase):
             encrypt(AAD, PLAINTEXT, bytes(13))
         with self.assertRaises(ValueError):
             decrypt(AAD, EXPECTED_CIPHERTEXT[:-1], KEY_VECTOR_NONCE)
+
+    def test_variable_synthetic_payload_round_trips_at_mtu_256_limit(self):
+        plaintext = bytes((index + 7) & 0xFF for index in range(231))
+        aad = bytes.fromhex("020207000100000064000000ef00")
+        ciphertext = encrypt_synthetic(aad, plaintext, KEY_VECTOR_NONCE)
+
+        self.assertEqual(len(aad) + len(ciphertext), 253)
+        self.assertEqual(
+            decrypt_synthetic(aad, ciphertext, KEY_VECTOR_NONCE),
+            plaintext,
+        )
+
+        tampered = bytearray(ciphertext)
+        tampered[-1] ^= 0x01
+        with self.assertRaises(InvalidTag):
+            decrypt_synthetic(aad, bytes(tampered), KEY_VECTOR_NONCE)
 
 
 if __name__ == "__main__":

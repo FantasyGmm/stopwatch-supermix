@@ -16,7 +16,7 @@ from typing import Any, Callable, Optional
 
 from cryptography.exceptions import InvalidTag
 
-from voice_probe_crypto import decrypt, derive_nonce
+from voice_probe_crypto import decrypt, decrypt_synthetic, derive_nonce
 from voice_probe_metrics import ProbeMetrics
 from voice_probe_protocol import (
     DATA,
@@ -26,6 +26,7 @@ from voice_probe_protocol import (
     START_ACK,
     STOP_SUMMARY,
     SYNTHETIC,
+    SYNTHETIC_AES_CCM,
     Notification,
     StopSummary,
     decode_error,
@@ -252,19 +253,32 @@ class VoiceProbeClient:
                         )
                     sequence_gap = notification.sequence > expected_sequence
                     decode_payload = notification.payload
-                    if profile.mode == MICROPHONE_ADPCM_AES_CCM:
+                    if profile.mode in (
+                        MICROPHONE_ADPCM_AES_CCM,
+                        SYNTHETIC_AES_CCM,
+                    ):
                         encrypted_value_sizes.add(
                             14 + len(notification.payload)
                         )
                         try:
-                            decode_payload = decrypt(
-                                notification_aad(notification),
-                                notification.payload,
-                                derive_nonce(
-                                    notification.session,
-                                    notification.sequence,
-                                    notification.watch_ms,
-                                ),
+                            nonce = derive_nonce(
+                                notification.session,
+                                notification.sequence,
+                                notification.watch_ms,
+                            )
+                            aad = notification_aad(notification)
+                            decode_payload = (
+                                decrypt_synthetic(
+                                    aad,
+                                    notification.payload,
+                                    nonce,
+                                )
+                                if profile.mode == SYNTHETIC_AES_CCM
+                                else decrypt(
+                                    aad,
+                                    notification.payload,
+                                    nonce,
+                                )
                             )
                         except InvalidTag as error:
                             invalid_tags += 1
@@ -273,12 +287,17 @@ class VoiceProbeClient:
                             ) from error
                         except ValueError as error:
                             raise ProbeError(
-                                f"invalid encrypted microphone packet: {error}"
+                                f"invalid encrypted probe packet: {error}"
                             ) from error
                     metrics.observe(
                         notification,
                         arrival_ns,
                         expected_sequence=expected_sequence,
+                        plaintext_payload=(
+                            decode_payload
+                            if profile.mode == SYNTHETIC_AES_CCM
+                            else None
+                        ),
                     )
                     expected_sequence = notification.sequence + 1
                     if profile.mode in (
@@ -472,6 +491,9 @@ class VoiceProbeClient:
             "sender_accepted_data_packets": None,
             "receiver_data_packets": metrics._data_packets_received,
             "receiver_payload_bytes": metrics._receiver_payload_bytes,
+            "receiver_plaintext_payload_bytes": (
+                metrics._receiver_plaintext_payload_bytes
+            ),
             "queue_overflows": None,
             "encode_failures": None,
             "crypto_packets": None,
@@ -481,6 +503,14 @@ class VoiceProbeClient:
             "crypto_p99_us": None,
             "elapsed_ms": None,
             "generated_payload_bytes": None,
+            "generated_plaintext_bytes": None,
+            "generated_encrypted_wire_bytes": None,
+            "receiver_encrypted_wire_bytes": (
+                metrics._receiver_payload_bytes
+                if metrics.mode == SYNTHETIC_AES_CCM
+                else None
+            ),
+            "encryption_overhead_bytes": None,
             "captured_pcm_samples": None,
             "decoded_pcm_samples": len(pcm_samples),
             "negotiated_mtu": None,
@@ -492,6 +522,7 @@ class VoiceProbeClient:
             "summary_semantically_valid": False,
             "sender_receiver_counter_parity": False,
             "sender_receiver_payload_byte_parity": False,
+            "sender_receiver_plaintext_byte_parity": False,
             "microphone_block_byte_parity": False,
             "p95_arrival_deviation_ms": None,
             "max_arrival_gap_ms": None,
@@ -528,13 +559,13 @@ class VoiceProbeClient:
         )
         result["invalid_tags"] = invalid_tags
         result["encrypted_characteristic_value_bytes"] = encrypted_value_bytes
-        if mode != MICROPHONE_ADPCM_AES_CCM:
+        if mode not in (MICROPHONE_ADPCM_AES_CCM, SYNTHETIC_AES_CCM):
             return result
 
         failure_reasons = list(result["failure_reasons"])
         if invalid_tags and "invalid_tags" not in failure_reasons:
             failure_reasons.append("invalid_tags")
-        if (
+        if mode == MICROPHONE_ADPCM_AES_CCM and (
             encrypted_value_bytes != 186
             and "encrypted_characteristic_value_bytes" not in failure_reasons
         ):
@@ -567,6 +598,12 @@ def _build_parser() -> argparse.ArgumentParser:
             MICROPHONE_ADPCM_AES_CCM,
             (8192,),
             True,
+        ),
+        (
+            "synthetic-encrypted",
+            SYNTHETIC_AES_CCM,
+            (8192, 16384),
+            False,
         ),
     ):
         command = subcommands.add_parser(name)

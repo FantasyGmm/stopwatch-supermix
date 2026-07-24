@@ -44,3 +44,27 @@ def encrypt(aad: bytes, plaintext: bytes, nonce: bytes) -> bytes:
 def decrypt(aad: bytes, ciphertext: bytes, nonce: bytes) -> bytes:
     _validate_inputs(aad, ciphertext, CIPHERTEXT_BYTES, nonce)
     return _AES_CCM.decrypt(nonce, ciphertext, aad)
+
+
+def encrypt_synthetic(aad: bytes, plaintext: bytes, nonce: bytes) -> bytes:
+    _validate_synthetic_inputs(aad, plaintext, nonce, minimum_size=1)
+    return _AES_CCM.encrypt(nonce, plaintext, aad)
+
+
+def decrypt_synthetic(aad: bytes, ciphertext: bytes, nonce: bytes) -> bytes:
+    _validate_synthetic_inputs(aad, ciphertext, nonce, minimum_size=TAG_BYTES + 1)
+    return _AES_CCM.decrypt(nonce, ciphertext, aad)
+
+
+def _validate_synthetic_inputs(
+    aad: bytes,
+    value: bytes,
+    nonce: bytes,
+    minimum_size: int,
+) -> None:
+    if len(aad) != AAD_BYTES:
+        raise ValueError(f"AAD must be {AAD_BYTES} bytes")
+    if len(value) < minimum_size:
+        raise ValueError(f"value must be at least {minimum_size} bytes")
+    if len(nonce) != NONCE_BYTES or not any(nonce):
+        raise ValueError(f"nonce must be {NONCE_BYTES} nonzero bytes")

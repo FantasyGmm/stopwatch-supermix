@@ -6,6 +6,7 @@ from voice_probe_protocol import (
     MICROPHONE_ADPCM,
     MICROPHONE_ADPCM_AES_CCM,
     SYNTHETIC,
+    SYNTHETIC_AES_CCM,
     Notification,
     StopSummary,
     expected_synthetic_payload,
@@ -19,6 +20,7 @@ class ProbeMetrics:
         self.target_bps = target_bps
         self._data_packets_received = 0
         self._receiver_payload_bytes = 0
+        self._receiver_plaintext_payload_bytes = 0
         self._sequence_gaps = 0
         self._sequence_regressions = 0
         self._payload_corruptions = 0
@@ -34,12 +36,23 @@ class ProbeMetrics:
         notification: Notification,
         arrival_ns: int,
         expected_sequence: Optional[int] = None,
+        plaintext_payload: Optional[bytes] = None,
     ) -> None:
         if notification.kind != DATA or notification.session != self.session:
             return
 
         self._data_packets_received += 1
         self._receiver_payload_bytes += len(notification.payload)
+        checked_payload = (
+            b""
+            if self.mode == SYNTHETIC_AES_CCM and plaintext_payload is None
+            else (
+                notification.payload
+                if plaintext_payload is None
+                else plaintext_payload
+            )
+        )
+        self._receiver_plaintext_payload_bytes += len(checked_payload)
         if expected_sequence is not None:
             sequence_delta = notification.sequence - expected_sequence
             if sequence_delta > 0:
@@ -53,8 +66,8 @@ class ProbeMetrics:
             elif sequence_delta <= 0:
                 self._sequence_regressions += 1
 
-        if self.mode == SYNTHETIC and notification.payload != expected_synthetic_payload(
-            notification.sequence, len(notification.payload)
+        if self._is_synthetic_mode() and checked_payload != expected_synthetic_payload(
+            notification.sequence, len(checked_payload)
         ):
             self._payload_corruptions += 1
 
@@ -108,6 +121,11 @@ class ProbeMetrics:
         payload_byte_parity = (
             summary.generated_payload_bytes == self._receiver_payload_bytes
         )
+        plaintext_byte_parity = (
+            self.mode != SYNTHETIC_AES_CCM
+            or summary.generated_plaintext_bytes
+            == self._receiver_plaintext_payload_bytes
+        )
         microphone_block_byte_parity = (
             not self._is_microphone_mode()
             or summary.generated_data_packets * self._microphone_block_bytes()
@@ -117,7 +135,10 @@ class ProbeMetrics:
         wav_duration_error_percent = self._wav_duration_error(
             summary, safe_decoded_pcm_samples
         )
-        required_profile = not (self.mode == SYNTHETIC and self.target_bps == 32768)
+        required_profile = not (
+            self.mode == SYNTHETIC and self.target_bps == 32768
+            or self.mode == SYNTHETIC_AES_CCM and self.target_bps == 16384
+        )
 
         failure_reasons = []
         if not summary_semantically_valid:
@@ -134,10 +155,10 @@ class ProbeMetrics:
             failure_reasons.append("queue_overflows")
         if summary.encode_failures:
             failure_reasons.append("encode_failures")
-        if self.mode == MICROPHONE_ADPCM_AES_CCM and summary.crypto_failures:
+        if self._is_encrypted_mode() and summary.crypto_failures:
             failure_reasons.append("crypto_failures")
         if (
-            self.mode == MICROPHONE_ADPCM_AES_CCM
+            self._is_encrypted_mode()
             and summary.crypto_p99_us > 1000
         ):
             failure_reasons.append("crypto_p99_us")
@@ -145,9 +166,11 @@ class ProbeMetrics:
             failure_reasons.append("counter_parity")
         if not payload_byte_parity:
             failure_reasons.append("payload_byte_parity")
+        if not plaintext_byte_parity:
+            failure_reasons.append("plaintext_byte_parity")
         if not microphone_block_byte_parity:
             failure_reasons.append("microphone_block_byte_parity")
-        if self.mode == SYNTHETIC and (
+        if self._is_synthetic_mode() and (
             throughput_error_percent is None or throughput_error_percent > 1
         ):
             failure_reasons.append("throughput_error_percent")
@@ -181,10 +204,34 @@ class ProbeMetrics:
             "sender_accepted_data_packets": summary.accepted_data_packets,
             "receiver_data_packets": self._data_packets_received,
             "receiver_payload_bytes": self._receiver_payload_bytes,
+            "receiver_plaintext_payload_bytes": (
+                self._receiver_plaintext_payload_bytes
+            ),
             "queue_overflows": summary.queue_overflows,
             "encode_failures": summary.encode_failures,
             "elapsed_ms": summary.elapsed_ms,
             "generated_payload_bytes": summary.generated_payload_bytes,
+            "generated_plaintext_bytes": (
+                summary.generated_plaintext_bytes
+                if self.mode == SYNTHETIC_AES_CCM
+                else None
+            ),
+            "generated_encrypted_wire_bytes": (
+                summary.generated_payload_bytes
+                if self.mode == SYNTHETIC_AES_CCM
+                else None
+            ),
+            "receiver_encrypted_wire_bytes": (
+                self._receiver_payload_bytes
+                if self.mode == SYNTHETIC_AES_CCM
+                else None
+            ),
+            "encryption_overhead_bytes": (
+                summary.generated_payload_bytes -
+                summary.generated_plaintext_bytes
+                if self.mode == SYNTHETIC_AES_CCM
+                else None
+            ),
             "captured_pcm_samples": summary.captured_pcm_samples,
             "decoded_pcm_samples": safe_decoded_pcm_samples,
             "decoded_pcm_samples_valid": decoded_pcm_samples_valid,
@@ -202,6 +249,7 @@ class ProbeMetrics:
             "summary_semantically_valid": summary_semantically_valid,
             "sender_receiver_counter_parity": counter_parity,
             "sender_receiver_payload_byte_parity": payload_byte_parity,
+            "sender_receiver_plaintext_byte_parity": plaintext_byte_parity,
             "microphone_block_byte_parity": microphone_block_byte_parity,
             "p95_arrival_deviation_ms": p95_arrival_deviation_ms,
             "max_arrival_gap_ms": max_arrival_gap_ms,
@@ -252,6 +300,7 @@ class ProbeMetrics:
             summary.crypto_total_us,
             summary.crypto_max_us,
             summary.crypto_p99_us,
+            summary.generated_plaintext_bytes,
         )
         if not all(self._is_nonnegative_int(value) for value in numeric_fields):
             return False
@@ -263,9 +312,20 @@ class ProbeMetrics:
             return False
         if summary.generated_data_packets > 0 and summary.generated_payload_bytes == 0:
             return False
-        if self.mode == MICROPHONE_ADPCM_AES_CCM:
+        if self._is_encrypted_mode():
             if summary.crypto_failures > summary.crypto_packets:
                 return False
+            if self.mode == SYNTHETIC_AES_CCM:
+                if (
+                    summary.generated_plaintext_bytes == 0
+                    and summary.generated_data_packets != 0
+                ):
+                    return False
+                if summary.generated_payload_bytes != (
+                    summary.generated_plaintext_bytes
+                    + summary.generated_data_packets * 8
+                ):
+                    return False
             if summary.crypto_packets < summary.generated_data_packets:
                 return False
             if summary.crypto_total_us < summary.crypto_max_us:
@@ -303,11 +363,16 @@ class ProbeMetrics:
         return True
 
     def _synthetic_throughput(self, summary: StopSummary) -> tuple[Optional[float], Optional[float]]:
-        if self.mode != SYNTHETIC:
+        if not self._is_synthetic_mode():
             return None, None
         if summary.elapsed_ms <= 0 or self.target_bps <= 0:
             return None, None
-        throughput_bps = summary.generated_payload_bytes * 1000 / summary.elapsed_ms
+        payload_bytes = (
+            summary.generated_plaintext_bytes
+            if self.mode == SYNTHETIC_AES_CCM
+            else summary.generated_payload_bytes
+        )
+        throughput_bps = payload_bytes * 1000 / summary.elapsed_ms
         return throughput_bps, abs(throughput_bps - self.target_bps) / self.target_bps * 100
 
     def _wav_duration_error(
@@ -327,6 +392,12 @@ class ProbeMetrics:
 
     def _is_microphone_mode(self) -> bool:
         return self.mode in (MICROPHONE_ADPCM, MICROPHONE_ADPCM_AES_CCM)
+
+    def _is_synthetic_mode(self) -> bool:
+        return self.mode in (SYNTHETIC, SYNTHETIC_AES_CCM)
+
+    def _is_encrypted_mode(self) -> bool:
+        return self.mode in (MICROPHONE_ADPCM_AES_CCM, SYNTHETIC_AES_CCM)
 
     def _microphone_block_bytes(self) -> int:
         return 172 if self.mode == MICROPHONE_ADPCM_AES_CCM else 164

@@ -28,7 +28,7 @@ int main()
     invalid[1] = 3;
     assert(!decode_control(invalid.data(), invalid.size(), command));
     invalid = start;
-    invalid[2] = 4;
+    invalid[2] = 5;
     assert(!decode_control(invalid.data(), invalid.size(), command));
     invalid = start;
     invalid[4] = 0;
@@ -52,6 +52,21 @@ int main()
     encrypted[2] = static_cast<uint8_t>(Mode::MicrophoneAdpcmAesCcm);
     assert(decode_control(encrypted.data(), encrypted.size(), command));
     assert(command.mode == Mode::MicrophoneAdpcmAesCcm);
+
+    auto encrypted_synthetic = start;
+    encrypted_synthetic[2] = static_cast<uint8_t>(Mode::SyntheticAesCcm);
+    assert(decode_control(
+        encrypted_synthetic.data(), encrypted_synthetic.size(), command));
+    assert(command.mode == Mode::SyntheticAesCcm);
+    encrypted_synthetic[6] = 0x00;
+    encrypted_synthetic[7] = 0x40;
+    assert(decode_control(
+        encrypted_synthetic.data(), encrypted_synthetic.size(), command));
+    assert(command.target_bps == 16384);
+    encrypted_synthetic[6] = 0x00;
+    encrypted_synthetic[7] = 0x80;
+    assert(!decode_control(
+        encrypted_synthetic.data(), encrypted_synthetic.size(), command));
 
     invalid = start;
     invalid[2] = static_cast<uint8_t>(Mode::MicrophoneAdpcm);
@@ -155,6 +170,32 @@ int main()
                Mode::MicrophoneAdpcmAesCcm,
                encrypted_summary_bytes.data(),
                encrypted_summary_bytes.size() - 1) == 0);
+
+    summary.generated_payload_bytes = 1800;
+    summary.captured_pcm_samples = 0;
+    summary.generated_plaintext_bytes = 1720;
+    std::array<uint8_t, kEncryptedSyntheticStopSummarySize>
+        encrypted_synthetic_summary_bytes = {};
+    assert(encode_stop_summary(
+               summary,
+               Mode::SyntheticAesCcm,
+               encrypted_synthetic_summary_bytes.data(),
+               encrypted_synthetic_summary_bytes.size()) ==
+           kEncryptedSyntheticStopSummarySize);
+    std::array<uint8_t, kEncryptedStopSummarySize>
+        equivalent_mode_three_summary_bytes = {};
+    assert(encode_stop_summary(
+               summary,
+               Mode::MicrophoneAdpcmAesCcm,
+               equivalent_mode_three_summary_bytes.data(),
+               equivalent_mode_three_summary_bytes.size()) ==
+           kEncryptedStopSummarySize);
+    assert(std::equal(
+        encrypted_synthetic_summary_bytes.begin(),
+        encrypted_synthetic_summary_bytes.begin() + kEncryptedStopSummarySize,
+        equivalent_mode_three_summary_bytes.begin()));
+    assert(encrypted_synthetic_summary_bytes[50] == 0xb8);
+    assert(encrypted_synthetic_summary_bytes[51] == 0x06);
 
     std::array<uint8_t, kErrorPayloadSize> error = {};
     assert(encode_error(ErrorCode::Busy, 0x1234, error.data(), error.size()) ==

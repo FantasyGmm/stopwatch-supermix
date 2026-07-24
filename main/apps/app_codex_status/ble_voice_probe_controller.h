@@ -101,6 +101,7 @@ private:
                                 uint32_t now_ms);
     bool setup_microphone_resources(ble_voice_probe::ErrorCode& error);
     bool capture_microphone_samples(ble_voice_probe::ErrorCode& error);
+    bool prepare_synthetic_packet_locked(uint32_t now_ms);
     bool prepare_microphone_packet(ble_voice_probe::ErrorCode& error);
     void fail_microphone_session(ble_voice_probe::ErrorCode error);
     void release_audio_resources(bool forced_cleanup = false);

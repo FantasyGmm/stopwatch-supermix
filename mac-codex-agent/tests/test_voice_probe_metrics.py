@@ -12,6 +12,7 @@ from voice_probe_protocol import (
     MICROPHONE_ADPCM,
     MICROPHONE_ADPCM_AES_CCM,
     SYNTHETIC,
+    SYNTHETIC_AES_CCM,
     Notification,
     StopSummary,
     expected_synthetic_payload,
@@ -41,6 +42,114 @@ def synthetic_summary(
 
 
 class VoiceProbeMetricsTests(unittest.TestCase):
+    def test_encrypted_16384_profile_is_capacity_evidence(self):
+        metrics = ProbeMetrics(
+            session=9,
+            mode=SYNTHETIC_AES_CCM,
+            target_bps=16384,
+        )
+        result = metrics.finish(
+            summary=StopSummary(
+                0,
+                0,
+                0,
+                0,
+                1000,
+                0,
+                0,
+                256,
+                generated_plaintext_bytes=0,
+            ),
+            disconnected=False,
+        )
+
+        self.assertFalse(result["required_profile"])
+        self.assertEqual(result["acceptance_decision"], "exploratory_fail")
+
+    def test_encrypted_synthetic_separates_wire_and_plaintext_accounting(self):
+        metrics = ProbeMetrics(
+            session=9,
+            mode=SYNTHETIC_AES_CCM,
+            target_bps=8192,
+        )
+        plaintext_sizes = [164] * 49 + [156]
+        wire_bytes = 0
+        for index, plaintext_size in enumerate(plaintext_sizes):
+            sequence = index + 1
+            timestamp_ms = index * 20
+            plaintext = expected_synthetic_payload(sequence, plaintext_size)
+            wire_payload = bytes(plaintext_size + 8)
+            wire_bytes += len(wire_payload)
+            metrics.observe(
+                Notification(DATA, 9, sequence, timestamp_ms, wire_payload),
+                arrival_ns=timestamp_ms * 1_000_000,
+                plaintext_payload=plaintext,
+            )
+
+        result = metrics.finish(
+            summary=StopSummary(
+                50,
+                50,
+                0,
+                0,
+                1000,
+                wire_bytes,
+                0,
+                256,
+                crypto_packets=50,
+                crypto_failures=0,
+                crypto_total_us=1000,
+                crypto_max_us=20,
+                crypto_p99_us=20,
+                generated_plaintext_bytes=8192,
+            ),
+            disconnected=False,
+        )
+
+        self.assertTrue(result["automated_pass"])
+        self.assertEqual(result["generated_plaintext_bytes"], 8192)
+        self.assertEqual(result["receiver_plaintext_payload_bytes"], 8192)
+        self.assertEqual(result["generated_encrypted_wire_bytes"], 8592)
+        self.assertEqual(result["receiver_encrypted_wire_bytes"], 8592)
+        self.assertTrue(result["sender_receiver_payload_byte_parity"])
+        self.assertTrue(result["sender_receiver_plaintext_byte_parity"])
+        self.assertEqual(result["synthetic_throughput_bps"], 8192)
+        self.assertEqual(result["encryption_overhead_bytes"], 400)
+        self.assertEqual(result["payload_corruptions"], 0)
+
+    def test_encrypted_synthetic_pattern_checker_uses_decrypted_plaintext(self):
+        metrics = ProbeMetrics(
+            session=9,
+            mode=SYNTHETIC_AES_CCM,
+            target_bps=8192,
+        )
+        metrics.observe(
+            Notification(DATA, 9, 1, 0, bytes(172)),
+            arrival_ns=0,
+            plaintext_payload=b"bad",
+        )
+        result = metrics.finish(
+            summary=StopSummary(
+                1,
+                1,
+                0,
+                0,
+                1000,
+                172,
+                0,
+                256,
+                crypto_packets=1,
+                crypto_failures=0,
+                crypto_total_us=20,
+                crypto_max_us=20,
+                crypto_p99_us=20,
+                generated_plaintext_bytes=164,
+            ),
+            disconnected=False,
+        )
+        self.assertEqual(result["payload_corruptions"], 1)
+        self.assertIn("payload_corruptions", result["failure_reasons"])
+
     def test_encrypted_microphone_uses_ciphertext_size_and_crypto_gate(self):
         metrics = ProbeMetrics(
             session=9,

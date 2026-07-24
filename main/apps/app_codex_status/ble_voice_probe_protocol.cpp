@@ -37,7 +37,8 @@ bool is_valid_mode(uint8_t value)
 {
     return value == static_cast<uint8_t>(Mode::Synthetic) ||
            value == static_cast<uint8_t>(Mode::MicrophoneAdpcm) ||
-           value == static_cast<uint8_t>(Mode::MicrophoneAdpcmAesCcm);
+           value == static_cast<uint8_t>(Mode::MicrophoneAdpcmAesCcm) ||
+           value == static_cast<uint8_t>(Mode::SyntheticAesCcm);
 }
 
 bool is_microphone_mode(Mode mode)
@@ -74,6 +75,8 @@ bool decode_control(const uint8_t* bytes, size_t length, ControlCommand& command
     } else if (duration_ms < 1000 || duration_ms > 120000 ||
                (parsed_mode == Mode::Synthetic &&
                 (target_bps < 1024 || target_bps > 32768)) ||
+               (parsed_mode == Mode::SyntheticAesCcm &&
+                target_bps != 8192 && target_bps != 16384) ||
                (is_microphone_mode(parsed_mode) && target_bps != 8192)) {
         return false;
     }
@@ -154,10 +157,15 @@ size_t encode_stop_summary(
     size_t capacity
 )
 {
-    if (mode != Mode::MicrophoneAdpcmAesCcm) {
+    if (mode != Mode::MicrophoneAdpcmAesCcm &&
+        mode != Mode::SyntheticAesCcm) {
         return encode_stop_summary(summary, output, capacity);
     }
-    if (output == nullptr || capacity < kEncryptedStopSummarySize ||
+    const size_t required_size =
+        mode == Mode::SyntheticAesCcm
+            ? kEncryptedSyntheticStopSummarySize
+            : kEncryptedStopSummarySize;
+    if (output == nullptr || capacity < required_size ||
         encode_stop_summary(summary, output, capacity) != kStopSummarySize) {
         return 0;
     }
@@ -166,7 +174,10 @@ size_t encode_stop_summary(
     write_u32(output + 38, summary.crypto_total_us);
     write_u32(output + 42, summary.crypto_max_us);
     write_u32(output + 46, summary.crypto_p99_us);
-    return kEncryptedStopSummarySize;
+    if (mode == Mode::SyntheticAesCcm) {
+        write_u32(output + 50, summary.generated_plaintext_bytes);
+    }
+    return required_size;
 }
 
 size_t encode_error(ErrorCode code, uint16_t detail, uint8_t* output, size_t capacity)

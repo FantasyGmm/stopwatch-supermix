@@ -15,7 +15,7 @@ from unittest import mock
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from ble_voice_probe import Profile, VoiceProbeClient, _build_parser
-from voice_probe_crypto import derive_nonce, encrypt
+from voice_probe_crypto import derive_nonce, encrypt, encrypt_synthetic
 from voice_probe_protocol import (
     DATA,
     ERROR,
@@ -24,6 +24,7 @@ from voice_probe_protocol import (
     START_ACK,
     STOP_SUMMARY,
     SYNTHETIC,
+    SYNTHETIC_AES_CCM,
     StopSummary,
     expected_synthetic_payload,
     pack_notification,
@@ -191,6 +192,68 @@ def encrypted_microphone_events(session=7, packets=50):
                 crypto_max_us=20,
                 crypto_p99_us=20,
             ).pack(MICROPHONE_ADPCM_AES_CCM),
+        )
+    )
+    return events
+
+
+def encrypted_synthetic_events(
+    session=7,
+    target_bps=8192,
+    corrupt_plaintext=False,
+):
+    packets = 50
+    base_size, remainder = divmod(target_bps, packets)
+    plaintext_sizes = [base_size] * packets
+    plaintext_sizes[-1] += remainder
+    events = [start_ack(session, SYNTHETIC_AES_CCM, target_bps)]
+    wire_bytes = 0
+    for index, plaintext_size in enumerate(plaintext_sizes):
+        sequence = index + 1
+        watch_ms = index * 20
+        plaintext = expected_synthetic_payload(sequence, plaintext_size)
+        if corrupt_plaintext and index == 0:
+            plaintext = bytes([plaintext[0] ^ 0x01]) + plaintext[1:]
+        aad = struct.pack(
+            "<BBHIIH",
+            1,
+            DATA,
+            session,
+            sequence,
+            watch_ms,
+            plaintext_size + 8,
+        )
+        ciphertext = encrypt_synthetic(
+            aad,
+            plaintext,
+            derive_nonce(session, sequence, watch_ms),
+        )
+        wire_bytes += len(ciphertext)
+        events.append(
+            pack_notification(DATA, session, sequence, watch_ms, ciphertext)
+        )
+    events.append(
+        pack_notification(
+            STOP_SUMMARY,
+            session,
+            packets + 1,
+            1000,
+            StopSummary(
+                packets,
+                packets,
+                0,
+                0,
+                1000,
+                wire_bytes,
+                0,
+                256,
+                crypto_packets=packets,
+                crypto_failures=0,
+                crypto_total_us=packets * 20,
+                crypto_max_us=20,
+                crypto_p99_us=20,
+                generated_plaintext_bytes=target_bps,
+            ).pack(SYNTHETIC_AES_CCM),
         )
     )
     return events
@@ -698,6 +761,110 @@ class BleVoiceProbeTests(unittest.TestCase):
             ]
         )
         self.assertEqual(arguments.protocol_mode, MICROPHONE_ADPCM_AES_CCM)
+
+    def test_encrypted_synthetic_decrypts_pattern_and_reports_wire_overhead(self):
+        fake = FakeClient(encrypted_synthetic_events())
+        runner = make_runner(fake)
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = pathlib.Path(temporary)
+            exit_code = self.run_probe(
+                runner,
+                Profile(
+                    session=7,
+                    mode=SYNTHETIC_AES_CCM,
+                    target_bps=8192,
+                    duration_ms=1000,
+                ),
+                directory,
+            )
+            saved = json.loads((directory / "report.json").read_text())
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(saved["metrics"]["invalid_tags"], 0)
+        self.assertEqual(saved["metrics"]["payload_corruptions"], 0)
+        self.assertEqual(saved["metrics"]["generated_plaintext_bytes"], 8192)
+        self.assertEqual(
+            saved["metrics"]["generated_encrypted_wire_bytes"], 8592
+        )
+        self.assertEqual(saved["metrics"]["encryption_overhead_bytes"], 400)
+        self.assertFalse(saved["manual_audio_review_required"])
+
+    def test_encrypted_synthetic_invalid_tag_fails_closed(self):
+        events = encrypted_synthetic_events()[:2]
+        corrupted = bytearray(events[-1])
+        corrupted[-1] ^= 0x01
+        events[-1] = bytes(corrupted)
+        fake = FakeClient(events)
+        runner = make_runner(fake)
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = pathlib.Path(temporary)
+            exit_code = self.run_probe(
+                runner,
+                Profile(
+                    session=7,
+                    mode=SYNTHETIC_AES_CCM,
+                    target_bps=8192,
+                    duration_ms=1000,
+                ),
+                directory,
+            )
+            saved = json.loads((directory / "report.json").read_text())
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(saved["metrics"]["invalid_tags"], 1)
+        self.assertEqual(saved["metrics"]["receiver_plaintext_payload_bytes"], 0)
+        self.assertIn("authentication tag", saved["exception"])
+
+    def test_encrypted_synthetic_valid_tag_with_bad_pattern_fails_corruption_gate(self):
+        fake = FakeClient(encrypted_synthetic_events(corrupt_plaintext=True))
+        runner = make_runner(fake)
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = pathlib.Path(temporary)
+            exit_code = self.run_probe(
+                runner,
+                Profile(
+                    session=7,
+                    mode=SYNTHETIC_AES_CCM,
+                    target_bps=8192,
+                    duration_ms=1000,
+                ),
+                directory,
+            )
+            saved = json.loads((directory / "report.json").read_text())
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(saved["metrics"]["invalid_tags"], 0)
+        self.assertEqual(saved["metrics"]["payload_corruptions"], 1)
+
+    def test_cli_exposes_only_8192_and_16384_encrypted_synthetic_profiles(self):
+        parser = _build_parser()
+        for target_bps in (8192, 16384):
+            arguments = parser.parse_args(
+                [
+                    "synthetic-encrypted",
+                    "--target-bps",
+                    str(target_bps),
+                    "--duration",
+                    "60",
+                    "--report",
+                    "report.json",
+                ]
+            )
+            self.assertEqual(arguments.protocol_mode, SYNTHETIC_AES_CCM)
+
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                parser.parse_args(
+                    [
+                        "synthetic-encrypted",
+                        "--target-bps",
+                        "32768",
+                        "--duration",
+                        "60",
+                        "--report",
+                        "report.json",
+                    ]
+                )
 
     def test_device_initiated_disconnect_fails_and_reports_partial_state(self):
         fake = DeviceDisconnectClient([start_ack(7, SYNTHETIC, 8192)])

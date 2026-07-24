@@ -65,4 +65,16 @@ int main()
     assert(exploratory_rate.start(command, 0, 256));
     assert(exploratory_rate.synthetic_payload_size(7, 239) == 0);
     assert(exploratory_rate.synthetic_payload_size(8, 239) == 239);
+
+    Session encrypted_synthetic;
+    command.mode = Mode::SyntheticAesCcm;
+    command.target_bps = 16384;
+    assert(encrypted_synthetic.start(command, 0, 256));
+    assert(encrypted_synthetic.synthetic_payload_size(14, 231) == 0);
+    assert(encrypted_synthetic.synthetic_payload_size(15, 231) == 231);
+    encrypted_synthetic.record_generated(239, 231);
+    assert(encrypted_synthetic.synthetic_bytes_due(20) == 96);
+    const StopSummary encrypted_summary = encrypted_synthetic.summary(20);
+    assert(encrypted_summary.generated_payload_bytes == 239);
+    assert(encrypted_summary.generated_plaintext_bytes == 231);
 }

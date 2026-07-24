@@ -25,5 +25,15 @@ bool encrypt(const uint8_t* aad, size_t aad_len,
 bool decrypt(const uint8_t* aad, size_t aad_len,
              const uint8_t* ciphertext, size_t ciphertext_len,
              const Nonce& nonce, Plaintext& output);
+bool encrypt_synthetic(const uint8_t* aad, size_t aad_len,
+                       const uint8_t* plaintext, size_t plaintext_len,
+                       const Nonce& nonce,
+                       uint8_t* output, size_t output_capacity,
+                       size_t& output_len, uint32_t& elapsed_us);
+bool decrypt_synthetic(const uint8_t* aad, size_t aad_len,
+                       const uint8_t* ciphertext, size_t ciphertext_len,
+                       const Nonce& nonce,
+                       uint8_t* output, size_t output_capacity,
+                       size_t& output_len);
 
 }  // namespace ble_voice_probe::crypto

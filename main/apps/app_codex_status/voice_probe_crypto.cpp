@@ -184,4 +184,112 @@ bool decrypt(
     return true;
 }
 
+bool encrypt_synthetic(
+    const uint8_t* aad,
+    size_t aad_len,
+    const uint8_t* plaintext,
+    size_t plaintext_len,
+    const Nonce& nonce,
+    uint8_t* output,
+    size_t output_capacity,
+    size_t& output_len,
+    uint32_t& elapsed_us
+)
+{
+    output_len = 0;
+    elapsed_us = 0;
+    if (aad == nullptr || aad_len != kAadSize ||
+        plaintext == nullptr || plaintext_len == 0 ||
+        output == nullptr || output_capacity < plaintext_len + kTagSize ||
+        !is_valid_nonce(nonce)) {
+        return false;
+    }
+
+    const uint64_t started_us = now_us();
+    mbedtls_ccm_context context;
+    mbedtls_ccm_init(&context);
+    const int key_result = mbedtls_ccm_setkey(
+        &context,
+        MBEDTLS_CIPHER_ID_AES,
+        kDiagnosticKey.data(),
+        kDiagnosticKey.size() * 8);
+    if (key_result != 0) {
+        mbedtls_ccm_free(&context);
+        elapsed_us = elapsed_u32(started_us);
+        return false;
+    }
+
+    const int result = mbedtls_ccm_encrypt_and_tag(
+        &context,
+        plaintext_len,
+        nonce.data(),
+        nonce.size(),
+        aad,
+        aad_len,
+        plaintext,
+        output,
+        output + plaintext_len,
+        kTagSize);
+    mbedtls_ccm_free(&context);
+    elapsed_us = elapsed_u32(started_us);
+    if (result != 0) {
+        return false;
+    }
+
+    output_len = plaintext_len + kTagSize;
+    return true;
+}
+
+bool decrypt_synthetic(
+    const uint8_t* aad,
+    size_t aad_len,
+    const uint8_t* ciphertext,
+    size_t ciphertext_len,
+    const Nonce& nonce,
+    uint8_t* output,
+    size_t output_capacity,
+    size_t& output_len
+)
+{
+    output_len = 0;
+    if (aad == nullptr || aad_len != kAadSize ||
+        ciphertext == nullptr || ciphertext_len <= kTagSize ||
+        output == nullptr || output_capacity < ciphertext_len - kTagSize ||
+        !is_valid_nonce(nonce)) {
+        return false;
+    }
+
+    const size_t plaintext_len = ciphertext_len - kTagSize;
+    mbedtls_ccm_context context;
+    mbedtls_ccm_init(&context);
+    const int key_result = mbedtls_ccm_setkey(
+        &context,
+        MBEDTLS_CIPHER_ID_AES,
+        kDiagnosticKey.data(),
+        kDiagnosticKey.size() * 8);
+    if (key_result != 0) {
+        mbedtls_ccm_free(&context);
+        return false;
+    }
+
+    const int result = mbedtls_ccm_auth_decrypt(
+        &context,
+        plaintext_len,
+        nonce.data(),
+        nonce.size(),
+        aad,
+        aad_len,
+        ciphertext,
+        output,
+        ciphertext + plaintext_len,
+        kTagSize);
+    mbedtls_ccm_free(&context);
+    if (result != 0) {
+        return false;
+    }
+
+    output_len = plaintext_len;
+    return true;
+}
+
 }  // namespace ble_voice_probe::crypto
