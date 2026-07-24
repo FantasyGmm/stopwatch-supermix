@@ -108,6 +108,13 @@ CodexMessageKind parse_codex_message(const char* data, size_t length, CodexStatu
     }
 
     const std::string type = json_string_or_empty(root, "type");
+    cJSON* source = cJSON_GetObjectItemCaseSensitive(root, "source");
+    if (source != nullptr &&
+        (!cJSON_IsString(source) || source->valuestring == nullptr ||
+         std::strcmp(source->valuestring, "codex") != 0)) {
+        cJSON_Delete(root);
+        return CodexMessageKind::Invalid;
+    }
     if (type == "chime") {
         const std::string agent = json_string_or_empty(root, "agent");
         cJSON_Delete(root);

@@ -78,6 +78,10 @@ int main()
     assert(parse(R"({"codex_model":"gpt-5"})", snapshot) == CodexMessageKind::Status);
     assert(snapshot.model == "gpt-5");
     assert(parse(
+        R"({"type":"status","source":"trae","codex_model":"must-not-apply","trae_model":"Model A","trae_tasks":[]})",
+        snapshot
+    ) == CodexMessageKind::Invalid);
+    assert(parse(
         R"({"type":"chime","agent":"codex"})", snapshot
     ) == CodexMessageKind::Chime);
 }
