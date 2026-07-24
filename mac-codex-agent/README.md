@@ -1,8 +1,9 @@
 # StopWatch Codex Mac Agent
 
-This menu bar agent reads the local Codex model, reasoning effort, quota, and
-conversation progress events, then sends a compact status snapshot to the
-StopWatch over BLE.
+This menu bar agent reads local Codex status and, when Trae CN is installed,
+local Trae task status. It sends compact, source-tagged snapshots to the
+StopWatch over BLE. Trae CN is optional: Codex collection and watch updates
+continue normally when Trae is absent or its private local format changes.
 
 After each successful BLE connection, it sends one time-sync event before the
 first status snapshot. The event contains the current Unix time and the Mac's
@@ -10,7 +11,14 @@ effective UTC offset; the watch applies them globally and stores the result in
 its hardware RTC. The current version uses a fixed offset for that connection,
 so reconnecting refreshes daylight-saving or timezone changes.
 
-It does not send OAuth credentials, prompts, responses, or source code to the watch.
+The Trae collector makes no network requests. It reads only local process state,
+allowlisted workspace metadata, and newly appended local log events. A
+private-format parse failure degrades the Trae page to `WAIT` and `--` values
+without affecting Codex.
+
+No raw prompt, response, source code, tool argument, tool output, request header,
+or log line is persisted or transmitted. Only bounded normalized fields such as
+project, short task title, state, model, and effort leave the collector.
 
 ## Install
 
@@ -53,6 +61,8 @@ Logs are written to:
 - **Task Alerts** shows the latest current-day state of each conversation,
   grouped into Pending, Running, and Completed. Pending rows are orange,
   Running rows are blue, and Completed rows are dimmed.
+- The optional **Trae Status** section shows Trae availability, model, effort,
+  and up to four normalized task rows. Trae failures are isolated from Codex.
 - Codex status is sampled once every two seconds and shared with the watch. The
   menu continues updating even when the watch is disconnected or watch
   connection is disabled.
@@ -104,6 +114,21 @@ and recover progress that occurred while the menu app was closed. If several
 unnotified alerts accumulated while disconnected, reconnecting produces one
 summary chime rather than one sound per alert; the individual records remain
 visible in the ledger and carousel.
+
+## Trae Local Cache
+
+Incremental Trae collection stores only a byte cursor and the normalized,
+bounded task ledger:
+
+```text
+~/.trae-cn/.stopwatch_cursor.json
+~/.trae-cn/.stopwatch_tasks.json
+```
+
+The first scan starts at the end of existing logs, so installing or restarting
+the agent does not replay historical Trae activity. Log rotation or truncation
+causes a safe re-baseline. The ledger is capped and contains no raw prompt,
+response, code, tool output, header, or source log line.
 
 ## Development Run
 
