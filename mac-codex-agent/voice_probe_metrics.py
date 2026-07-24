@@ -45,7 +45,7 @@ class ProbeMetrics:
         self._receiver_payload_bytes += len(notification.payload)
         checked_payload = (
             b""
-            if self.mode == SYNTHETIC_AES_CCM and plaintext_payload is None
+            if self._is_encrypted_mode() and plaintext_payload is None
             else (
                 notification.payload
                 if plaintext_payload is None
@@ -121,9 +121,18 @@ class ProbeMetrics:
         payload_byte_parity = (
             summary.generated_payload_bytes == self._receiver_payload_bytes
         )
+        generated_plaintext_bytes = (
+            summary.generated_plaintext_bytes
+            if self.mode == SYNTHETIC_AES_CCM
+            else (
+                summary.generated_data_packets * 164
+                if self.mode == MICROPHONE_ADPCM_AES_CCM
+                else None
+            )
+        )
         plaintext_byte_parity = (
-            self.mode != SYNTHETIC_AES_CCM
-            or summary.generated_plaintext_bytes
+            not self._is_encrypted_mode()
+            or generated_plaintext_bytes
             == self._receiver_plaintext_payload_bytes
         )
         microphone_block_byte_parity = (
@@ -212,24 +221,23 @@ class ProbeMetrics:
             "elapsed_ms": summary.elapsed_ms,
             "generated_payload_bytes": summary.generated_payload_bytes,
             "generated_plaintext_bytes": (
-                summary.generated_plaintext_bytes
-                if self.mode == SYNTHETIC_AES_CCM
+                generated_plaintext_bytes
+                if self._is_encrypted_mode()
                 else None
             ),
             "generated_encrypted_wire_bytes": (
                 summary.generated_payload_bytes
-                if self.mode == SYNTHETIC_AES_CCM
+                if self._is_encrypted_mode()
                 else None
             ),
             "receiver_encrypted_wire_bytes": (
                 self._receiver_payload_bytes
-                if self.mode == SYNTHETIC_AES_CCM
+                if self._is_encrypted_mode()
                 else None
             ),
             "encryption_overhead_bytes": (
-                summary.generated_payload_bytes -
-                summary.generated_plaintext_bytes
-                if self.mode == SYNTHETIC_AES_CCM
+                summary.generated_payload_bytes - generated_plaintext_bytes
+                if self._is_encrypted_mode()
                 else None
             ),
             "captured_pcm_samples": summary.captured_pcm_samples,

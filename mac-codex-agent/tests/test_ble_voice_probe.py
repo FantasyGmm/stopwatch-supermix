@@ -197,6 +197,34 @@ def encrypted_microphone_events(session=7, packets=50):
     return events
 
 
+def encrypted_microphone_crypto_failure_events(session=7):
+    events = encrypted_microphone_events(session=session, packets=1)[:2]
+    events.append(
+        pack_notification(
+            STOP_SUMMARY,
+            session,
+            2,
+            20,
+            StopSummary(
+                1,
+                1,
+                0,
+                0,
+                20,
+                172,
+                320,
+                256,
+                crypto_packets=2,
+                crypto_failures=1,
+                crypto_total_us=57,
+                crypto_max_us=37,
+                crypto_p99_us=37,
+            ).pack(MICROPHONE_ADPCM_AES_CCM),
+        )
+    )
+    return events
+
+
 def encrypted_synthetic_events(
     session=7,
     target_bps=8192,
@@ -715,6 +743,21 @@ class BleVoiceProbeTests(unittest.TestCase):
         self.assertEqual(
             saved["metrics"]["encrypted_characteristic_value_bytes"], 186
         )
+        self.assertEqual(saved["metrics"]["generated_plaintext_bytes"], 8200)
+        self.assertEqual(
+            saved["metrics"]["receiver_plaintext_payload_bytes"], 8200
+        )
+        self.assertEqual(
+            saved["metrics"]["generated_encrypted_wire_bytes"], 8600
+        )
+        self.assertEqual(
+            saved["metrics"]["receiver_encrypted_wire_bytes"], 8600
+        )
+        self.assertEqual(saved["metrics"]["encryption_overhead_bytes"], 400)
+        self.assertTrue(
+            saved["metrics"]["sender_receiver_plaintext_byte_parity"]
+        )
+        self.assertTrue(saved["metrics"]["sender_receiver_payload_byte_parity"])
         self.assertEqual(saved["metrics"]["crypto_p99_us"], 20)
 
     def test_encrypted_microphone_invalid_tag_fails_before_decoder(self):
@@ -745,6 +788,34 @@ class BleVoiceProbeTests(unittest.TestCase):
         self.assertEqual(exit_code, 1)
         self.assertEqual(saved["metrics"]["invalid_tags"], 1)
         self.assertIn("authentication tag", saved["exception"])
+
+    def test_encrypted_microphone_crypto_failure_summary_survives_report(self):
+        fake = FakeClient(encrypted_microphone_crypto_failure_events())
+        runner = make_runner(fake)
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = pathlib.Path(temporary)
+            exit_code = self.run_probe(
+                runner,
+                Profile(
+                    session=7,
+                    mode=MICROPHONE_ADPCM_AES_CCM,
+                    target_bps=8192,
+                    duration_ms=1000,
+                ),
+                directory,
+                wav_path=directory / "microphone-encrypted.wav",
+            )
+            saved = json.loads((directory / "report.json").read_text())
+
+        self.assertEqual(exit_code, 1)
+        self.assertIsNone(saved["exception"])
+        self.assertEqual(saved["metrics"]["receiver_data_packets"], 1)
+        self.assertEqual(saved["metrics"]["crypto_packets"], 2)
+        self.assertEqual(saved["metrics"]["crypto_failures"], 1)
+        self.assertEqual(saved["metrics"]["crypto_total_us"], 57)
+        self.assertEqual(saved["metrics"]["crypto_max_us"], 37)
+        self.assertEqual(saved["metrics"]["crypto_p99_us"], 37)
+        self.assertIn("crypto_failures", saved["metrics"]["failure_reasons"])
 
     def test_cli_exposes_encrypted_microphone_profile(self):
         arguments = _build_parser().parse_args(
@@ -788,6 +859,30 @@ class BleVoiceProbeTests(unittest.TestCase):
         )
         self.assertEqual(saved["metrics"]["encryption_overhead_bytes"], 400)
         self.assertFalse(saved["manual_audio_review_required"])
+
+    def test_encrypted_synthetic_16384_retains_capacity_classification(self):
+        fake = FakeClient(encrypted_synthetic_events(target_bps=16384))
+        runner = make_runner(fake)
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = pathlib.Path(temporary)
+            exit_code = self.run_probe(
+                runner,
+                Profile(
+                    session=7,
+                    mode=SYNTHETIC_AES_CCM,
+                    target_bps=16384,
+                    duration_ms=1000,
+                ),
+                directory,
+            )
+            saved = json.loads((directory / "report.json").read_text())
+
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(saved["metrics"]["automated_pass"])
+        self.assertFalse(saved["metrics"]["required_profile"])
+        self.assertEqual(
+            saved["metrics"]["acceptance_decision"], "exploratory_pass"
+        )
 
     def test_encrypted_synthetic_invalid_tag_fails_closed(self):
         events = encrypted_synthetic_events()[:2]
@@ -884,6 +979,31 @@ class BleVoiceProbeTests(unittest.TestCase):
         self.assertTrue(saved["metrics"]["disconnected"])
         self.assertIn(("stop_notify", runner.voice_tx_uuid), fake.operations)
         self.assertNotIn("disconnect", fake.operations)
+
+    def test_incomplete_encrypted_synthetic_16384_remains_capacity_profile(self):
+        fake = DeviceDisconnectClient(
+            [start_ack(7, SYNTHETIC_AES_CCM, 16384)]
+        )
+        runner = make_runner(fake)
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = pathlib.Path(temporary)
+            exit_code = self.run_probe(
+                runner,
+                Profile(
+                    session=7,
+                    mode=SYNTHETIC_AES_CCM,
+                    target_bps=16384,
+                    duration_ms=1000,
+                ),
+                directory,
+            )
+            saved = json.loads((directory / "report.json").read_text())
+
+        self.assertEqual(exit_code, 1)
+        self.assertFalse(saved["metrics"]["required_profile"])
+        self.assertEqual(
+            saved["metrics"]["acceptance_decision"], "exploratory_fail"
+        )
 
     def test_refuses_when_installed_agent_is_running(self):
         fake = FakeClient([])

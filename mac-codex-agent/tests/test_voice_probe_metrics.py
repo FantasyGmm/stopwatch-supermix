@@ -160,6 +160,7 @@ class VoiceProbeMetricsTests(unittest.TestCase):
             metrics.observe(
                 Notification(DATA, 9, sequence, timestamp_ms, bytes(172)),
                 arrival_ns=timestamp_ms * 1_000_000,
+                plaintext_payload=bytes(164),
             )
         result = metrics.finish(
             summary=StopSummary(
@@ -181,6 +182,13 @@ class VoiceProbeMetricsTests(unittest.TestCase):
             decoded_pcm_samples=640,
         )
         self.assertTrue(result["microphone_block_byte_parity"])
+        self.assertEqual(result["generated_plaintext_bytes"], 328)
+        self.assertEqual(result["receiver_plaintext_payload_bytes"], 328)
+        self.assertEqual(result["generated_encrypted_wire_bytes"], 344)
+        self.assertEqual(result["receiver_encrypted_wire_bytes"], 344)
+        self.assertEqual(result["encryption_overhead_bytes"], 16)
+        self.assertTrue(result["sender_receiver_plaintext_byte_parity"])
+        self.assertTrue(result["sender_receiver_payload_byte_parity"])
         self.assertEqual(result["crypto_packets"], 2)
         self.assertEqual(result["crypto_p99_us"], 20)
         self.assertNotIn("crypto_failures", result["failure_reasons"])
@@ -195,6 +203,7 @@ class VoiceProbeMetricsTests(unittest.TestCase):
             metrics.observe(
                 Notification(DATA, 9, sequence, timestamp_ms, bytes(172)),
                 arrival_ns=timestamp_ms * 1_000_000,
+                plaintext_payload=bytes(164),
             )
         result = metrics.finish(
             summary=StopSummary(

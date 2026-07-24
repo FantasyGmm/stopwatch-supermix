@@ -445,7 +445,8 @@ void BleVoiceProbeController::producer_loop()
                         stop_for_duration = true;
                     } else if (is_synthetic_mode(_session.mode())) {
                         have_packet = prepare_synthetic_packet_locked(now_ms);
-                        producer_inactive = _terminal_error_pending;
+                        producer_inactive =
+                            _terminal_error_pending || !_producer_enabled;
                     } else {
                         capture_microphone = true;
                     }
@@ -656,8 +657,10 @@ bool BleVoiceProbeController::prepare_synthetic_packet_locked(uint32_t now_ms)
         _session.record_crypto_result(elapsed_us, encrypted_ok);
         if (!encrypted_ok) {
             _pending_data_valid = true;
-            prepare_terminal_error_locked(
-                ble_voice_probe::ErrorCode::CryptoFailed, 0, now_ms);
+            if (!prepare_crypto_failure_summary_locked(now_ms)) {
+                prepare_terminal_error_locked(
+                    ble_voice_probe::ErrorCode::CryptoFailed, 0, now_ms);
+            }
             return false;
         }
     } else {
@@ -839,7 +842,9 @@ bool BleVoiceProbeController::prepare_microphone_packet(ble_voice_probe::ErrorCo
                     elapsed_us);
             _session.record_crypto_result(elapsed_us, encrypted);
             if (!encrypted) {
-                _pending_data = {};
+                _pending_data_valid = true;
+                _pending_data_queued = false;
+                _pending_data_counted = false;
                 error = ble_voice_probe::ErrorCode::CryptoFailed;
                 return false;
             }
@@ -864,7 +869,14 @@ void BleVoiceProbeController::fail_microphone_session(ble_voice_probe::ErrorCode
         StateLock lock(_state_mutex);
         if (lock.locked() && _session.active() &&
             is_microphone_mode(_session.mode())) {
-            prepare_terminal_error_locked(error, 0, GetHAL().millis());
+            const uint32_t now_ms = GetHAL().millis();
+            if (error == ble_voice_probe::ErrorCode::CryptoFailed) {
+                if (!prepare_crypto_failure_summary_locked(now_ms)) {
+                    prepare_terminal_error_locked(error, 0, now_ms);
+                }
+            } else {
+                prepare_terminal_error_locked(error, 0, now_ms);
+            }
         }
     }
 
@@ -1059,6 +1071,44 @@ void BleVoiceProbeController::finalize_stop(uint32_t now_ms)
     if (stop_for_congestion) {
         request_stop(false, ble_voice_probe::ErrorCode::QueueCongested);
     }
+}
+
+bool BleVoiceProbeController::prepare_crypto_failure_summary_locked(
+    uint32_t now_ms
+)
+{
+    if (!_session.active() || !_pending_data_valid || _pending_data_queued ||
+        (!is_encrypted_microphone_mode(_session.mode()) &&
+         !is_encrypted_synthetic_mode(_session.mode())) ||
+        _terminal_error_pending ||
+        _summary_prepared || _summary_queued) {
+        return false;
+    }
+
+    _pending_summary = {};
+    _pending_summary.kind = ble_voice_probe::Kind::StopSummary;
+    _pending_summary.session = _session.id();
+    _pending_summary.sequence = _pending_data.sequence;
+    _pending_summary.watch_ms = now_ms;
+    _pending_summary.payload_length = ble_voice_probe::encode_stop_summary(
+        _session.summary(now_ms),
+        _session.mode(),
+        _pending_summary.payload.data(),
+        _pending_summary.payload.size());
+    if (_pending_summary.payload_length == 0) {
+        _pending_summary = {};
+        return false;
+    }
+
+    _pending_data = {};
+    _pending_data_valid = false;
+    _pending_data_queued = false;
+    _pending_data_counted = false;
+    _producer_enabled = false;
+    _stop_requested = true;
+    _summary_prepared = true;
+    _summary_queued = false;
+    return true;
 }
 
 void BleVoiceProbeController::prepare_terminal_error_locked(

@@ -295,7 +295,10 @@ class VoiceProbeClient:
                         expected_sequence=expected_sequence,
                         plaintext_payload=(
                             decode_payload
-                            if profile.mode == SYNTHETIC_AES_CCM
+                            if profile.mode in (
+                                MICROPHONE_ADPCM_AES_CCM,
+                                SYNTHETIC_AES_CCM,
+                            )
                             else None
                         ),
                     )
@@ -481,7 +484,11 @@ class VoiceProbeClient:
             )
 
         required_profile = not (
-            metrics.mode == SYNTHETIC and metrics.target_bps == 32768
+            (metrics.mode == SYNTHETIC and metrics.target_bps == 32768)
+            or (
+                metrics.mode == SYNTHETIC_AES_CCM
+                and metrics.target_bps == 16384
+            )
         )
         result = {
             "session": metrics.session,
@@ -507,7 +514,10 @@ class VoiceProbeClient:
             "generated_encrypted_wire_bytes": None,
             "receiver_encrypted_wire_bytes": (
                 metrics._receiver_payload_bytes
-                if metrics.mode == SYNTHETIC_AES_CCM
+                if metrics.mode in (
+                    MICROPHONE_ADPCM_AES_CCM,
+                    SYNTHETIC_AES_CCM,
+                )
                 else None
             ),
             "encryption_overhead_bytes": None,
@@ -573,7 +583,13 @@ class VoiceProbeClient:
         result["failure_reasons"] = failure_reasons
         result["automated_pass"] = not failure_reasons
         result["acceptance_decision"] = (
-            "pass" if result["automated_pass"] else "fail"
+            ("pass" if result["automated_pass"] else "fail")
+            if result["required_profile"]
+            else (
+                "exploratory_pass"
+                if result["automated_pass"]
+                else "exploratory_fail"
+            )
         )
         return result
 

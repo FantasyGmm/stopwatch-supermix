@@ -162,14 +162,15 @@ Every JSON report records the requested profile, firmware revision, negotiated
 MTU, sender counters, receiver counters, payload bytes, timing metrics, the
 automated decision, exception text, and the WAV path when applicable.
 
-Mode 4 reports `generated_plaintext_bytes` and
+Modes 3 and 4 report `generated_plaintext_bytes` and
 `receiver_plaintext_payload_bytes` separately from
 `generated_encrypted_wire_bytes` and `receiver_encrypted_wire_bytes`.
 `encryption_overhead_bytes` is the tag overhead across generated packets.
 Sender/receiver wire parity compares the ciphertext/tag payload bytes.
-Synthetic throughput, plaintext parity, and deterministic-pattern validation
-use authenticated decrypted plaintext only. A tag failure is counted in
-`invalid_tags`, fails closed, and never reaches the pattern checker.
+Plaintext parity uses authenticated decrypted bytes for both encrypted modes;
+synthetic throughput and deterministic-pattern validation do the same for mode
+4. A tag failure is counted in `invalid_tags`, fails closed, and never reaches
+the ADPCM decoder or pattern checker.
 
 For required 8192 and 16384 B/s synthetic profiles, pass requires all of the
 following:
@@ -211,13 +212,19 @@ fails: the invalid block never reaches ADPCM decoding. Automated acceptance
 also requires zero crypto failures and invalid tags, p99 watch encryption time
 at most 1 ms, and every encrypted characteristic value to be exactly 186
 bytes. The same WAV duration and manual Mandarin listening checks still apply.
+If firmware encryption itself fails, the failed ciphertext is not sent. The
+probe terminates with a stop summary at that packet sequence so the Mac report
+retains numeric crypto packet, failure, total, maximum, and p99 timing
+counters; the nonzero failure count makes automated acceptance fail.
 
 Stop summaries for modes 1 and 2 retain their original 30-byte layout. Mode 3
 retains its 50-byte layout: the 30-byte legacy prefix followed by five 32-bit
 crypto counters. Mode 4 uses the same 50-byte prefix and appends one 32-bit
 `generated_plaintext_bytes` field for a 54-byte summary. In mode 4, the legacy
 `generated_payload_bytes` field counts encrypted payload bytes
-(ciphertext plus tag, excluding the 14-byte notification header).
+(ciphertext plus tag, excluding the 14-byte notification header). Mode 3 uses
+the same encrypted wire-byte meaning and derives plaintext bytes as 164 times
+the generated data-packet count without changing its summary layout.
 
 The 32768 B/s result is labeled `exploratory_pass` or `exploratory_fail`; it is
 recorded for capacity information and is not a required BLE acceptance gate.

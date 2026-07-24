@@ -108,6 +108,7 @@ private:
     void retry_start_ack();
     void retry_terminal_error();
     void finalize_stop(uint32_t now_ms);
+    bool prepare_crypto_failure_summary_locked(uint32_t now_ms);
     void prepare_terminal_error_locked(ble_voice_probe::ErrorCode code,
                                        uint16_t detail, uint32_t now_ms);
     void replace_terminal_error_sequence_locked(ble_voice_probe::Kind kind);

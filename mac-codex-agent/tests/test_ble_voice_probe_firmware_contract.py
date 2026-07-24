@@ -273,6 +273,60 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         )[1].split("void BleVoiceProbeController::handle_disconnect", 1)[0]
         self.assertIn("replace_terminal_error_sequence_locked(kind)", notify_result)
 
+    def test_crypto_failure_replaces_failed_data_with_counter_summary(self):
+        header = (
+            ROOT / "main/apps/app_codex_status/ble_voice_probe_controller.h"
+        ).read_text()
+        controller = (
+            ROOT / "main/apps/app_codex_status/ble_voice_probe_controller.cpp"
+        ).read_text()
+        self.assertIn("prepare_crypto_failure_summary_locked", header)
+
+        summary_failure = controller.split(
+            "bool BleVoiceProbeController::prepare_crypto_failure_summary_locked", 1
+        )[1].split(
+            "void BleVoiceProbeController::prepare_terminal_error_locked", 1
+        )[0]
+        self.assertIn("Kind::StopSummary", summary_failure)
+        self.assertIn(
+            "_pending_summary.sequence = _pending_data.sequence",
+            summary_failure,
+        )
+        self.assertIn(
+            "encode_stop_summary(\n        _session.summary(now_ms)",
+            summary_failure,
+        )
+        self.assertIn("_pending_data = {};", summary_failure)
+        self.assertIn("_pending_data_valid = false;", summary_failure)
+        self.assertIn("_stop_requested = true;", summary_failure)
+
+        synthetic = controller.split(
+            "bool BleVoiceProbeController::prepare_synthetic_packet_locked", 1
+        )[1].split(
+            "bool BleVoiceProbeController::queue_start_ack_locked", 1
+        )[0]
+        self.assertIn("prepare_crypto_failure_summary_locked(now_ms)", synthetic)
+
+        microphone_packet = controller.split(
+            "bool BleVoiceProbeController::prepare_microphone_packet", 1
+        )[1].split(
+            "void BleVoiceProbeController::fail_microphone_session", 1
+        )[0]
+        self.assertIn("_pending_data_valid = true;", microphone_packet)
+        microphone_failure = controller.split(
+            "void BleVoiceProbeController::fail_microphone_session", 1
+        )[1].split(
+            "void BleVoiceProbeController::release_audio_resources", 1
+        )[0]
+        self.assertIn(
+            "error == ble_voice_probe::ErrorCode::CryptoFailed",
+            microphone_failure,
+        )
+        self.assertIn(
+            "prepare_crypto_failure_summary_locked(now_ms)",
+            microphone_failure,
+        )
+
     def test_microphone_producer_drains_complete_pcm_before_more_reads(self):
         controller = (
             ROOT / "main/apps/app_codex_status/ble_voice_probe_controller.cpp"

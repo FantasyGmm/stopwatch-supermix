@@ -77,4 +77,17 @@ int main()
     const StopSummary encrypted_summary = encrypted_synthetic.summary(20);
     assert(encrypted_summary.generated_payload_bytes == 239);
     assert(encrypted_summary.generated_plaintext_bytes == 231);
+
+    Session failed_crypto;
+    command.mode = Mode::MicrophoneAdpcmAesCcm;
+    command.target_bps = 8192;
+    assert(failed_crypto.start(command, 0, 256));
+    failed_crypto.record_crypto_result(37, false);
+    const StopSummary failed_crypto_summary = failed_crypto.summary(20);
+    assert(failed_crypto_summary.generated_data_packets == 0);
+    assert(failed_crypto_summary.crypto_packets == 1);
+    assert(failed_crypto_summary.crypto_failures == 1);
+    assert(failed_crypto_summary.crypto_total_us == 37);
+    assert(failed_crypto_summary.crypto_max_us == 37);
+    assert(failed_crypto_summary.crypto_p99_us == 37);
 }
