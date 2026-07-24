@@ -1,4 +1,5 @@
 #include "ble_voice_probe_controller.h"
+#include "ble_voice_probe_failure_transition.h"
 #include "ima_adpcm_codec.h"
 #include "voice_probe_crypto.h"
 
@@ -463,7 +464,7 @@ void BleVoiceProbeController::producer_loop()
             if (setup_microphone) {
                 ble_voice_probe::ErrorCode error = ble_voice_probe::ErrorCode::ResamplerFailed;
                 if (!setup_microphone_resources(error)) {
-                    fail_microphone_session(error);
+                    transition_microphone_failure(error);
                     break;
                 }
 
@@ -493,12 +494,7 @@ void BleVoiceProbeController::producer_loop()
             if (prepare_microphone) {
                 ble_voice_probe::ErrorCode error = ble_voice_probe::ErrorCode::EncoderFailed;
                 if (!prepare_microphone_packet(error)) {
-                    StateLock lock(_state_mutex);
-                    if (lock.locked() && _session.active() &&
-                        error == ble_voice_probe::ErrorCode::EncoderFailed) {
-                        _session.record_encode_failure();
-                    }
-                    fail_microphone_session(error);
+                    transition_microphone_failure(error);
                     break;
                 }
                 continue;
@@ -512,7 +508,7 @@ void BleVoiceProbeController::producer_loop()
                         stopping = lock.locked() && _stop_requested;
                     }
                     if (!stopping) {
-                        fail_microphone_session(error);
+                        transition_microphone_failure(error);
                         break;
                     }
                 }
@@ -863,12 +859,17 @@ bool BleVoiceProbeController::prepare_microphone_packet(ble_voice_probe::ErrorCo
     return true;
 }
 
-void BleVoiceProbeController::fail_microphone_session(ble_voice_probe::ErrorCode error)
+void BleVoiceProbeController::transition_microphone_failure(
+    ble_voice_probe::ErrorCode error
+)
 {
     {
         StateLock lock(_state_mutex);
         if (lock.locked() && _session.active() &&
             is_microphone_mode(_session.mode())) {
+            if (error == ble_voice_probe::ErrorCode::EncoderFailed) {
+                _session.record_encode_failure();
+            }
             const uint32_t now_ms = GetHAL().millis();
             if (error == ble_voice_probe::ErrorCode::CryptoFailed) {
                 if (!prepare_crypto_failure_summary_locked(now_ms)) {
@@ -1085,28 +1086,22 @@ bool BleVoiceProbeController::prepare_crypto_failure_summary_locked(
         return false;
     }
 
-    _pending_summary = {};
-    _pending_summary.kind = ble_voice_probe::Kind::StopSummary;
-    _pending_summary.session = _session.id();
-    _pending_summary.sequence = _pending_data.sequence;
-    _pending_summary.watch_ms = now_ms;
-    _pending_summary.payload_length = ble_voice_probe::encode_stop_summary(
-        _session.summary(now_ms),
-        _session.mode(),
-        _pending_summary.payload.data(),
-        _pending_summary.payload.size());
-    if (_pending_summary.payload_length == 0) {
-        _pending_summary = {};
+    ble_voice_probe::detail::CryptoFailureTransition transition;
+    if (!ble_voice_probe::detail::prepare_crypto_failure_transition(
+            _session, _pending_data, now_ms, transition)) {
         return false;
     }
 
-    _pending_data = {};
-    _pending_data_valid = false;
+    _pending_summary = transition.summary;
+    if (transition.discard_pending_data) {
+        _pending_data = {};
+        _pending_data_valid = false;
+    }
     _pending_data_queued = false;
     _pending_data_counted = false;
-    _producer_enabled = false;
-    _stop_requested = true;
-    _summary_prepared = true;
+    _producer_enabled = transition.producer_enabled;
+    _stop_requested = transition.stop_requested;
+    _summary_prepared = transition.summary_prepared;
     _summary_queued = false;
     return true;
 }

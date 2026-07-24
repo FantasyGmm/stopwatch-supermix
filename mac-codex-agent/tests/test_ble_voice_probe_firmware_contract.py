@@ -225,7 +225,7 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
             "void BleVoiceProbeController::request_stop", 1
         )[1].split("bool BleVoiceProbeController::enqueue_packet", 1)[0]
         microphone_failure = controller.split(
-            "void BleVoiceProbeController::fail_microphone_session", 1
+            "void BleVoiceProbeController::transition_microphone_failure", 1
         )[1].split("void BleVoiceProbeController::release_audio_resources", 1)[0]
         self.assertNotIn("xQueueReset", request_stop)
         self.assertNotIn("xQueueReset", microphone_failure)
@@ -280,6 +280,10 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         controller = (
             ROOT / "main/apps/app_codex_status/ble_voice_probe_controller.cpp"
         ).read_text()
+        policy = (
+            ROOT
+            / "main/apps/app_codex_status/ble_voice_probe_failure_transition.cpp"
+        ).read_text()
         self.assertIn("prepare_crypto_failure_summary_locked", header)
 
         summary_failure = controller.split(
@@ -287,18 +291,21 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         )[1].split(
             "void BleVoiceProbeController::prepare_terminal_error_locked", 1
         )[0]
-        self.assertIn("Kind::StopSummary", summary_failure)
-        self.assertIn(
-            "_pending_summary.sequence = _pending_data.sequence",
-            summary_failure,
-        )
-        self.assertIn(
-            "encode_stop_summary(\n        _session.summary(now_ms)",
-            summary_failure,
-        )
+        self.assertIn("prepare_crypto_failure_transition(", summary_failure)
+        self.assertIn("_pending_summary = transition.summary", summary_failure)
         self.assertIn("_pending_data = {};", summary_failure)
         self.assertIn("_pending_data_valid = false;", summary_failure)
-        self.assertIn("_stop_requested = true;", summary_failure)
+        self.assertIn("_stop_requested = transition.stop_requested", summary_failure)
+
+        self.assertIn("candidate.summary.kind = Kind::StopSummary", policy)
+        self.assertIn(
+            "candidate.summary.sequence = failed_data.sequence",
+            policy,
+        )
+        self.assertIn(
+            "candidate.summary.payload_length = encode_stop_summary(",
+            policy,
+        )
 
         synthetic = controller.split(
             "bool BleVoiceProbeController::prepare_synthetic_packet_locked", 1
@@ -310,11 +317,11 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         microphone_packet = controller.split(
             "bool BleVoiceProbeController::prepare_microphone_packet", 1
         )[1].split(
-            "void BleVoiceProbeController::fail_microphone_session", 1
+            "void BleVoiceProbeController::transition_microphone_failure", 1
         )[0]
         self.assertIn("_pending_data_valid = true;", microphone_packet)
         microphone_failure = controller.split(
-            "void BleVoiceProbeController::fail_microphone_session", 1
+            "void BleVoiceProbeController::transition_microphone_failure", 1
         )[1].split(
             "void BleVoiceProbeController::release_audio_resources", 1
         )[0]
@@ -326,6 +333,41 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
             "prepare_crypto_failure_summary_locked(now_ms)",
             microphone_failure,
         )
+
+    def test_microphone_failure_transition_has_single_lock_owner(self):
+        controller = (
+            ROOT / "main/apps/app_codex_status/ble_voice_probe_controller.cpp"
+        ).read_text()
+        self.assertNotIn("xSemaphoreCreateRecursiveMutex", controller)
+        self.assertNotIn("xSemaphoreTakeRecursive", controller)
+        producer = controller.split(
+            "void BleVoiceProbeController::producer_loop", 1
+        )[1].split(
+            "bool BleVoiceProbeController::prepare_synthetic_packet_locked", 1
+        )[0]
+        packet_failure = producer.split(
+            "if (!prepare_microphone_packet(error)) {", 1
+        )[1].split("continue;", 1)[0]
+        self.assertNotIn("StateLock", packet_failure)
+        self.assertEqual(
+            packet_failure.count("transition_microphone_failure(error)"), 1
+        )
+
+        transition = controller.split(
+            "void BleVoiceProbeController::transition_microphone_failure", 1
+        )[1].split(
+            "void BleVoiceProbeController::release_audio_resources", 1
+        )[0]
+        self.assertEqual(transition.count("StateLock lock(_state_mutex)"), 1)
+        self.assertIn("prepare_crypto_failure_summary_locked(now_ms)", transition)
+
+        synthetic = controller.split(
+            "bool BleVoiceProbeController::prepare_synthetic_packet_locked", 1
+        )[1].split(
+            "bool BleVoiceProbeController::queue_start_ack_locked", 1
+        )[0]
+        self.assertNotIn("StateLock", synthetic)
+        self.assertIn("prepare_crypto_failure_summary_locked(now_ms)", synthetic)
 
     def test_microphone_producer_drains_complete_pcm_before_more_reads(self):
         controller = (
@@ -357,11 +399,14 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
     def test_offline_validation_and_probe_docs_cover_pcm_and_checkout_evidence(self):
         runner = (ROOT / "scripts/run_unified_offline_validation.sh").read_text()
         docs = (ROOT / "docs/ble-voice-link-probe.md").read_text()
-        self.assertIn("[16/21] BLE voice probe crypto host test", runner)
+        self.assertIn("[16/22] BLE voice probe crypto host test", runner)
         self.assertIn("tests/voice_probe_crypto_test.cpp", runner)
-        self.assertIn("[18/21] BLE voice probe PCM buffer host test", runner)
+        self.assertIn("[19/22] BLE voice probe PCM buffer host test", runner)
         self.assertIn("tests/ble_voice_probe_pcm_buffer_test.cpp", runner)
-        self.assertIn("[21/21] Whitespace error check", runner)
+        self.assertIn(
+            "[17/22] BLE voice probe failure transition host test", runner
+        )
+        self.assertIn("[22/22] Whitespace error check", runner)
         self.assertLess(
             runner.index("tests/voice_probe_crypto_test.cpp"),
             runner.index("./scripts/build_unified_candidate.sh --clean"),

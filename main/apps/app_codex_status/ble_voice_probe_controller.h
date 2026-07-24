@@ -103,7 +103,8 @@ private:
     bool capture_microphone_samples(ble_voice_probe::ErrorCode& error);
     bool prepare_synthetic_packet_locked(uint32_t now_ms);
     bool prepare_microphone_packet(ble_voice_probe::ErrorCode& error);
-    void fail_microphone_session(ble_voice_probe::ErrorCode error);
+    // Called without _state_mutex; this helper owns failure-transition locking.
+    void transition_microphone_failure(ble_voice_probe::ErrorCode error);
     void release_audio_resources(bool forced_cleanup = false);
     void retry_start_ack();
     void retry_terminal_error();
