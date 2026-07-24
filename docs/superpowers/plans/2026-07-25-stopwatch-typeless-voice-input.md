@@ -10,6 +10,21 @@
 
 ---
 
+## Conditional Encryption Amendment
+
+Before Task 2, execute Task 15. It measures AES-CCM on the actual watch and BLE
+path under the gate in
+`docs/superpowers/specs/2026-07-25-voice-encryption-performance-gate.md`.
+
+- If Task 15 passes, update Tasks 5, 6, 7, 9, 10, 12, 13, and 14 to carry
+  authenticated AES-CCM controls and audio with a locally generated device key
+  stored in Mac Keychain and compiled into the watch through an ignored
+  generated header.
+- If Task 15 shows a large crypto-specific performance impact, stop and ask the
+  user whether encryption is still required before changing those tasks.
+- The fixed Task-15 key is diagnostic only and is never used by the installed
+  Agent.
+
 ## Scope And File Map
 
 ### Mac Agent: new files
@@ -1449,3 +1464,186 @@ evidence identifies the final tested commit and binary hashes.
       recovery, and no watch reboot.
 - [ ] The final report distinguishes automated, flash, boot, and manual
       Typeless evidence.
+
+## Task 15: Measure AES-CCM Voice Performance Before Production Integration
+
+**Files:**
+- Create: `main/apps/app_codex_status/voice_probe_crypto.h`
+- Create: `main/apps/app_codex_status/voice_probe_crypto.cpp`
+- Create: `tests/voice_probe_crypto_test.cpp`
+- Create: `mac-codex-agent/voice_probe_crypto.py`
+- Create: `mac-codex-agent/tests/test_voice_probe_crypto.py`
+- Modify: `main/apps/app_codex_status/ble_voice_probe_protocol.h`
+- Modify: `main/apps/app_codex_status/ble_voice_probe_protocol.cpp`
+- Modify: `main/apps/app_codex_status/ble_voice_probe_controller.h`
+- Modify: `main/apps/app_codex_status/ble_voice_probe_controller.cpp`
+- Modify: `mac-codex-agent/voice_probe_protocol.py`
+- Modify: `mac-codex-agent/ble_voice_probe.py`
+- Modify: `mac-codex-agent/tests/test_voice_probe_protocol.py`
+- Modify: `mac-codex-agent/tests/test_ble_voice_probe.py`
+- Modify: `main/CMakeLists.txt`
+- Modify: `scripts/run_unified_offline_validation.sh`
+- Modify: `docs/ble-voice-link-probe.md`
+
+- [ ] **Step 1: Write failing cross-language crypto vectors**
+
+Use one fixed diagnostic vector in both C++ and Python:
+
+```text
+key:       000102030405060708090a0b0c0d0e0f
+nonce:     101112131415161718191a1b1c
+aad:       020207000100000064000000ac00
+plaintext: 164 zero bytes
+tag size:  8 bytes
+```
+
+Tests must assert byte-identical ciphertext/tag, successful decryption, and
+rejection after changing one ciphertext, tag, nonce, or AAD byte. Generate the
+expected ciphertext once using Python's `AESCCM`, record it as a literal vector
+in both tests, and never calculate the expected value through the function
+under test.
+
+- [ ] **Step 2: Run focused crypto tests and verify RED**
+
+Run:
+
+```bash
+mac-codex-agent/.venv/bin/python -m unittest \
+  mac-codex-agent/tests/test_voice_probe_crypto.py -v
+c++ -std=c++17 -Wall -Wextra -Werror -I. \
+  tests/voice_probe_crypto_test.cpp \
+  main/apps/app_codex_status/voice_probe_crypto.cpp \
+  -lmbedtls -lmbedcrypto -lmbedx509 \
+  -o /tmp/voice_probe_crypto_test
+```
+
+Expected: missing Python and firmware crypto modules.
+
+- [ ] **Step 3: Implement diagnostic AES-128-CCM**
+
+Python uses `cryptography.hazmat.primitives.ciphers.aead.AESCCM` with an
+8-byte tag. Firmware uses `mbedtls_ccm_setkey`,
+`mbedtls_ccm_encrypt_and_tag`, and `mbedtls_ccm_auth_decrypt`. Expose:
+
+```cpp
+bool encrypt(const uint8_t* aad, size_t aad_len,
+             const uint8_t* plaintext, size_t plaintext_len,
+             const Nonce& nonce, Ciphertext& output,
+             uint32_t& elapsed_us);
+bool decrypt(const uint8_t* aad, size_t aad_len,
+             const uint8_t* ciphertext, size_t ciphertext_len,
+             const Nonce& nonce, Plaintext& output);
+```
+
+The diagnostic key is confined to `voice_probe_crypto.*` and its Python
+counterpart. Derive the 13-byte benchmark nonce from a constant three-byte
+domain, session, sequence, and watch timestamp. Reject nonce/session zero,
+plaintext lengths other than 164 for microphone mode, and ciphertext lengths
+other than 172.
+
+- [ ] **Step 4: Add encrypted probe mode and timing counters**
+
+Add `MICROPHONE_ADPCM_AES_CCM = 3`. For this mode, encrypt each encoded
+164-byte ADPCM block, place 172 ciphertext/tag bytes in the existing
+notification payload, and authenticate the 14-byte header as AAD. Extend the
+stop summary and JSON report with:
+
+```text
+crypto_packets
+crypto_failures
+crypto_total_us
+crypto_max_us
+crypto_p99_us
+invalid_tags
+encrypted_characteristic_value_bytes
+```
+
+The Mac decrypts before ADPCM decoding. Invalid tags never reach the decoder
+and make the run fail closed. Keep existing unencrypted modes byte-compatible.
+
+- [ ] **Step 5: Run focused protocol, client, and firmware tests**
+
+Run:
+
+```bash
+mac-codex-agent/.venv/bin/python -m unittest \
+  mac-codex-agent/tests/test_voice_probe_crypto.py \
+  mac-codex-agent/tests/test_voice_probe_protocol.py \
+  mac-codex-agent/tests/test_ble_voice_probe.py -v
+c++ -std=c++17 -Wall -Wextra -Werror -I. \
+  tests/voice_probe_crypto_test.cpp \
+  main/apps/app_codex_status/voice_probe_crypto.cpp \
+  -o /tmp/voice_probe_crypto_test
+/tmp/voice_probe_crypto_test
+```
+
+Use the ESP-IDF component libraries or an isolated ESP-IDF hostable build for
+the final C++ command if the system linker does not expose mbedTLS. Record the
+exact successful command in the task report.
+
+- [ ] **Step 6: Run the full offline validation**
+
+Run:
+
+```bash
+PYTHON="$PWD/mac-codex-agent/.venv/bin/python" \
+  ./scripts/run_unified_offline_validation.sh
+```
+
+Expected: all existing tests, new crypto vectors, clean unified firmware build,
+capacity gate, and whitespace check pass.
+
+- [ ] **Step 7: Commit the diagnostic encryption probe**
+
+```bash
+git add main/apps/app_codex_status/voice_probe_crypto.* \
+  main/apps/app_codex_status/ble_voice_probe_protocol.* \
+  main/apps/app_codex_status/ble_voice_probe_controller.* \
+  tests/voice_probe_crypto_test.cpp \
+  mac-codex-agent/voice_probe_crypto.py \
+  mac-codex-agent/voice_probe_protocol.py \
+  mac-codex-agent/ble_voice_probe.py \
+  mac-codex-agent/tests/test_voice_probe_crypto.py \
+  mac-codex-agent/tests/test_voice_probe_protocol.py \
+  mac-codex-agent/tests/test_ble_voice_probe.py \
+  main/CMakeLists.txt scripts/run_unified_offline_validation.sh \
+  docs/ble-voice-link-probe.md
+git commit -m "Add encrypted BLE voice performance probe"
+```
+
+- [ ] **Step 8: Flash the exact diagnostic artifact**
+
+Record the commit and binary hash, auto-detect the connected watch port, flash,
+and verify boot:
+
+```bash
+EVIDENCE="/tmp/stopwatch-ble-voice-probe/$(date +%Y%m%d)-aes-ccm-gate"
+mkdir -p "$EVIDENCE"
+git rev-parse HEAD | tee "$EVIDENCE/firmware-git-revision.txt"
+shasum -a 256 build-unified/StopWatch-UserDemo.bin \
+  | tee "$EVIDENCE/firmware-app.sha256"
+PORT="$(python3 -c 'from scripts.watch_debug import discover_port; print(discover_port())')"
+idf.py -B build-unified -p "$PORT" flash | tee "$EVIDENCE/flash.log"
+python3 scripts/watch_debug.py --port "$PORT" --timeout 15 app list \
+  | tee "$EVIDENCE/boot-app-list.txt"
+```
+
+- [ ] **Step 9: Run alternating physical profiles**
+
+With the installed Agent fully quit, run three adjacent baseline/encrypted
+8,192 B/s 60-second synthetic pairs and three adjacent baseline/encrypted
+30-second microphone pairs. Run one encrypted 16,384 B/s synthetic profile for
+capacity evidence. Preserve JSON, WAV, command logs, watch serial log, and a
+manual Mandarin listening result under the evidence directory.
+
+- [ ] **Step 10: Apply the decision rule**
+
+Classify encryption as small only if every encrypted 8 KiB/s and microphone run
+has zero transport/crypto failures, p95 at most 40 ms, max gap at most 100 ms,
+encrypted p95 no more than 5 ms above its adjacent baseline, p99 encryption at
+most 1 ms, exact 186-byte encrypted characteristic values, WAV duration error
+at most 1 percent, and intelligible Mandarin.
+
+If all pass, mark the gate complete and amend the production tasks for
+AES-CCM. If a crypto-specific measurement misses, stop and ask the user before
+adding encryption.
