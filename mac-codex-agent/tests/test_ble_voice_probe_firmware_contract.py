@@ -6,14 +6,13 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
 class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
-    def test_gatt_has_isolated_encrypted_voice_characteristics(self):
+    def test_gatt_has_isolated_transport_only_voice_characteristics(self):
         source = (ROOT / "main/apps/app_codex_status/codex_ble_transport.cpp").read_text()
         probe = (ROOT / "mac-codex-agent/ble_voice_probe.py").read_text()
+        docs = (ROOT / "docs/ble-voice-link-probe.md").read_text()
         self.assertIn("kVoiceServiceUuid", source)
         self.assertIn("kVoiceControlUuid", source)
         self.assertIn("kVoiceTxUuid", source)
-        self.assertIn("BLE_GATT_CHR_F_WRITE_ENC", source)
-        self.assertIn("BLE_GATT_CHR_F_NOTIFY_INDICATE_ENC", source)
         self.assertIn("BLE_GAP_EVENT_SUBSCRIBE", source)
         self.assertIn("BLE_GAP_EVENT_MTU", source)
         self.assertIn("ble_gatts_notify_custom", source)
@@ -28,6 +27,20 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         self.assertIn("kStatusCharacteristics", services)
         self.assertIn("&kVoiceServiceUuid.u", services)
         self.assertIn("kVoiceCharacteristics", services)
+        status_characteristics = source.split(
+            "const ble_gatt_chr_def kStatusCharacteristics[]", 1
+        )[1].split("const ble_gatt_chr_def kVoiceCharacteristics[]", 1)[0]
+        self.assertIn("BLE_GATT_CHR_F_WRITE_ENC", status_characteristics)
+        voice_characteristics = source.split(
+            "const ble_gatt_chr_def kVoiceCharacteristics[]", 1
+        )[1].split("const ble_gatt_svc_def kServices[]", 1)[0]
+        self.assertIn(
+            "BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP",
+            voice_characteristics,
+        )
+        self.assertIn("BLE_GATT_CHR_F_NOTIFY", voice_characteristics)
+        self.assertNotIn("BLE_GATT_CHR_F_WRITE_ENC", voice_characteristics)
+        self.assertNotIn("BLE_GATT_CHR_F_NOTIFY_INDICATE_ENC", voice_characteristics)
         advertising = source.split("int start_advertising()", 2)[2].split(
             "void on_reset", 1
         )[0]
@@ -43,6 +56,12 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         voice_tx_definition = source.split("&kVoiceTxUuid.u", 1)[1].split("},", 1)[0]
         self.assertIn("voice_tx_access", voice_tx_definition)
         self.assertNotIn("nullptr,\n        nullptr,\n        nullptr,", voice_tx_definition)
+        connect_event = source.split("case BLE_GAP_EVENT_CONNECT:", 1)[1].split(
+            "case BLE_GAP_EVENT_DISCONNECT:", 1
+        )[0]
+        self.assertNotIn("ble_gap_security_initiate", connect_event)
+        self.assertIn("transport-only", docs)
+        self.assertIn("unencrypted", docs)
 
     def test_transport_bounds_control_queue_and_mtu_payload(self):
         header = (ROOT / "main/apps/app_codex_status/codex_ble_transport.h").read_text()

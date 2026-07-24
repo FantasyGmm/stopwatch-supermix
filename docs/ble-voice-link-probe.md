@@ -5,6 +5,21 @@ the StopWatch-to-Mac BLE voice data path. It does not invoke Typeless, send the
 `Fn` key, or change any production right-button behavior. It is not the voice
 input feature itself.
 
+## Security Boundary
+
+This hardware run is a transport-only capacity probe. The isolated voice
+control and notification characteristics are intentionally unencrypted so the
+measurement can proceed independently of pairing. The normal status
+characteristic remains encrypted.
+
+Three physical runs already showed that macOS CoreBluetooth could discover and
+connect to the custom service, but the encrypted characteristic handshake
+timed out with NimBLE status 13. The same result occurred with a fresh
+peripheral identity, access-triggered pairing, and volatile non-bonded keys, so
+this unencrypted probe must not be treated as production security acceptance.
+Production voice input still requires a pairing path that completes on macOS,
+or application-layer authentication and encryption.
+
 ## Preconditions
 
 1. Fully quit **StopWatch Codex Agent** from its menu-bar menu. Disabling its

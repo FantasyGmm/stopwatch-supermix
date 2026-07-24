@@ -149,7 +149,7 @@ const ble_gatt_chr_def kVoiceCharacteristics[] = {
         voice_control_access,
         nullptr,
         nullptr,
-        BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP | BLE_GATT_CHR_F_WRITE_ENC,
+        BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP,
         0,
         nullptr,
         nullptr,
@@ -159,7 +159,7 @@ const ble_gatt_chr_def kVoiceCharacteristics[] = {
         voice_tx_access,
         nullptr,
         nullptr,
-        BLE_GATT_CHR_F_NOTIFY | BLE_GATT_CHR_F_NOTIFY_INDICATE_ENC,
+        BLE_GATT_CHR_F_NOTIFY,
         0,
         &g_voice_tx_value_handle,
         nullptr,
@@ -195,8 +195,7 @@ int gap_event(ble_gap_event* event, void*)
         case BLE_GAP_EVENT_CONNECT:
             if (event->connect.status == 0) {
                 g_transport->handle_gap_connected(event->connect.conn_handle);
-                const int security_result = ble_gap_security_initiate(event->connect.conn_handle);
-                ESP_LOGI(kTag, "connected, security=%d", security_result);
+                ESP_LOGI(kTag, "connected, transport-only voice probe");
             } else if (!g_transport->stopping()) {
                 start_advertising();
             }
