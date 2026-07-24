@@ -195,7 +195,8 @@ int gap_event(ble_gap_event* event, void*)
         case BLE_GAP_EVENT_CONNECT:
             if (event->connect.status == 0) {
                 g_transport->handle_gap_connected(event->connect.conn_handle);
-                ESP_LOGI(kTag, "connected; awaiting encrypted characteristic access");
+                const int security_result = ble_gap_security_initiate(event->connect.conn_handle);
+                ESP_LOGI(kTag, "connected, security=%d", security_result);
             } else if (!g_transport->stopping()) {
                 start_advertising();
             }

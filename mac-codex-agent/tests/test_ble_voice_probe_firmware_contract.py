@@ -62,14 +62,6 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         self.assertIn("event->passkey.params.action", source)
         self.assertIn("event->passkey.conn_handle", source)
 
-    def test_core_bluetooth_triggers_pairing_on_encrypted_characteristic_access(self):
-        source = (ROOT / "main/apps/app_codex_status/codex_ble_transport.cpp").read_text()
-        connect_case = source.split("case BLE_GAP_EVENT_CONNECT:", 1)[1].split(
-            "case BLE_GAP_EVENT_DISCONNECT:", 1
-        )[0]
-        self.assertNotIn("ble_gap_security_initiate", connect_case)
-        self.assertIn("handle_gap_connected", connect_case)
-
     def test_controller_is_bounded_and_not_attached_to_a_button(self):
         controller = (
             ROOT / "main/apps/app_codex_status/ble_voice_probe_controller.cpp"
