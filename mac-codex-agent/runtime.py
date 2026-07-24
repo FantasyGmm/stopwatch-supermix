@@ -18,10 +18,13 @@ from app_state import (
     CodexSnapshot,
     ConnectionState,
     Preferences,
+    TraeSnapshot,
     UserDefaultsPreferences,
 )
 from codex_adapter import CodexStateCollector
+from combined_collector import CompositeStateCollector
 from task_alerts import TaskAlertTracker
+from trae_adapter import TraeStateCollector
 
 
 LOGGER = logging.getLogger(__name__)
@@ -89,6 +92,7 @@ class AgentRuntime:
                 self._connection_enabled,
                 detail,
                 codex=previous.codex,
+                trae=previous.trae,
             )
             self._snapshot = snapshot
         if previous.state is not state or previous.detail != detail:
@@ -201,6 +205,7 @@ class AgentRuntime:
             else:
                 first_status = not self._latest_status
                 codex = CodexSnapshot.from_status(status)
+                trae = TraeSnapshot.from_status(status)
                 with self._state_lock:
                     previous = self._snapshot
                     self._snapshot = AgentSnapshot(
@@ -208,6 +213,7 @@ class AgentRuntime:
                         previous.connection_enabled,
                         previous.detail,
                         codex=codex,
+                        trae=trae,
                     )
                 self._latest_status = status
                 if first_status:
@@ -274,7 +280,10 @@ class AgentController:
         self._preferences = preferences or UserDefaultsPreferences()
         self._collector = None
         if runtime is None:
-            self._collector = CodexStateCollector(alert_tracker=TaskAlertTracker())
+            self._collector = CompositeStateCollector(
+                CodexStateCollector(alert_tracker=TaskAlertTracker()),
+                TraeStateCollector(),
+            )
             runtime = AgentRuntime(
                 collector=self._collector,
                 connection_enabled=self._preferences.connection_enabled(),

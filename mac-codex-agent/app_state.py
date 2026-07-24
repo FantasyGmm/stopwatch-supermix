@@ -73,11 +73,38 @@ class CodexSnapshot:
 
 
 @dataclasses.dataclass(frozen=True)
+class TraeSnapshot:
+    online: bool = False
+    model: str = ""
+    effort: str = ""
+    project: str = ""
+    task_state: str = ""
+    task_title: str = ""
+    task_detail: str = ""
+    fresh: bool = False
+
+    @classmethod
+    def from_status(cls, status: Mapping[str, Any]) -> "TraeSnapshot":
+        task = _first_trae_task(status.get("trae_tasks"))
+        return cls(
+            online=status.get("trae_online") is True,
+            model=_text_value(status.get("trae_model")),
+            effort=_text_value(status.get("trae_effort")),
+            project=task.get("project", ""),
+            task_state=task.get("state", ""),
+            task_title=task.get("title", ""),
+            task_detail=task.get("detail", ""),
+            fresh=status.get("trae_fresh") is True,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
 class AgentSnapshot:
     state: ConnectionState
     connection_enabled: bool
     detail: str = ""
     codex: CodexSnapshot = dataclasses.field(default_factory=CodexSnapshot)
+    trae: TraeSnapshot = dataclasses.field(default_factory=TraeSnapshot)
     changed_at: float = dataclasses.field(default_factory=time.time)
 
 
@@ -90,6 +117,13 @@ class MenuPresentation:
     alert_summary_text: str
     alerts: Tuple[TaskAlertView, ...]
     alert_revision: int
+    trae_online_text: str
+    trae_model_text: str
+    trae_effort_text: str
+    trae_project_text: str
+    trae_state_text: str
+    trae_task_text: str
+    trae_detail_text: str
     agent_text: str
     bluetooth_text: str
     device_text: str
@@ -113,6 +147,19 @@ _STATE_LABELS = {
 
 def present(snapshot: AgentSnapshot) -> MenuPresentation:
     codex = snapshot.codex
+    trae = snapshot.trae
+    trae_source = (
+        "Online"
+        if trae.online and trae.fresh
+        else "Stale"
+        if trae.online
+        else "Offline"
+    )
+    trae_state = {
+        "pending": "Pending",
+        "running": "Running",
+        "completed": "Completed",
+    }.get(trae.task_state, "--")
     return MenuPresentation(
         model_text="Model: {}".format(codex.model or "--"),
         effort_text="Effort: {}".format(codex.effort.title() if codex.effort else "--"),
@@ -129,6 +176,15 @@ def present(snapshot: AgentSnapshot) -> MenuPresentation:
         ),
         alerts=codex.alerts,
         alert_revision=codex.alert_revision,
+        trae_online_text="Source: {}".format(trae_source),
+        trae_model_text="Model: {}".format(trae.model or "--"),
+        trae_effort_text="Effort: {}".format(
+            trae.effort.title() if trae.effort and trae.effort != "--" else "--"
+        ),
+        trae_project_text="Project: {}".format(trae.project or "--"),
+        trae_state_text="State: {}".format(trae_state),
+        trae_task_text="Task: {}".format(trae.task_title or "--"),
+        trae_detail_text="Detail: {}".format(trae.task_detail or "--"),
         agent_text="Agent: Running",
         bluetooth_text="Bluetooth: {}".format(_STATE_LABELS[snapshot.state]),
         device_text="Device: {}".format(DEVICE_NAME),
@@ -179,6 +235,24 @@ def _alert_views(value: Any) -> Tuple[TaskAlertView, ...]:
         ):
             alerts.append(TaskAlertView(project, title, alert_time, state, outcome))
     return tuple(alerts)
+
+
+def _first_trae_task(value: Any) -> Mapping[str, str]:
+    if not isinstance(value, list):
+        return {}
+    for entry in value:
+        if not isinstance(entry, Mapping):
+            continue
+        state = _text_value(entry.get("state")).lower()
+        if state not in ("pending", "running", "completed"):
+            continue
+        return {
+            "project": _text_value(entry.get("project")),
+            "state": state,
+            "title": _text_value(entry.get("title")),
+            "detail": _text_value(entry.get("detail")),
+        }
+    return {}
 
 
 def _format_number(value: Optional[int], suffix: str) -> str:

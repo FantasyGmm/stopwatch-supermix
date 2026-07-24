@@ -125,6 +125,18 @@ async def wait_for_codex_model(runtime, expected):
     )
 
 
+async def wait_for_trae_model(runtime, expected):
+    for _ in range(100):
+        if runtime.snapshot().trae.model == expected:
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError(
+        "Trae model did not become {}; current={}".format(
+            expected, runtime.snapshot()
+        )
+    )
+
+
 async def wait_for_messages(transport, count):
     for _ in range(100):
         if len(transport.messages) >= count:
@@ -134,6 +146,43 @@ async def wait_for_messages(transport, count):
 
 
 class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_collects_trae_snapshot_independently(self):
+        collector = FakeCollector(
+            [
+                {
+                    "codex_model": "gpt-menu",
+                    "trae_online": True,
+                    "trae_model": "Model A",
+                    "trae_effort": "high",
+                    "trae_fresh": True,
+                    "trae_tasks": [
+                        {
+                            "project": "StopWatch",
+                            "title": "Status page",
+                            "detail": "Collecting state",
+                            "state": "running",
+                        }
+                    ],
+                }
+            ]
+        )
+        runtime = AgentRuntime(
+            collector=collector,
+            transport_factory=FakeTransportFactory([]),
+            connection_enabled=False,
+            status_interval=0.01,
+            retry_delays=(0.01,),
+        )
+
+        task = asyncio.create_task(runtime.run())
+        await wait_for_trae_model(runtime, "Model A")
+
+        self.assertEqual(runtime.snapshot().codex.model, "gpt-menu")
+        self.assertEqual(runtime.snapshot().trae.project, "StopWatch")
+        self.assertEqual(runtime.snapshot().trae.task_state, "running")
+        runtime.submit(AgentCommand.STOP)
+        await asyncio.wait_for(task, 1)
+
     async def test_collects_codex_status_while_connection_is_disabled(self):
         collector = FakeCollector(
             [

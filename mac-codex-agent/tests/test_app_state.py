@@ -10,6 +10,7 @@ from app_state import (
     CodexSnapshot,
     ConnectionState,
     MemoryPreferences,
+    TraeSnapshot,
     present,
 )
 
@@ -186,6 +187,41 @@ class AppStateTests(unittest.TestCase):
             [alert.state for alert in codex.alerts],
             ["pending", "running"],
         )
+
+    def test_agent_snapshot_contains_independent_trae_status(self):
+        trae = TraeSnapshot.from_status(
+            {
+                "trae_online": True,
+                "trae_model": "Model A",
+                "trae_effort": "high",
+                "trae_fresh": True,
+                "trae_tasks": [
+                    {
+                        "project": "StopWatch",
+                        "title": "Add Trae page",
+                        "detail": "Building the collector",
+                        "state": "running",
+                    }
+                ],
+            }
+        )
+
+        snapshot = AgentSnapshot(
+            ConnectionState.CONNECTED,
+            True,
+            trae=trae,
+        )
+        view = present(snapshot)
+
+        self.assertTrue(snapshot.trae.online)
+        self.assertEqual(snapshot.trae.project, "StopWatch")
+        self.assertEqual(view.trae_online_text, "Source: Online")
+        self.assertEqual(view.trae_model_text, "Model: Model A")
+        self.assertEqual(view.trae_effort_text, "Effort: High")
+        self.assertEqual(view.trae_project_text, "Project: StopWatch")
+        self.assertEqual(view.trae_state_text, "State: Running")
+        self.assertEqual(view.trae_task_text, "Task: Add Trae page")
+        self.assertEqual(view.trae_detail_text, "Detail: Building the collector")
 
 
 if __name__ == "__main__":

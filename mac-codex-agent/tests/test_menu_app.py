@@ -7,7 +7,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from AppKit import NSApplication, NSColor, NSControlStateValueOn
 
-from app_state import AgentSnapshot, CodexSnapshot, ConnectionState
+from app_state import AgentSnapshot, CodexSnapshot, ConnectionState, TraeSnapshot
 from menu_app import MenuBarApplication
 
 
@@ -57,6 +57,22 @@ class FakeController:
                             "state": "completed",
                             "outcome": "completed",
                         },
+                    ],
+                }
+            ),
+            trae=TraeSnapshot.from_status(
+                {
+                    "trae_online": True,
+                    "trae_model": "Model A",
+                    "trae_effort": "high",
+                    "trae_fresh": True,
+                    "trae_tasks": [
+                        {
+                            "project": "StopWatch",
+                            "title": "Trae status page",
+                            "detail": "Building menu state",
+                            "state": "running",
+                        }
                     ],
                 }
             ),
@@ -119,12 +135,31 @@ class MenuBarApplicationTests(unittest.TestCase):
         self.assertEqual(
             delegate.connection_header_label.stringValue(), "Connection Status"
         )
+        self.assertEqual(delegate.trae_header_label.stringValue(), "Trae Status")
+        self.assertEqual(delegate.trae_online_label.stringValue(), "Source: Online")
+        self.assertEqual(delegate.trae_model_label.stringValue(), "Model: Model A")
+        self.assertEqual(delegate.trae_effort_label.stringValue(), "Effort: High")
+        self.assertEqual(delegate.trae_project_label.stringValue(), "Project: StopWatch")
+        self.assertEqual(delegate.trae_state_label.stringValue(), "State: Running")
+        self.assertEqual(delegate.trae_task_label.stringValue(), "Task: Trae status page")
+        self.assertEqual(
+            delegate.trae_detail_label.stringValue(),
+            "Detail: Building menu state",
+        )
         for item in (
             delegate.codex_header_item,
             delegate.model_item,
             delegate.effort_item,
             delegate.five_hour_item,
             delegate.seven_day_item,
+            delegate.trae_header_item,
+            delegate.trae_online_item,
+            delegate.trae_model_item,
+            delegate.trae_effort_item,
+            delegate.trae_project_item,
+            delegate.trae_state_item,
+            delegate.trae_task_item,
+            delegate.trae_detail_item,
             delegate.connection_header_item,
             delegate.agent_item,
             delegate.bluetooth_item,

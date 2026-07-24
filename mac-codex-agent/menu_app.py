@@ -110,6 +110,31 @@ class MenuBarApplication(NSObject):
         self.alert_item.setSubmenu_(self.alert_submenu)
         self.menu.addItem_(self.alert_item)
         self.menu.addItem_(NSMenuItem.separatorItem())
+        self.trae_header_item, self.trae_header_label = self._informational_item(
+            "Trae Status", header=True
+        )
+        self.trae_online_item, self.trae_online_label = self._informational_item(
+            "Source: Offline", indent=STATUS_CHILD_INDENT
+        )
+        self.trae_model_item, self.trae_model_label = self._informational_item(
+            "Model: --", indent=STATUS_CHILD_INDENT
+        )
+        self.trae_effort_item, self.trae_effort_label = self._informational_item(
+            "Effort: --", indent=STATUS_CHILD_INDENT
+        )
+        self.trae_project_item, self.trae_project_label = self._informational_item(
+            "Project: --", indent=STATUS_CHILD_INDENT
+        )
+        self.trae_state_item, self.trae_state_label = self._informational_item(
+            "State: --", indent=STATUS_CHILD_INDENT
+        )
+        self.trae_task_item, self.trae_task_label = self._informational_item(
+            "Task: --", indent=STATUS_CHILD_INDENT
+        )
+        self.trae_detail_item, self.trae_detail_label = self._informational_item(
+            "Detail: --", indent=STATUS_CHILD_INDENT
+        )
+        self.menu.addItem_(NSMenuItem.separatorItem())
         (
             self.connection_header_item,
             self.connection_header_label,
@@ -239,6 +264,13 @@ class MenuBarApplication(NSObject):
         if self._last_alert_revision != view.alert_revision:
             self._rebuild_alert_submenu(view.alerts)
             self._last_alert_revision = view.alert_revision
+        self.trae_online_label.setStringValue_(view.trae_online_text)
+        self.trae_model_label.setStringValue_(view.trae_model_text)
+        self.trae_effort_label.setStringValue_(view.trae_effort_text)
+        self.trae_project_label.setStringValue_(view.trae_project_text)
+        self.trae_state_label.setStringValue_(view.trae_state_text)
+        self.trae_task_label.setStringValue_(view.trae_task_text)
+        self.trae_detail_label.setStringValue_(view.trae_detail_text)
         self.agent_label.setStringValue_(view.agent_text)
         self.bluetooth_label.setStringValue_(view.bluetooth_text)
         self.device_label.setStringValue_(view.device_text)
