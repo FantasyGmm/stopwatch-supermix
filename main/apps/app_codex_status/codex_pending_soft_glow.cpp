@@ -10,24 +10,32 @@
 
 namespace {
 
-lv_obj_t* make_ring(lv_obj_t* parent, int x, int y, int size, int border_width)
+void draw_ring(
+    lv_layer_t* layer,
+    const lv_area_t& overlay_coords,
+    const codex_pending_glow::RingGeometry& ring,
+    lv_opa_t opacity
+)
 {
-    lv_obj_t* ring = lv_obj_create(parent);
-    lv_obj_set_size(ring, size, size);
-    lv_obj_set_pos(ring, x, y);
-    lv_obj_set_style_radius(ring, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_pad_all(ring, 0, 0);
-    lv_obj_set_style_bg_opa(ring, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(ring, border_width, 0);
-    lv_obj_set_style_border_color(
-        ring,
-        lv_color_hex(codex_status_ui::kAlertVermilion),
-        0
-    );
-    lv_obj_clear_flag(ring, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_clear_flag(ring, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(ring, LV_OBJ_FLAG_HIDDEN);
-    return ring;
+    lv_draw_rect_dsc_t dsc;
+    lv_draw_rect_dsc_init(&dsc);
+    dsc.bg_opa = LV_OPA_TRANSP;
+    dsc.border_color = lv_color_hex(codex_status_ui::kAlertVermilion);
+    dsc.border_opa = opacity;
+    dsc.border_width = ring.border_width;
+    dsc.radius = LV_RADIUS_CIRCLE;
+
+    lv_area_t area = {
+        static_cast<lv_coord_t>(overlay_coords.x1 + ring.inset),
+        static_cast<lv_coord_t>(overlay_coords.y1 + ring.inset),
+        static_cast<lv_coord_t>(
+            overlay_coords.x1 + ring.inset + ring.size - 1
+        ),
+        static_cast<lv_coord_t>(
+            overlay_coords.y1 + ring.inset + ring.size - 1
+        ),
+    };
+    lv_draw_rect(layer, &dsc, &area);
 }
 
 lv_opa_t interpolate_opa(int32_t phase, lv_opa_t minimum, lv_opa_t maximum)
@@ -46,9 +54,22 @@ void CodexPendingSoftGlow::init(lv_obj_t* parent)
         return;
     }
 
-    _rings[0] = make_ring(parent, 1, 1, 464, 2);
-    _rings[1] = make_ring(parent, 5, 5, 456, 4);
-    _rings[2] = make_ring(parent, 11, 11, 444, 6);
+    _overlay = lv_obj_create(parent);
+    lv_obj_set_size(
+        _overlay,
+        codex_pending_glow::kPanelSize,
+        codex_pending_glow::kPanelSize
+    );
+    lv_obj_set_pos(_overlay, 0, 0);
+    lv_obj_set_style_radius(_overlay, 0, 0);
+    lv_obj_set_style_pad_all(_overlay, 0, 0);
+    lv_obj_set_style_bg_opa(_overlay, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(_overlay, 0, 0);
+    lv_obj_clear_flag(_overlay, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(_overlay, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(_overlay, LV_OBJ_FLAG_FLOATING);
+    lv_obj_add_flag(_overlay, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_event_cb(_overlay, draw_event_cb, LV_EVENT_ALL, this);
 }
 
 void CodexPendingSoftGlow::set_heading(lv_obj_t* label)
@@ -76,11 +97,10 @@ void CodexPendingSoftGlow::set_active(bool active)
 void CodexPendingSoftGlow::shutdown()
 {
     stop();
-    for (lv_obj_t*& ring : _rings) {
-        if (ring != nullptr) {
-            lv_obj_delete(ring);
-            ring = nullptr;
-        }
+    if (_overlay != nullptr) {
+        lv_obj_remove_event_cb_with_user_data(_overlay, draw_event_cb, this);
+        lv_obj_delete(_overlay);
+        _overlay = nullptr;
     }
     _heading = nullptr;
 }
@@ -92,32 +112,44 @@ bool CodexPendingSoftGlow::active() const
 
 void CodexPendingSoftGlow::apply_phase(int32_t phase)
 {
-    const lv_opa_t core = interpolate_opa(phase, LV_OPA_40, LV_OPA_COVER);
-    const lv_opa_t middle = interpolate_opa(phase, LV_OPA_20, LV_OPA_60);
-    const lv_opa_t inner = interpolate_opa(phase, LV_OPA_10, LV_OPA_30);
-    const lv_opa_t heading = interpolate_opa(phase, LV_OPA_70, LV_OPA_COVER);
-
-    if (_rings[0] != nullptr) {
-        lv_obj_set_style_border_opa(_rings[0], core, 0);
-    }
-    if (_rings[1] != nullptr) {
-        lv_obj_set_style_border_opa(_rings[1], middle, 0);
-    }
-    if (_rings[2] != nullptr) {
-        lv_obj_set_style_border_opa(_rings[2], inner, 0);
-    }
+    _opacity = static_cast<lv_opa_t>(
+        codex_pending_glow::opacity_for_phase(phase)
+    );
     if (_heading != nullptr) {
+        const lv_opa_t heading = interpolate_opa(
+            phase,
+            LV_OPA_70,
+            LV_OPA_COVER
+        );
         lv_obj_set_style_opa(_heading, heading, 0);
+    }
+    invalidate_edges();
+}
+
+void CodexPendingSoftGlow::invalidate_edges()
+{
+    if (_overlay == nullptr) {
+        return;
+    }
+
+    lv_area_t coords;
+    lv_obj_get_coords(_overlay, &coords);
+    for (const auto& edge : codex_pending_glow::kInvalidationAreas) {
+        lv_area_t area = {
+            static_cast<lv_coord_t>(coords.x1 + edge.x1),
+            static_cast<lv_coord_t>(coords.y1 + edge.y1),
+            static_cast<lv_coord_t>(coords.x1 + edge.x2),
+            static_cast<lv_coord_t>(coords.y1 + edge.y2),
+        };
+        lv_obj_invalidate_area(_overlay, &area);
     }
 }
 
 void CodexPendingSoftGlow::start()
 {
     _active = true;
-    for (lv_obj_t* ring : _rings) {
-        if (ring != nullptr) {
-            lv_obj_remove_flag(ring, LV_OBJ_FLAG_HIDDEN);
-        }
+    if (_overlay != nullptr) {
+        lv_obj_remove_flag(_overlay, LV_OBJ_FLAG_HIDDEN);
     }
     apply_phase(0);
 
@@ -127,8 +159,8 @@ void CodexPendingSoftGlow::start()
     lv_anim_set_var(&animation, this);
     lv_anim_set_exec_cb(&animation, animation_cb);
     lv_anim_set_values(&animation, 0, 255);
-    lv_anim_set_duration(&animation, 900);
-    lv_anim_set_playback_duration(&animation, 900);
+    lv_anim_set_duration(&animation, codex_pending_glow::kHalfCycleMs);
+    lv_anim_set_playback_duration(&animation, codex_pending_glow::kHalfCycleMs);
     lv_anim_set_repeat_count(&animation, LV_ANIM_REPEAT_INFINITE);
     lv_anim_set_path_cb(&animation, lv_anim_path_ease_in_out);
     lv_anim_start(&animation);
@@ -137,10 +169,8 @@ void CodexPendingSoftGlow::start()
 void CodexPendingSoftGlow::stop()
 {
     lv_anim_delete(this, animation_cb);
-    for (lv_obj_t* ring : _rings) {
-        if (ring != nullptr) {
-            lv_obj_add_flag(ring, LV_OBJ_FLAG_HIDDEN);
-        }
+    if (_overlay != nullptr) {
+        lv_obj_add_flag(_overlay, LV_OBJ_FLAG_HIDDEN);
     }
     if (_heading != nullptr) {
         lv_obj_set_style_opa(_heading, LV_OPA_COVER, 0);
@@ -153,5 +183,31 @@ void CodexPendingSoftGlow::animation_cb(void* target, int32_t phase)
     auto* self = static_cast<CodexPendingSoftGlow*>(target);
     if (self != nullptr) {
         self->apply_phase(phase);
+    }
+}
+
+void CodexPendingSoftGlow::draw_event_cb(lv_event_t* event)
+{
+    auto* self = static_cast<CodexPendingSoftGlow*>(
+        lv_event_get_user_data(event)
+    );
+    if (self == nullptr) {
+        return;
+    }
+
+    const lv_event_code_t code = lv_event_get_code(event);
+    if (code == LV_EVENT_COVER_CHECK) {
+        lv_event_set_cover_res(event, LV_COVER_RES_NOT_COVER);
+        return;
+    }
+    if (code != LV_EVENT_DRAW_MAIN_BEGIN || !self->_active) {
+        return;
+    }
+
+    lv_area_t coords;
+    lv_obj_get_coords(lv_event_get_target_obj(event), &coords);
+    lv_layer_t* layer = lv_event_get_layer(event);
+    for (const auto& ring : codex_pending_glow::kRings) {
+        draw_ring(layer, coords, ring, self->_opacity);
     }
 }
