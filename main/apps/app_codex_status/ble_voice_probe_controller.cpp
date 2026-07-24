@@ -21,7 +21,7 @@ namespace {
 constexpr const char* kTag = "VoiceProbe";
 constexpr size_t kVoicePacketQueueDepth = 32;
 constexpr uint8_t kMaxConsecutiveQueueFailures = 3;
-constexpr uint32_t kProducerTaskStackDepth = 4 * 1024;
+constexpr uint32_t kProducerTaskStackDepth = 8 * 1024;
 constexpr UBaseType_t kProducerTaskPriority = 5;
 constexpr TickType_t kProducerIdleDelay = pdMS_TO_TICKS(1);
 constexpr TickType_t kCaptureReadTimeout = pdMS_TO_TICKS(100);
@@ -35,7 +35,6 @@ constexpr uint16_t kMinimumNotificationLimit =
     ble_voice_probe::kNotificationHeaderSize + ble_voice_probe::kStopSummarySize;
 constexpr uint32_t kCaptureRate = 44100;
 constexpr uint32_t kOutputRate = 16000;
-constexpr size_t kCaptureSamplesPerBlock = 882;
 constexpr size_t kOutputSamplesPerBlock = 320;
 constexpr size_t kAdpcmBytesPerBlock = 164;
 constexpr uint16_t kMicrophoneNotificationLimit =
@@ -618,7 +617,7 @@ bool BleVoiceProbeController::setup_microphone_resources(ble_voice_probe::ErrorC
     uint32_t output_capacity = 0;
     if (esp_ae_rate_cvt_get_max_out_sample_num(
             _resampler,
-            kCaptureSamplesPerBlock,
+            kCaptureInputSamples,
             &output_capacity) != ESP_AE_ERR_OK ||
         output_capacity == 0 || output_capacity > kMaxResamplerOutputSamples) {
         error = ble_voice_probe::ErrorCode::ResamplerFailed;
@@ -640,9 +639,9 @@ bool BleVoiceProbeController::capture_microphone_samples(ble_voice_probe::ErrorC
         return false;
     }
 
-    std::array<int16_t, kCaptureSamplesPerBlock> captured = {};
-    const size_t expected_bytes = captured.size() * sizeof(captured.front());
-    if (GetStopWatchAudioBackend().read(captured.data(), expected_bytes, kCaptureReadTimeout) != expected_bytes) {
+    const size_t expected_bytes = _capture_input.size() * sizeof(_capture_input.front());
+    if (GetStopWatchAudioBackend().read(
+            _capture_input.data(), expected_bytes, kCaptureReadTimeout) != expected_bytes) {
         error = ble_voice_probe::ErrorCode::RecorderOpenFailed;
         return false;
     }
@@ -650,8 +649,8 @@ bool BleVoiceProbeController::capture_microphone_samples(ble_voice_probe::ErrorC
     uint32_t output_samples = _resampler_output_capacity;
     if (esp_ae_rate_cvt_process(
             _resampler,
-            static_cast<esp_ae_sample_t>(captured.data()),
-            captured.size(),
+            static_cast<esp_ae_sample_t>(_capture_input.data()),
+            _capture_input.size(),
             static_cast<esp_ae_sample_t>(_resampler_output.data()),
             &output_samples) != ESP_AE_ERR_OK ||
         output_samples > _resampler_output_capacity) {

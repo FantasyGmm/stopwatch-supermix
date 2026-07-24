@@ -160,6 +160,32 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         self.assertIn("recorder enable failed", open_recorder)
         self.assertIn("esp_err_to_name", open_recorder)
 
+    def test_audio_backend_starts_shared_tx_clock_before_rx_capture(self):
+        backend = (ROOT / "main/hal/audio/stopwatch_audio_backend.cpp").read_text()
+        open_recorder = backend.split(
+            "bool StopWatchAudioBackend::openRecorder", 1
+        )[1].split("void StopWatchAudioBackend::closeRecorder", 1)[0]
+        self.assertIn("enableTxLocked()", open_recorder)
+        self.assertIn("enableRxLocked()", open_recorder)
+        self.assertLess(
+            open_recorder.index("enableTxLocked()"),
+            open_recorder.index("enableRxLocked()"),
+        )
+
+    def test_microphone_capture_buffer_does_not_consume_worker_stack(self):
+        header = (
+            ROOT / "main/apps/app_codex_status/ble_voice_probe_controller.h"
+        ).read_text()
+        controller = (
+            ROOT / "main/apps/app_codex_status/ble_voice_probe_controller.cpp"
+        ).read_text()
+        capture = controller.split(
+            "bool BleVoiceProbeController::capture_microphone_samples", 1
+        )[1].split("bool BleVoiceProbeController::prepare_microphone_packet", 1)[0]
+        self.assertIn("kProducerTaskStackDepth = 8 * 1024", controller)
+        self.assertIn("_capture_input", header)
+        self.assertNotIn("std::array<int16_t, kCaptureSamplesPerBlock> captured", capture)
+
     def test_forced_audio_cleanup_never_takes_worker_state_mutex(self):
         controller = (
             ROOT / "main/apps/app_codex_status/ble_voice_probe_controller.cpp"

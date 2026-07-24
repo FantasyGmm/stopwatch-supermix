@@ -87,6 +87,8 @@ public:
     void shutdown();
 
 private:
+    static constexpr size_t kCaptureInputSamples = 882;
+
     static void producer_entry(void* context);
     void producer_loop();
     bool start_session(const ble_voice_probe::ControlCommand& command,
@@ -127,6 +129,7 @@ private:
     ble_voice_probe::Notification _pending_summary = {};
     ble_voice_probe::Notification _pending_error = {};
     std::atomic<bool> _shutdown_requested{false};
+    std::array<int16_t, kCaptureInputSamples> _capture_input = {};
     std::vector<int16_t> _resampler_output;
     ble_voice_probe::detail::MicrophonePcmBuffer _microphone_pcm;
     uint16_t _notification_payload_capacity = 0;
