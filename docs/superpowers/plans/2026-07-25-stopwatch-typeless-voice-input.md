@@ -4,7 +4,7 @@
 
 **Goal:** Add production push-to-talk voice input from the StopWatch Codex app to Typeless through the existing Mac Agent, BLE IMA-ADPCM transport, and an Agent-managed BlackHole 2ch device.
 
-**Architecture:** The watch turns right-button edges into version-2 voice events and streams the already validated 16 kHz IMA-ADPCM blocks over the existing BLE connection. The Mac Agent decodes those events, feeds PCM into an in-process native Core Audio bridge targeting BlackHole, leases the system default input, and emits paired Fn taps around each voice session. BlackHole installation is initiated from the existing menu application using a pinned, hash-verified package that is present only in the generated local app bundle.
+**Architecture:** The watch turns right-button edges into authenticated, encrypted version-3 voice events and streams the already validated 16 kHz IMA-ADPCM blocks over the existing BLE connection. The Mac Agent authenticates and decrypts those events, feeds PCM into an in-process native Core Audio bridge targeting BlackHole, leases the system default input, and emits paired Fn taps around each voice session. BlackHole installation is initiated from the existing menu application using a pinned, hash-verified package that is present only in the generated local app bundle.
 
 **Tech Stack:** ESP-IDF 5.5, C++17, NimBLE, FreeRTOS, Python 3, asyncio, Bleak, PyObjC/AppKit/Quartz, Core Audio and AudioToolbox, Objective-C++, BlackHole 2ch 0.7.1, Python `unittest`, C++ host tests.
 
@@ -25,6 +25,25 @@ path under the gate in
 - The fixed Task-15 key is diagnostic only and is never used by the installed
   Agent.
 
+## Accepted Production Encryption Amendment
+
+Task 15 measured about 1.22 ms average and 1.87 ms p99 encryption time per
+packet, about 6.1 percent of one core while recording, and about 4.7 percent
+wire overhead. It found no packet loss, sequence error, throughput loss, or
+visible arrival-latency regression. The strict 1 ms p99 gate did not pass; the
+user explicitly confirmed on 2026-07-25 that production encryption should
+still be implemented.
+
+Tasks 5, 6, 7, 9, 10, 12, 13, and 14 must follow:
+
+```text
+docs/superpowers/specs/2026-07-25-stopwatch-voice-production-encryption.md
+```
+
+That specification overrides the unencrypted version-2 byte examples in those
+tasks. Production voice is authenticated protocol version 3. The diagnostic
+fixed key must not be reused.
+
 ## Scope And File Map
 
 ### Mac Agent: new files
@@ -32,7 +51,8 @@ path under the gate in
 - `mac-codex-agent/voice_driver.py`: pinned BlackHole metadata, package verification, install state, and authorized installation.
 - `mac-codex-agent/voice_shortcut.py`: Accessibility readiness, Typeless process detection, and paired Fn taps.
 - `mac-codex-agent/voice_audio.py`: Python wrapper around the native Core Audio bridge and the default-input lease.
-- `mac-codex-agent/voice_input_protocol.py`: production voice control and notification framing.
+- `mac-codex-agent/voice_input_protocol.py`: encrypted production voice control and notification framing.
+- `mac-codex-agent/voice_input_crypto.py`: AES-CCM, nonce domains, Keychain loading, and fail-closed authentication.
 - `mac-codex-agent/voice_session.py`: Mac voice session state machine, ADPCM decoding, gap handling, route acquisition, and cleanup.
 - `mac-codex-agent/native/voice_audio_ring.h`: bounded single-producer/single-consumer stereo PCM ring.
 - `mac-codex-agent/native/voice_audio_bridge.h`: stable C ABI consumed through `ctypes`.
@@ -42,6 +62,7 @@ path under the gate in
 - `mac-codex-agent/tests/test_voice_shortcut.py`: Fn pairing, Accessibility, and Typeless process checks.
 - `mac-codex-agent/tests/test_voice_audio.py`: bridge wrapper and input restoration.
 - `mac-codex-agent/tests/test_voice_input_protocol.py`: byte-for-byte protocol tests.
+- `mac-codex-agent/tests/test_voice_input_crypto.py`: production crypto vectors, tamper rejection, and key-loading tests.
 - `mac-codex-agent/tests/test_voice_session.py`: production Mac session state and cleanup.
 
 ### Mac Agent: modified files
@@ -58,11 +79,13 @@ path under the gate in
 
 ### Firmware: new files
 
-- `main/apps/app_codex_status/voice_input_protocol.h/.cpp`: version-2 ready/unavailable and PTT notification encoding.
+- `main/apps/app_codex_status/voice_input_protocol.h/.cpp`: encrypted version-3 ready/unavailable and PTT notification encoding.
+- `main/apps/app_codex_status/voice_input_crypto.h/.cpp`: keyed AES-CCM and production nonce construction.
 - `main/apps/app_codex_status/voice_input_session.h/.cpp`: pure push-to-talk state and sequence accounting.
 - `main/apps/app_codex_status/voice_capture_pipeline.h/.cpp`: recorder ownership, resampling, ADPCM block production, and bounded shutdown shared by probe and production controllers.
 - `main/apps/app_codex_status/voice_input_controller.h/.cpp`: button-driven production capture and BLE packet queue.
 - `tests/voice_input_protocol_test.cpp`: protocol byte layout and rejection tests.
+- `tests/voice_input_crypto_test.cpp`: firmware production vectors and tamper rejection.
 - `tests/voice_input_session_test.cpp`: state-transition and summary-counter tests.
 - `tests/voice_capture_pipeline_contract_test.py`: firmware ownership and callback-safety contracts.
 
@@ -503,7 +526,9 @@ git commit -m "Add paired Typeless Fn control"
 ## Task 5: Define The Production Voice Protocol On Mac
 
 **Files:**
+- Create: `mac-codex-agent/voice_input_crypto.py`
 - Create: `mac-codex-agent/voice_input_protocol.py`
+- Create: `mac-codex-agent/tests/test_voice_input_crypto.py`
 - Create: `mac-codex-agent/tests/test_voice_input_protocol.py`
 
 - [ ] **Step 1: Write failing byte-layout tests**
@@ -511,8 +536,10 @@ git commit -m "Add paired Typeless Fn control"
 ```python
 def test_ready_control_matches_firmware_layout(self):
     self.assertEqual(
-        encode_ready(8192),
-        bytes.fromhex("0201000000200000"),
+        encode_ready(TEST_KEY, TEST_NONCE, 8192),
+        bytes.fromhex(
+            "030100001011121314151617b0f4d7ed237c66ad647fe0aa"
+        ),
     )
 
 
@@ -534,12 +561,14 @@ mac-codex-agent/.venv/bin/python -m unittest \
 
 Expected: import failure because `voice_input_protocol.py` is absent.
 
-- [ ] **Step 3: Implement version-2 framing**
+- [ ] **Step 3: Implement authenticated version-3 framing**
 
-Use:
+Use the exact encrypted version-3 layouts and vectors in
+`docs/superpowers/specs/2026-07-25-stopwatch-voice-production-encryption.md`.
+The logical plaintext constants remain:
 
 ```python
-PROTOCOL_VERSION = 2
+PROTOCOL_VERSION = 3
 READY = 1
 UNAVAILABLE = 2
 PTT_BEGIN = 1
@@ -547,15 +576,18 @@ AUDIO = 2
 PTT_END = 3
 VOICE_ERROR = 4
 
-CONTROL = struct.Struct("<BBBBI")
+CONTROL_AAD = struct.Struct("<BBBB8s")
+CONTROL_BODY = struct.Struct("<I")
 HEADER = struct.Struct("<BBHIIH")
+BEGIN_BODY = struct.Struct("<BHH")
 END_PAYLOAD = struct.Struct("<IIIIIIH")
 ERROR_PAYLOAD = struct.Struct("<HH")
 ```
 
 `encode_ready()` must accept only 8192 B/s. `decode_notification()` must reject
-zero sessions, unknown kinds, payload-length mismatches, an AUDIO payload other
-than 164 bytes, and a nonempty PTT_BEGIN payload. Define an immutable
+production version 2, zero sessions, unknown kinds, payload-length mismatches,
+an authenticated AUDIO plaintext other than 164 bytes, and an invalid
+PTT_BEGIN codec tuple. Define an immutable
 `EndSummary` containing generated packets, accepted packets, queue overflows,
 encode failures, captured samples, elapsed milliseconds, and negotiated MTU.
 
@@ -653,12 +685,13 @@ class VoiceSessionService:
 ```
 
 On `PTT_BEGIN`, start the route before the shortcut. On AUDIO, decode 320
-samples and write them. For a forward sequence gap, write one 320-sample
+samples only after AES-CCM authentication and write them. For a forward sequence gap, write one 320-sample
 silence block per missing AUDIO sequence, capped at five blocks; larger gaps
 abort. On `PTT_END`, validate counters, wait at most 150 ms for the native
 queue to drain, stop the shortcut, stop the route, and return to READY.
 Sequence regressions, stale sessions, and malformed summaries abort through one
-idempotent cleanup method.
+idempotent cleanup method. Invalid tags and duplicate recent session nonces use
+the same cleanup and never reach the decoder.
 
 - [ ] **Step 5: Run session and probe protocol tests**
 
@@ -754,9 +787,14 @@ event loop. Decoding and Core Audio work occur in an asyncio consumer task.
 - [ ] **Step 4: Extend runtime ownership and snapshots**
 
 Create one `VoiceSessionService` per BLE session. Call `prepare()` before
-writing `READY`; send `UNAVAILABLE` with a compact reason for all non-ready
+writing an authenticated `READY`; send authenticated `UNAVAILABLE` with a
+compact reason for all non-ready
 states. Always invoke voice cleanup before BLE disconnect. Preserve status
 collection when voice is unavailable.
+
+Load the production key from Keychain once per BLE session. A missing or
+malformed key makes only voice unavailable and must not stop status or time
+sync.
 
 Add `voice_state` and `voice_detail` to `AgentSnapshot` and `PresentableState`.
 Do not alter `connection_enabled`, login behavior, or retry delays.
@@ -882,6 +920,7 @@ for module in (
     "voice_driver.py",
     "voice_shortcut.py",
     "voice_audio.py",
+    "voice_input_crypto.py",
     "voice_input_protocol.py",
     "voice_session.py",
     "ima_adpcm.py",
@@ -926,6 +965,9 @@ cp "$DRIVER_PACKAGE" "$APP_RESOURCES/Drivers/"
 ```
 
 Copy all voice Python modules and the native dylib into the generated app.
+Generate or validate the external mode-0600 device-key file, import it into the
+specified Keychain service/account, and generate the firmware build header.
+Never copy the key file or generated header into the app bundle.
 Extend `Info.plist` with an Accessibility usage explanation only if the
 framework requires one; do not add microphone permission to the Agent because
 the Agent receives BLE data and does not open a physical Mac microphone.
@@ -958,21 +1000,28 @@ git commit -m "Package the local voice input runtime"
 ## Task 10: Add The Firmware Production Protocol And State Machine
 
 **Files:**
+- Create: `main/apps/app_codex_status/voice_input_crypto.h`
+- Create: `main/apps/app_codex_status/voice_input_crypto.cpp`
 - Create: `main/apps/app_codex_status/voice_input_protocol.h`
 - Create: `main/apps/app_codex_status/voice_input_protocol.cpp`
 - Create: `main/apps/app_codex_status/voice_input_session.h`
 - Create: `main/apps/app_codex_status/voice_input_session.cpp`
 - Create: `tests/voice_input_protocol_test.cpp`
+- Create: `tests/voice_input_crypto_test.cpp`
 - Create: `tests/voice_input_session_test.cpp`
+- Create: `scripts/provision_voice_key.py`
+- Modify: `.gitignore`
+- Modify: `main/CMakeLists.txt`
 
 - [ ] **Step 1: Write the failing protocol host test**
 
 ```cpp
 int main()
 {
-    const uint8_t ready[] = {0x02, 0x01, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00};
+    const auto ready = test_vector_ready_control();
     VoiceReadyControl decoded = {};
-    assert(voice_input::decodeReady(ready, sizeof(ready), decoded));
+    assert(voice_input::decodeReady(
+        ready.data(), ready.size(), test_key(), decoded));
     assert(decoded.target_bps == 8192);
 
     VoiceNotification begin = {};
@@ -980,8 +1029,9 @@ int main()
     begin.session = 7;
     begin.sequence = 0;
     uint8_t bytes[32] = {};
-    assert(voice_input::encodeNotification(begin, bytes, sizeof(bytes)) == 14);
-    assert(bytes[0] == 2 && bytes[1] == 1);
+    assert(voice_input::encodeNotification(
+        begin, test_key(), test_nonce(), bytes, sizeof(bytes)) > 14);
+    assert(bytes[0] == 3 && bytes[1] == 1);
     return 0;
 }
 ```
@@ -1001,11 +1051,15 @@ Expected: missing source/header failure.
 
 - [ ] **Step 3: Implement byte-identical firmware framing**
 
-Mirror the Python constants and layouts from Task 5. Reject a readiness bitrate
+Mirror the Python constants, AES-CCM vectors, nonce domains, and layouts from
+Task 5. Reject production version 2, a readiness bitrate
 other than 8192, zero sessions, payloads larger than the negotiated
 notification capacity, and non-164-byte AUDIO payloads. Keep all structs
 logical; serialize fields explicitly in little-endian order rather than
 `memcpy` of packed C++ structs.
+
+Provision the AES-128 key exactly as specified. The build must fail on missing,
+malformed, or insecure key material and must not contain a public fallback key.
 
 - [ ] **Step 4: Run the protocol host test**
 
@@ -1181,8 +1235,9 @@ self.assertNotIn("kVoiceProbeIdentityXor", transport)
 self.assertIn("voice_input::kProtocolVersion", transport)
 ```
 
-Assert voice characteristics remain unencrypted while status keeps
-`BLE_GATT_CHR_F_WRITE_ENC`.
+Assert voice characteristics do not require BLE link-layer encryption because
+their version-3 payloads are protected by application-layer AES-CCM, while
+status keeps `BLE_GATT_CHR_F_WRITE_ENC`.
 
 - [ ] **Step 2: Run contracts and verify RED**
 
@@ -1210,15 +1265,18 @@ VoiceInputUiState ui_state() const;
 ```
 
 On the down edge, open `VoiceCapturePipeline`, allocate a nonzero session,
-enqueue PTT_BEGIN, and start an 8 KB producer task. Keep at most 300 ms of
+generate a fresh nonzero 8-byte session nonce, enqueue authenticated PTT_BEGIN,
+and start an 8 KB producer task. Encrypt every ADPCM block before enqueueing it.
+Keep at most 300 ms of
 pre-roll in the existing bounded outgoing queue. On the up edge, request the
-pipeline stop, encode the final complete block, enqueue PTT_END after AUDIO, and
-release resources. Use the tested eight-kilobyte producer stack.
+pipeline stop, encode and encrypt the final complete block, enqueue
+authenticated PTT_END after AUDIO, and release resources. Use the tested
+eight-kilobyte producer stack and the reusable keyed CCM context.
 
 - [ ] **Step 4: Route both protocol versions in BLE transport**
 
-Keep version-1 probe controls for the standalone diagnostic. Decode version-2
-READY/UNAVAILABLE into a separate queue consumed by
+Keep version-1 probe controls for the standalone diagnostic. Decode encrypted
+version-3 READY/UNAVAILABLE into a separate queue consumed by
 `VoiceInputController`. Restore the normal NimBLE identity path by removing the
 diagnostic XOR address and using `ble_hs_util_ensure_addr(0)` plus
 `ble_hs_id_infer_auto(0, ...)`. Keep one central connection and existing status
@@ -1310,7 +1368,9 @@ Document:
 - right-button press/release behavior;
 - previous default input restoration;
 - no login startup;
-- unencrypted personal-use boundary;
+- the application-layer encryption boundary and physical-flash limitation;
+- the external key file, Keychain identity, rotation/reflash procedure, and
+  prohibition on placing the key in the app bundle or repository;
 - how to remove BlackHole with its official package receipt;
 - the standalone probe remains diagnostic and requires the Agent to be quit.
 
@@ -1341,6 +1401,11 @@ git commit -m "Validate and document watch voice input"
 - Generated only: `build-unified/StopWatch-UserDemo.bin`
 - Generated only: `$HOME/Applications/StopWatch Codex Agent.app`
 - Evidence only: `/tmp/stopwatch-typeless-voice/<timestamp>/`
+
+Physical acceptance must also prove the app bundle contains no device key,
+Keychain contains the expected service/account, the flashed firmware and Agent
+use the same provisioned key, tampered packets fail closed, and the encrypted
+AUDIO characteristic value is exactly 186 bytes at MTU 256.
 
 - [ ] **Step 1: Record exact source and artifact identities**
 
