@@ -141,7 +141,7 @@ cmake -S "$MBEDTLS_SOURCE" -B "$MBEDTLS_BUILD" \
     -DUSE_STATIC_MBEDTLS_LIBRARY=ON \
     -DCMAKE_BUILD_TYPE=Release
 cmake --build "$MBEDTLS_BUILD" --target mbedcrypto -j4
-"$CXX" -std=c++17 -Wall -Wextra -Werror -I. \
+"$CXX" -std=c++17 -Wall -Wextra -Werror -DSTOPWATCH_HOST_TEST -I. \
     -I"$MBEDTLS_SOURCE/include" \
     tests/voice_probe_crypto_test.cpp \
     main/apps/app_codex_status/voice_probe_crypto.cpp \

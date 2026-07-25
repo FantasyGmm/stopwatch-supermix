@@ -36,4 +36,9 @@ bool decrypt_synthetic(const uint8_t* aad, size_t aad_len,
                        uint8_t* output, size_t output_capacity,
                        size_t& output_len);
 
+#if defined(STOPWATCH_HOST_TEST)
+uint32_t key_schedule_initializations();
+uint32_t max_concurrent_operations();
+#endif
+
 }  // namespace ble_voice_probe::crypto

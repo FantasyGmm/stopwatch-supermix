@@ -6,6 +6,7 @@
 #include <array>
 #include <chrono>
 #include <limits>
+#include <mutex>
 
 #if defined(ESP_PLATFORM)
 #include <esp_timer.h>
@@ -19,6 +20,86 @@ constexpr std::array<uint8_t, 16> kDiagnosticKey = {
     0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
 };
 constexpr std::array<uint8_t, 3> kNonceDomain = {0x10, 0x11, 0x12};
+
+uint32_t g_key_schedule_initializations = 0;
+
+class DiagnosticCcmContext {
+public:
+    class Operation {
+    public:
+        explicit Operation(DiagnosticCcmContext& owner)
+            : _owner(owner),
+              _lock(owner._mutex)
+        {
+            ++_owner._active_operations;
+            _owner._max_concurrent_operations = std::max(
+                _owner._max_concurrent_operations,
+                _owner._active_operations);
+        }
+
+        ~Operation()
+        {
+            --_owner._active_operations;
+        }
+
+        Operation(const Operation&) = delete;
+        Operation& operator=(const Operation&) = delete;
+
+    private:
+        DiagnosticCcmContext& _owner;
+        std::unique_lock<std::mutex> _lock;
+    };
+
+    DiagnosticCcmContext()
+    {
+        mbedtls_ccm_init(&_context);
+        ++g_key_schedule_initializations;
+        _ready = mbedtls_ccm_setkey(
+                     &_context,
+                     MBEDTLS_CIPHER_ID_AES,
+                     kDiagnosticKey.data(),
+                     kDiagnosticKey.size() * 8) == 0;
+    }
+
+    ~DiagnosticCcmContext()
+    {
+        mbedtls_ccm_free(&_context);
+    }
+
+    bool ready() const
+    {
+        return _ready;
+    }
+
+    mbedtls_ccm_context* get()
+    {
+        return &_context;
+    }
+
+    Operation begin_operation()
+    {
+        return Operation(*this);
+    }
+
+    uint32_t max_concurrent_operations()
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        return _max_concurrent_operations;
+    }
+
+private:
+    mbedtls_ccm_context _context = {};
+    bool _ready = false;
+    std::mutex _mutex;
+    uint32_t _active_operations = 0;
+    uint32_t _max_concurrent_operations = 0;
+};
+
+DiagnosticCcmContext& diagnostic_context()
+{
+    static DiagnosticCcmContext context;
+    return context;
+}
 
 void write_u16(uint8_t* bytes, uint16_t value)
 {
@@ -100,22 +181,16 @@ bool encrypt(
     }
 
     const uint64_t started_us = now_us();
-    mbedtls_ccm_context context;
-    mbedtls_ccm_init(&context);
-    const int key_result = mbedtls_ccm_setkey(
-        &context,
-        MBEDTLS_CIPHER_ID_AES,
-        kDiagnosticKey.data(),
-        kDiagnosticKey.size() * 8);
-    if (key_result != 0) {
-        mbedtls_ccm_free(&context);
+    auto& context = diagnostic_context();
+    auto operation = context.begin_operation();
+    if (!context.ready()) {
         elapsed_us = elapsed_u32(started_us);
         return false;
     }
 
     Ciphertext encrypted = {};
     const int result = mbedtls_ccm_encrypt_and_tag(
-        &context,
+        context.get(),
         plaintext_len,
         nonce.data(),
         nonce.size(),
@@ -125,7 +200,6 @@ bool encrypt(
         encrypted.data(),
         encrypted.data() + kPlaintextSize,
         kTagSize);
-    mbedtls_ccm_free(&context);
     elapsed_us = elapsed_u32(started_us);
     if (result != 0) {
         return false;
@@ -151,21 +225,15 @@ bool decrypt(
         return false;
     }
 
-    mbedtls_ccm_context context;
-    mbedtls_ccm_init(&context);
-    const int key_result = mbedtls_ccm_setkey(
-        &context,
-        MBEDTLS_CIPHER_ID_AES,
-        kDiagnosticKey.data(),
-        kDiagnosticKey.size() * 8);
-    if (key_result != 0) {
-        mbedtls_ccm_free(&context);
+    auto& context = diagnostic_context();
+    auto operation = context.begin_operation();
+    if (!context.ready()) {
         return false;
     }
 
     Plaintext decrypted = {};
     const int result = mbedtls_ccm_auth_decrypt(
-        &context,
+        context.get(),
         kPlaintextSize,
         nonce.data(),
         nonce.size(),
@@ -175,7 +243,6 @@ bool decrypt(
         decrypted.data(),
         ciphertext + kPlaintextSize,
         kTagSize);
-    mbedtls_ccm_free(&context);
     if (result != 0) {
         return false;
     }
@@ -206,21 +273,15 @@ bool encrypt_synthetic(
     }
 
     const uint64_t started_us = now_us();
-    mbedtls_ccm_context context;
-    mbedtls_ccm_init(&context);
-    const int key_result = mbedtls_ccm_setkey(
-        &context,
-        MBEDTLS_CIPHER_ID_AES,
-        kDiagnosticKey.data(),
-        kDiagnosticKey.size() * 8);
-    if (key_result != 0) {
-        mbedtls_ccm_free(&context);
+    auto& context = diagnostic_context();
+    auto operation = context.begin_operation();
+    if (!context.ready()) {
         elapsed_us = elapsed_u32(started_us);
         return false;
     }
 
     const int result = mbedtls_ccm_encrypt_and_tag(
-        &context,
+        context.get(),
         plaintext_len,
         nonce.data(),
         nonce.size(),
@@ -230,7 +291,6 @@ bool encrypt_synthetic(
         output,
         output + plaintext_len,
         kTagSize);
-    mbedtls_ccm_free(&context);
     elapsed_us = elapsed_u32(started_us);
     if (result != 0) {
         return false;
@@ -260,20 +320,14 @@ bool decrypt_synthetic(
     }
 
     const size_t plaintext_len = ciphertext_len - kTagSize;
-    mbedtls_ccm_context context;
-    mbedtls_ccm_init(&context);
-    const int key_result = mbedtls_ccm_setkey(
-        &context,
-        MBEDTLS_CIPHER_ID_AES,
-        kDiagnosticKey.data(),
-        kDiagnosticKey.size() * 8);
-    if (key_result != 0) {
-        mbedtls_ccm_free(&context);
+    auto& context = diagnostic_context();
+    auto operation = context.begin_operation();
+    if (!context.ready()) {
         return false;
     }
 
     const int result = mbedtls_ccm_auth_decrypt(
-        &context,
+        context.get(),
         plaintext_len,
         nonce.data(),
         nonce.size(),
@@ -283,7 +337,6 @@ bool decrypt_synthetic(
         output,
         ciphertext + plaintext_len,
         kTagSize);
-    mbedtls_ccm_free(&context);
     if (result != 0) {
         return false;
     }
@@ -291,5 +344,17 @@ bool decrypt_synthetic(
     output_len = plaintext_len;
     return true;
 }
+
+#if defined(STOPWATCH_HOST_TEST)
+uint32_t key_schedule_initializations()
+{
+    return g_key_schedule_initializations;
+}
+
+uint32_t max_concurrent_operations()
+{
+    return diagnostic_context().max_concurrent_operations();
+}
+#endif
 
 }  // namespace ble_voice_probe::crypto

@@ -2,9 +2,12 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cassert>
 #include <cstdint>
 #include <string_view>
+#include <thread>
+#include <vector>
 
 namespace {
 
@@ -61,6 +64,44 @@ int main()
         ciphertext,
         elapsed_us));
     assert(ciphertext == expected_ciphertext);
+    assert(key_schedule_initializations() == 1);
+
+    assert(encrypt(
+        aad.data(),
+        aad.size(),
+        plaintext.data(),
+        plaintext.size(),
+        expected_nonce,
+        ciphertext,
+        elapsed_us));
+    assert(key_schedule_initializations() == 1);
+
+    std::atomic<bool> start_concurrent_encrypts{false};
+    std::vector<std::thread> encrypt_threads;
+    for (size_t index = 0; index < 4; ++index) {
+        encrypt_threads.emplace_back([&] {
+            while (!start_concurrent_encrypts.load(std::memory_order_acquire)) {
+            }
+            for (size_t iteration = 0; iteration < 200; ++iteration) {
+                Ciphertext concurrent_ciphertext = {};
+                uint32_t concurrent_elapsed_us = 0;
+                assert(encrypt(
+                    aad.data(),
+                    aad.size(),
+                    plaintext.data(),
+                    plaintext.size(),
+                    expected_nonce,
+                    concurrent_ciphertext,
+                    concurrent_elapsed_us));
+                assert(concurrent_ciphertext == expected_ciphertext);
+            }
+        });
+    }
+    start_concurrent_encrypts.store(true, std::memory_order_release);
+    for (auto& thread : encrypt_threads) {
+        thread.join();
+    }
+    assert(max_concurrent_operations() == 1);
 
     Plaintext decrypted = {};
     assert(decrypt(
