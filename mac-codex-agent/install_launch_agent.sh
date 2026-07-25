@@ -11,6 +11,8 @@ APP_EXECUTABLE="$APP_DIR/Contents/MacOS/StopWatchCodexAgent"
 APP_RESOURCES="$APP_DIR/Contents/Resources"
 APP_CODE="$APP_RESOURCES/app"
 APP_PYTHON_RUNTIME="$APP_DIR/Contents/Python3"
+NATIVE_BUILD_DIR="$ROOT_DIR/.native"
+NATIVE_LIBRARY="$NATIVE_BUILD_DIR/libstopwatch_voice_audio.dylib"
 
 # Stop and remove the legacy auto-start service before replacing its executable.
 launchctl bootout "gui/$UID/$LABEL" >/dev/null 2>&1 || true
@@ -20,6 +22,15 @@ python3 -m venv "$VENV_DIR"
 "$VENV_DIR/bin/python" -m pip install --upgrade pip
 "$VENV_DIR/bin/python" -m pip install -r "$ROOT_DIR/requirements.txt"
 
+mkdir -p "$NATIVE_BUILD_DIR"
+xcrun clang++ -std=c++17 -O2 -dynamiclib \
+    -fvisibility=hidden \
+    -framework AudioToolbox \
+    -framework CoreAudio \
+    -framework CoreFoundation \
+    "$ROOT_DIR/native/voice_audio_bridge.mm" \
+    -o "$NATIVE_LIBRARY"
+
 SITE_PACKAGES="$($VENV_DIR/bin/python -c 'import site; print(site.getsitepackages()[0])')"
 PYTHON_EXECUTABLE="$($VENV_DIR/bin/python -c 'import os, sys; print(os.path.realpath(sys.executable))')"
 PYTHON_FRAMEWORK_ROOT="$(cd "$(dirname "$PYTHON_EXECUTABLE")/.." && pwd)"
@@ -27,6 +38,8 @@ PYTHON_APP_EXECUTABLE="$PYTHON_FRAMEWORK_ROOT/Resources/Python.app/Contents/MacO
 PYTHON_RUNTIME="$PYTHON_FRAMEWORK_ROOT/Python3"
 
 mkdir -p "$LOG_DIR" "$APP_DIR/Contents/MacOS" "$APP_RESOURCES" "$APP_CODE"
+mkdir -p "$APP_RESOURCES/native"
+cp "$NATIVE_LIBRARY" "$APP_RESOURCES/native/libstopwatch_voice_audio.dylib"
 cp "$PYTHON_APP_EXECUTABLE" "$APP_EXECUTABLE"
 cp "$PYTHON_RUNTIME" "$APP_PYTHON_RUNTIME"
 install_name_tool \
