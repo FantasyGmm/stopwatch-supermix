@@ -25,6 +25,7 @@ class FakeBridge:
         fail_start=False,
         fail_stop=False,
         fail_close=False,
+        set_failures=None,
     ):
         self.default_uid = default_uid
         self.devices = devices or {"BlackHole 2ch": "BH2"}
@@ -32,6 +33,9 @@ class FakeBridge:
         self.fail_start = fail_start
         self.fail_stop = fail_stop
         self.fail_close = fail_close
+        self.set_failures = {
+            uid: list(failures) for uid, failures in (set_failures or {}).items()
+        }
         self.events = []
         self.release_sets = 0
 
@@ -48,6 +52,9 @@ class FakeBridge:
         if uid == "BuiltInMic":
             self.release_sets += 1
         self.default_uid = uid
+        failures = self.set_failures.get(uid)
+        if failures:
+            raise failures.pop(0)
 
     def open(self, output_uid):
         self.events.append(("open", output_uid))
@@ -124,6 +131,24 @@ class DefaultInputLeaseTests(unittest.TestCase):
         self.assertEqual(bridge.default_uid, "USB-Microphone")
         self.assertEqual(bridge.events.count(("set", "USB-Microphone")), 1)
 
+    def test_failed_acquire_attempts_restore_only_once(self):
+        bridge = FakeBridge(
+            set_failures={
+                "BH2": [VoiceAudioError("switch failed")],
+                "BuiltInMic": [VoiceAudioError("restore failed")],
+            }
+        )
+        route = VoiceAudioRoute(bridge)
+
+        with self.assertRaises(VoiceAudioError):
+            route.start()
+        route.stop()
+
+        set_sequence = [
+            event[1] for event in bridge.events if event[0] == "set"
+        ]
+        self.assertEqual(set_sequence, ["BH2", "BuiltInMic"])
+
 
 class VoiceAudioRouteTests(unittest.TestCase):
     def test_route_primes_sink_before_switching_default_input(self):
@@ -148,6 +173,21 @@ class VoiceAudioRouteTests(unittest.TestCase):
         self.assertEqual(bridge.default_uid, "BuiltInMic")
         self.assertIn(("close",), bridge.events)
 
+    def test_open_error_remains_primary_when_close_also_fails(self):
+        bridge = FakeBridge(fail_open=True, fail_close=True)
+        route = VoiceAudioRoute(bridge)
+
+        with self.assertRaises(VoiceAudioError) as caught:
+            route.start()
+
+        self.assertEqual(
+            [name for name, _error in caught.exception.failures],
+            ["start audio route", "close audio sink"],
+        )
+        self.assertEqual(str(caught.exception.__cause__), "open failed")
+        self.assertIn("open failed", str(caught.exception))
+        self.assertIn("close failed", str(caught.exception))
+
     def test_route_restores_after_sink_start_failure(self):
         bridge = FakeBridge(default_uid="BuiltInMic", fail_start=True)
         route = VoiceAudioRoute(bridge)
@@ -170,6 +210,30 @@ class VoiceAudioRouteTests(unittest.TestCase):
 
         self.assertEqual(bridge.default_uid, "External-Mic")
         self.assertEqual(bridge.events.count(("set", "External-Mic")), 1)
+
+    def test_restore_error_has_priority_and_cleanup_aggregates_all_errors(self):
+        bridge = FakeBridge(
+            default_uid="External-Mic",
+            fail_stop=True,
+            fail_close=True,
+            set_failures={
+                "External-Mic": [VoiceAudioError("restore failed")],
+            },
+        )
+        route = VoiceAudioRoute(bridge)
+        route.start()
+
+        with self.assertRaises(VoiceAudioError) as caught:
+            route.stop()
+
+        self.assertEqual(
+            [name for name, _error in caught.exception.failures],
+            ["restore default input", "stop audio sink", "close audio sink"],
+        )
+        self.assertEqual(str(caught.exception.__cause__), "restore failed")
+        self.assertIn("restore failed", str(caught.exception))
+        self.assertIn("stop failed", str(caught.exception))
+        self.assertIn("close failed", str(caught.exception))
 
 
 class VoiceAudioBridgeTests(unittest.TestCase):
@@ -223,6 +287,18 @@ class VoiceAudioBridgeTests(unittest.TestCase):
                 "libstopwatch_voice_audio.dylib"
             ),
         )
+
+    def test_write_accepts_int16_boundaries_and_rejects_values_outside_them(self):
+        bridge = VoiceAudioBridge(library=FakeLibrary())
+
+        for sample in (-32768, 32767):
+            with self.subTest(sample=sample):
+                bridge.write([sample])
+
+        for sample in (-32769, 32768):
+            with self.subTest(sample=sample):
+                with self.assertRaises(ValueError):
+                    bridge.write([sample])
 
 
 if __name__ == "__main__":

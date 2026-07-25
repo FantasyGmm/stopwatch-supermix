@@ -2,16 +2,53 @@
 
 import ctypes
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import List, Optional, Sequence, Tuple
 
 
 BLACKHOLE_DEVICE_NAME = "BlackHole 2ch"
 LIBRARY_NAME = "libstopwatch_voice_audio.dylib"
 UID_BUFFER_SIZE = 1024
+INT16_MIN = -32768
+INT16_MAX = 32767
+
+VoiceAudioFailure = Tuple[str, Exception]
 
 
 class VoiceAudioError(RuntimeError):
     """The native Core Audio bridge could not complete an operation."""
+
+    def __init__(
+        self,
+        message: str,
+        failures: Sequence[VoiceAudioFailure] = (),
+    ):
+        self.failures = tuple(failures)
+        if self.failures:
+            details = "; ".join(
+                "{}: {}".format(operation, error)
+                for operation, error in self.failures
+            )
+            message = "{}: {}".format(message, details)
+        super().__init__(message)
+
+
+def _error_failures(
+    operation: str, error: Exception
+) -> List[VoiceAudioFailure]:
+    if isinstance(error, VoiceAudioError) and error.failures:
+        return list(error.failures)
+    return [(operation, error)]
+
+
+def _prioritize_cleanup_failures(
+    failures: Sequence[VoiceAudioFailure],
+) -> List[VoiceAudioFailure]:
+    priority = {
+        "restore default input": 0,
+        "stop audio sink": 1,
+        "close audio sink": 2,
+    }
+    return sorted(failures, key=lambda item: priority[item[0]])
 
 
 def native_library_path() -> Path:
@@ -111,8 +148,18 @@ class VoiceAudioBridge:
         self._check_status("start audio sink", self._library.swva_start())
 
     def write(self, samples: Sequence[int]) -> int:
-        pcm = (ctypes.c_int16 * len(samples))(*samples)
-        return int(self._library.swva_write_mono_16k(pcm, len(samples)))
+        validated_samples = tuple(samples)
+        for index, sample in enumerate(validated_samples):
+            if sample < INT16_MIN or sample > INT16_MAX:
+                raise ValueError(
+                    "sample {} at index {} is outside int16 range".format(
+                        sample, index
+                    )
+                )
+        pcm = (ctypes.c_int16 * len(validated_samples))(*validated_samples)
+        return int(
+            self._library.swva_write_mono_16k(pcm, len(validated_samples))
+        )
 
     def dropped_frames(self) -> int:
         return int(self._library.swva_dropped_frames())
@@ -142,22 +189,26 @@ class DefaultInputLease:
         self._previous_uid = previous_uid
         try:
             self._bridge.set_default_input_uid(target_uid)
-        except Exception as error:
+        except Exception as switch_error:
             try:
                 self.release()
             except Exception as restore_error:
+                failures = [
+                    ("switch default input", switch_error),
+                    ("restore default input", restore_error),
+                ]
                 raise VoiceAudioError(
-                    "could not restore previous default input after route failure"
-                ) from restore_error
-            raise error
+                    "could not acquire default input lease", failures
+                ) from switch_error
+            raise
 
     def release(self) -> None:
         if self._previous_uid is None:
             return
 
         previous_uid = self._previous_uid
-        self._bridge.set_default_input_uid(previous_uid)
         self._previous_uid = None
+        self._bridge.set_default_input_uid(previous_uid)
 
 
 class VoiceAudioRoute:
@@ -184,12 +235,11 @@ class VoiceAudioRoute:
             self._lease.acquire(self._device_name)
             self._started = True
         except Exception as error:
-            cleanup_error = self._cleanup()
-            if cleanup_error is not None:
-                raise VoiceAudioError("could not clean up failed audio route start") from cleanup_error
-            if isinstance(error, VoiceAudioError):
-                raise
-            raise VoiceAudioError("could not start audio route") from error
+            failures = _error_failures("start audio route", error)
+            failures.extend(_prioritize_cleanup_failures(self._cleanup()))
+            raise VoiceAudioError(
+                "could not start audio route", failures
+            ) from failures[0][1]
 
     def write(self, samples: Sequence[int]) -> int:
         if not self._started:
@@ -197,27 +247,29 @@ class VoiceAudioRoute:
         return self._bridge.write(samples)
 
     def stop(self) -> None:
-        cleanup_error = self._cleanup()
-        if cleanup_error is not None:
-            raise VoiceAudioError("could not clean up audio route") from cleanup_error
+        failures = _prioritize_cleanup_failures(self._cleanup())
+        if failures:
+            raise VoiceAudioError(
+                "could not clean up audio route", failures
+            ) from failures[0][1]
 
-    def _cleanup(self) -> Optional[Exception]:
-        errors = []
+    def _cleanup(self) -> List[VoiceAudioFailure]:
+        failures = []
         if self._opened:
             try:
                 self._bridge.stop()
             except Exception as error:
-                errors.append(error)
+                failures.append(("stop audio sink", error))
             try:
                 self._bridge.close()
             except Exception as error:
-                errors.append(error)
+                failures.append(("close audio sink", error))
             self._opened = False
 
         if self._lease.acquired:
             try:
                 self._lease.release()
             except Exception as error:
-                errors.append(error)
+                failures.append(("restore default input", error))
         self._started = False
-        return errors[0] if errors else None
+        return failures
