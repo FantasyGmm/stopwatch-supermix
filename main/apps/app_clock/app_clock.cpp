@@ -29,6 +29,10 @@ void AppClock::onCreate()
     }
 
     _alarm_clock->onTriggered().connect([this](const model::AlarmClock::AlarmTriggeredEvent& event) {
+        auto& protection = GetGlobalDisplayProtectionService();
+        protection.setKeepAwake(DisplayKeepAwakeReason::AlarmRinging, true);
+        protection.applyPendingHardwareUpdate();
+
         std::unique_ptr<view::AlarmTriggerView> trigger_view;
         {
             LvglLockGuard lock;
@@ -47,6 +51,7 @@ void AppClock::onCreate()
             }
         }
         GetHAL().stopAlarm();
+        protection.setKeepAwake(DisplayKeepAwakeReason::AlarmRinging, false);
     });
 }
 
@@ -149,6 +154,8 @@ void AppClock::onDestroy()
     _stopwatch.reset();
     GetGlobalDisplayProtectionService().setKeepAwake(
         DisplayKeepAwakeReason::StopwatchRunning, false);
+    GetGlobalDisplayProtectionService().setKeepAwake(
+        DisplayKeepAwakeReason::AlarmRinging, false);
 }
 
 void AppClock::transitionTo(Feature feature)
