@@ -911,6 +911,118 @@ class VoiceSessionServiceTests(unittest.IsolatedAsyncioTestCase):
     async def test_forced_cleanup_preserves_operation_error_over_stop_failure(self):
         await self._assert_forced_cleanup_serializes_waiters(fail_stop=True)
 
+    async def test_stale_forced_done_callback_cannot_complete_next_generation(self):
+        first_drain_started = asyncio.Event()
+        old_callback_deferred = asyncio.Event()
+        second_drain_started = asyncio.Event()
+        release_second_drain = asyncio.Event()
+        deferred = []
+        sleep_calls = 0
+
+        async def generation_sleep(seconds):
+            nonlocal sleep_calls
+            self.assertEqual(seconds, 0.150)
+            sleep_calls += 1
+            if sleep_calls == 1:
+                first_drain_started.set()
+                await asyncio.Event().wait()
+            second_drain_started.set()
+            await release_second_drain.wait()
+
+        route = FakeRoute()
+        shortcut = FakeShortcut()
+        service = VoiceSessionService(
+            route,
+            shortcut,
+            TEST_KEY,
+            sleep=generation_sleep,
+        )
+        original_done = service._cleanup_worker_done
+
+        def defer_first_done(*args):
+            if not deferred:
+                deferred.append(lambda: original_done(*args))
+                old_callback_deferred.set()
+            else:
+                original_done(*args)
+
+        second_cleanup = None
+        second_task = None
+        try:
+            with mock.patch.object(
+                service,
+                "_cleanup_worker_done",
+                side_effect=defer_first_done,
+            ):
+                await service.handle(begin_packet())
+                first_cleanup = asyncio.create_task(
+                    service.disconnect_bounded(0.01)
+                )
+                await first_drain_started.wait()
+                self.assertFalse(await first_cleanup)
+                await asyncio.wait_for(old_callback_deferred.wait(), 1)
+                self.assertIsNone(service._cleanup_task)
+
+                route.fail_stop = True
+                await service.handle(
+                    begin_packet(session=8, nonce=nonce_for(8))
+                )
+                second_cleanup = asyncio.create_task(service.disconnect())
+                await second_drain_started.wait()
+                second_task = service._cleanup_task
+                second_completion = service._cleanup_completion
+
+                deferred[0]()
+                await asyncio.sleep(0)
+
+                self.assertIs(service._cleanup_task, second_task)
+                self.assertIs(service._cleanup_completion, second_completion)
+                self.assertFalse(second_task.done())
+                self.assertFalse(second_completion.done())
+                self.assertFalse(second_cleanup.done())
+                self.assertEqual(
+                    route.calls,
+                    ["start", "stop", "start"],
+                )
+
+                release_second_drain.set()
+                with self.assertRaisesRegex(
+                    RuntimeError, "route stop failed"
+                ):
+                    await second_cleanup
+
+            self.assertEqual(
+                shortcut.calls,
+                ["start", "stop", "start", "stop"],
+            )
+            self.assertEqual(
+                route.calls,
+                ["start", "stop", "start", "stop"],
+            )
+            self.assertEqual(service.state, VoiceState.ERROR)
+            self.assertIsNone(service._cleanup_task)
+            self.assertEqual(
+                [
+                    task
+                    for task in asyncio.all_tasks()
+                    if task is not asyncio.current_task() and not task.done()
+                ],
+                [],
+            )
+        finally:
+            release_second_drain.set()
+            for task in (second_cleanup, second_task):
+                if task is not None and not task.done():
+                    task.cancel()
+            await asyncio.gather(
+                *(
+                    task
+                    for task in (second_cleanup, second_task)
+                    if task is not None
+                ),
+                return_exceptions=True,
+            )
+
     async def _assert_forced_cleanup_serializes_waiters(self, fail_stop):
         drain_started = asyncio.Event()
         cleanup_task_cancelled = asyncio.Event()
