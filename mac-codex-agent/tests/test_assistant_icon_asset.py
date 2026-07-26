@@ -42,6 +42,15 @@ def bounds(pixels, threshold):
     )
 
 
+def bright_run_in_column(pixels, x, threshold=180):
+    ys = [
+        y
+        for y in range(200)
+        if brightness(pixels[y * 200 + x]) >= threshold
+    ]
+    return min(ys), max(ys) + 1
+
+
 class AssistantIconAssetTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -71,10 +80,32 @@ class AssistantIconAssetTests(unittest.TestCase):
         self.assertLessEqual(faint[2], 195)
         self.assertLessEqual(faint[3], 195)
 
-    def test_has_approved_three_star_landmarks_without_an_outer_frame(self):
-        self.assertGreaterEqual(brightness(self.pixel(100, 100)), 245)
-        self.assertGreaterEqual(brightness(self.pixel(52, 58)), 180)
-        self.assertGreaterEqual(brightness(self.pixel(151, 147)), 160)
+    def test_has_approved_five_bar_aurora_waveform(self):
+        expected_runs = {
+            43: (79, 121),
+            72: (60, 140),
+            100: (38, 162),
+            128: (60, 140),
+            157: (79, 121),
+        }
+        for x, expected in expected_runs.items():
+            actual = bright_run_in_column(self.pixels, x)
+            self.assertLessEqual(abs(actual[0] - expected[0]), 3)
+            self.assertLessEqual(abs(actual[1] - expected[1]), 3)
+
+        left = self.pixel(43, 100)
+        center = self.pixel(100, 100)
+        right = self.pixel(157, 100)
+        self.assertGreater(left[1], left[0])
+        self.assertGreater(left[2], left[0])
+        self.assertGreater(center[2], center[0])
+        self.assertGreater(right[2], right[0])
+        self.assertGreater(right[0] - left[0], 25)
+        self.assertGreater(left[1] - right[1], 30)
+        self.assertLess(max(left), 245)
+        self.assertLess(max(center), 245)
+        self.assertLess(max(right), 245)
+
         for point in ((5, 100), (194, 100), (100, 5), (100, 194)):
             self.assertLessEqual(brightness(self.pixel(*point)), 12)
 
