@@ -3,6 +3,7 @@ import unittest
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+HOST_TEST = ROOT / "tests/voice_capture_pipeline_test.cpp"
 PIPELINE_HEADER = (
     ROOT / "main/apps/app_codex_status/voice_capture_pipeline.h"
 )
@@ -37,13 +38,19 @@ class VoiceCapturePipelineContractTests(unittest.TestCase):
         self.assertIn("std::atomic<bool>", header)
         self.assertIn("VoiceCapturePipeline::~VoiceCapturePipeline()", source)
 
+    def test_real_host_lifecycle_stage_is_present(self):
+        runner = (ROOT / "scripts/run_unified_offline_validation.sh").read_text()
+        self.assertTrue(HOST_TEST.exists(), "missing executable pipeline host test")
+        self.assertIn("tests/voice_capture_pipeline_test.cpp", runner)
+        self.assertIn('"$HOST_TEST_DIR/voice_capture_pipeline_test"', runner)
+
     def test_pipeline_exclusively_owns_capture_resources_and_conversion(self):
         header, source = self.pipeline()
         self.assertIn(
             "GetResourceSupervisor().acquireCapture(RuntimeOwner::Codex)", source
         )
         self.assertIn(
-            "GetStopWatchAudioBackend().openRecorder(44100, 16, 1)", source
+            "GetStopWatchAudioBackend().openRecorder(kCaptureRate, 16, 1)", source
         )
         self.assertIn("GetStopWatchAudioBackend().closeRecorder()", source)
         self.assertIn(
@@ -80,12 +87,12 @@ class VoiceCapturePipelineContractTests(unittest.TestCase):
         helper = source.split("VoiceCapturePipeline::encodePendingBlock", 1)[1]
         self.assertIn("encodePendingBlock", capture)
         self.assertIn("_microphone_pcm.take_complete_block", helper)
-        self.assertIn("GetStopWatchAudioBackend().read", capture)
+        self.assertIn("_backend->readRecorder", capture)
         self.assertLess(
             capture.index("encodePendingBlock"),
-            capture.index("GetStopWatchAudioBackend().read"),
+            capture.index("_backend->readRecorder"),
         )
-        self.assertIn("pdMS_TO_TICKS(kCaptureReadTimeoutMs)", capture)
+        self.assertIn("kCaptureReadTimeoutMs", capture)
         self.assertGreaterEqual(capture.count("_stop_requested.load()"), 2)
 
     def test_controller_only_delegates_capture_lifecycle(self):

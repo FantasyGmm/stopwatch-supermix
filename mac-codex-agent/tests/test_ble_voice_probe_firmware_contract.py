@@ -380,10 +380,10 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         helper = pipeline.split("VoiceCapturePipeline::encodePendingBlock", 1)[1]
         self.assertIn("encodePendingBlock", capture)
         self.assertIn("_microphone_pcm.take_complete_block", helper)
-        self.assertIn("GetStopWatchAudioBackend().read", capture)
+        self.assertIn("_backend->readRecorder", capture)
         self.assertLess(
             capture.index("encodePendingBlock"),
-            capture.index("GetStopWatchAudioBackend().read"),
+            capture.index("_backend->readRecorder"),
         )
 
     def test_microphone_resources_are_acquired_and_released(self):
@@ -395,7 +395,7 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         ).read_text()
         self.assertIn("acquireCapture(RuntimeOwner::Codex)", pipeline)
         self.assertIn("releaseCapture(RuntimeOwner::Codex)", pipeline)
-        self.assertIn("openRecorder(44100, 16, 1)", pipeline)
+        self.assertIn("openRecorder(kCaptureRate, 16, 1)", pipeline)
         self.assertIn("closeRecorder()", pipeline)
         self.assertIn("esp_ae_rate_cvt_open", pipeline)
         self.assertIn("esp_ae_rate_cvt_close", pipeline)
@@ -413,8 +413,12 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         self.assertIn("tests/voice_input_protocol_test.cpp", runner)
         self.assertIn("[19/25] Production voice session host test", runner)
         self.assertIn("tests/voice_input_session_test.cpp", runner)
-        self.assertIn("[22/25] BLE voice probe PCM buffer host test", runner)
+        self.assertIn(
+            "[22/25] BLE voice probe PCM buffer and capture pipeline host tests",
+            runner,
+        )
         self.assertIn("tests/ble_voice_probe_pcm_buffer_test.cpp", runner)
+        self.assertIn("tests/voice_capture_pipeline_test.cpp", runner)
         self.assertIn(
             "[20/25] BLE voice probe failure transition host test", runner
         )

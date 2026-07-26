@@ -82,13 +82,47 @@ enum class VoiceCaptureResult : uint8_t {
     Failed,
 };
 
+class VoiceCaptureBackend {
+public:
+    virtual ~VoiceCaptureBackend() = default;
+
+    virtual bool acquireCapture() = 0;
+    virtual void releaseCapture() = 0;
+    virtual bool openRecorder() = 0;
+    virtual void closeRecorder() = 0;
+    virtual size_t readRecorder(
+        int16_t* samples,
+        size_t sample_count,
+        uint32_t timeout_ms) = 0;
+    virtual bool openResampler(void*& handle) = 0;
+    virtual bool maxOutputSamples(
+        void* handle,
+        size_t input_samples,
+        uint32_t& output_samples) = 0;
+    virtual bool resample(
+        void* handle,
+        const int16_t* input,
+        size_t input_samples,
+        int16_t* output,
+        uint32_t& output_samples) = 0;
+    virtual void closeResampler(void* handle) = 0;
+    virtual size_t encodeAdpcm(
+        const int16_t* samples,
+        size_t sample_count,
+        uint8_t* output,
+        size_t capacity) = 0;
+};
+
 class VoiceCapturePipeline {
 public:
     static constexpr uint32_t kCaptureReadTimeoutMs = 100;
     static constexpr size_t kOutputSamplesPerBlock = 320;
     static constexpr size_t kAdpcmBytesPerBlock = 164;
 
-    VoiceCapturePipeline() = default;
+#ifndef STOPWATCH_HOST_TEST
+    VoiceCapturePipeline();
+#endif
+    explicit VoiceCapturePipeline(VoiceCaptureBackend& backend);
     ~VoiceCapturePipeline();
 
     VoiceCapturePipeline(const VoiceCapturePipeline&) = delete;
@@ -110,6 +144,7 @@ private:
         uint32_t& captured_samples,
         VoiceCaptureError& error);
 
+    VoiceCaptureBackend* _backend = nullptr;
     void* _resampler = nullptr;
     std::atomic<bool> _stop_requested{true};
     std::array<int16_t, kCaptureInputSamples> _capture_input = {};

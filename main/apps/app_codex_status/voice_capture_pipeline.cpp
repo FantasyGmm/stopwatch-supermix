@@ -1,19 +1,129 @@
 #include "voice_capture_pipeline.h"
 
+#ifndef STOPWATCH_HOST_TEST
 #include "ima_adpcm_codec.h"
 
 #include <hal/audio/stopwatch_audio_backend.h>
 #include <esp_ae_rate_cvt.h>
 #include <freertos/FreeRTOS.h>
 #include <runtime/resource_supervisor.h>
+#endif
 
 namespace {
 
-constexpr uint32_t kCaptureRate = 44100;
-constexpr uint32_t kOutputRate = 16000;
 constexpr uint32_t kMaxResamplerOutputSamples = 512;
 
+#ifndef STOPWATCH_HOST_TEST
+constexpr uint32_t kCaptureRate = 44100;
+constexpr uint32_t kOutputRate = 16000;
+
+class ProductionVoiceCaptureBackend final : public VoiceCaptureBackend {
+public:
+    bool acquireCapture() override
+    {
+        return GetResourceSupervisor().acquireCapture(RuntimeOwner::Codex) ==
+               AcquireResult::Granted;
+    }
+
+    void releaseCapture() override
+    {
+        GetResourceSupervisor().releaseCapture(RuntimeOwner::Codex);
+    }
+
+    bool openRecorder() override
+    {
+        return GetStopWatchAudioBackend().openRecorder(kCaptureRate, 16, 1);
+    }
+
+    void closeRecorder() override
+    {
+        GetStopWatchAudioBackend().closeRecorder();
+    }
+
+    size_t readRecorder(
+        int16_t* samples,
+        size_t sample_count,
+        uint32_t timeout_ms) override
+    {
+        return GetStopWatchAudioBackend().read(
+            samples,
+            sample_count * sizeof(*samples),
+            pdMS_TO_TICKS(timeout_ms));
+    }
+
+    bool openResampler(void*& handle) override
+    {
+        esp_ae_rate_cvt_cfg_t config = {};
+        config.src_rate = kCaptureRate;
+        config.dest_rate = kOutputRate;
+        config.channel = 1;
+        config.bits_per_sample = 16;
+        config.complexity = 3;
+        config.perf_type = ESP_AE_RATE_CVT_PERF_TYPE_MEMORY;
+        return esp_ae_rate_cvt_open(&config, &handle) == ESP_AE_ERR_OK &&
+               handle != nullptr;
+    }
+
+    bool maxOutputSamples(
+        void* handle,
+        size_t input_samples,
+        uint32_t& output_samples) override
+    {
+        return esp_ae_rate_cvt_get_max_out_sample_num(
+                   handle, input_samples, &output_samples) == ESP_AE_ERR_OK;
+    }
+
+    bool resample(
+        void* handle,
+        const int16_t* input,
+        size_t input_samples,
+        int16_t* output,
+        uint32_t& output_samples) override
+    {
+        return esp_ae_rate_cvt_process(
+                   handle,
+                   static_cast<esp_ae_sample_t>(const_cast<int16_t*>(input)),
+                   input_samples,
+                   static_cast<esp_ae_sample_t>(output),
+                   &output_samples) == ESP_AE_ERR_OK;
+    }
+
+    void closeResampler(void* handle) override
+    {
+        esp_ae_rate_cvt_close(handle);
+    }
+
+    size_t encodeAdpcm(
+        const int16_t* samples,
+        size_t sample_count,
+        uint8_t* output,
+        size_t capacity) override
+    {
+        return ble_voice_probe::encode_ima_adpcm_block(
+            samples, sample_count, output, capacity);
+    }
+};
+
+VoiceCaptureBackend& productionBackend()
+{
+    static ProductionVoiceCaptureBackend backend;
+    return backend;
+}
+#endif
+
 }  // namespace
+
+#ifndef STOPWATCH_HOST_TEST
+VoiceCapturePipeline::VoiceCapturePipeline()
+    : VoiceCapturePipeline(productionBackend())
+{
+}
+#endif
+
+VoiceCapturePipeline::VoiceCapturePipeline(VoiceCaptureBackend& backend)
+    : _backend(&backend)
+{
+}
 
 VoiceCapturePipeline::~VoiceCapturePipeline()
 {
@@ -31,40 +141,29 @@ bool VoiceCapturePipeline::open(VoiceCaptureError& error)
     _stop_requested = false;
     error = VoiceCaptureError::None;
 
-    if (GetResourceSupervisor().acquireCapture(RuntimeOwner::Codex) !=
-        AcquireResult::Granted) {
+    if (!_backend->acquireCapture()) {
         error = VoiceCaptureError::CaptureBusy;
         _stop_requested = true;
         return false;
     }
     _capture_owned = true;
 
-    if (!GetStopWatchAudioBackend().openRecorder(44100, 16, 1)) {
+    if (!_backend->openRecorder()) {
         error = VoiceCaptureError::RecorderOpenFailed;
         close();
         return false;
     }
     _recorder_open = true;
 
-    esp_ae_rate_cvt_cfg_t config = {};
-    config.src_rate = kCaptureRate;
-    config.dest_rate = kOutputRate;
-    config.channel = 1;
-    config.bits_per_sample = 16;
-    config.complexity = 3;
-    config.perf_type = ESP_AE_RATE_CVT_PERF_TYPE_MEMORY;
-    if (esp_ae_rate_cvt_open(&config, &_resampler) != ESP_AE_ERR_OK ||
-        _resampler == nullptr) {
+    if (!_backend->openResampler(_resampler) || _resampler == nullptr) {
         error = VoiceCaptureError::ResamplerFailed;
         close();
         return false;
     }
 
     uint32_t output_capacity = 0;
-    if (esp_ae_rate_cvt_get_max_out_sample_num(
-            _resampler,
-            kCaptureInputSamples,
-            &output_capacity) != ESP_AE_ERR_OK ||
+    if (!_backend->maxOutputSamples(
+            _resampler, kCaptureInputSamples, output_capacity) ||
         output_capacity == 0 || output_capacity > kMaxResamplerOutputSamples) {
         error = VoiceCaptureError::ResamplerFailed;
         close();
@@ -103,34 +202,35 @@ VoiceCaptureResult VoiceCapturePipeline::captureBlock(
 
     const size_t expected_bytes =
         _capture_input.size() * sizeof(_capture_input.front());
-    if (GetStopWatchAudioBackend().read(
+    if (_backend->readRecorder(
             _capture_input.data(),
-            expected_bytes,
-            pdMS_TO_TICKS(kCaptureReadTimeoutMs)) != expected_bytes) {
+            _capture_input.size(),
+            kCaptureReadTimeoutMs) != expected_bytes) {
         if (_stop_requested.load()) {
             return VoiceCaptureResult::Stopped;
         }
         error = VoiceCaptureError::RecorderOpenFailed;
         return VoiceCaptureResult::Failed;
     }
-    if (_stop_requested.load()) {
-        return VoiceCaptureResult::Stopped;
-    }
-
     uint32_t output_samples = _resampler_output_capacity;
-    if (esp_ae_rate_cvt_process(
+    if (!_backend->resample(
             _resampler,
-            static_cast<esp_ae_sample_t>(_capture_input.data()),
+            _capture_input.data(),
             _capture_input.size(),
-            static_cast<esp_ae_sample_t>(_resampler_output.data()),
-            &output_samples) != ESP_AE_ERR_OK ||
+            _resampler_output.data(),
+            output_samples) ||
         output_samples > _resampler_output_capacity) {
         error = VoiceCaptureError::ResamplerFailed;
         return VoiceCaptureResult::Failed;
     }
 
     _microphone_pcm.append(_resampler_output.data(), output_samples);
-    return encodePendingBlock(adpcm, captured_samples, error);
+    result = encodePendingBlock(adpcm, captured_samples, error);
+    if (result != VoiceCaptureResult::Continue) {
+        return result;
+    }
+    return _stop_requested.load() ? VoiceCaptureResult::Stopped
+                                  : VoiceCaptureResult::Continue;
 }
 
 void VoiceCapturePipeline::requestStop()
@@ -142,15 +242,15 @@ void VoiceCapturePipeline::close()
 {
     requestStop();
     if (_resampler != nullptr) {
-        esp_ae_rate_cvt_close(_resampler);
+        _backend->closeResampler(_resampler);
         _resampler = nullptr;
     }
     if (_recorder_open) {
-        GetStopWatchAudioBackend().closeRecorder();
+        _backend->closeRecorder();
         _recorder_open = false;
     }
     if (_capture_owned) {
-        GetResourceSupervisor().releaseCapture(RuntimeOwner::Codex);
+        _backend->releaseCapture();
         _capture_owned = false;
     }
     _resampler_output.clear();
@@ -169,7 +269,7 @@ VoiceCaptureResult VoiceCapturePipeline::encodePendingBlock(
     if (!_microphone_pcm.take_complete_block(samples)) {
         return VoiceCaptureResult::Continue;
     }
-    if (ble_voice_probe::encode_ima_adpcm_block(
+    if (_backend->encodeAdpcm(
             samples.data(),
             samples.size(),
             adpcm.data(),

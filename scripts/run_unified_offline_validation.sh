@@ -206,11 +206,16 @@ echo "[21/25] BLE voice probe session host test"
     -o "$HOST_TEST_DIR/ble_voice_probe_session_test"
 "$HOST_TEST_DIR/ble_voice_probe_session_test"
 
-echo "[22/25] BLE voice probe PCM buffer host test"
+echo "[22/25] BLE voice probe PCM buffer and capture pipeline host tests"
 "$CXX" -std=c++17 -Wall -Wextra -Werror -I. \
     tests/ble_voice_probe_pcm_buffer_test.cpp \
     -o "$HOST_TEST_DIR/ble_voice_probe_pcm_buffer_test"
 "$HOST_TEST_DIR/ble_voice_probe_pcm_buffer_test"
+"$CXX" -std=c++17 -Wall -Wextra -Werror -pthread -DSTOPWATCH_HOST_TEST -I. \
+    tests/voice_capture_pipeline_test.cpp \
+    main/apps/app_codex_status/voice_capture_pipeline.cpp \
+    -o "$HOST_TEST_DIR/voice_capture_pipeline_test"
+"$HOST_TEST_DIR/voice_capture_pipeline_test"
 
 echo "[23/25] IMA ADPCM codec host test"
 "$CXX" -std=c++17 -Wall -Wextra -Werror -I. \
