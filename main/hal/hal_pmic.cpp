@@ -17,7 +17,6 @@ static std::unique_ptr<M5PM1> _pm1;
 
 namespace {
 
-constexpr uint32_t _power_led_blink_period_ms = 2000;
 constexpr uint32_t _power_led_pulse_ms = 160;
 
 bool deadline_reached(uint32_t now, uint32_t deadline)
@@ -121,6 +120,7 @@ void Hal::pmic_init()
     _pm1->setI2cSleepTime(0);
     _pm1->setI2cSleepTime(0);
 
+    getPowerLedBlinkIntervalSeconds(true);
     setPowerLedMode(getPowerLedMode(true), false);
 
     // set button delay click 1s
@@ -223,7 +223,7 @@ void Hal::setPowerLedMode(PowerLedMode mode, bool saveToSettings)
     case PowerLedMode::Blink:
         applyPowerLedOutput(true);
         _power_led_pulse_end_ms  = now + _power_led_pulse_ms;
-        _power_led_next_blink_ms = now + _power_led_blink_period_ms;
+        _power_led_next_blink_ms = now + power_led_blink_interval_ms(_power_led_blink_interval_seconds);
         break;
     }
 
@@ -242,6 +242,32 @@ Hal::PowerLedMode Hal::getPowerLedMode(bool loadFromSettings)
     return _power_led_mode;
 }
 
+void Hal::setPowerLedBlinkIntervalSeconds(int seconds, bool saveToSettings)
+{
+    const int normalized = normalize_power_led_blink_interval_seconds(seconds);
+    const bool changed   = normalized != _power_led_blink_interval_seconds;
+    _power_led_blink_interval_seconds = normalized;
+
+    if (changed && _power_led_mode == PowerLedMode::Blink) {
+        setPowerLedMode(PowerLedMode::Blink, false);
+    }
+
+    if (saveToSettings) {
+        Settings settings(std::string(Hal::SettingsNs), true);
+        settings.SetInt("pwr_led_interval_s", _power_led_blink_interval_seconds);
+    }
+}
+
+int Hal::getPowerLedBlinkIntervalSeconds(bool loadFromSettings)
+{
+    if (loadFromSettings) {
+        Settings settings(std::string(Hal::SettingsNs), false);
+        _power_led_blink_interval_seconds = normalize_power_led_blink_interval_seconds(
+            settings.GetInt("pwr_led_interval_s", PowerLedBlinkIntervalDefaultSeconds));
+    }
+    return _power_led_blink_interval_seconds;
+}
+
 void Hal::updatePowerLed()
 {
     if (_power_led_mode != PowerLedMode::Blink || !_pm1) {
@@ -256,6 +282,6 @@ void Hal::updatePowerLed()
     if (!_power_led_output && deadline_reached(now, _power_led_next_blink_ms)) {
         applyPowerLedOutput(true);
         _power_led_pulse_end_ms  = now + _power_led_pulse_ms;
-        _power_led_next_blink_ms = now + _power_led_blink_period_ms;
+        _power_led_next_blink_ms = now + power_led_blink_interval_ms(_power_led_blink_interval_seconds);
     }
 }

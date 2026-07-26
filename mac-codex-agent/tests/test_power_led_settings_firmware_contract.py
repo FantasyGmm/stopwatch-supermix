@@ -32,15 +32,27 @@ class PowerLedSettingsFirmwareContractTests(unittest.TestCase):
         self.assertIn("Blink = 2", self.hal_header)
         self.assertIn("void setPowerLedMode(PowerLedMode mode", self.hal_header)
         self.assertIn("PowerLedMode getPowerLedMode", self.hal_header)
+        self.assertIn(
+            "void setPowerLedBlinkIntervalSeconds(int seconds", self.hal_header
+        )
+        self.assertIn("int getPowerLedBlinkIntervalSeconds", self.hal_header)
         self.assertIn("void updatePowerLed()", self.hal_header)
 
         self.assertIn('GetInt("pwr_led_mode", 0)', self.hal_pmic)
         self.assertIn('SetInt("pwr_led_mode"', self.hal_pmic)
+        self.assertIn(
+            'GetInt("pwr_led_interval_s", PowerLedBlinkIntervalDefaultSeconds)',
+            self.hal_pmic,
+        )
+        self.assertIn('SetInt("pwr_led_interval_s"', self.hal_pmic)
         self.assertIn("setLedEnLevel", self.hal_pmic)
 
-    def test_blink_mode_uses_short_pulse_on_two_second_period(self):
-        self.assertIn("constexpr uint32_t _power_led_blink_period_ms = 2000", self.hal_pmic)
+    def test_blink_mode_uses_short_pulse_on_configurable_period(self):
         self.assertIn("constexpr uint32_t _power_led_pulse_ms = 160", self.hal_pmic)
+        self.assertIn(
+            "power_led_blink_interval_ms(_power_led_blink_interval_seconds)",
+            self.hal_pmic,
+        )
         self.assertIn("void Hal::updatePowerLed()", self.hal_pmic)
         self.assertIn("GetHAL().updatePowerLed();", self.main_loop)
 

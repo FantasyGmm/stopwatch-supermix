@@ -5,6 +5,7 @@
  */
 #pragma once
 #include "button_input_gate.h"
+#include "power_led_blink_config.h"
 #include "utils/button/Button_Class.hpp"
 #include <apps/common/common.h>
 #include <memory>
@@ -169,6 +170,8 @@ public:
     bool isBatteryCharging(bool strict = false);
     void setPowerLedMode(PowerLedMode mode, bool saveToSettings = false);
     PowerLedMode getPowerLedMode(bool loadFromSettings = false);
+    void setPowerLedBlinkIntervalSeconds(int seconds, bool saveToSettings = false);
+    int getPowerLedBlinkIntervalSeconds(bool loadFromSettings = false);
     void updatePowerLed();
 
     /* --------------------------------- Display -------------------------------- */
@@ -293,6 +296,7 @@ private:
     ButtonInputGate _button_input_gate;
     int _spk_volume    = 80;
     PowerLedMode _power_led_mode = PowerLedMode::Off;
+    int _power_led_blink_interval_seconds = PowerLedBlinkIntervalDefaultSeconds;
     bool _power_led_output       = false;
     bool _power_led_output_valid = false;
     uint32_t _power_led_next_blink_ms = 0;
