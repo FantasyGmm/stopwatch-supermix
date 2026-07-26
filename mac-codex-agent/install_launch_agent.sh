@@ -4,7 +4,6 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 VENV_DIR="$ROOT_DIR/.venv"
 LABEL="com.stopwatch.codex-agent"
-PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 LOG_DIR="$HOME/Library/Logs"
 APP_DIR="$HOME/Applications/StopWatch Codex Agent.app"
 APP_EXECUTABLE="$APP_DIR/Contents/MacOS/StopWatchCodexAgent"
@@ -13,10 +12,33 @@ APP_CODE="$APP_RESOURCES/app"
 APP_PYTHON_RUNTIME="$APP_DIR/Contents/Python3"
 NATIVE_BUILD_DIR="$ROOT_DIR/.native"
 NATIVE_LIBRARY="$NATIVE_BUILD_DIR/libstopwatch_voice_audio.dylib"
+DRIVER_CACHE="$ROOT_DIR/.driver-cache"
+DRIVER_PACKAGE_NAME="BlackHole2ch-0.7.1.pkg"
+DRIVER_PACKAGE="$DRIVER_CACHE/BlackHole2ch-0.7.1.pkg"
+DRIVER_TEMP="$DRIVER_PACKAGE.tmp"
+DRIVER_URL="https://existential.audio/downloads/BlackHole2ch-0.7.1.pkg"
+BLACKHOLE_SHA256="57b540f27a3e29c37e310e01bee0fdfab76733087e47f997ef9dccf851400dcf"
 
-# Stop and remove the legacy auto-start service before replacing its executable.
-launchctl bootout "gui/$UID/$LABEL" >/dev/null 2>&1 || true
-rm -f "$PLIST"
+# Task 10 owns external device-key provisioning. Packaging never receives,
+# generates, logs, or bundles device-key material or a firmware key header.
+
+verify_driver_package() {
+    local package_path="$1"
+    printf '%s  %s\n' "$BLACKHOLE_SHA256" "$package_path" |
+        shasum -a 256 --check
+}
+
+mkdir -p "$DRIVER_CACHE"
+rm -f "$DRIVER_TEMP"
+trap 'rm -f "$DRIVER_TEMP"' EXIT
+if [[ ! -f "$DRIVER_PACKAGE" ]]; then
+    curl --fail --location --proto '=https' --tlsv1.2 \
+        --output "$DRIVER_TEMP" \
+        "$DRIVER_URL"
+    verify_driver_package "$DRIVER_TEMP"
+    mv "$DRIVER_TEMP" "$DRIVER_PACKAGE"
+fi
+verify_driver_package "$DRIVER_PACKAGE"
 
 python3 -m venv "$VENV_DIR"
 "$VENV_DIR/bin/python" -m pip install --upgrade pip
@@ -38,7 +60,10 @@ PYTHON_APP_EXECUTABLE="$PYTHON_FRAMEWORK_ROOT/Resources/Python.app/Contents/MacO
 PYTHON_RUNTIME="$PYTHON_FRAMEWORK_ROOT/Python3"
 
 mkdir -p "$LOG_DIR" "$APP_DIR/Contents/MacOS" "$APP_RESOURCES" "$APP_CODE"
+mkdir -p "$APP_DIR/Contents/Resources/Drivers"
 mkdir -p "$APP_RESOURCES/native"
+cp "$DRIVER_PACKAGE" "$APP_RESOURCES/Drivers/"
+verify_driver_package "$APP_RESOURCES/Drivers/$DRIVER_PACKAGE_NAME"
 cp "$NATIVE_LIBRARY" "$APP_RESOURCES/native/libstopwatch_voice_audio.dylib"
 cp "$PYTHON_APP_EXECUTABLE" "$APP_EXECUTABLE"
 cp "$PYTHON_RUNTIME" "$APP_PYTHON_RUNTIME"
@@ -58,7 +83,14 @@ for module in \
     agent.py \
     codex_adapter.py \
     task_alerts.py \
-    protocol.py; do
+    protocol.py \
+    voice_driver.py \
+    voice_shortcut.py \
+    voice_audio.py \
+    voice_input_crypto.py \
+    voice_input_protocol.py \
+    voice_session.py \
+    ima_adpcm.py; do
     cp "$ROOT_DIR/$module" "$APP_CODE/$module"
 done
 rm -f "$APP_RESOURCES/request_bluetooth.py"
@@ -104,6 +136,7 @@ cat > "$APP_DIR/Contents/Info.plist" <<EOF
 EOF
 
 codesign --force --deep --sign - "$APP_DIR"
+codesign --verify --deep --strict --verbose=2 "$APP_DIR"
 
 touch "$LOG_DIR/stopwatch-codex-agent.log"
 
