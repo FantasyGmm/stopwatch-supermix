@@ -122,7 +122,7 @@ public:
 
         if (!LGFX_Device::init_impl(use_reset, use_clear)) return false;
 
-        enableFrameBuffer(true);
+        enableFrameBuffer(false);
 
         _panel_instance.setBrightness(128);
 
@@ -322,6 +322,10 @@ static void lvgl_flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px
     }
 
     gfx.endWrite();
+
+    if (lv_display_flush_is_last(disp)) {
+        gfx.display();
+    }
 
     lv_display_flush_ready(disp);
 }
