@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 #include "app_codex_status.h"
+#include "codex_status_priority.h"
 #include "assets/codex_pet_assets.h"
 #include "codex_ble_transport.h"
 #include "ble_voice_probe_controller.h"
@@ -239,6 +240,7 @@ void AppCodexStatus::onOpen()
     _production_voice_link_usable = false;
     _production_voice_mtu = 23;
     _production_voice_connection_epoch = 0;
+    _voice_status.store(VoiceInputUiState::Off);
     _ws_connected    = false;
     _wifi_lease.reset();
     _wifi_started    = false;
@@ -286,11 +288,12 @@ void AppCodexStatus::onOpen()
 void AppCodexStatus::onRunning()
 {
     const uint32_t now = GetHAL().millis();
+    GetHAL().updateButtonStates();
     const bool woke_screen = update_screen_off_control(now);
     const bool right_pressed = GetHAL().btnB.isPressed();
     input::KeyEvent key_event = input::KeyEvent::None;
     if (_key_manager) {
-        key_event = _key_manager->update();
+        key_event = _key_manager->update(false);
     }
 
     const VoiceButtonAction voice_button_action = _voice_button_gate.update(
@@ -329,6 +332,9 @@ void AppCodexStatus::onRunning()
             if (connection_epoch != _production_voice_connection_epoch) {
                 _production_voice_connection_epoch = connection_epoch;
                 _production_voice_ready = false;
+                _production_voice_link_usable = false;
+                _production_voice_mtu = 23;
+                _voice_input->handle_connection_epoch(connection_epoch);
             }
             CodexProductionVoiceControl production_control;
             while (_ble_transport->take_production_voice_control(production_control)) {
@@ -352,10 +358,20 @@ void AppCodexStatus::onRunning()
             while (_voice_input->take_notification(notification)) {
                 const CodexBleNotifyResult result = _ble_transport->notify_voice(
                     notification.bytes.data(), notification.size);
+                VoiceNotificationSendResult send_result =
+                    VoiceNotificationSendResult::PermanentFailure;
+                if (result == CodexBleNotifyResult::Accepted) {
+                    send_result = VoiceNotificationSendResult::Accepted;
+                } else if (result == CodexBleNotifyResult::Congested) {
+                    send_result = VoiceNotificationSendResult::Congested;
+                }
                 _voice_input->record_notification_result(
-                    notification.kind,
-                    result == CodexBleNotifyResult::Accepted,
+                    notification,
+                    send_result,
                     now);
+                if (result != CodexBleNotifyResult::Accepted) {
+                    break;
+                }
             }
         }
         if (_voice_probe) {
@@ -438,16 +454,9 @@ void AppCodexStatus::onRunning()
         update_battery();
     }
 
-    if (_voice_input) {
-        const VoiceInputUiState voice_state = _voice_input->ui_state();
-        if (voice_state == VoiceInputUiState::Error) {
-            set_status("VOICE ERR", kCodexRed);
-        } else if (voice_state == VoiceInputUiState::Active) {
-            set_status("VOICE", kCodexBlue);
-        } else {
-            set_status("VOICE OFF", kTextDim);
-        }
-    }
+    _voice_status.store(
+        _voice_input ? _voice_input->ui_state() : VoiceInputUiState::Off);
+    render_status();
 }
 
 void AppCodexStatus::onClose()
@@ -460,6 +469,7 @@ void AppCodexStatus::onClose()
     }
     stop_network_fallback();
     if (_voice_input) {
+        _voice_status.store(VoiceInputUiState::Off);
         _voice_input->shutdown();
         _voice_input.reset();
     }
@@ -762,10 +772,41 @@ void AppCodexStatus::stop_websocket()
 
 void AppCodexStatus::set_status(const char* status, uint32_t color)
 {
+    {
+        std::lock_guard<std::mutex> lock(_status_mutex);
+        _base_status = status == nullptr ? "" : status;
+        _base_status_color = color;
+        _base_status_is_error = color == kCodexRed;
+    }
+    render_status();
+}
+
+void AppCodexStatus::render_status()
+{
+    std::string base_status;
+    uint32_t base_color = kTextDim;
+    bool base_is_error = false;
+    {
+        std::lock_guard<std::mutex> lock(_status_mutex);
+        base_status = _base_status;
+        base_color = _base_status_color;
+        base_is_error = _base_status_is_error;
+    }
+    const VoiceInputUiState voice_state = _voice_status.load();
+    const CodexStatusPresentation presentation = resolve_codex_status(
+        base_status.c_str(),
+        base_color,
+        base_is_error,
+        voice_state == VoiceInputUiState::Active,
+        voice_state == VoiceInputUiState::Error,
+        kCodexBlue,
+        kCodexRed,
+        kTextDim);
     LvglLockGuard lock;
     if (_status_label != nullptr) {
-        lv_label_set_text(_status_label, status);
-        lv_obj_set_style_text_color(_status_label, lv_color_hex(color), 0);
+        lv_label_set_text(_status_label, presentation.text);
+        lv_obj_set_style_text_color(
+            _status_label, lv_color_hex(presentation.color), 0);
     }
 }
 
@@ -810,23 +851,22 @@ bool AppCodexStatus::handle_status_json(const char* data, int length, const char
     copy_short(model, sizeof(model), snapshot.model.c_str());
     uppercase_short(effort, sizeof(effort), snapshot.effort.c_str());
 
-    LvglLockGuard lock;
-    if (_model_value != nullptr && model[0] != '\0') {
-        lv_label_set_text(_model_value, model);
-    }
-    if (_effort_value != nullptr && effort[0] != '\0') {
-        lv_label_set_text(_effort_value, effort);
-    }
-    set_percent(_five_hour_pct, _five_hour_bar, snapshot.five_hour_left_pct);
-    set_percent(_week_pct, _week_bar, snapshot.week_left_pct);
+    {
+        LvglLockGuard lock;
+        if (_model_value != nullptr && model[0] != '\0') {
+            lv_label_set_text(_model_value, model);
+        }
+        if (_effort_value != nullptr && effort[0] != '\0') {
+            lv_label_set_text(_effort_value, effort);
+        }
+        set_percent(_five_hour_pct, _five_hour_bar, snapshot.five_hour_left_pct);
+        set_percent(_week_pct, _week_bar, snapshot.week_left_pct);
 
-    if (_alert_carousel.apply(snapshot, GetHAL().millis())) {
-        render_alert();
+        if (_alert_carousel.apply(snapshot, GetHAL().millis())) {
+            render_alert();
+        }
     }
-    if (_status_label != nullptr) {
-        lv_label_set_text(_status_label, live_status);
-        lv_obj_set_style_text_color(_status_label, lv_color_hex(kCodexBlue), 0);
-    }
+    set_status(live_status, kCodexBlue);
     return true;
 }
 

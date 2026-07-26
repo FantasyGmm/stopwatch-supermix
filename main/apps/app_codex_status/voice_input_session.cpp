@@ -87,11 +87,25 @@ void VoiceInputSession::disconnect()
     _state = VoiceInputState::Unavailable;
 }
 
-bool VoiceInputSession::allocate_sequence(uint32_t& sequence)
+bool VoiceInputSession::allocate_audio_sequence(uint32_t& sequence)
+{
+    return allocate_sequence(sequence, true);
+}
+
+bool VoiceInputSession::allocate_terminal_sequence(uint32_t& sequence)
+{
+    return allocate_sequence(sequence, false);
+}
+
+bool VoiceInputSession::allocate_sequence(
+    uint32_t& sequence,
+    bool reserve_terminal)
 {
     if ((_state != VoiceInputState::Streaming &&
          _state != VoiceInputState::Stopping) ||
-        !_has_started || _sequence_exhausted) {
+        !_has_started || _sequence_exhausted ||
+        (reserve_terminal &&
+         _next_sequence == std::numeric_limits<uint32_t>::max())) {
         return false;
     }
     sequence = _next_sequence;

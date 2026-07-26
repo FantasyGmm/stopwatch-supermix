@@ -12,6 +12,7 @@
 namespace {
 
 constexpr uint32_t kMaxResamplerOutputSamples = 512;
+std::atomic<VoiceCapturePipeline*> g_capture_lease{nullptr};
 
 #ifndef STOPWATCH_HOST_TEST
 constexpr uint32_t kCaptureRate = 44100;
@@ -141,9 +142,17 @@ bool VoiceCapturePipeline::open(VoiceCaptureError& error)
     _stop_requested = false;
     error = VoiceCaptureError::None;
 
-    if (!_backend->acquireCapture()) {
+    VoiceCapturePipeline* expected = nullptr;
+    if (!g_capture_lease.compare_exchange_strong(expected, this)) {
         error = VoiceCaptureError::CaptureBusy;
         _stop_requested = true;
+        return false;
+    }
+    _global_lease_owned = true;
+
+    if (!_backend->acquireCapture()) {
+        error = VoiceCaptureError::CaptureBusy;
+        close();
         return false;
     }
     _capture_owned = true;
@@ -252,6 +261,11 @@ void VoiceCapturePipeline::close()
     if (_capture_owned) {
         _backend->releaseCapture();
         _capture_owned = false;
+    }
+    if (_global_lease_owned) {
+        VoiceCapturePipeline* expected = this;
+        (void)g_capture_lease.compare_exchange_strong(expected, nullptr);
+        _global_lease_owned = false;
     }
     _resampler_output.clear();
     _microphone_pcm.clear();

@@ -3,6 +3,11 @@
 #include <cassert>
 #include <cstdint>
 #include <functional>
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <mutex>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -113,12 +118,12 @@ public:
     bool read_ok = true;
     bool encode_ok = true;
     bool capture_owned = false;
-    int acquire_calls = 0;
-    int release_calls = 0;
-    int open_recorder_calls = 0;
-    int close_recorder_calls = 0;
-    int close_resampler_calls = 0;
-    int read_calls = 0;
+    std::atomic<int> acquire_calls{0};
+    std::atomic<int> release_calls{0};
+    std::atomic<int> open_recorder_calls{0};
+    std::atomic<int> close_recorder_calls{0};
+    std::atomic<int> close_resampler_calls{0};
+    std::atomic<int> read_calls{0};
     std::function<void()> during_read;
 };
 
@@ -184,9 +189,10 @@ void test_begin_audio_end_order_and_counters()
     auto begin = decode(wire, crypto, nullptr);
     assert(begin.kind == voice_input::NotificationKind::PttBegin);
     assert(begin.sequence == 0);
-    assert(begin.session == 7);
+    assert(begin.session == 1);
     const auto nonce = begin.session_nonce;
-    controller.record_notification_result(begin.kind, true, 101);
+    controller.record_notification_result(
+        wire, VoiceNotificationSendResult::Accepted, 101);
 
     controller.poll(120);
     assert(controller.take_notification(wire));
@@ -194,7 +200,8 @@ void test_begin_audio_end_order_and_counters()
     assert(audio.kind == voice_input::NotificationKind::Audio);
     assert(audio.sequence == 1);
     assert(audio.payload_size == voice_input::kAudioPlaintextSize);
-    controller.record_notification_result(audio.kind, true, 121);
+    controller.record_notification_result(
+        wire, VoiceNotificationSendResult::Accepted, 121);
 
     controller.handle_button(false, 130);
     controller.poll(131);
@@ -211,7 +218,8 @@ void test_begin_audio_end_order_and_counters()
     assert(summary.encode_failures == 0);
     assert(summary.captured_samples == 320);
     assert(summary.negotiated_mtu == 256);
-    controller.record_notification_result(end.kind, true, 132);
+    controller.record_notification_result(
+        wire, VoiceNotificationSendResult::Accepted, 132);
     controller.poll(133);
     assert(controller.ui_state() == VoiceInputUiState::Ready);
 }
@@ -229,7 +237,8 @@ void test_release_during_read_keeps_final_complete_block()
     assert(controller.take_notification(wire));
     auto begin = decode(wire, crypto, nullptr);
     const auto nonce = begin.session_nonce;
-    controller.record_notification_result(begin.kind, true, 201);
+    controller.record_notification_result(
+        wire, VoiceNotificationSendResult::Accepted, 201);
 
     backend.during_read = [&controller] { controller.handle_button(false, 220); };
     controller.poll(220);
@@ -237,7 +246,8 @@ void test_release_during_read_keeps_final_complete_block()
     auto audio = decode(wire, crypto, &nonce);
     assert(audio.kind == voice_input::NotificationKind::Audio);
     assert(audio.sequence == 1);
-    controller.record_notification_result(audio.kind, true, 221);
+    controller.record_notification_result(
+        wire, VoiceNotificationSendResult::Accepted, 221);
     controller.poll(222);
     assert(controller.take_notification(wire));
     auto end = decode(wire, crypto, &nonce);
@@ -296,9 +306,13 @@ void test_queue_overflow_emits_error_and_cleans_capture()
     assert(controller.take_notification(wire));
     const auto begin = decode(wire, crypto, nullptr);
     assert(begin.kind == voice_input::NotificationKind::PttBegin);
+    controller.record_notification_result(
+        wire, VoiceNotificationSendResult::Accepted, 521);
     assert(controller.take_notification(wire));
     const auto error = decode(wire, crypto, &begin.session_nonce);
     assert(error.kind == voice_input::NotificationKind::VoiceError);
+    controller.record_notification_result(
+        wire, VoiceNotificationSendResult::Accepted, 522);
     assert(!controller.take_notification(wire));
 }
 
@@ -318,17 +332,62 @@ void test_consecutive_sessions_do_not_reuse_identity()
     voice_input::Notification wire = {};
     assert(controller.take_notification(wire));
     const auto first = decode(wire, crypto, nullptr);
-    controller.record_notification_result(first.kind, true, 601);
+    controller.record_notification_result(
+        wire, VoiceNotificationSendResult::Accepted, 601);
     controller.handle_button(false, 602);
     controller.poll(603);
     assert(controller.take_notification(wire));
-    controller.record_notification_result(wire.kind, true, 604);
+    controller.record_notification_result(
+        wire, VoiceNotificationSendResult::Accepted, 604);
 
     controller.handle_button(true, 605);
     assert(controller.take_notification(wire));
     const auto second = decode(wire, crypto, nullptr);
-    assert(second.session != first.session);
+    assert(first.session == 1);
+    assert(second.session == 2);
     assert(second.session_nonce != first.session_nonce);
+
+    controller.handle_connection_epoch(2);
+    controller.set_ready(true, 256);
+    controller.handle_button(false, 606);
+    controller.handle_button(true, 607);
+    assert(controller.take_notification(wire));
+    const auto after_reconnect = decode(wire, crypto, nullptr);
+    assert(after_reconnect.session == 1);
+}
+
+void test_session_exhaustion_requires_new_connection_epoch()
+{
+    FakeBackend backend;
+    FakeEntropy entropy;
+    voice_input::crypto::CcmContext crypto(kKey);
+    VoiceInputController controller(backend, crypto, entropy);
+    controller.set_ready(true, 256);
+    controller.set_next_connection_session_for_test(UINT16_MAX);
+
+    controller.handle_button(true, 610);
+    voice_input::Notification wire = {};
+    assert(controller.take_notification(wire));
+    auto begin = decode(wire, crypto, nullptr);
+    assert(begin.session == UINT16_MAX);
+    controller.record_notification_result(
+        wire, VoiceNotificationSendResult::Accepted, 611);
+    controller.handle_button(false, 612);
+    controller.poll(613);
+    assert(controller.take_notification(wire));
+    controller.record_notification_result(
+        wire, VoiceNotificationSendResult::Accepted, 614);
+
+    controller.handle_button(true, 615);
+    assert(controller.ui_state() == VoiceInputUiState::Error);
+    assert(!controller.take_notification(wire));
+    controller.handle_button(false, 616);
+    controller.handle_connection_epoch(3);
+    controller.set_ready(true, 256);
+    controller.handle_button(true, 617);
+    assert(controller.take_notification(wire));
+    begin = decode(wire, crypto, nullptr);
+    assert(begin.session == 1);
 }
 
 void test_notification_failure_stops_capture_before_error()
@@ -343,19 +402,23 @@ void test_notification_failure_stops_capture_before_error()
     voice_input::Notification wire = {};
     assert(controller.take_notification(wire));
     const auto begin = decode(wire, crypto, nullptr);
-    controller.record_notification_result(begin.kind, true, 701);
+    controller.record_notification_result(
+        wire, VoiceNotificationSendResult::Accepted, 701);
     controller.poll(702);
     assert(controller.take_notification(wire));
     const auto audio = decode(wire, crypto, &begin.session_nonce);
     assert(audio.kind == voice_input::NotificationKind::Audio);
 
-    controller.record_notification_result(audio.kind, false, 703);
+    controller.record_notification_result(
+        wire, VoiceNotificationSendResult::PermanentFailure, 703);
     assert(controller.ui_state() == VoiceInputUiState::Error);
     assert(backend.release_calls == 1);
     assert(controller.take_notification(wire));
     const auto error = decode(wire, crypto, &begin.session_nonce);
     assert(error.kind == voice_input::NotificationKind::VoiceError);
-    assert(error.sequence == 2);
+    assert(error.sequence == 1);
+    controller.record_notification_result(
+        wire, VoiceNotificationSendResult::Accepted, 704);
     assert(!controller.take_notification(wire));
 }
 
@@ -371,10 +434,94 @@ void test_rejected_begin_does_not_emit_undecodable_error()
     voice_input::Notification wire = {};
     assert(controller.take_notification(wire));
     assert(wire.kind == voice_input::NotificationKind::PttBegin);
-    controller.record_notification_result(wire.kind, false, 801);
+    controller.record_notification_result(
+        wire, VoiceNotificationSendResult::PermanentFailure, 801);
     assert(controller.ui_state() == VoiceInputUiState::Error);
     assert(backend.release_calls == 1);
     assert(!controller.take_notification(wire));
+}
+
+void test_congestion_retries_identical_notification_until_accepted()
+{
+    FakeBackend backend;
+    FakeEntropy entropy;
+    voice_input::crypto::CcmContext crypto(kKey);
+    VoiceInputController controller(backend, crypto, entropy);
+    controller.set_ready(true, 256);
+    controller.handle_button(true, 820);
+
+    voice_input::Notification first = {};
+    voice_input::Notification retry = {};
+    assert(controller.take_notification(first));
+    controller.record_notification_result(
+        first, VoiceNotificationSendResult::Congested, 821);
+    assert(controller.take_notification(retry));
+    assert(retry.kind == first.kind);
+    assert(retry.sequence == first.sequence);
+    assert(retry.size == first.size);
+    assert(std::equal(first.bytes.begin(), first.bytes.begin() + first.size,
+                      retry.bytes.begin()));
+    controller.record_notification_result(
+        retry, VoiceNotificationSendResult::Accepted, 822);
+    controller.poll(823);
+    assert(controller.take_notification(retry));
+    assert(retry.kind == voice_input::NotificationKind::Audio);
+    assert(retry.sequence == 1);
+}
+
+void test_repeated_congestion_replaces_unsent_audio_with_contiguous_error()
+{
+    FakeBackend backend;
+    FakeEntropy entropy;
+    voice_input::crypto::CcmContext crypto(kKey);
+    VoiceInputController controller(backend, crypto, entropy);
+    controller.set_ready(true, 256);
+    controller.handle_button(true, 824);
+
+    voice_input::Notification wire = {};
+    assert(controller.take_notification(wire));
+    const auto begin = decode(wire, crypto, nullptr);
+    controller.record_notification_result(
+        wire, VoiceNotificationSendResult::Accepted, 825);
+    controller.poll(826);
+    assert(controller.take_notification(wire));
+    const auto audio = decode(wire, crypto, &begin.session_nonce);
+    assert(audio.sequence == 1);
+
+    for (int retry = 0; retry < 3; ++retry) {
+        controller.record_notification_result(
+            wire, VoiceNotificationSendResult::Congested,
+            static_cast<uint32_t>(827 + retry));
+        voice_input::Notification same = {};
+        assert(controller.take_notification(same));
+        assert(same.sequence == 1);
+        wire = same;
+    }
+    controller.record_notification_result(
+        wire, VoiceNotificationSendResult::Congested, 830);
+    assert(controller.take_notification(wire));
+    const auto error = decode(wire, crypto, &begin.session_nonce);
+    assert(error.kind == voice_input::NotificationKind::VoiceError);
+    assert(error.sequence == 1);
+}
+
+void test_release_after_failed_attempt_clears_error_state()
+{
+    FakeBackend backend;
+    backend.acquire_ok = false;
+    FakeEntropy entropy;
+    voice_input::crypto::CcmContext crypto(kKey);
+    VoiceInputController controller(backend, crypto, entropy);
+    controller.set_ready(true, 256);
+    controller.handle_button(true, 830);
+    assert(controller.ui_state() == VoiceInputUiState::Error);
+    controller.handle_button(false, 831);
+    assert(controller.ui_state() == VoiceInputUiState::Ready);
+
+    controller.handle_button(true, 832);
+    controller.handle_disconnect();
+    controller.handle_button(false, 833);
+    assert(controller.ui_state() == VoiceInputUiState::Off);
 }
 
 void test_production_and_probe_pipeline_exclude_each_other()
@@ -425,11 +572,56 @@ void test_wake_suppression_and_button_edges()
     VoiceButtonEdgeGate gate;
     gate.reset(false);
     assert(gate.update(true, true, false) == VoiceButtonAction::None);
-    assert(gate.update(false, false, false) == VoiceButtonAction::Release);
+    assert(gate.update(true, false, false) == VoiceButtonAction::None);
+    assert(gate.update(false, false, false) == VoiceButtonAction::None);
     assert(gate.update(false, false, false) == VoiceButtonAction::None);
     assert(gate.update(true, false, false) == VoiceButtonAction::Press);
     assert(gate.update(true, false, true) == VoiceButtonAction::CancelHome);
-    assert(gate.update(false, false, false) == VoiceButtonAction::Release);
+    assert(gate.update(true, false, false) == VoiceButtonAction::None);
+    assert(gate.update(false, false, false) == VoiceButtonAction::None);
+}
+
+void test_cancel_waits_for_inflight_producer_cleanup()
+{
+    FakeBackend backend;
+    FakeEntropy entropy;
+    voice_input::crypto::CcmContext crypto(kKey);
+    VoiceInputController controller(backend, crypto, entropy);
+    controller.set_ready(true, 256);
+    controller.handle_button(true, 950);
+
+    std::mutex mutex;
+    std::condition_variable condition;
+    bool first_read_entered = false;
+    bool release_first_read = false;
+    std::atomic<int> read_entries{0};
+    backend.during_read = [&] {
+        if (read_entries.fetch_add(1) != 0) {
+            return;
+        }
+        std::unique_lock<std::mutex> lock(mutex);
+        first_read_entered = true;
+        condition.notify_all();
+        condition.wait(lock, [&] { return release_first_read; });
+    };
+
+    std::thread producer([&] { controller.poll(951); });
+    {
+        std::unique_lock<std::mutex> lock(mutex);
+        condition.wait(lock, [&] { return first_read_entered; });
+    }
+    std::thread cancel([&] { controller.cancel_for_home(952); });
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    assert(backend.release_calls.load() == 0);
+    assert(read_entries.load() == 1);
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        release_first_read = true;
+        condition.notify_all();
+    }
+    producer.join();
+    cancel.join();
+    assert(backend.release_calls.load() == 1);
 }
 
 }  // namespace
@@ -442,9 +634,14 @@ int main()
     test_duplicate_edges_disconnect_home_and_capture_failure_are_bounded();
     test_queue_overflow_emits_error_and_cleans_capture();
     test_consecutive_sessions_do_not_reuse_identity();
+    test_session_exhaustion_requires_new_connection_epoch();
     test_notification_failure_stops_capture_before_error();
     test_rejected_begin_does_not_emit_undecodable_error();
+    test_congestion_retries_identical_notification_until_accepted();
+    test_repeated_congestion_replaces_unsent_audio_with_contiguous_error();
+    test_release_after_failed_attempt_clears_error_state();
     test_production_and_probe_pipeline_exclude_each_other();
     test_control_authentication_and_replay_guard();
     test_wake_suppression_and_button_edges();
+    test_cancel_waits_for_inflight_producer_cleanup();
 }

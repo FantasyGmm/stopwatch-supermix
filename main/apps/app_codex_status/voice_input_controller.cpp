@@ -9,6 +9,9 @@
 #endif
 
 #include <algorithm>
+#if defined(STOPWATCH_HOST_TEST)
+#include <thread>
+#endif
 
 namespace {
 
@@ -16,6 +19,7 @@ namespace {
 constexpr uint32_t kMaxBufferedAudioMs = 300;
 constexpr uint32_t kAudioBlockMs = 20;
 constexpr size_t kMaxQueuedAudioPackets = kMaxBufferedAudioMs / kAudioBlockMs;
+constexpr uint8_t kMaxCongestionRetries = 3;
 constexpr uint16_t kMinimumAudioMtu =
     static_cast<uint16_t>(voice_input::kAudioCharacteristicValueSize + 3);
 [[maybe_unused]] constexpr uint32_t kProducerStopTimeoutMs = 500;
@@ -100,6 +104,7 @@ void ControlReplayGuard::reset()
 void VoiceButtonEdgeGate::reset(bool pressed)
 {
     _pressed = pressed;
+    _suppressed_until_release = false;
 }
 
 VoiceButtonAction VoiceButtonEdgeGate::update(
@@ -109,11 +114,20 @@ VoiceButtonAction VoiceButtonEdgeGate::update(
 {
     if (woke_screen) {
         _pressed = pressed;
+        _suppressed_until_release = pressed;
         return VoiceButtonAction::None;
     }
     if (go_home) {
         _pressed = pressed;
+        _suppressed_until_release = pressed;
         return VoiceButtonAction::CancelHome;
+    }
+    if (_suppressed_until_release) {
+        _pressed = pressed;
+        if (!pressed) {
+            _suppressed_until_release = false;
+        }
+        return VoiceButtonAction::None;
     }
     if (pressed == _pressed) {
         return VoiceButtonAction::None;
@@ -243,6 +257,18 @@ void VoiceInputController::set_ready(bool ready, uint16_t negotiated_mtu)
     }
 }
 
+void VoiceInputController::handle_connection_epoch(uint32_t connection_epoch)
+{
+    if (connection_epoch == _connection_epoch) {
+        return;
+    }
+    handle_disconnect();
+    std::lock_guard<std::mutex> lock(_mutex);
+    _connection_epoch = connection_epoch;
+    _next_session = 1;
+    _last_session_nonce = {};
+}
+
 void VoiceInputController::handle_button(bool pressed, uint32_t now_ms)
 {
     if (pressed == _button_pressed) {
@@ -260,6 +286,12 @@ void VoiceInputController::handle_button(bool pressed, uint32_t now_ms)
     bool should_stop = false;
     {
         std::lock_guard<std::mutex> lock(_mutex);
+        if (_ui_state == VoiceInputUiState::Error &&
+            (_session.state() == voice_input::VoiceInputState::Ready ||
+             _session.state() == voice_input::VoiceInputState::Unavailable)) {
+            _ui_state = _ready.load() ? VoiceInputUiState::Ready
+                                      : VoiceInputUiState::Off;
+        }
         should_stop = _session.release(now_ms);
         if (should_stop) {
             _graceful_stop = true;
@@ -316,43 +348,78 @@ bool VoiceInputController::take_notification(voice_input::Notification& output)
         return false;
     }
     output = _outgoing.front();
-    _outgoing.pop_front();
-    if (output.kind == voice_input::NotificationKind::Audio &&
-        _queued_audio_packets != 0) {
-        --_queued_audio_packets;
-    }
     return true;
 }
 
 void VoiceInputController::record_notification_result(
-    voice_input::NotificationKind kind,
-    bool accepted,
+    const voice_input::Notification& notification,
+    VoiceNotificationSendResult result,
     uint32_t now_ms)
 {
     bool notification_failed = false;
+    bool terminal_delivery_failed = false;
+    voice_input::Notification failed = {};
     {
         std::lock_guard<std::mutex> lock(_mutex);
-        if (accepted) {
-            if (kind == voice_input::NotificationKind::PttBegin) {
+        if (_outgoing.empty() ||
+            _outgoing.front().kind != notification.kind ||
+            _outgoing.front().session != notification.session ||
+            _outgoing.front().sequence != notification.sequence) {
+            return;
+        }
+        if (result == VoiceNotificationSendResult::Congested &&
+            ++_congestion_retries <= kMaxCongestionRetries) {
+            return;
+        }
+        if (result == VoiceNotificationSendResult::Congested) {
+            result = VoiceNotificationSendResult::PermanentFailure;
+        }
+
+        if (result == VoiceNotificationSendResult::Accepted) {
+            failed = _outgoing.front();
+            _outgoing.pop_front();
+            _congestion_retries = 0;
+            if (failed.kind == voice_input::NotificationKind::Audio &&
+                _queued_audio_packets != 0) {
+                --_queued_audio_packets;
+            }
+            _last_accepted_sequence = failed.sequence;
+            _has_accepted_notification = true;
+            if (failed.kind == voice_input::NotificationKind::PttBegin) {
                 _begin_accepted = true;
-            } else if (kind == voice_input::NotificationKind::Audio) {
+            } else if (failed.kind == voice_input::NotificationKind::Audio) {
                 _session.record_accepted();
-            } else if (kind == voice_input::NotificationKind::PttEnd) {
+            } else if (failed.kind == voice_input::NotificationKind::PttEnd) {
                 _session.stopped();
                 _terminal_pending = false;
                 _begin_accepted = false;
                 _ui_state = _ready.load() ? VoiceInputUiState::Ready
                                           : VoiceInputUiState::Off;
+            } else if (failed.kind == voice_input::NotificationKind::VoiceError) {
+                _terminal_pending = false;
             }
         } else {
+            failed = _outgoing.front();
+            _outgoing.pop_front();
+            _congestion_retries = 0;
             _session.record_queue_overflow();
-            notification_failed = true;
+            terminal_delivery_failed =
+                failed.kind == voice_input::NotificationKind::VoiceError;
+            notification_failed = !terminal_delivery_failed;
+            if (terminal_delivery_failed) {
+                _outgoing.clear();
+                _queued_audio_packets = 0;
+                _terminal_pending = false;
+                _ready = false;
+                _session.disconnect();
+                _ui_state = VoiceInputUiState::Error;
+            }
         }
     }
     if (notification_failed) {
         abort_with_failure(
             static_cast<uint16_t>(VoiceFailure::QueueOverflow),
-            static_cast<uint16_t>(kind),
+            static_cast<uint16_t>(failed.kind),
             now_ms);
     }
 }
@@ -368,6 +435,12 @@ size_t VoiceInputController::queued_audio_ms_for_test() const
 {
     std::lock_guard<std::mutex> lock(_mutex);
     return _queued_audio_packets * kAudioBlockMs;
+}
+
+void VoiceInputController::set_next_connection_session_for_test(uint16_t session)
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    _next_session = session;
 }
 #endif
 
@@ -398,6 +471,23 @@ void VoiceInputController::producer_loop()
 
 void VoiceInputController::producer_step(uint32_t now_ms)
 {
+    bool expected = false;
+    if (!_producer_step_active.compare_exchange_strong(expected, true)) {
+        return;
+    }
+    struct ActiveGuard {
+        std::atomic<bool>& active;
+        std::atomic<bool>& running;
+        bool completed = false;
+        ~ActiveGuard()
+        {
+            active = false;
+            if (completed) {
+                running = false;
+            }
+        }
+    } active_guard{_producer_step_active, _producer_running};
+
     std::array<uint8_t, VoiceCapturePipeline::kAdpcmBytesPerBlock> adpcm = {};
     uint32_t captured_samples = 0;
     VoiceCaptureError error = VoiceCaptureError::None;
@@ -405,6 +495,9 @@ void VoiceInputController::producer_step(uint32_t now_ms)
         adpcm, captured_samples, error);
     if (result == VoiceCaptureResult::BlockReady) {
         if (!prepare_audio(adpcm, captured_samples, now_ms)) {
+            _capture_pipeline->requestStop();
+            _capture_pipeline->close();
+            active_guard.completed = true;
             return;
         }
         return;
@@ -413,12 +506,12 @@ void VoiceInputController::producer_step(uint32_t now_ms)
         return;
     }
 
-    _producer_running = false;
     _capture_pipeline->close();
     if (result == VoiceCaptureResult::Failed &&
         !_external_failure_requested.load()) {
         fail(failure_code(error), 0, now_ms);
     }
+    active_guard.completed = true;
 }
 
 bool VoiceInputController::start_session(uint32_t now_ms)
@@ -436,6 +529,9 @@ bool VoiceInputController::start_session(uint32_t now_ms)
         _graceful_stop = false;
         _terminal_pending = false;
         _begin_accepted = false;
+        _has_accepted_notification = false;
+        _last_accepted_sequence = 0;
+        _congestion_retries = 0;
     }
 
     VoiceCaptureError capture_error = VoiceCaptureError::None;
@@ -510,7 +606,7 @@ bool VoiceInputController::prepare_audio(
             overflow = true;
         } else {
             uint32_t sequence = 0;
-            if (!_session.allocate_sequence(sequence)) {
+            if (!_session.allocate_audio_sequence(sequence)) {
                 exhausted = true;
             } else {
                 voice_input::VoiceNotification logical = {};
@@ -556,8 +652,22 @@ bool VoiceInputController::prepare_terminal(
     uint32_t now_ms)
 {
     uint32_t sequence = 0;
-    if (!_session.allocate_sequence(sequence) || payload == nullptr ||
+    if (!_session.allocate_terminal_sequence(sequence) || payload == nullptr ||
         payload_size > voice_input::kAudioPlaintextSize) {
+        return false;
+    }
+    return prepare_terminal_at(
+        kind, payload, payload_size, sequence, now_ms);
+}
+
+bool VoiceInputController::prepare_terminal_at(
+    voice_input::NotificationKind kind,
+    const uint8_t* payload,
+    size_t payload_size,
+    uint32_t sequence,
+    uint32_t now_ms)
+{
+    if (payload == nullptr || payload_size > voice_input::kAudioPlaintextSize) {
         return false;
     }
     voice_input::VoiceNotification logical = {};
@@ -622,8 +732,6 @@ void VoiceInputController::abort_with_failure(
 void VoiceInputController::fail(uint16_t code, uint16_t detail, uint32_t now_ms)
 {
     _capture_pipeline->requestStop();
-    _producer_running = false;
-    _capture_pipeline->close();
     std::lock_guard<std::mutex> lock(_mutex);
     voice_input::Notification pending_begin = {};
     const auto begin = std::find_if(
@@ -646,11 +754,16 @@ void VoiceInputController::fail(uint16_t code, uint16_t detail, uint32_t now_ms)
     std::array<uint8_t, voice_input::kErrorBodySize> payload = {};
     const size_t size = voice_input::encode_error_body(
         voice_input::ErrorBody{code, detail}, payload.data(), payload.size());
-    if (can_emit_terminal && _session.session() != 0 && size != 0) {
-        (void)prepare_terminal(
+    const uint32_t terminal_sequence = _has_accepted_notification
+                                           ? _last_accepted_sequence + 1U
+                                           : 1U;
+    if (can_emit_terminal && _session.session() != 0 && size != 0 &&
+        terminal_sequence != 0) {
+        (void)prepare_terminal_at(
             voice_input::NotificationKind::VoiceError,
             payload.data(),
             size,
+            terminal_sequence,
             now_ms);
     }
     _session.disconnect();
@@ -688,8 +801,11 @@ void VoiceInputController::stop_capture_bounded()
         _initialized = false;
     }
 #else
-    if (_producer_running.load()) {
+    while (_producer_running.load()) {
         producer_step(0);
+        if (_producer_running.load()) {
+            std::this_thread::yield();
+        }
     }
 #endif
     _producer_running = false;
@@ -712,6 +828,9 @@ void VoiceInputController::reset_session(
     _graceful_stop = false;
     _terminal_pending = false;
     _begin_accepted = false;
+    _has_accepted_notification = false;
+    _last_accepted_sequence = 0;
+    _congestion_retries = 0;
     _ui_state = ready_after_reset ? VoiceInputUiState::Ready
                                   : VoiceInputUiState::Off;
 }
@@ -722,13 +841,8 @@ bool VoiceInputController::make_session_identity(
 {
     session = 0;
     nonce = {};
-    for (int attempt = 0; attempt < 8; ++attempt) {
-        const uint16_t candidate =
-            static_cast<uint16_t>(_entropy->random32() & 0xffffU);
-        if (candidate != 0 && candidate != _last_session) {
-            session = candidate;
-            break;
-        }
+    if (_next_session == 0) {
+        return false;
     }
     for (int attempt = 0; attempt < 8; ++attempt) {
         const uint32_t low = _entropy->random32();
@@ -740,8 +854,11 @@ bool VoiceInputController::make_session_identity(
         }
         const bool nonzero = std::any_of(
             nonce.begin(), nonce.end(), [](uint8_t byte) { return byte != 0; });
-        if (nonzero && nonce != _last_session_nonce && session != 0) {
-            _last_session = session;
+        if (nonzero && nonce != _last_session_nonce) {
+            session = _next_session;
+            _next_session = _next_session == UINT16_MAX
+                                ? 0
+                                : static_cast<uint16_t>(_next_session + 1U);
             _last_session_nonce = nonce;
             return true;
         }

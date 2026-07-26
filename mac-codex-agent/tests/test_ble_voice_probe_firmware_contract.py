@@ -90,6 +90,7 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         header = (ROOT / "main/apps/app_codex_status/app_codex_status.h").read_text()
         source = (ROOT / "main/apps/app_codex_status/app_codex_status.cpp").read_text()
         self.assertIn("VoiceInputController", header)
+        self.assertIn("std::atomic<VoiceInputUiState>", header)
         self.assertIn("handle_button", source)
         self.assertIn("btnB.isPressed()", source)
         self.assertIn("cancel_for_home", source)
@@ -97,16 +98,21 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
             "void AppCodexStatus::onClose()", 1
         )[0]
         self.assertLess(
+            running.index("updateButtonStates"),
             running.index("update_screen_off_control"),
-            running.index("btnB.isPressed()"),
         )
         self.assertLess(
             running.index("update_screen_off_control"),
             running.index("handle_button"),
         )
+        self.assertIn("_key_manager->update(false)", running)
+        self.assertIn("_voice_status.store", running)
         self.assertLess(running.index("cancel_for_home"), running.index("close();"))
+        priority = (
+            ROOT / "main/apps/app_codex_status/codex_status_priority.h"
+        ).read_text()
         for label in ("VOICE", "VOICE OFF", "VOICE ERR"):
-            self.assertIn(f'"{label}"', source)
+            self.assertIn(f'"{label}"', priority)
 
     def test_production_controller_has_bounded_task_and_encrypted_queue(self):
         header = (ROOT / "main/apps/app_codex_status/voice_input_controller.h").read_text()

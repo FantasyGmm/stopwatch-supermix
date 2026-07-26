@@ -409,6 +409,36 @@ class VoiceSessionServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(shortcut.calls, ["start", "stop"])
         self.assertEqual(service.state, VoiceState.ERROR)
 
+    async def test_watch_monotonic_sessions_and_contiguous_error_are_accepted(self):
+        service, route, shortcut = self.make_service()
+        first_nonce = nonce_for(1)
+        await service.handle(begin_packet(session=1, nonce=first_nonce))
+        await service.handle(
+            end_packet(
+                1,
+                EndSummary(0, 0, 0, 0, 0, 10, 256),
+                session=1,
+                nonce=first_nonce,
+            )
+        )
+
+        second_nonce = nonce_for(2)
+        await service.handle(begin_packet(session=2, nonce=second_nonce))
+        with self.assertRaisesRegex(RuntimeError, "watch reported voice error"):
+            await service.handle(
+                encrypted_packet(
+                    VOICE_ERROR,
+                    1,
+                    ERROR_PAYLOAD.pack(5, 0),
+                    session=2,
+                    nonce=second_nonce,
+                )
+            )
+
+        self.assertEqual(route.calls, ["start", "stop", "start", "stop"])
+        self.assertEqual(shortcut.calls, ["start", "stop", "start", "stop"])
+        self.assertEqual(service.state, VoiceState.ERROR)
+
     async def test_route_start_failure_uses_cleanup_without_paired_stops(self):
         route = FakeRoute(fail_start=True)
         shortcut = FakeShortcut()

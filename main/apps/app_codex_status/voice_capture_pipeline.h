@@ -152,6 +152,7 @@ private:
     ble_voice_probe::detail::MicrophonePcmBuffer _microphone_pcm;
     uint32_t _resampler_output_capacity = 0;
     bool _capture_owned = false;
+    bool _global_lease_owned = false;
     bool _recorder_open = false;
     bool _open = false;
 };

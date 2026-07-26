@@ -9,6 +9,8 @@
 #include <mooncake.h>
 #include <lvgl.h>
 #include <memory>
+#include <atomic>
+#include <mutex>
 #include <cstdint>
 #include <string>
 #include <esp_event_base.h>
@@ -77,6 +79,11 @@ private:
     uint16_t _production_voice_mtu = 23;
     uint32_t _production_voice_connection_epoch = 0;
     CodexAlertCarousel _alert_carousel;
+    std::mutex _status_mutex;
+    std::string _base_status = "START";
+    uint32_t _base_status_color = 0;
+    bool _base_status_is_error = false;
+    std::atomic<VoiceInputUiState> _voice_status{VoiceInputUiState::Off};
 
     void create_view();
     void destroy_view();
@@ -86,6 +93,7 @@ private:
     void start_websocket();
     void stop_websocket();
     void set_status(const char* status, uint32_t color);
+    void render_status();
     void set_host_text(const char* prefix);
     bool handle_status_json(const char* data, int length, const char* live_status = "LIVE");
     void set_percent(lv_obj_t* label, lv_obj_t* bar, int value);

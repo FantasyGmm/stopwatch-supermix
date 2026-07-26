@@ -27,7 +27,8 @@ public:
     bool cancel_for_home();
     void disconnect();
 
-    bool allocate_sequence(uint32_t& sequence);
+    bool allocate_audio_sequence(uint32_t& sequence);
+    bool allocate_terminal_sequence(uint32_t& sequence);
     void record_generated();
     void record_accepted();
     void record_queue_overflow();
@@ -40,6 +41,7 @@ public:
 #endif
 
 private:
+    bool allocate_sequence(uint32_t& sequence, bool reserve_terminal);
     void reset_activity();
     bool active() const;
 

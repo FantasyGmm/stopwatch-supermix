@@ -22,9 +22,9 @@ int main()
     assert(!session.started(8, 111, 256));
 
     uint32_t sequence = 0;
-    assert(session.allocate_sequence(sequence));
+    assert(session.allocate_audio_sequence(sequence));
     assert(sequence == 1);
-    assert(session.allocate_sequence(sequence));
+    assert(session.allocate_audio_sequence(sequence));
     assert(sequence == 2);
     session.record_generated();
     session.record_accepted();
@@ -64,7 +64,7 @@ int main()
     session.disconnect();
     assert(session.state() == VoiceInputState::Unavailable);
     assert(session.session() == 0);
-    assert(!session.allocate_sequence(sequence));
+    assert(!session.allocate_audio_sequence(sequence));
 
     session.set_ready(true);
     assert(session.press(2000));
@@ -78,8 +78,9 @@ int main()
     assert(sequence_limit.started(9, 0, 256));
     sequence_limit.set_next_sequence_for_test(
         std::numeric_limits<uint32_t>::max());
-    assert(sequence_limit.allocate_sequence(sequence));
+    assert(!sequence_limit.allocate_audio_sequence(sequence));
+    assert(sequence_limit.allocate_terminal_sequence(sequence));
     assert(sequence == std::numeric_limits<uint32_t>::max());
-    assert(!sequence_limit.allocate_sequence(sequence));
+    assert(!sequence_limit.allocate_terminal_sequence(sequence));
     assert(sequence == std::numeric_limits<uint32_t>::max());
 }

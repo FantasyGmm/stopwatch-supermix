@@ -345,6 +345,73 @@ void testStoppedReadReturnsWithinBoundedTimeout()
     pipeline.close();
 }
 
+void testConcurrentPipelinesHaveOneInstanceOwnedLease()
+{
+    TestBackend first_backend;
+    TestBackend second_backend;
+    VoiceCapturePipeline first(first_backend);
+    VoiceCapturePipeline second(second_backend);
+    VoiceCaptureError first_error = VoiceCaptureError::None;
+    VoiceCaptureError second_error = VoiceCaptureError::None;
+    std::mutex start_mutex;
+    std::condition_variable start_condition;
+    int ready = 0;
+    bool start = false;
+    bool first_opened = false;
+    bool second_opened = false;
+
+    auto open = [&](VoiceCapturePipeline& pipeline, VoiceCaptureError& error,
+                    bool& opened) {
+        {
+            std::unique_lock<std::mutex> lock(start_mutex);
+            ++ready;
+            start_condition.notify_all();
+            start_condition.wait(lock, [&] { return start; });
+        }
+        opened = pipeline.open(error);
+    };
+    std::thread first_thread(open, std::ref(first), std::ref(first_error),
+                             std::ref(first_opened));
+    std::thread second_thread(open, std::ref(second), std::ref(second_error),
+                              std::ref(second_opened));
+    {
+        std::unique_lock<std::mutex> lock(start_mutex);
+        start_condition.wait(lock, [&] { return ready == 2; });
+        start = true;
+        start_condition.notify_all();
+    }
+    first_thread.join();
+    second_thread.join();
+
+    assert(first_opened != second_opened);
+    VoiceCapturePipeline& winner = first_opened ? first : second;
+    VoiceCapturePipeline& loser = first_opened ? second : first;
+    TestBackend& winner_backend = first_opened ? first_backend : second_backend;
+    VoiceCaptureError& loser_error = first_opened ? second_error : first_error;
+    assert(loser_error == VoiceCaptureError::CaptureBusy);
+
+    loser.close();
+    assert(winner_backend.release_calls == 0);
+    winner.close();
+    assert(winner_backend.release_calls == 1);
+}
+
+void testBackendAcquireFailureImmediatelyReleasesGlobalLease()
+{
+    TestBackend failed_backend;
+    failed_backend.acquire_ok = false;
+    VoiceCapturePipeline failed(failed_backend);
+    VoiceCaptureError error = VoiceCaptureError::None;
+    assert(!failed.open(error));
+    assert(error == VoiceCaptureError::CaptureBusy);
+
+    TestBackend next_backend;
+    VoiceCapturePipeline next(next_backend);
+    error = VoiceCaptureError::None;
+    assert(next.open(error));
+    next.close();
+}
+
 }  // namespace
 
 int main()
@@ -355,5 +422,7 @@ int main()
     testStopAndCloseAreIdempotent();
     testStopDuringReadProcessesSuccessfulFinalBlock();
     testStoppedReadReturnsWithinBoundedTimeout();
+    testConcurrentPipelinesHaveOneInstanceOwnedLease();
+    testBackendAcquireFailureImmediatelyReleasesGlobalLease();
     return 0;
 }

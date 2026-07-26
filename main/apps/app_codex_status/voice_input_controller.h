@@ -59,6 +59,12 @@ enum class VoiceButtonAction : uint8_t {
     CancelHome,
 };
 
+enum class VoiceNotificationSendResult : uint8_t {
+    Accepted,
+    Congested,
+    PermanentFailure,
+};
+
 class VoiceButtonEdgeGate {
 public:
     void reset(bool pressed);
@@ -66,6 +72,7 @@ public:
 
 private:
     bool _pressed = false;
+    bool _suppressed_until_release = false;
 };
 
 class VoiceInputController {
@@ -82,19 +89,21 @@ public:
     bool initialize();
     void shutdown();
     void set_ready(bool ready, uint16_t negotiated_mtu);
+    void handle_connection_epoch(uint32_t connection_epoch);
     void handle_button(bool pressed, uint32_t now_ms);
     void cancel_for_home(uint32_t now_ms);
     void handle_disconnect();
     void poll(uint32_t now_ms);
     bool take_notification(voice_input::Notification& output);
     void record_notification_result(
-        voice_input::NotificationKind kind,
-        bool accepted,
+        const voice_input::Notification& notification,
+        VoiceNotificationSendResult result,
         uint32_t now_ms);
     VoiceInputUiState ui_state() const;
 
 #if defined(STOPWATCH_HOST_TEST)
     size_t queued_audio_ms_for_test() const;
+    void set_next_connection_session_for_test(uint16_t session);
 #endif
 
 private:
@@ -111,6 +120,12 @@ private:
         voice_input::NotificationKind kind,
         const uint8_t* payload,
         size_t payload_size,
+        uint32_t now_ms);
+    bool prepare_terminal_at(
+        voice_input::NotificationKind kind,
+        const uint8_t* payload,
+        size_t payload_size,
+        uint32_t sequence,
         uint32_t now_ms);
     void finalize_graceful_stop(uint32_t now_ms);
     void abort_with_failure(uint16_t code, uint16_t detail, uint32_t now_ms);
@@ -135,15 +150,20 @@ private:
     std::deque<voice_input::Notification> _outgoing;
     mutable std::mutex _mutex;
     std::atomic<bool> _producer_running{false};
+    std::atomic<bool> _producer_step_active{false};
     std::atomic<bool> _external_failure_requested{false};
     std::atomic<bool> _shutdown_requested{false};
     void* _producer_task = nullptr;
     [[maybe_unused]] void* _producer_stopped = nullptr;
     uint16_t _negotiated_mtu = 23;
-    uint16_t _last_session = 0;
+    uint16_t _next_session = 1;
+    uint32_t _connection_epoch = 0;
+    uint32_t _last_accepted_sequence = 0;
+    uint8_t _congestion_retries = 0;
     size_t _queued_audio_packets = 0;
     bool _button_pressed = false;
     bool _begin_accepted = false;
+    bool _has_accepted_notification = false;
     std::atomic<bool> _ready{false};
     bool _graceful_stop = false;
     bool _terminal_pending = false;

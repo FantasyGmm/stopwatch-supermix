@@ -200,6 +200,10 @@ echo "[19/25] Production voice session host test"
     "$MBEDTLS_BUILD/library/libmbedcrypto.a" \
     -o "$HOST_TEST_DIR/voice_input_controller_test"
 "$HOST_TEST_DIR/voice_input_controller_test"
+"$CXX" -std=c++17 -Wall -Wextra -Werror -I. \
+    tests/codex_status_priority_test.cpp \
+    -o "$HOST_TEST_DIR/codex_status_priority_test"
+"$HOST_TEST_DIR/codex_status_priority_test"
 
 echo "[20/25] BLE voice probe failure transition host test"
 "$CXX" -std=c++17 -Wall -Wextra -Werror -I. \
