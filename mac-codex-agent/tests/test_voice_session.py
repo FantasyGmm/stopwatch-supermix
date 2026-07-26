@@ -1,5 +1,6 @@
 import asyncio
 import dataclasses
+import gc
 import pathlib
 import sys
 import unittest
@@ -879,6 +880,109 @@ class VoiceSessionServiceTests(unittest.IsolatedAsyncioTestCase):
             service.state,
             VoiceState.ERROR if fail_stop else VoiceState.READY,
         )
+
+    async def test_bounded_cleanup_uses_success_from_cancel_suppressing_child(self):
+        await self._assert_cancel_suppressing_child_outcome(
+            fail_stop=False,
+            cancel_caller=False,
+        )
+
+    async def test_bounded_cleanup_uses_failure_from_cancel_suppressing_child(self):
+        await self._assert_cancel_suppressing_child_outcome(
+            fail_stop=True,
+            cancel_caller=False,
+        )
+
+    async def test_bounded_cleanup_caller_cancel_dominates_suppressed_success(self):
+        await self._assert_cancel_suppressing_child_outcome(
+            fail_stop=False,
+            cancel_caller=True,
+        )
+
+    async def test_bounded_cleanup_caller_cancel_dominates_suppressed_failure(self):
+        await self._assert_cancel_suppressing_child_outcome(
+            fail_stop=True,
+            cancel_caller=True,
+        )
+
+    async def _assert_cancel_suppressing_child_outcome(
+        self, *, fail_stop, cancel_caller
+    ):
+        drain_started = asyncio.Event()
+        cancellation_suppressed = asyncio.Event()
+        release_drain = asyncio.Event()
+        unhandled = []
+        loop = asyncio.get_running_loop()
+        previous_handler = loop.get_exception_handler()
+
+        def capture_unhandled(_loop, context):
+            unhandled.append(context)
+
+        async def cancellation_suppressing_sleep(seconds):
+            self.assertEqual(seconds, 0.150)
+            drain_started.set()
+            while not release_drain.is_set():
+                try:
+                    await release_drain.wait()
+                except asyncio.CancelledError:
+                    cancellation_suppressed.set()
+
+        route = FakeRoute(fail_stop=fail_stop)
+        shortcut = FakeShortcut()
+        service = VoiceSessionService(
+            route,
+            shortcut,
+            TEST_KEY,
+            sleep=cancellation_suppressing_sleep,
+        )
+        await service.handle(begin_packet())
+        loop.set_exception_handler(capture_unhandled)
+        try:
+            with mock.patch.object(
+                service,
+                "_finish_cleanup",
+                wraps=service._finish_cleanup,
+            ) as finish_cleanup:
+                cleanup = asyncio.create_task(
+                    service.disconnect_bounded(0.01)
+                )
+                await drain_started.wait()
+                await asyncio.wait_for(cancellation_suppressed.wait(), 1)
+                child = service._cleanup_task
+
+                if cancel_caller:
+                    cleanup.cancel()
+                release_drain.set()
+
+                if cancel_caller:
+                    with self.assertRaises(asyncio.CancelledError):
+                        await cleanup
+                elif fail_stop:
+                    with self.assertRaisesRegex(
+                        RuntimeError, "route stop failed"
+                    ):
+                        await cleanup
+                else:
+                    self.assertFalse(await cleanup)
+
+                self.assertEqual(finish_cleanup.call_count, 1)
+
+            self.assertEqual(shortcut.calls, ["start", "stop"])
+            self.assertEqual(route.calls, ["start", "stop"])
+            self.assertEqual(
+                service.state,
+                VoiceState.ERROR if fail_stop else VoiceState.READY,
+            )
+            self.assertIsNone(service._cleanup_task)
+            self.assertTrue(child.done())
+            del child
+            del cleanup
+            gc.collect()
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            self.assertEqual(unhandled, [])
+        finally:
+            loop.set_exception_handler(previous_handler)
 
     async def test_concurrent_error_dominates_end_cleanup_final_state(self):
         drain_started = asyncio.Event()

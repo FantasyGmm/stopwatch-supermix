@@ -136,11 +136,20 @@ class VoiceSessionService:
                     except asyncio.CancelledError:
                         interrupted = True
                         cleanup_task.cancel()
-                failures = self._finish_cleanup(final_state)
+                failure = None
+                if cleanup_task.cancelled():
+                    failures = self._finish_cleanup(final_state)
+                    if failures:
+                        failure = failures[0]
+                else:
+                    try:
+                        cleanup_task.result()
+                    except Exception as error:
+                        failure = error
                 if interrupted:
                     raise asyncio.CancelledError
-                if failures:
-                    raise failures[0]
+                if failure is not None:
+                    raise failure
             else:
                 cleanup_task.result()
         finally:
