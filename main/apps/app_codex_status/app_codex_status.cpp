@@ -47,7 +47,6 @@ constexpr uint32_t kTraeStatusStaleMs    = 15000;
 constexpr uint32_t kScreenOffHoldMs      = 2000;
 constexpr int kPageWidth                 = 466;
 constexpr int kPageCount                 = 2;
-constexpr uint32_t kPowerPolicyCheckMs = 1000;
 
 bool is_ascii_text(const char* text)
 {
@@ -274,14 +273,10 @@ void AppCodexStatus::onOpen()
     _last_status_payload_ms = 0;
     _last_trae_status_payload_ms = 0;
     _screen_off_left_press_started_ms = 0;
-    _screen_off_restore_brightness = std::max(10, GetHAL().getUserBackLightBrightness());
-    _screen_off = false;
-    _screen_off_wake_armed = true;
+    _screen_off =
+        GetGlobalDisplayProtectionService().snapshot().state ==
+        DisplayProtectionState::ScreenOff;
     _trae_stale = false;
-    _last_power_policy_check_ms = 0;
-    _external_power_connected = false;
-    _power_policy_known = false;
-    refresh_display_protection_policy(now, true);
     _suppress_task_navigation = false;
     _ws_connected    = false;
     _wifi_lease.reset();
@@ -330,29 +325,26 @@ void AppCodexStatus::onOpen()
 void AppCodexStatus::onRunning()
 {
     const uint32_t now = GetHAL().millis();
-    refresh_display_protection_policy(now, false);
     input::KeyEvent key_event = input::KeyEvent::None;
     if (_key_manager) {
         key_event = _key_manager->update();
     }
 
-    const bool woke_screen = update_screen_off_control(now);
-    if (_screen_off) {
-        key_event = input::KeyEvent::None;
-    }
+    update_screen_off_control(now);
     if (_suppress_task_navigation) {
         key_event = input::KeyEvent::None;
         if (GetHAL().btnA.isReleased() && GetHAL().btnB.isReleased()) {
             _suppress_task_navigation = false;
         }
     }
-    if (!woke_screen && key_event == input::KeyEvent::GoHome) {
+    if (key_event == input::KeyEvent::GoHome) {
         close();
         return;
     }
 
     {
         LvglLockGuard lock;
+        sync_display_protection_presentation();
         update_page_swipe(now);
         bool alert_changed = false;
         if (_current_page == 0 && key_event == input::KeyEvent::GoPrevious) {
@@ -438,10 +430,6 @@ void AppCodexStatus::onClose()
     mclog::tagInfo(getAppInfo().name, "on close");
 
     _key_manager.reset();
-    if (_screen_off) {
-        wake_screen();
-    }
-    GetGlobalDisplayProtectionService().setAutomaticProtection(true);
     stop_network_fallback();
     if (_ble_transport) {
         _ble_transport->stop();
@@ -1150,112 +1138,69 @@ void AppCodexStatus::sync_pending_glow()
     if (_pending_glow == nullptr) {
         return;
     }
-    _pending_glow->set_state(
-        _alert_carousel.display_state(),
-        _screen_off
-    );
+    const bool screen_off =
+        GetGlobalDisplayProtectionService().snapshot().state ==
+        DisplayProtectionState::ScreenOff;
+    _pending_glow->set_state(_alert_carousel.display_state(), screen_off);
 }
 
-bool AppCodexStatus::update_screen_off_control(uint32_t now_ms)
+void AppCodexStatus::sync_display_protection_presentation()
+{
+    const bool screen_off =
+        GetGlobalDisplayProtectionService().snapshot().state ==
+        DisplayProtectionState::ScreenOff;
+    const bool woke_screen = _screen_off && !screen_off;
+    if (_screen_off == screen_off) {
+        return;
+    }
+
+    _screen_off = screen_off;
+    if (woke_screen) {
+        _suppress_task_navigation = true;
+        _screen_off_left_press_started_ms = 0;
+    }
+    _page_swipe.cancel();
+    _trae_card_tap.cancel();
+    _last_page_touch_state = LV_INDEV_STATE_REL;
+    sync_pending_glow();
+    if (_trae_status_page != nullptr) {
+        _trae_status_page->set_active(_current_page == 1 && !_screen_off);
+    }
+}
+
+void AppCodexStatus::update_screen_off_control(uint32_t now_ms)
 {
     const bool left_pressed = GetHAL().btnA.isPressed();
     const bool right_pressed = GetHAL().btnB.isPressed();
 
-    if (_screen_off) {
-        if (!_screen_off_wake_armed) {
-            if (!left_pressed && !right_pressed) {
-                _screen_off_wake_armed = true;
-            }
-            return false;
-        }
+    if (!left_pressed && !right_pressed) {
+        _screen_off_left_press_started_ms = 0;
+        return;
+    }
 
-        if (left_pressed || right_pressed) {
-            wake_screen();
-            return true;
-        }
-        return false;
+    if (_suppress_task_navigation) {
+        return;
     }
 
     if (!left_pressed) {
         _screen_off_left_press_started_ms = 0;
-        return false;
+        return;
     }
 
     if (right_pressed) {
         _screen_off_left_press_started_ms = 0;
-        return false;
+        return;
     }
 
     if (_screen_off_left_press_started_ms == 0) {
         _screen_off_left_press_started_ms = now_ms;
-        return false;
+        return;
     }
 
     if (now_ms - _screen_off_left_press_started_ms >= kScreenOffHoldMs) {
-        enter_screen_off();
-    }
-    return false;
-}
-
-void AppCodexStatus::enter_screen_off()
-{
-    _screen_off_restore_brightness = std::max(10, GetHAL().getUserBackLightBrightness());
-    _screen_off = true;
-    {
-        LvglLockGuard lock;
-        _page_swipe.cancel();
-        _trae_card_tap.cancel();
-        _last_page_touch_state = LV_INDEV_STATE_REL;
-        sync_pending_glow();
-        if (_trae_status_page != nullptr) {
-            _trae_status_page->set_active(_current_page == 1 && !_screen_off);
-        }
-    }
-    _screen_off_wake_armed = false;
-    _screen_off_left_press_started_ms = 0;
-    GetGlobalDisplayProtectionService().setAutomaticProtection(false, false);
-    GetHAL().setTemporaryBackLightBrightness(0);
-}
-
-void AppCodexStatus::wake_screen()
-{
-    GetHAL().setTemporaryBackLightBrightness(_screen_off_restore_brightness);
-    _screen_off = false;
-    {
-        LvglLockGuard lock;
-        _page_swipe.cancel();
-        _trae_card_tap.cancel();
-        _last_page_touch_state = LV_INDEV_STATE_REL;
-        sync_pending_glow();
-        if (_trae_status_page != nullptr) {
-            _trae_status_page->set_active(_current_page == 1 && !_screen_off);
-        }
-    }
-    _screen_off_wake_armed = true;
-    _screen_off_left_press_started_ms = 0;
-    refresh_display_protection_policy(GetHAL().millis(), true);
-    _suppress_task_navigation = true;
-}
-
-void AppCodexStatus::refresh_display_protection_policy(uint32_t now_ms, bool force)
-{
-    if (!force && _power_policy_known &&
-        now_ms - _last_power_policy_check_ms < kPowerPolicyCheckMs) {
-        return;
-    }
-
-    _last_power_policy_check_ms = now_ms;
-    const bool external_power = GetHAL().isBatteryCharging(false);
-    const bool policy_changed =
-        !_power_policy_known || _external_power_connected != external_power;
-    _external_power_connected = external_power;
-    _power_policy_known = true;
-
-    if (_screen_off) {
-        return;
-    }
-    if (force || policy_changed) {
-        GetGlobalDisplayProtectionService().setAutomaticProtection(!external_power);
+        GetGlobalDisplayProtectionService().screenOffNow();
+        _suppress_task_navigation = true;
+        _screen_off_left_press_started_ms = 0;
     }
 }
 

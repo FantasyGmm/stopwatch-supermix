@@ -36,7 +36,6 @@ public:
     void update();
     void applyPendingHardwareUpdate();
     void shutdown();
-    void setAutomaticProtection(bool enabled, bool restore_display = true);
     void setKeepAwake(DisplayKeepAwakeReason reason, bool active);
     const DisplayProtectionConfig& config() const;
     void applyConfig(const DisplayProtectionConfig& config, bool persist);

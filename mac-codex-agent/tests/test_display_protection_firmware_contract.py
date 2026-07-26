@@ -201,6 +201,54 @@ class DisplayProtectionFirmwareContractTests(unittest.TestCase):
             "_logic.automaticEnabled() && _logic.reasonMask() == 0", service
         )
 
+    def test_codex_delegates_display_protection_to_global_service(self):
+        codex_header = (
+            ROOT / "main" / "apps" / "app_codex_status" / "app_codex_status.h"
+        ).read_text(encoding="utf-8")
+        codex_source = (
+            ROOT / "main" / "apps" / "app_codex_status" / "app_codex_status.cpp"
+        ).read_text(encoding="utf-8")
+        codex_source_or_header = codex_header + codex_source
+
+        for forbidden in (
+            "kPowerPolicyCheckMs",
+            "isBatteryCharging(false)",
+            "setAutomaticProtection(",
+            "_external_power_connected",
+            "_power_policy_known",
+            "_screen_off_restore_brightness",
+        ):
+            self.assertNotIn(forbidden, codex_source_or_header)
+
+        self.assertIn(
+            "GetGlobalDisplayProtectionService().screenOffNow()", codex_source
+        )
+        self.assertIn(
+            "const bool screen_off =\n"
+            "        GetGlobalDisplayProtectionService().snapshot().state ==\n"
+            "        DisplayProtectionState::ScreenOff;\n"
+            "    _pending_glow->set_state(_alert_carousel.display_state(), screen_off);",
+            codex_source,
+        )
+
+        service_header = (
+            ROOT
+            / "main"
+            / "runtime"
+            / "display"
+            / "global_display_protection_service.h"
+        ).read_text(encoding="utf-8")
+        service_source = (
+            ROOT
+            / "main"
+            / "runtime"
+            / "display"
+            / "global_display_protection_service.cpp"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn(
+            "setAutomaticProtection", service_header + service_source
+        )
+
     def test_assistant_publishes_semantic_activity_only(self):
         assistant_source = (
             ROOT / "main" / "apps" / "app_assistant" / "app_assistant.cpp"

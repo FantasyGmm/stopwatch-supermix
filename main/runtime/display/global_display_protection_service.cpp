@@ -147,17 +147,6 @@ void GlobalDisplayProtectionService::shutdown()
     _initialized = false;
 }
 
-void GlobalDisplayProtectionService::setAutomaticProtection(bool enabled,
-                                                             bool restore_display)
-{
-    if (!_initialized) {
-        return;
-    }
-    syncUserBrightness();
-    acceptDecision(
-        _logic.setAutomaticEnabled(enabled, GetHAL().millis()), restore_display);
-}
-
 void GlobalDisplayProtectionService::setKeepAwake(DisplayKeepAwakeReason reason,
                                                    bool active)
 {
