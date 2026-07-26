@@ -434,6 +434,51 @@ class TraeTaskTrackerTests(unittest.TestCase):
         self.assertEqual(snapshot.tasks[0].model, "")
         self.assertEqual(snapshot.tasks[0].effort, "")
 
+    def test_model_observation_time_survives_cursor_and_ledger_recreation(self):
+        self.log.write_text(
+            "2026-07-24 10:00:02 model_info: CustomModel { "
+            'display_model_name: Some("Fresh Model"), '
+            'reasoning_effort: Some("high") }\n',
+            encoding="utf-8",
+        )
+        tracker = self.tracker()
+
+        snapshot = tracker.refresh((self.log,), now=1.0)
+        observed_at = parse_trae_log_event(
+            "2026-07-24 10:00:02 model_info: CustomModel { "
+            'display_model_name: Some("Fresh Model"), '
+            'reasoning_effort: Some("high") }'
+        ).occurred_at
+        cursor = json.loads(self.cursor.read_text(encoding="utf-8"))["cursors"][
+            str(self.log)
+        ]
+        ledger = json.loads(self.ledger.read_text(encoding="utf-8"))
+
+        self.assertEqual(getattr(snapshot, "model_updated_at", None), observed_at)
+        self.assertEqual(cursor["model_updated_at"], observed_at)
+        self.assertEqual(ledger["model_updated_at"], observed_at)
+        recreated = self.tracker().refresh((), now=2.0)
+        self.assertEqual(getattr(recreated, "model_updated_at", None), observed_at)
+
+    def test_old_cursor_and_ledger_default_missing_model_observation_time(self):
+        self.ledger.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "model": "Legacy Model",
+                    "effort": "low",
+                    "revision": 3,
+                    "tasks": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        snapshot = self.tracker().refresh((), now=1.0)
+
+        self.assertEqual(snapshot.model, "Legacy Model")
+        self.assertEqual(getattr(snapshot, "model_updated_at", None), 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()

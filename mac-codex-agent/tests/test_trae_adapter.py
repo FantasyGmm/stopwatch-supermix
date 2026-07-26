@@ -420,6 +420,134 @@ class TraeStateCollectorTests(unittest.TestCase):
         self.assertEqual(by_title["Task B"]["model"], "Model B")
         self.assertEqual(by_title["Task B"]["effort"], "high")
 
+    def test_cold_start_synthesizes_every_active_project_metadata_record(self):
+        metadata_a = self.write_sandbox(
+            {
+                "session_id": "session-a",
+                "task_id": "task-a",
+                "project_path": "/work/Project A",
+                "task_title": "Task A",
+                "state": "pending",
+            },
+            name="project-a.json",
+        )
+        metadata_b = self.write_sandbox(
+            {
+                "session_id": "session-b",
+                "task_id": "task-b",
+                "project_path": "/work/Project B",
+                "task_title": "Task B",
+                "state": "running",
+            },
+            name="project-b.json",
+        )
+        os.utime(metadata_a, ns=(100, 100))
+        os.utime(metadata_b, ns=(200, 200))
+
+        state = self.collector(online=True).get_state()
+
+        self.assertEqual(state["trae_pending_count"], 1)
+        self.assertEqual(state["trae_running_count"], 1)
+        self.assertEqual(
+            {item["project"] for item in state["trae_tasks"]},
+            {"Project A", "Project B"},
+        )
+
+    def test_older_terminal_metadata_retires_task_while_newer_project_runs(self):
+        for terminal_state in ("failed", "cancelled"):
+            with self.subTest(terminal_state=terminal_state):
+                metadata_b = self.write_sandbox(
+                    {
+                        "session_id": "session-b",
+                        "task_id": "task-b",
+                        "project_path": "/work/Project B",
+                        "task_title": "Task B",
+                        "state": terminal_state,
+                    },
+                    name="project-b.json",
+                )
+                metadata_a = self.write_sandbox(
+                    {
+                        "session_id": "session-a",
+                        "task_id": "task-a",
+                        "project_path": "/work/Project A",
+                        "task_title": "Task A",
+                        "state": "running",
+                    },
+                    name="project-a.json",
+                )
+                os.utime(metadata_b, ns=(100, 100))
+                os.utime(metadata_a, ns=(200, 200))
+                collector = self.collector(online=True)
+                collector._tracker = FakeTracker(
+                    tasks=(
+                        TraeTask(
+                            "session-b",
+                            "task-b",
+                            "Project B",
+                            "Task B",
+                            "",
+                            "running",
+                            5.0,
+                        ),
+                    )
+                )
+
+                state = collector.get_state()
+
+                self.assertEqual(state["trae_running_count"], 1)
+                self.assertEqual(
+                    [item["project"] for item in state["trae_tasks"]],
+                    ["Project A"],
+                )
+
+    def test_older_workspace_model_does_not_override_newer_log_model(self):
+        self.write_log(
+            "2026-07-24 10:00:05 model_info: CustomModel { "
+            'display_model_name: Some("New Log Model"), '
+            'reasoning_effort: Some("high") }'
+        )
+        metadata = self.write_sandbox(
+            {
+                "session_id": "session-a",
+                "task_id": "task-a",
+                "selected_model": "Old Workspace Model",
+                "selected_effort": "low",
+                "state": "running",
+            }
+        )
+        os.utime(metadata, ns=(1_000_000_000, 1_000_000_000))
+
+        state = self.collector(online=True).get_state()
+
+        self.assertEqual(state["trae_model"], "New Log Model")
+        self.assertEqual(state["trae_effort"], "high")
+
+    def test_newer_workspace_model_overrides_older_log_model(self):
+        self.write_log(
+            "2020-01-01 10:00:05 model_info: CustomModel { "
+            'display_model_name: Some("Old Log Model"), '
+            'reasoning_effort: Some("low") }'
+        )
+        metadata = self.write_sandbox(
+            {
+                "session_id": "session-a",
+                "task_id": "task-a",
+                "selected_model": "New Workspace Model",
+                "selected_effort": "high",
+                "state": "running",
+            }
+        )
+        os.utime(
+            metadata,
+            ns=(2_000_000_000_000_000_000, 2_000_000_000_000_000_000),
+        )
+
+        state = self.collector(online=True).get_state()
+
+        self.assertEqual(state["trae_model"], "New Workspace Model")
+        self.assertEqual(state["trae_effort"], "high")
+
 
 if __name__ == "__main__":
     unittest.main()

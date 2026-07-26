@@ -55,6 +55,9 @@ class TraeLogCursor:
     inode: int
     offset: int
     mtime_ns: int
+    model: str = ""
+    effort: str = ""
+    model_updated_at: float = 0.0
 
 
 @dataclasses.dataclass(frozen=True)
@@ -63,6 +66,7 @@ class TraeTaskSnapshot:
     model: Optional[str]
     effort: Optional[str]
     revision: int
+    model_updated_at: float = 0.0
 
 
 def parse_trae_log_event(line: str) -> Optional[TraeLogEvent]:
@@ -200,7 +204,13 @@ class TraeTaskTracker:
         self._cursor_path = pathlib.Path(cursor_path)
         self._ledger_path = pathlib.Path(ledger_path)
         self._cursors = self._load_cursors()
-        self._tasks, self._model, self._effort, self._revision = self._load_ledger()
+        (
+            self._tasks,
+            self._model,
+            self._effort,
+            self._model_updated_at,
+            self._revision,
+        ) = self._load_ledger()
 
     def refresh(
         self,
@@ -240,11 +250,28 @@ class TraeTaskTracker:
                     )
                 continue
 
-            local_model = self._latest_model_from_tail(path, cursor.offset)
+            local_model = (
+                TraeLogEvent(
+                    kind="model",
+                    model=cursor.model,
+                    effort=cursor.effort or None,
+                    occurred_at=(
+                        cursor.model_updated_at
+                        if cursor.model_updated_at > 0
+                        else None
+                    ),
+                )
+                if cursor.model
+                else self._latest_model_from_tail(path, cursor.offset)
+            )
+            local_model_updated_at = 0.0
             if local_model is not None:
+                local_model_updated_at = self._event_time(
+                    local_model, cursor.mtime_ns, 0
+                )
                 model_events.append(
                     (
-                        self._event_time(local_model, cursor.mtime_ns, 0),
+                        local_model_updated_at,
                         key,
                         0,
                         local_model,
@@ -267,11 +294,12 @@ class TraeTaskTracker:
                         continue
                     if event.kind == "model":
                         local_model = event
+                        local_model_updated_at = self._event_time(
+                            event, stat.st_mtime_ns, line_index
+                        )
                         model_events.append(
                             (
-                                self._event_time(
-                                    event, stat.st_mtime_ns, line_index
-                                ),
+                                local_model_updated_at,
                                 key,
                                 line_index,
                                 event,
@@ -293,17 +321,31 @@ class TraeTaskTracker:
                 inode=stat.st_ino,
                 offset=cursor.offset + complete_length,
                 mtime_ns=stat.st_mtime_ns,
+                model=local_model.model if local_model is not None else "",
+                effort=(
+                    (local_model.effort or "")
+                    if local_model is not None
+                    else ""
+                ),
+                model_updated_at=local_model_updated_at,
             )
 
         if model_events:
-            latest_model = max(
+            latest_model_entry = max(
                 model_events,
                 key=lambda item: (item[0], item[1], item[2]),
-            )[3]
+            )
+            latest_model_time = latest_model_entry[0]
+            latest_model = latest_model_entry[3]
             next_pair = (latest_model.model, latest_model.effort)
-            if next_pair != (self._model, self._effort):
+            if latest_model_time > self._model_updated_at or (
+                self._model is None and latest_model_time == self._model_updated_at
+            ):
+                model_changed = next_pair != (self._model, self._effort)
                 self._model, self._effort = next_pair
-                changed = True
+                timestamp_changed = latest_model_time != self._model_updated_at
+                self._model_updated_at = latest_model_time
+                changed = changed or model_changed or timestamp_changed
 
         for activity_time, _path_key, _line_index, event, local_model in sorted(
             activity_events,
@@ -333,6 +375,7 @@ class TraeTaskTracker:
             model=self._model,
             effort=self._effort,
             revision=self._revision,
+            model_updated_at=self._model_updated_at,
         )
 
     def remember_tasks(self, tasks: Iterable[TraeTask]) -> TraeTaskSnapshot:
@@ -362,12 +405,24 @@ class TraeTaskTracker:
         self, path: pathlib.Path, stat: os.stat_result
     ) -> Optional[TraeLogEvent]:
         model = self._latest_model_from_tail(path, stat.st_size)
+        model_updated_at = (
+            self._event_time(model, stat.st_mtime_ns, 0)
+            if model is not None
+            else 0.0
+        )
         key = str(path)
         self._cursors[key] = TraeLogCursor(
             path=key,
             inode=stat.st_ino,
             offset=stat.st_size,
             mtime_ns=stat.st_mtime_ns,
+            model=(
+                model.model
+                if model is not None and model.model is not None
+                else ""
+            ),
+            effort=(model.effort or "") if model is not None else "",
+            model_updated_at=model_updated_at,
         )
         return model
 
@@ -407,6 +462,17 @@ class TraeTaskTracker:
                 inode=int(value["inode"]),
                 offset=int(value["offset"]),
                 mtime_ns=int(value["mtime_ns"]),
+                model=(
+                    str(value.get("model", ""))[:64]
+                    if isinstance(value.get("model", ""), str)
+                    else ""
+                ),
+                effort=(
+                    str(value.get("effort", ""))[:32]
+                    if isinstance(value.get("effort", ""), str)
+                    else ""
+                ),
+                model_updated_at=float(value.get("model_updated_at", 0.0)),
             )
         except (ValueError, TypeError, KeyError):
             return None
@@ -433,7 +499,13 @@ class TraeTaskTracker:
 
     def _load_ledger(
         self,
-    ) -> Tuple[Tuple[TraeTask, ...], Optional[str], Optional[str], int]:
+    ) -> Tuple[
+        Tuple[TraeTask, ...],
+        Optional[str],
+        Optional[str],
+        float,
+        int,
+    ]:
         try:
             value = json.loads(self._ledger_path.read_text(encoding="utf-8"))
             tasks = []
@@ -468,6 +540,7 @@ class TraeTaskTracker:
                 self._retain_ledger_tasks(tasks),
                 model if isinstance(model, str) else None,
                 effort if isinstance(effort, str) else None,
+                float(value.get("model_updated_at", 0.0)),
                 int(value.get("revision", 0)),
             )
         except (
@@ -477,7 +550,7 @@ class TraeTaskTracker:
             KeyError,
             json.JSONDecodeError,
         ):
-            return (), None, None, 0
+            return (), None, None, 0.0, 0
 
     def _retain_ledger_tasks(
         self, tasks: Iterable[TraeTask]
@@ -515,6 +588,7 @@ class TraeTaskTracker:
                 "version": 2,
                 "model": self._model,
                 "effort": self._effort,
+                "model_updated_at": self._model_updated_at,
                 "revision": self._revision,
                 "tasks": [dataclasses.asdict(item) for item in self._tasks],
             },

@@ -109,22 +109,42 @@ class TraeStateCollector:
 
         now = self._now()
         snapshot = self._tracker.refresh(self._log_paths(), now)
-        metadata = self._current_agent_metadata(snapshot.tasks)
+        metadata_observations = self._current_agent_metadata()
         fallback_project = self._workspace_project()
-        metadata_model = _clean_text(metadata.get("selected_model"), 64)
-        metadata_effort = _clean_text(metadata.get("selected_effort"), 32)
-        model = metadata_model or snapshot.model
-        effort = (
-            metadata_effort
-            if metadata_model
-            else snapshot.effort
+        latest_metadata_model = max(
+            (
+                item
+                for item in metadata_observations
+                if _clean_text(item[1].get("selected_model"), 64)
+            ),
+            default=None,
+            key=lambda item: (
+                item[0],
+                item[1].get("session_id", ""),
+                item[1].get("task_id", ""),
+            ),
         )
-        enriched_tasks = self._enrich_tasks(
-            snapshot.tasks,
-            metadata,
-            fallback_project,
-            now,
+        metadata_is_newer = latest_metadata_model is not None and (
+            snapshot.model is None
+            or (latest_metadata_model[0] / 1_000_000_000.0)
+            > snapshot.model_updated_at
         )
+        if metadata_is_newer:
+            latest_metadata = latest_metadata_model[1]
+            model = _clean_text(latest_metadata.get("selected_model"), 64)
+            effort = _clean_text(latest_metadata.get("selected_effort"), 32)
+        else:
+            model = snapshot.model
+            effort = snapshot.effort
+
+        enriched_tasks = snapshot.tasks
+        for observed_at_ns, metadata in metadata_observations:
+            enriched_tasks = self._enrich_tasks(
+                enriched_tasks,
+                metadata,
+                fallback_project,
+                observed_at_ns / 1_000_000_000.0 if observed_at_ns > 0 else now,
+            )
         remember_tasks = getattr(self._tracker, "remember_tasks", None)
         if callable(remember_tasks):
             snapshot = remember_tasks(enriched_tasks)
@@ -163,31 +183,33 @@ class TraeStateCollector:
             return ()
 
     def _current_agent_metadata(
-        self, tasks: Iterable[TraeTask]
-    ) -> Dict[str, object]:
+        self,
+    ) -> Tuple[Tuple[int, Dict[str, object]], ...]:
         candidates = self._sandbox_metadata() + self._state_db_metadata()
-        if not candidates:
-            return {}
-        task_keys = {(item.session_id, item.task_id) for item in tasks}
-        _, value = max(
-            candidates,
-            key=lambda item: (
-                item[0],
-                (
-                    item[1].get("session_id"),
-                    item[1].get("task_id"),
-                )
-                in task_keys,
-            ),
+        newest_by_task = {}
+        for candidate in candidates:
+            value = candidate[1]
+            key = (value.get("session_id"), value.get("task_id"))
+            previous = newest_by_task.get(key)
+            if previous is None or candidate[0] >= previous[0]:
+                newest_by_task[key] = candidate
+        return tuple(
+            sorted(
+                newest_by_task.values(),
+                key=lambda item: (
+                    item[0],
+                    item[1].get("session_id", ""),
+                    item[1].get("task_id", ""),
+                ),
+            )
         )
-        return value
 
     def _sandbox_metadata(self) -> List[Tuple[int, Dict[str, object]]]:
         if not self._paths.sandbox.is_dir():
             return []
         candidates = []
         try:
-            paths = self._paths.sandbox.rglob("*.json")
+            paths = sorted(self._paths.sandbox.rglob("*.json"), key=str)
             for path in paths:
                 try:
                     value = json.loads(path.read_text(encoding="utf-8"))
@@ -205,7 +227,10 @@ class TraeStateCollector:
             return []
         candidates = []
         try:
-            paths = self._paths.workspace_storage.rglob("state.vscdb")
+            paths = sorted(
+                self._paths.workspace_storage.rglob("state.vscdb"),
+                key=str,
+            )
             for path in paths:
                 value = self._read_current_agent_row(path)
                 normalized = self._normalize_metadata(value)
