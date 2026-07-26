@@ -45,6 +45,28 @@ class DebugCommandFirmwareContractTests(unittest.TestCase):
         self.assertIn("openApp(props.appID)", launcher)
         self.assertNotIn("GetMooncake().openApp(props.appID)", launcher)
 
+    def test_display_protection_status_is_read_only_metadata(self):
+        parser_header = (
+            ROOT / "main" / "debug" / "debug_command_parser.h"
+        ).read_text(encoding="utf-8")
+        service = (
+            ROOT / "main" / "debug" / "debug_command_service.cpp"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("DisplayProtectionStatus", parser_header)
+        self.assertIn(
+            "GetGlobalDisplayProtectionService().snapshot()", service
+        )
+        self.assertIn(
+            "DISPLAY PROTECTION state=%s brightness=%d restore=%d automatic=%u reasons=0x%02x",
+            service,
+        )
+        body_start = service.index("void log_display_protection_status()")
+        body_end = service.index("\n}", body_start)
+        display_status_body = service[body_start:body_end].lower()
+        for forbidden in ("transcript", "payload", "audio data", "conversation"):
+            self.assertNotIn(forbidden, display_status_body)
+
 
 if __name__ == "__main__":
     unittest.main()

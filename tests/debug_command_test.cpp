@@ -71,6 +71,8 @@ int main()
            DebugCommandKind::AssistantTraceClear);
     assert(ParseDebugCommand("debug assistant wifi-cycle").kind ==
            DebugCommandKind::AssistantWifiCycle);
+    assert(ParseDebugCommand("debug display protection").kind ==
+           DebugCommandKind::DisplayProtectionStatus);
 
     const auto muted = ParseDebugCommand("debug volume 0");
     assert(muted.kind == DebugCommandKind::VolumeSet);
