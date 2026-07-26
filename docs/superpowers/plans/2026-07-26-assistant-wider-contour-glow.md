@@ -27,9 +27,11 @@ Replace the current footprint test with:
 
 ```python
 def test_matches_launcher_family_visual_footprint(self):
-    halo = bounds(self.pixels, 8)
+    # RGB565 quantizes the first visible blue step to brightness 8, so a
+    # threshold of 7 includes the complete low-light contour footprint.
+    halo = bounds(self.pixels, 7)
     halo_long_axis = max(halo[2] - halo[0], halo[3] - halo[1])
-    self.assertGreaterEqual(halo_long_axis, 185)
+    self.assertGreaterEqual(halo_long_axis, 190)
     self.assertLessEqual(halo_long_axis, 199)
 
     strong = bounds(self.pixels, 80)
@@ -38,7 +40,7 @@ def test_matches_launcher_family_visual_footprint(self):
     self.assertLessEqual(strong_long_axis, 165)
 ```
 
-The 8-level bound measures the soft outer light. The 80-level bound protects the unchanged five-bar core from accidental enlargement.
+The 7 threshold includes RGB565's first visible brightness step at level 8 and measures the complete soft outer light. The 80-level bound protects the unchanged five-bar core from accidental enlargement.
 
 - [ ] **Step 2: Run the focused test and verify RED**
 
@@ -48,7 +50,7 @@ Run:
 python3 -m unittest mac-codex-agent/tests/test_assistant_icon_asset.py
 ```
 
-Expected: `test_matches_launcher_family_visual_footprint` fails because the current 18 px / alpha 90 halo measures about 174 px on its long axis, below the new 185 px minimum.
+Expected: `test_matches_launcher_family_visual_footprint` fails because the current 18 px / alpha 90 halo measures about 182 px on its long axis, below the new 190 px minimum.
 
 ### Task 2: Expand only the outer contour layer
 

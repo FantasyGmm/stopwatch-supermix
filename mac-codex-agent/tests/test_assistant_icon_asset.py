@@ -67,7 +67,14 @@ class AssistantIconAssetTests(unittest.TestCase):
         self.assertEqual(len(self.raw), 80000)
 
     def test_matches_launcher_family_visual_footprint(self):
-        strong = bounds(self.pixels, 40)
+        # RGB565 quantizes the first visible blue step to brightness 8, so a
+        # threshold of 7 includes the complete low-light contour footprint.
+        halo = bounds(self.pixels, 7)
+        halo_long_axis = max(halo[2] - halo[0], halo[3] - halo[1])
+        self.assertGreaterEqual(halo_long_axis, 190)
+        self.assertLessEqual(halo_long_axis, 199)
+
+        strong = bounds(self.pixels, 80)
         strong_long_axis = max(strong[2] - strong[0], strong[3] - strong[1])
         self.assertGreaterEqual(strong_long_axis, 145)
         self.assertLessEqual(strong_long_axis, 165)

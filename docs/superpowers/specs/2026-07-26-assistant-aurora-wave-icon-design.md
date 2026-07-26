@@ -32,7 +32,7 @@ Replace only the Assistant launcher icon with the user-selected H2 Aurora Wave d
 ## Verification and release scope
 
 - Update the focused asset contract first and observe it fail against the current 18 px / alpha 90 contour glow.
-- Generate the refined H2 asset, run the focused contract, and inspect decoded 200 px, 72 px, and 45 px previews beside the launcher family. At the low-brightness threshold, the Assistant footprint should expand from about 174 px toward 190 px without changing the five bright bar silhouettes.
+- Generate the refined H2 asset, run the focused contract, and inspect decoded 200 px, 72 px, and 45 px previews beside the launcher family. Including RGB565's first visible brightness step at level 8, the Assistant footprint should expand from about 182 px toward 192 px without changing the five bright bar silhouettes.
 - Build the unified firmware; do not run unrelated runtime test suites unless the focused checks or build expose a broader issue.
 - For this asset-only change, flash the verified build directly without a new full-flash backup, then validate boot to the launcher and confirm the Mac Codex Agent remains running.
 - Physical on-watch appearance remains a separate visual acceptance check after flashing.
