@@ -53,7 +53,7 @@ void GlobalEdgeControlService::update()
         if (_last_touch_state == LV_INDEV_STATE_REL) {
             _last_release_consumed = false;
             _overlay.hide();
-            _logic.press(point.x, point.y, GetHAL().getBackLightBrightness(),
+            _logic.press(point.x, point.y, GetHAL().getUserBackLightBrightness(),
                          GetHAL().getSpeakerVolume(), now_ms);
         }
 

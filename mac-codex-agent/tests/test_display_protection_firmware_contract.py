@@ -60,9 +60,19 @@ class DisplayProtectionFirmwareContractTests(unittest.TestCase):
             "lv_indev_reset(indev, nullptr)",
             "GetHAL().suppressButtonInputUntilRelease()",
             "GetHAL().setTemporaryBackLightBrightness",
+            "active && GetHAL().getBackLightBrightness() <= 0",
         ):
             self.assertIn(token, service)
         self.assertNotIn("setBackLightBrightness", service)
+        edge_service = (
+            ROOT
+            / "main"
+            / "apps"
+            / "common"
+            / "edge_control"
+            / "global_edge_control_service.cpp"
+        ).read_text(encoding="utf-8")
+        self.assertIn("GetHAL().getUserBackLightBrightness()", edge_service)
 
     def test_codex_policy_tracks_external_power_and_preserves_manual_off(self):
         codex_source = (

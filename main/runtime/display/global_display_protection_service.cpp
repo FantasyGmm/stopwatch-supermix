@@ -110,7 +110,13 @@ void GlobalDisplayProtectionService::setKeepAwake(DisplayKeepAwakeReason reason,
     if (!_initialized) {
         return;
     }
+    syncUserBrightness();
+    const uint8_t reason_bit = static_cast<uint8_t>(reason);
+    const bool was_active = (_logic.reasonMask() & reason_bit) != 0;
     acceptDecision(_logic.setKeepAwake(reason, active, GetHAL().millis()));
+    if (active && GetHAL().getBackLightBrightness() <= 0 && !was_active) {
+        _pending_brightness = _restore_brightness;
+    }
 }
 
 DisplayProtectionSnapshot GlobalDisplayProtectionService::snapshot() const
