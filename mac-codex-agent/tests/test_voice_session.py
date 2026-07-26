@@ -834,6 +834,52 @@ class VoiceSessionServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(route.calls, ["start", "stop"])
         self.assertEqual(service.state, VoiceState.ERROR)
 
+    async def test_bounded_cleanup_preserves_cancel_as_child_finishes(self):
+        await self._assert_bounded_cancel_as_child_finishes(fail_stop=False)
+
+    async def test_bounded_cleanup_preserves_cancel_as_failing_child_finishes(self):
+        await self._assert_bounded_cancel_as_child_finishes(fail_stop=True)
+
+    async def _assert_bounded_cancel_as_child_finishes(self, fail_stop):
+        drain_started = asyncio.Event()
+        cleanup_task_cancelled = asyncio.Event()
+        finish_cancelled_cleanup = asyncio.Event()
+
+        async def cancellation_paused_sleep(seconds):
+            self.assertEqual(seconds, 0.150)
+            drain_started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cleanup_task_cancelled.set()
+                await finish_cancelled_cleanup.wait()
+                raise
+
+        route = FakeRoute(fail_stop=fail_stop)
+        shortcut = FakeShortcut()
+        service = VoiceSessionService(
+            route,
+            shortcut,
+            TEST_KEY,
+            sleep=cancellation_paused_sleep,
+        )
+        await service.handle(begin_packet())
+        cleanup = asyncio.create_task(service.disconnect_bounded(0.01))
+        await drain_started.wait()
+        await asyncio.wait_for(cleanup_task_cancelled.wait(), 1)
+
+        finish_cancelled_cleanup.set()
+        cleanup.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await cleanup
+
+        self.assertEqual(shortcut.calls, ["start", "stop"])
+        self.assertEqual(route.calls, ["start", "stop"])
+        self.assertEqual(
+            service.state,
+            VoiceState.ERROR if fail_stop else VoiceState.READY,
+        )
+
     async def test_concurrent_error_dominates_end_cleanup_final_state(self):
         drain_started = asyncio.Event()
         release_drain = asyncio.Event()

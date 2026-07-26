@@ -132,14 +132,10 @@ class VoiceSessionService:
                 cleanup_task.cancel()
                 while not cleanup_task.done():
                     try:
-                        await asyncio.shield(cleanup_task)
+                        await asyncio.wait((cleanup_task,))
                     except asyncio.CancelledError:
-                        if cleanup_task.done():
-                            break
                         interrupted = True
                         cleanup_task.cancel()
-                    except Exception:
-                        break
                 failures = self._finish_cleanup(final_state)
                 if interrupted:
                     raise asyncio.CancelledError
