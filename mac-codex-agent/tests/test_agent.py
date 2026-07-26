@@ -321,6 +321,32 @@ class CodexStatusAgentTests(unittest.TestCase):
                 self.assertEqual(payload["trae_running_count"], expected_running)
                 self.assertLessEqual(len(_compact_json_bytes(payload)), 1024)
 
+    def test_trae_payload_bounds_huge_revision_to_firmware_signed_int(self):
+        payload = _watch_trae_status({"trae_revision": 10**2000})
+
+        self.assertEqual(payload["trae_revision"], 2147483647)
+        self.assertLessEqual(len(_compact_json_bytes(payload)), 1024)
+
+    def test_trae_payload_rejects_nonfinite_scalar_values(self):
+        for case, value in (
+            ("nan", float("nan")),
+            ("inf", float("inf")),
+            ("negative_inf", float("-inf")),
+        ):
+            with self.subTest(case=case):
+                payload = _watch_trae_status(
+                    {
+                        "trae_pending_count": value,
+                        "trae_running_count": value,
+                        "trae_revision": value,
+                    }
+                )
+
+                self.assertEqual(payload["trae_pending_count"], 0)
+                self.assertEqual(payload["trae_running_count"], 0)
+                self.assertEqual(payload["trae_revision"], 0)
+                self.assertLessEqual(len(_compact_json_bytes(payload)), 1024)
+
     def test_trae_payload_keeps_full_counts_when_details_are_trimmed(self):
         status = trae_status()
         status.update(

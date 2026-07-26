@@ -5,6 +5,7 @@ import asyncio
 import datetime
 import hashlib
 import json
+import math
 import time
 from typing import Any, Callable, Mapping, Optional
 
@@ -24,6 +25,7 @@ MAX_TITLE_LENGTH = 48
 MAX_DETAIL_LENGTH = 72
 MAX_TRAE_TASKS = 4
 MAX_TRAE_TASK_COUNT = 65535
+MAX_TRAE_REVISION = 2147483647
 MAX_TRAE_MESSAGE_SIZE = 1024
 TRAE_HEARTBEAT_SECONDS = 6.0
 _CODEX_STATUS_KEYS = (
@@ -181,7 +183,9 @@ def _watch_trae_status(status: Mapping[str, object]):
         "trae_online": status.get("trae_online") is True,
         "trae_model": _bounded_text(status.get("trae_model"), 64) or "--",
         "trae_effort": _bounded_text(status.get("trae_effort"), 32) or "--",
-        "trae_revision": _nonnegative_integer(status.get("trae_revision")),
+        "trae_revision": min(
+            _nonnegative_integer(status.get("trae_revision")), MAX_TRAE_REVISION
+        ),
         "trae_process_state": process_state,
         "trae_pending_count": pending_count,
         "trae_running_count": running_count,
@@ -243,6 +247,8 @@ def _bounded_text(value: object, limit: int) -> str:
 
 def _nonnegative_integer(value: object) -> int:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0
+    if isinstance(value, float) and not math.isfinite(value):
         return 0
     return max(0, int(value))
 
