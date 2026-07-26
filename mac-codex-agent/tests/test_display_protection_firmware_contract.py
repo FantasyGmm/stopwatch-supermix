@@ -85,6 +85,13 @@ class DisplayProtectionFirmwareContractTests(unittest.TestCase):
                     "main/runtime/display/display_protection_logic.cpp",
                 ),
             ),
+            "display_brightness_arbiter_test": (
+                25,
+                (
+                    "tests/display_brightness_arbiter_test.cpp",
+                    "main/runtime/display/display_protection_logic.cpp",
+                ),
+            ),
             "external_power_state_test": (
                 26,
                 ("tests/external_power_state_test.cpp",),
@@ -94,6 +101,14 @@ class DisplayProtectionFirmwareContractTests(unittest.TestCase):
                 (
                     "tests/display_protection_settings_model_test.cpp",
                     "main/runtime/display/display_protection_config.cpp",
+                ),
+            ),
+            "touch_input_gate_test": (
+                28,
+                (
+                    "tests/touch_input_gate_test.cpp",
+                    "main/apps/common/edge_control/edge_control_logic.cpp",
+                    "main/apps/app_codex_status/status_page_swipe_logic.cpp",
                 ),
             ),
         }
@@ -249,10 +264,11 @@ class DisplayProtectionFirmwareContractTests(unittest.TestCase):
             "lv_indev_reset(indev, nullptr)",
             "GetHAL().suppressButtonInputUntilRelease()",
             "GetHAL().setTemporaryBackLightBrightness",
+            "GlobalDisplayProtectionService::applyUserBrightness",
+            "GlobalDisplayProtectionService::touchInputSuppressed() const",
             "active && GetHAL().getBackLightBrightness() <= 0",
         ):
             self.assertIn(token, service)
-        self.assertNotIn("setBackLightBrightness", service)
         edge_service = (
             ROOT
             / "main"
@@ -262,6 +278,69 @@ class DisplayProtectionFirmwareContractTests(unittest.TestCase):
             / "global_edge_control_service.cpp"
         ).read_text(encoding="utf-8")
         self.assertIn("GetHAL().getUserBackLightBrightness()", edge_service)
+        self.assertIn(
+            "GetGlobalDisplayProtectionService().applyUserBrightness(",
+            edge_service,
+        )
+        self.assertNotIn("GetHAL().setBackLightBrightness", edge_service)
+        app_brightness_writes = []
+        for source_path in (ROOT / "main" / "apps").rglob("*.cpp"):
+            if "GetHAL().setBackLightBrightness" in source_path.read_text(
+                encoding="utf-8"
+            ):
+                app_brightness_writes.append(source_path.relative_to(ROOT).as_posix())
+        self.assertEqual([], app_brightness_writes)
+
+    def test_every_raw_touch_poller_honors_the_global_release_gate(self):
+        expected_raw_pollers = {
+            "main/apps/common/edge_control/global_edge_control_service.cpp",
+            "main/apps/common/status_bar/status_bar.cpp",
+            "main/apps/app_launcher/view/view.cpp",
+            "main/apps/app_watch_face/view/watch_face_manager.cpp",
+            "main/apps/app_codex_status/app_codex_status.cpp",
+        }
+        actual_raw_pollers = set()
+        for source_path in (ROOT / "main" / "apps").rglob("*.cpp"):
+            source = source_path.read_text(encoding="utf-8")
+            if "lv_indev_get_state" not in source:
+                continue
+            relative_path = source_path.relative_to(ROOT).as_posix()
+            actual_raw_pollers.add(relative_path)
+            self.assertIn("touchInputSuppressed()", source, relative_path)
+        self.assertEqual(expected_raw_pollers, actual_raw_pollers)
+
+        edge_source = (
+            ROOT
+            / "main/apps/common/edge_control/global_edge_control_service.cpp"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "indev == nullptr || protection.touchInputSuppressed()\n"
+            "        ? LV_INDEV_STATE_REL\n"
+            "        : lv_indev_get_state(indev)",
+            edge_source,
+        )
+
+        service = (
+            ROOT
+            / "main"
+            / "runtime"
+            / "display"
+            / "global_display_protection_service.cpp"
+        ).read_text(encoding="utf-8")
+        self.assertIn("_touch_input_gate.beginFrame", service)
+        self.assertIn("_touch_input_gate.suppressUntilRelease()", service)
+
+        codex_header = (
+            ROOT / "main" / "apps" / "app_codex_status" / "app_codex_status.h"
+        ).read_text(encoding="utf-8")
+        swipe_header = (
+            ROOT
+            / "main"
+            / "apps"
+            / "app_codex_status"
+            / "status_page_swipe_logic.h"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("StatusPageTouchWakeGate", codex_header + swipe_header)
 
     def test_global_service_owns_configuration_and_power_policy(self):
         service_header = (
@@ -309,6 +388,7 @@ class DisplayProtectionFirmwareContractTests(unittest.TestCase):
         self.assertIn(
             "_logic.automaticEnabled() && _logic.reasonMask() == 0", service
         )
+        self.assertIn("DisplayWakeReason::KeepAwakeReleased", service_source)
 
     def test_codex_delegates_display_protection_to_global_service(self):
         codex_header = (

@@ -100,6 +100,9 @@ int main()
     assert(std::strcmp(
                DisplayWakeReasonName(DisplayWakeReason::KeepAwakeActivated),
                "keep_awake_activated") == 0);
+    assert(std::strcmp(
+               DisplayWakeReasonName(DisplayWakeReason::KeepAwakeReleased),
+               "keep_awake_released") == 0);
     assert(std::strcmp(DisplayWakeReasonName(
                            static_cast<DisplayWakeReason>(UINT8_MAX)),
                        "unknown") == 0);

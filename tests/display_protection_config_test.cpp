@@ -1,6 +1,8 @@
 #include "runtime/display/display_protection_config.h"
 
+#include <array>
 #include <cassert>
+#include <string_view>
 
 int main()
 {
@@ -12,6 +14,31 @@ int main()
     assert(displayProtectionScreenOffMs(defaults) == 60000U);
     assert(displayProtectionDimLabel(5) == "5m");
     assert(displayProtectionScreenOffLabel(4) == "10m");
+
+    constexpr std::array<uint32_t, DisplayProtectionDimChoiceCount> dim_ms{
+        10000U, 15000U, 30000U, 60000U, 120000U, 300000U};
+    constexpr std::array<std::string_view, DisplayProtectionDimChoiceCount>
+        dim_labels{"10s", "15s", "30s", "1m", "2m", "5m"};
+    for (size_t choice = 0; choice < dim_ms.size(); ++choice) {
+        const DisplayProtectionConfig config{static_cast<uint8_t>(choice), 4,
+                                             false};
+        assert(displayProtectionDimMs(config) == dim_ms[choice]);
+        assert(displayProtectionDimLabel(static_cast<int>(choice)) ==
+               dim_labels[choice]);
+    }
+
+    constexpr std::array<uint32_t, DisplayProtectionScreenOffChoiceCount>
+        off_ms{30000U, 60000U, 120000U, 300000U, 600000U};
+    constexpr std::array<std::string_view,
+                         DisplayProtectionScreenOffChoiceCount>
+        off_labels{"30s", "1m", "2m", "5m", "10m"};
+    for (size_t choice = 0; choice < off_ms.size(); ++choice) {
+        const DisplayProtectionConfig config{0, static_cast<uint8_t>(choice),
+                                             false};
+        assert(displayProtectionScreenOffMs(config) == off_ms[choice]);
+        assert(displayProtectionScreenOffLabel(static_cast<int>(choice)) ==
+               off_labels[choice]);
+    }
 
     DisplayProtectionConfig invalid{99, 0, true};
     const auto repaired = sanitizeDisplayProtectionConfig(invalid);

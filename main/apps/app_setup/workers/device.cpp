@@ -8,6 +8,7 @@
 #include <assets/assets.h>
 #include <mooncake_log.h>
 #include <hal/hal.h>
+#include <runtime/display/global_display_protection_service.h>
 #include <cstdint>
 #include <cstdio>
 #include <vector>
@@ -409,12 +410,14 @@ void BrightnessWorker::update()
     }
 
     if (_view && _applied_brightness != _view->currentValue()) {
-        GetHAL().setBackLightBrightness(_view->currentValue(), false);
+        GetGlobalDisplayProtectionService().applyUserBrightness(
+            _view->currentValue(), false);
         _applied_brightness = _view->currentValue();
     }
 
     if (_view && _view->consumeSaveRequested()) {
-        GetHAL().setBackLightBrightness(_view->currentValue(), true);
+        GetGlobalDisplayProtectionService().applyUserBrightness(
+            _view->currentValue(), true);
         _is_done = true;
     }
 }

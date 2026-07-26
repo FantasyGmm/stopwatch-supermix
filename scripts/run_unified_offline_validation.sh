@@ -221,6 +221,11 @@ echo "[25/32] AMOLED protection state machine host test"
     main/runtime/display/display_protection_logic.cpp \
     -o "$HOST_TEST_DIR/display_protection_diagnostics_test"
 "$HOST_TEST_DIR/display_protection_diagnostics_test"
+"$CXX" -std=c++17 -Wall -Wextra -Werror -Imain \
+    tests/display_brightness_arbiter_test.cpp \
+    main/runtime/display/display_protection_logic.cpp \
+    -o "$HOST_TEST_DIR/display_brightness_arbiter_test"
+"$HOST_TEST_DIR/display_brightness_arbiter_test"
 
 echo "[26/32] External power tracker host test"
 "$CXX" -std=c++17 -Wall -Wextra -Werror -Imain \
@@ -240,6 +245,12 @@ echo "[28/32] Button input wake gate host test"
     tests/button_input_gate_test.cpp \
     -o "$HOST_TEST_DIR/button_input_gate_test"
 "$HOST_TEST_DIR/button_input_gate_test"
+"$CXX" -std=c++17 -Wall -Wextra -Werror -Imain \
+    tests/touch_input_gate_test.cpp \
+    main/apps/common/edge_control/edge_control_logic.cpp \
+    main/apps/app_codex_status/status_page_swipe_logic.cpp \
+    -o "$HOST_TEST_DIR/touch_input_gate_test"
+"$HOST_TEST_DIR/touch_input_gate_test"
 
 echo "[29/32] Assistant display activity host test"
 "$CXX" -std=c++17 -Wall -Wextra -Werror -Imain \

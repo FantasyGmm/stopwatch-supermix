@@ -131,12 +131,13 @@ private:
         _charging_switch->setBgOpa(LV_OPA_COVER, LV_PART_MAIN);
         _charging_switch->setBorderWidth(0, LV_PART_MAIN);
         _charging_switch->setRadius(LV_RADIUS_CIRCLE, LV_PART_MAIN);
+        const lv_style_selector_t checked_indicator =
+            static_cast<lv_style_selector_t>(LV_PART_INDICATOR) |
+            static_cast<lv_style_selector_t>(LV_STATE_CHECKED);
         _charging_switch->setBgColor(lv_color_hex(0x4AD78C),
-                                     LV_PART_INDICATOR | LV_STATE_CHECKED);
-        _charging_switch->setBgOpa(LV_OPA_COVER,
-                                   LV_PART_INDICATOR | LV_STATE_CHECKED);
-        _charging_switch->setBorderWidth(0,
-                                        LV_PART_INDICATOR | LV_STATE_CHECKED);
+                                     checked_indicator);
+        _charging_switch->setBgOpa(LV_OPA_COVER, checked_indicator);
+        _charging_switch->setBorderWidth(0, checked_indicator);
         lv_obj_set_style_bg_color(_charging_switch->get(), lv_color_hex(0xFFFFFF),
                                   LV_PART_KNOB);
         lv_obj_set_style_bg_opa(_charging_switch->get(), LV_OPA_COVER, LV_PART_KNOB);

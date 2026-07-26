@@ -93,8 +93,7 @@ class CodexTaskNavigationFirmwareContractTests(unittest.TestCase):
             ROOT / "main/apps/app_codex_status/app_codex_status.cpp"
         ).read_text()
 
-        self.assertIn("StatusPageTouchWakeGate _page_touch_wake_gate", header)
-        self.assertIn("_page_touch_wake_gate.reset()", app)
+        self.assertNotIn("StatusPageTouchWakeGate", header + app)
 
         sync_start = app.index(
             "void AppCodexStatus::sync_display_protection_presentation()"
@@ -103,14 +102,13 @@ class CodexTaskNavigationFirmwareContractTests(unittest.TestCase):
             "void AppCodexStatus::update_screen_off_control", sync_start
         )
         sync = app[sync_start:sync_end]
-        self.assertIn("DisplayWakeReason::Touch", sync)
-        self.assertIn("_page_touch_wake_gate.suppressUntilRelease()", sync)
+        self.assertNotIn("DisplayWakeReason::Touch", sync)
 
         update_start = app.index("void AppCodexStatus::update_page_swipe")
         update_end = app.index("void AppCodexStatus::set_page", update_start)
         update = app[update_start:update_end]
         gate = update.index(
-            "_page_touch_wake_gate.consume(state == LV_INDEV_STATE_PR)"
+            "GetGlobalDisplayProtectionService().touchInputSuppressed()"
         )
         swipe = update.index("_page_swipe.press(")
         trae_tap = update.index("_trae_card_tap.press(")

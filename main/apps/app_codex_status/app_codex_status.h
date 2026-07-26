@@ -87,7 +87,6 @@ private:
     CodexAlertCarousel _alert_carousel;
     TraeStatusSnapshot _trae_snapshot;
     TraeTaskCarousel _trae_carousel;
-    StatusPageTouchWakeGate _page_touch_wake_gate;
     StatusPageSwipeLogic _page_swipe;
     TraeCardTapLogic _trae_card_tap;
 

@@ -1,8 +1,10 @@
 #pragma once
 
 #include "display_protection_config.h"
+#include "display_brightness_arbiter.h"
 #include "display_protection_diagnostics.h"
 #include "display_protection_logic.h"
+#include "touch_input_gate.h"
 
 #include <hal/button_input_gate.h>
 #include <hal/external_power_state.h>
@@ -31,6 +33,9 @@ public:
     const DisplayProtectionConfig& config() const;
     void applyConfig(const DisplayProtectionConfig& config, bool persist);
     void screenOffNow();
+    void applyUserBrightness(int brightness, bool persist);
+    bool touchInputSuppressed() const;
+    DisplayProtectionState state() const;
     DisplayProtectionSnapshot snapshot() const;
 
 private:
@@ -48,9 +53,11 @@ private:
     ExternalPowerSnapshot _external_power{};
     DisplayWakeReason _last_wake_reason = DisplayWakeReason::Initialization;
     int _restore_brightness = 80;
+    DisplayBrightnessArbiter _brightness_arbiter;
     int _pending_brightness = -1;
     uint32_t _brightness_revision = 0;
     ExternalPowerHealthLogPolicy _power_health_log_policy;
+    TouchInputGate _touch_input_gate;
     lv_indev_state_t _last_touch_state = LV_INDEV_STATE_REL;
     ButtonPhysicalState _last_buttons{};
     bool _initialized = false;

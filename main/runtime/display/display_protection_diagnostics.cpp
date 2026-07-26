@@ -47,6 +47,8 @@ const char* DisplayWakeReasonName(DisplayWakeReason reason)
             return "configuration_changed";
         case DisplayWakeReason::KeepAwakeActivated:
             return "keep_awake_activated";
+        case DisplayWakeReason::KeepAwakeReleased:
+            return "keep_awake_released";
     }
     return "unknown";
 }

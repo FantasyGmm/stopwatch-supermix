@@ -114,6 +114,7 @@ class DebugCommandFirmwareContractTests(unittest.TestCase):
             "DisplayWakeReason::PowerRemoved": '"power_removed"',
             "DisplayWakeReason::ConfigurationChanged": '"configuration_changed"',
             "DisplayWakeReason::KeepAwakeActivated": '"keep_awake_activated"',
+            "DisplayWakeReason::KeepAwakeReleased": '"keep_awake_released"',
         }
         for enum_value, ascii_name in expected_mappings.items():
             self.assertRegex(

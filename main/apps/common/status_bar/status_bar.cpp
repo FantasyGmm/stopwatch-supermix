@@ -12,6 +12,7 @@
 #include <assets/assets.h>
 #include <fmt/chrono.h>
 #include <hal/hal.h>
+#include <runtime/display/global_display_protection_service.h>
 #include <memory>
 #include <vector>
 #include <lvgl.h>
@@ -45,6 +46,12 @@ public:
     {
         lv_indev_t* indev = GetHAL().lvTouchpad;
         if (!indev) {
+            return;
+        }
+
+        if (GetGlobalDisplayProtectionService().touchInputSuppressed()) {
+            _is_tracking = false;
+            _last_state = LV_INDEV_STATE_REL;
             return;
         }
 

@@ -76,25 +76,6 @@ static void assert_cancel_clears_active_gesture()
 }
 
 
-static void assert_touch_wake_hold_and_release_never_starts_swipe()
-{
-    StatusPageTouchWakeGate gate;
-    StatusPageSwipeLogic swipe;
-
-    gate.suppressUntilRelease();
-    assert(gate.consume(true));
-    assert(gate.consume(true));
-    assert(gate.consume(false));
-    assert(swipe.release(1200, 0) == StatusPageSwipeResult::Stay);
-
-    assert(!gate.consume(true));
-    swipe.press(300, 220, 2000);
-    swipe.move(250, 220);
-    assert(!gate.consume(false));
-    assert(swipe.release(2200, 0) == StatusPageSwipeResult::Trae);
-}
-
-
 int main()
 {
     assert(right_to_left_fast_swipe_moves_codex_to_trae());
@@ -105,5 +86,4 @@ int main()
     assert_codex_page_does_not_wrap_left();
     assert_trae_page_does_not_wrap_right();
     assert_cancel_clears_active_gesture();
-    assert_touch_wake_hold_and_release_never_starts_swipe();
 }

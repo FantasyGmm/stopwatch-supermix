@@ -108,5 +108,34 @@ int main()
     logic.setTimeouts(10000U, 30000U, UINT32_MAX - 5000U);
     assert(logic.update(4999U).action == DisplayProtectionAction::Dim);
     assert(logic.update(24999U).action == DisplayProtectionAction::ScreenOff);
+
+    logic.reset(0);
+    assert(logic.update(15000U).action == DisplayProtectionAction::Dim);
+    const auto timeout_restore_from_dimmed =
+        logic.setTimeouts(30000U, 120000U, 16000U);
+    assert(timeout_restore_from_dimmed.action == DisplayProtectionAction::Restore);
+    assert(logic.state() == DisplayProtectionState::Active);
+    assert(logic.timingSnapshot(16000U).inactivity_ms == 0U);
+
+    logic.screenOffNow(17000U);
+    const auto timeout_restore_from_off =
+        logic.setTimeouts(10000U, 30000U, 18000U);
+    assert(timeout_restore_from_off.action == DisplayProtectionAction::Restore);
+    assert(logic.state() == DisplayProtectionState::Active);
+
+    logic.setTimeouts(UINT32_MAX, UINT32_MAX, 20000U);
+    auto sanitized_timing = logic.timingSnapshot(20000U);
+    assert(sanitized_timing.dim_after_ms == UINT32_MAX - 1U);
+    assert(sanitized_timing.screen_off_after_ms == UINT32_MAX);
+    logic.setTimeouts(UINT32_MAX, 0U, 21000U);
+    sanitized_timing = logic.timingSnapshot(21000U);
+    assert(sanitized_timing.dim_after_ms == UINT32_MAX - 1U);
+    assert(sanitized_timing.screen_off_after_ms == UINT32_MAX);
+
+    logic.reset(0);
+    logic.setAutomaticEnabled(false, 1U);
+    const auto disabled_manual_off = logic.screenOffNow(2U);
+    assert(disabled_manual_off.action == DisplayProtectionAction::ScreenOff);
+    assert(logic.state() == DisplayProtectionState::ScreenOff);
     return 0;
 }

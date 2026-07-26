@@ -48,6 +48,7 @@ bool GlobalDisplayProtectionService::init()
     _restore_brightness = GetHAL().getUserBackLightBrightness();
     _brightness_revision = GetHAL().backLightBrightnessRevision();
     _logic.reset(now_ms);
+    _brightness_arbiter.reset(_restore_brightness, _logic.state());
     acceptDecision(_logic.setTimeouts(displayProtectionDimMs(_config),
                                       displayProtectionScreenOffMs(_config),
                                       now_ms));
@@ -55,6 +56,8 @@ bool GlobalDisplayProtectionService::init()
     _power_health_log_policy.reset(_external_power.latest_sample_valid, now_ms);
     recalculateAutomaticProtection(now_ms);
     _last_touch_state = lv_indev_get_state(indev);
+    _touch_input_gate.reset();
+    _touch_input_gate.beginFrame(_last_touch_state == LV_INDEV_STATE_PR);
     _last_buttons = GetHAL().readButtonPhysicalState();
     _last_wake_reason = DisplayWakeReason::Initialization;
     _initialized = true;
@@ -126,6 +129,7 @@ void GlobalDisplayProtectionService::update()
 
     const ButtonPhysicalState buttons = GetHAL().readButtonPhysicalState();
     const lv_indev_state_t touch_state = lv_indev_get_state(indev);
+    _touch_input_gate.beginFrame(touch_state == LV_INDEV_STATE_PR);
     const bool button_pressed =
         (buttons.a_pressed && !_last_buttons.a_pressed) ||
         (buttons.b_pressed && !_last_buttons.b_pressed);
@@ -163,9 +167,11 @@ void GlobalDisplayProtectionService::shutdown()
     _external_power = {};
     _last_wake_reason = DisplayWakeReason::Initialization;
     _restore_brightness = 80;
+    _brightness_arbiter.reset(80, DisplayProtectionState::Active);
     _pending_brightness = -1;
     _brightness_revision = 0;
     _power_health_log_policy = {};
+    _touch_input_gate.reset();
     _last_touch_state = LV_INDEV_STATE_REL;
     _last_buttons = {};
     _initialized = false;
@@ -184,6 +190,9 @@ void GlobalDisplayProtectionService::setKeepAwake(DisplayKeepAwakeReason reason,
         _last_wake_reason = DisplayWakeReason::KeepAwakeActivated;
     }
     acceptDecision(_logic.setKeepAwake(reason, active, GetHAL().millis()));
+    if (!active && was_active && _logic.reasonMask() == 0) {
+        _last_wake_reason = DisplayWakeReason::KeepAwakeReleased;
+    }
     if (active && GetHAL().getBackLightBrightness() <= 0 && !was_active) {
         _pending_brightness = _restore_brightness;
     }
@@ -242,6 +251,32 @@ void GlobalDisplayProtectionService::screenOffNow()
     acceptDecision(_logic.screenOffNow(GetHAL().millis()));
 }
 
+void GlobalDisplayProtectionService::applyUserBrightness(int brightness,
+                                                          bool persist)
+{
+    GetHAL().setBackLightBrightness(brightness, persist);
+    _brightness_revision = GetHAL().backLightBrightnessRevision();
+    _brightness_arbiter.setUserBrightness(
+        GetHAL().getUserBackLightBrightness());
+    _restore_brightness = _brightness_arbiter.userBrightness();
+
+    // HAL's user-brightness write also updates the panel. Re-apply the
+    // protection state's temporary level immediately so ScreenOff always wins.
+    GetHAL().setTemporaryBackLightBrightness(
+        _brightness_arbiter.effectiveBrightness());
+    _pending_brightness = -1;
+}
+
+bool GlobalDisplayProtectionService::touchInputSuppressed() const
+{
+    return _initialized && _touch_input_gate.suppressedThisFrame();
+}
+
+DisplayProtectionState GlobalDisplayProtectionService::state() const
+{
+    return _logic.state();
+}
+
 DisplayProtectionSnapshot GlobalDisplayProtectionService::snapshot() const
 {
     return {
@@ -261,19 +296,22 @@ DisplayProtectionSnapshot GlobalDisplayProtectionService::snapshot() const
 void GlobalDisplayProtectionService::acceptDecision(
     const DisplayProtectionDecision& decision, bool restore_display)
 {
+    if (decision.action != DisplayProtectionAction::None) {
+        _brightness_arbiter.setDisplayState(_logic.state());
+    }
     switch (decision.action) {
         case DisplayProtectionAction::Restore:
             syncUserBrightness();
             if (restore_display) {
-                _pending_brightness = _restore_brightness;
+                _pending_brightness =
+                    _brightness_arbiter.effectiveBrightness();
             }
             break;
         case DisplayProtectionAction::Dim:
-            _pending_brightness =
-                DisplayProtectionLogic::dimBrightness(_restore_brightness);
+            _pending_brightness = _brightness_arbiter.effectiveBrightness();
             break;
         case DisplayProtectionAction::ScreenOff:
-            _pending_brightness = 0;
+            _pending_brightness = _brightness_arbiter.effectiveBrightness();
             break;
         case DisplayProtectionAction::None:
             return;
@@ -292,6 +330,7 @@ void GlobalDisplayProtectionService::suppressWakeInput(
         GetHAL().suppressButtonInputUntilRelease();
     }
     if (touch_pressed) {
+        _touch_input_gate.suppressUntilRelease();
         lv_indev_wait_release(indev);
         lv_indev_reset(indev, nullptr);
     }
@@ -305,6 +344,11 @@ void GlobalDisplayProtectionService::syncUserBrightness()
     }
     _brightness_revision = revision;
     _restore_brightness = GetHAL().getUserBackLightBrightness();
+    _brightness_arbiter.setUserBrightness(_restore_brightness);
+    _restore_brightness = _brightness_arbiter.userBrightness();
+    if (_logic.state() != DisplayProtectionState::Active) {
+        _pending_brightness = _brightness_arbiter.effectiveBrightness();
+    }
 }
 
 bool GlobalDisplayProtectionService::automaticProtectionEnabledForPolicy() const

@@ -16,6 +16,7 @@ enum class DisplayWakeReason : uint8_t {
     PowerRemoved,
     ConfigurationChanged,
     KeepAwakeActivated,
+    KeepAwakeReleased,
 };
 
 struct DisplayProtectionDiagnostics {

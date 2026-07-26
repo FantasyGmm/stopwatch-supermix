@@ -30,7 +30,6 @@ private:
     bool _last_release_consumed = false;
     uint32_t _brightness_revision = 0;
     uint32_t _volume_revision = 0;
-    bool _restore_screen_off_after_apply = false;
 
     void apply(const EdgeControlUpdate& update, lv_indev_t* indev);
     void suspendForScreenOff(lv_indev_t* indev);
