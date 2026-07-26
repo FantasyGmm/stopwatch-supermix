@@ -74,7 +74,10 @@ class AppStateTests(unittest.TestCase):
                     )
                 )
                 self.assertIs(view.voice_state, state)
-                self.assertEqual(view.voice_text, expected)
+                self.assertEqual(
+                    view.voice_text,
+                    "{} - exact detail".format(expected),
+                )
                 self.assertEqual(view.voice_detail, "exact detail")
 
     def test_connection_preference_round_trips(self):

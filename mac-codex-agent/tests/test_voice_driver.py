@@ -5,6 +5,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 
 
@@ -13,6 +14,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 from voice_driver import (
     INSTALL_SCRIPT,
     BlackHoleInstaller,
+    DriverInstallCancelled,
     DriverInstallError,
     DriverState,
     blackhole_receipt_present,
@@ -373,6 +375,234 @@ class VoiceDriverTests(unittest.TestCase):
             len([call for call in process_calls if call[0] == "wait"]), 3
         )
         self.assertEqual(len(install_errors), 1)
+
+    def test_close_stays_bounded_while_process_factory_is_blocked(self):
+        package = self.directory / "BlackHole2ch-0.7.1.pkg"
+        package.write_bytes(b"known package")
+        factory_started = threading.Event()
+        release_factory = threading.Event()
+        process_released = threading.Event()
+        group_signals = []
+        install_errors = []
+
+        class Process:
+            pid = 7654
+
+            def wait(self, timeout=None):
+                if process_released.is_set():
+                    return -signal.SIGTERM
+                raise subprocess.TimeoutExpired("osascript", timeout)
+
+        def process_factory(_command, **_kwargs):
+            factory_started.set()
+            release_factory.wait(1)
+            return Process()
+
+        def signal_process_group(_pid, signum):
+            group_signals.append(signum)
+            process_released.set()
+
+        installer = BlackHoleInstaller(
+            expected_sha256=hashlib.sha256(b"known package").hexdigest(),
+            process_factory=process_factory,
+            signal_process_group=signal_process_group,
+            receipt_checker=lambda: True,
+            device_checker=lambda: True,
+        )
+        worker = threading.Thread(
+            target=lambda: self._capture_error(
+                install_errors, lambda: installer.install(package)
+            )
+        )
+        worker.start()
+        self.assertTrue(factory_started.wait(1))
+        delayed_release = threading.Timer(0.3, release_factory.set)
+        delayed_release.start()
+
+        started = time.monotonic()
+        closed = installer.close(timeout=0.05)
+        elapsed = time.monotonic() - started
+        worker.join(1)
+        delayed_release.cancel()
+
+        self.assertFalse(closed)
+        self.assertLess(elapsed, 0.2)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(group_signals, [signal.SIGTERM])
+        self.assertEqual(len(install_errors), 1)
+
+    def test_cancel_after_process_exit_never_signals_reaped_process_group(self):
+        package = self.directory / "BlackHole2ch-0.7.1.pkg"
+        package.write_bytes(b"known package")
+        receipt_started = threading.Event()
+        release_receipt = threading.Event()
+        group_signals = []
+        install_errors = []
+
+        class Process:
+            pid = 8765
+
+            def wait(self, timeout=None):
+                return 0
+
+        def receipt_checker():
+            receipt_started.set()
+            release_receipt.wait(1)
+            return True
+
+        installer = BlackHoleInstaller(
+            expected_sha256=hashlib.sha256(b"known package").hexdigest(),
+            process_factory=lambda *_args, **_kwargs: Process(),
+            signal_process_group=lambda pid, signum: group_signals.append(
+                (pid, signum)
+            ),
+            receipt_checker=receipt_checker,
+            device_checker=lambda: True,
+        )
+        worker = threading.Thread(
+            target=lambda: self._capture_error(
+                install_errors, lambda: installer.install(package)
+            )
+        )
+        worker.start()
+        self.assertTrue(receipt_started.wait(1))
+
+        cancelled = installer.cancel(timeout=0.05)
+        release_receipt.set()
+        worker.join(1)
+
+        self.assertFalse(cancelled)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(group_signals, [])
+        self.assertEqual(len(install_errors), 1)
+        self.assertIsInstance(install_errors[0], DriverInstallCancelled)
+
+    def test_close_reports_incomplete_while_device_checker_is_blocked(self):
+        package = self.directory / "BlackHole2ch-0.7.1.pkg"
+        package.write_bytes(b"known package")
+        device_check_started = threading.Event()
+        release_device_check = threading.Event()
+        group_signals = []
+        install_errors = []
+
+        class Process:
+            pid = 9876
+
+            def wait(self, timeout=None):
+                return 0
+
+        def device_checker():
+            device_check_started.set()
+            release_device_check.wait(1)
+            return True
+
+        installer = BlackHoleInstaller(
+            expected_sha256=hashlib.sha256(b"known package").hexdigest(),
+            process_factory=lambda *_args, **_kwargs: Process(),
+            signal_process_group=lambda pid, signum: group_signals.append(
+                (pid, signum)
+            ),
+            receipt_checker=lambda: True,
+            device_checker=device_checker,
+        )
+        worker = threading.Thread(
+            target=lambda: self._capture_error(
+                install_errors, lambda: installer.install(package)
+            )
+        )
+        worker.start()
+        self.assertTrue(device_check_started.wait(1))
+
+        started = time.monotonic()
+        closed = installer.close(timeout=0.05)
+        elapsed = time.monotonic() - started
+        release_device_check.set()
+        worker.join(1)
+
+        self.assertFalse(closed)
+        self.assertLess(elapsed, 0.2)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(group_signals, [])
+        self.assertEqual(len(install_errors), 1)
+        self.assertIsInstance(install_errors[0], DriverInstallCancelled)
+
+    def test_install_can_retry_after_failure(self):
+        package = self.directory / "BlackHole2ch-0.7.1.pkg"
+        package.write_bytes(b"known package")
+        returncodes = iter((1, 0))
+
+        class Process:
+            pid = 5432
+
+            def __init__(self, returncode):
+                self.returncode = returncode
+
+            def wait(self, timeout=None):
+                return self.returncode
+
+        installer = BlackHoleInstaller(
+            expected_sha256=hashlib.sha256(b"known package").hexdigest(),
+            process_factory=lambda *_args, **_kwargs: Process(
+                next(returncodes)
+            ),
+            receipt_checker=lambda: True,
+            device_checker=lambda: True,
+        )
+
+        with self.assertRaisesRegex(
+            DriverInstallError,
+            "Driver installation was cancelled or failed",
+        ):
+            installer.install(package)
+
+        self.assertIs(installer.install(package), DriverState.READY)
+
+    def test_install_can_retry_after_cancelled_owned_operation(self):
+        package = self.directory / "BlackHole2ch-0.7.1.pkg"
+        package.write_bytes(b"known package")
+        process_started = threading.Event()
+        process_released = threading.Event()
+        install_errors = []
+        attempts = []
+
+        class BlockedProcess:
+            pid = 6543
+
+            def wait(self, timeout=None):
+                if process_released.is_set():
+                    return -signal.SIGTERM
+                raise subprocess.TimeoutExpired("osascript", timeout)
+
+        def process_factory(*_args, **_kwargs):
+            attempts.append(True)
+            if len(attempts) == 1:
+                process_started.set()
+                return BlockedProcess()
+            return CompletedProcess()
+
+        installer = BlackHoleInstaller(
+            expected_sha256=hashlib.sha256(b"known package").hexdigest(),
+            process_factory=process_factory,
+            signal_process_group=lambda _pid, _signum: process_released.set(),
+            receipt_checker=lambda: True,
+            device_checker=lambda: True,
+        )
+        worker = threading.Thread(
+            target=lambda: self._capture_error(
+                install_errors, lambda: installer.install(package)
+            )
+        )
+        worker.start()
+        self.assertTrue(process_started.wait(1))
+
+        self.assertTrue(installer.cancel(timeout=1))
+        worker.join(1)
+
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(len(install_errors), 1)
+        self.assertIsInstance(install_errors[0], DriverInstallCancelled)
+        self.assertIs(installer.install(package), DriverState.READY)
+        self.assertEqual(len(attempts), 2)
 
     @staticmethod
     def _capture_error(errors, operation):

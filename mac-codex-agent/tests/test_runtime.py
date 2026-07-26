@@ -230,9 +230,12 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             connection_enabled=True,
         )
         runtime._transition(ConnectionState.CONNECTED, "watch connected")
+        runtime._transition_voice(VoiceState.DRIVER_REQUIRED)
+        token = runtime.begin_voice_setup()
         secret = "0123456789abcdef0123456789abcdef"
         worker = threading.Thread(
             target=lambda: runtime.report_voice_setup_failure(
+                token,
                 "  Authorization\nfailed {} {}".format(secret, "detail " * 40)
             )
         )
@@ -245,24 +248,77 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(snapshot.state, ConnectionState.CONNECTED)
         self.assertTrue(snapshot.connection_enabled)
         self.assertEqual(snapshot.detail, "watch connected")
-        self.assertIs(snapshot.voice_state, VoiceState.ERROR)
+        self.assertIs(snapshot.voice_state, VoiceState.DRIVER_REQUIRED)
         self.assertNotIn(secret, snapshot.voice_detail)
         self.assertNotIn("\n", snapshot.voice_detail)
         self.assertIn("[redacted]", snapshot.voice_detail)
         self.assertLessEqual(len(snapshot.voice_detail), 120)
+        self.assertIsNotNone(runtime.begin_voice_setup())
 
     async def test_setup_success_publishes_immediate_driver_state(self):
-        runtime = AgentRuntime(collector=FakeCollector())
+        restart_runtime = AgentRuntime(collector=FakeCollector())
+        restart_runtime._transition_voice(VoiceState.DRIVER_REQUIRED)
+        restart_token = restart_runtime.begin_voice_setup()
+        ready_runtime = AgentRuntime(collector=FakeCollector())
+        ready_runtime._transition_voice(VoiceState.DRIVER_REQUIRED)
+        ready_token = ready_runtime.begin_voice_setup()
 
-        runtime.report_voice_setup_result(DriverState.RESTART_REQUIRED)
-        restart_snapshot = runtime.snapshot()
-        runtime.report_voice_setup_result(DriverState.READY)
-        ready_snapshot = runtime.snapshot()
+        restart_runtime.report_voice_setup_result(
+            restart_token,
+            DriverState.RESTART_REQUIRED,
+        )
+        restart_snapshot = restart_runtime.snapshot()
+        ready_runtime.report_voice_setup_result(ready_token, DriverState.READY)
+        ready_snapshot = ready_runtime.snapshot()
 
         self.assertIs(restart_snapshot.voice_state, VoiceState.RESTART_REQUIRED)
         self.assertEqual(restart_snapshot.voice_detail, "")
         self.assertIs(ready_snapshot.voice_state, VoiceState.READY)
         self.assertEqual(ready_snapshot.voice_detail, "")
+
+    async def test_setup_result_cannot_overwrite_reconnect_voice_state(self):
+        runtime = AgentRuntime(collector=FakeCollector())
+        runtime._transition_voice(VoiceState.DRIVER_REQUIRED)
+        token = runtime.begin_voice_setup()
+
+        runtime._transition_voice(VoiceState.ACCESSIBILITY_REQUIRED)
+        applied = runtime.report_voice_setup_result(token, DriverState.READY)
+
+        self.assertFalse(applied)
+        self.assertIs(
+            runtime.snapshot().voice_state,
+            VoiceState.ACCESSIBILITY_REQUIRED,
+        )
+
+    async def test_setup_failure_cannot_overwrite_reconnect_voice_state(self):
+        runtime = AgentRuntime(collector=FakeCollector())
+        runtime._transition_voice(VoiceState.DRIVER_REQUIRED)
+        token = runtime.begin_voice_setup()
+
+        runtime._transition_voice(VoiceState.RECORDING)
+        applied = runtime.report_voice_setup_failure(
+            token,
+            "Driver installation was cancelled or failed",
+        )
+
+        self.assertFalse(applied)
+        snapshot = runtime.snapshot()
+        self.assertIs(snapshot.voice_state, VoiceState.RECORDING)
+        self.assertEqual(snapshot.voice_detail, "")
+
+    async def test_setup_result_cannot_overwrite_new_driver_generation(self):
+        runtime = AgentRuntime(collector=FakeCollector())
+        runtime._transition_voice(VoiceState.DRIVER_REQUIRED)
+        token = runtime.begin_voice_setup()
+
+        runtime._transition_voice(VoiceState.DRIVER_REQUIRED)
+        applied = runtime.report_voice_setup_result(
+            token,
+            DriverState.RESTART_REQUIRED,
+        )
+
+        self.assertFalse(applied)
+        self.assertIs(runtime.snapshot().voice_state, VoiceState.DRIVER_REQUIRED)
 
     async def test_readiness_refresh_enables_voice_without_restarting_ble(self):
         factory = FakeTransportFactory([{}])
@@ -305,7 +361,8 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         else:
             self.fail("initial voice readiness was not published")
 
-        runtime.report_voice_setup_result(DriverState.READY)
+        setup_token = runtime.begin_voice_setup()
+        runtime.report_voice_setup_result(setup_token, DriverState.READY)
         runtime.refresh_voice_readiness()
 
         for _ in range(100):
@@ -1546,6 +1603,7 @@ class FakeRuntime:
         self.voice_refresh_count = 0
         self.voice_setup_failures = []
         self.voice_setup_results = []
+        self.voice_setup_token = object()
 
     def submit(self, command):
         self.commands.append(command)
@@ -1553,11 +1611,14 @@ class FakeRuntime:
     def refresh_voice_readiness(self):
         self.voice_refresh_count += 1
 
-    def report_voice_setup_failure(self, detail):
-        self.voice_setup_failures.append(detail)
+    def begin_voice_setup(self):
+        return self.voice_setup_token
 
-    def report_voice_setup_result(self, state):
-        self.voice_setup_results.append(state)
+    def report_voice_setup_failure(self, token, detail):
+        self.voice_setup_failures.append((token, detail))
+
+    def report_voice_setup_result(self, token, state):
+        self.voice_setup_results.append((token, state))
 
 
 class AgentControllerTests(unittest.TestCase):
@@ -1567,11 +1628,15 @@ class AgentControllerTests(unittest.TestCase):
             preferences=MemoryPreferences(True), runtime=runtime
         )
 
-        controller.report_voice_setup_result(DriverState.RESTART_REQUIRED)
+        token = controller.begin_voice_setup()
+        controller.report_voice_setup_result(
+            token,
+            DriverState.RESTART_REQUIRED,
+        )
 
         self.assertEqual(
             runtime.voice_setup_results,
-            [DriverState.RESTART_REQUIRED],
+            [(runtime.voice_setup_token, DriverState.RESTART_REQUIRED)],
         )
         self.assertEqual(runtime.commands, [])
 
@@ -1581,11 +1646,20 @@ class AgentControllerTests(unittest.TestCase):
             preferences=MemoryPreferences(True), runtime=runtime
         )
 
-        controller.report_voice_setup_failure("Driver package verification failed")
+        token = controller.begin_voice_setup()
+        controller.report_voice_setup_failure(
+            token,
+            "Driver package verification failed",
+        )
 
         self.assertEqual(
             runtime.voice_setup_failures,
-            ["Driver package verification failed"],
+            [
+                (
+                    runtime.voice_setup_token,
+                    "Driver package verification failed",
+                )
+            ],
         )
         self.assertEqual(runtime.commands, [])
 

@@ -35,6 +35,7 @@ class FakeController:
         self.voice_detail = ""
         self.voice_setup_failures = []
         self.voice_setup_results = []
+        self.voice_revision = 0
 
     def start(self):
         self.started = True
@@ -91,18 +92,39 @@ class FakeController:
     def refresh_voice_readiness(self):
         self.voice_refresh_count += 1
 
-    def report_voice_setup_failure(self, detail):
-        self.voice_setup_failures.append(detail)
-        self.voice_state = VoiceState.ERROR
-        self.voice_detail = detail
+    def begin_voice_setup(self):
+        return (
+            self.voice_revision
+            if self.voice_state is VoiceState.DRIVER_REQUIRED
+            else None
+        )
 
-    def report_voice_setup_result(self, state):
+    def report_voice_setup_failure(self, token, detail):
+        if (
+            token != self.voice_revision
+            or self.voice_state is not VoiceState.DRIVER_REQUIRED
+        ):
+            return False
+        self.voice_setup_failures.append(detail)
+        self.voice_revision += 1
+        self.voice_state = VoiceState.DRIVER_REQUIRED
+        self.voice_detail = detail
+        return True
+
+    def report_voice_setup_result(self, token, state):
+        if (
+            token != self.voice_revision
+            or self.voice_state is not VoiceState.DRIVER_REQUIRED
+        ):
+            return False
         self.voice_setup_results.append(state)
+        self.voice_revision += 1
         self.voice_state = {
             DriverState.READY: VoiceState.READY,
             DriverState.RESTART_REQUIRED: VoiceState.RESTART_REQUIRED,
         }[state]
         self.voice_detail = ""
+        return True
 
     def stop(self, timeout=5.0):
         self.stopped = True
@@ -169,6 +191,9 @@ class MenuBarApplicationTests(unittest.TestCase):
             def start(self):
                 pass
 
+            def is_alive(self):
+                return False
+
         NSApplication.sharedApplication()
         controller = FakeController(VoiceState.DRIVER_REQUIRED)
         delegate = MenuBarApplication.alloc().initWithController_(controller)
@@ -190,9 +215,16 @@ class MenuBarApplicationTests(unittest.TestCase):
             controller.voice_setup_failures,
             ["Driver package verification failed"],
         )
-        self.assertIs(controller.voice_state, VoiceState.ERROR)
-        self.assertEqual(delegate.voice_label.stringValue(), "Voice Input: Error")
-        self.assertTrue(delegate.setup_voice_item.isHidden())
+        self.assertIs(controller.voice_state, VoiceState.DRIVER_REQUIRED)
+        self.assertEqual(
+            delegate.voice_label.stringValue(),
+            "Voice Input: Driver Required - Driver package verification failed",
+        )
+        self.assertFalse(delegate.setup_voice_item.isHidden())
+        self.assertTrue(delegate.setup_voice_item.isEnabled())
+
+        delegate.setupVoice_(None)
+        self.assertEqual(len(workers), 2)
 
     def test_shutdown_cancels_and_reaps_blocked_installer_without_late_callback(self):
         temporary_directory = tempfile.TemporaryDirectory()

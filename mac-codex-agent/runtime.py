@@ -83,6 +83,11 @@ class _BleSessionContext:
     shutdown_task: Optional[asyncio.Task] = None
 
 
+@dataclasses.dataclass(frozen=True)
+class VoiceSetupToken:
+    revision: int
+
+
 def _new_voice_nonce() -> bytes:
     nonce = bytes(8)
     while not any(nonce):
@@ -172,6 +177,7 @@ class AgentRuntime:
             else ConnectionState.DISABLED,
             connection_enabled,
         )
+        self._voice_revision = 0
         self._command_lock = threading.Lock()
         self._pending_commands: List[AgentCommand] = []
         self._loop: Optional[asyncio.AbstractEventLoop] = None
@@ -199,20 +205,31 @@ class AgentRuntime:
     def refresh_voice_readiness(self) -> None:
         self._voice_refresh_requested.set()
 
-    def report_voice_setup_failure(self, detail: str) -> None:
-        self._transition_voice(
-            VoiceState.ERROR,
+    def begin_voice_setup(self) -> Optional[VoiceSetupToken]:
+        with self._state_lock:
+            if self._snapshot.voice_state is not VoiceState.DRIVER_REQUIRED:
+                return None
+            return VoiceSetupToken(self._voice_revision)
+
+    def report_voice_setup_failure(
+        self, token: VoiceSetupToken, detail: str
+    ) -> bool:
+        return self._compare_and_transition_voice(
+            token,
+            VoiceState.DRIVER_REQUIRED,
             _sanitize_voice_setup_detail(detail),
         )
 
-    def report_voice_setup_result(self, state: DriverState) -> None:
+    def report_voice_setup_result(
+        self, token: VoiceSetupToken, state: DriverState
+    ) -> bool:
         voice_state = {
             DriverState.READY: VoiceState.READY,
             DriverState.RESTART_REQUIRED: VoiceState.RESTART_REQUIRED,
         }.get(state)
         if voice_state is None:
             raise ValueError("setup result must be ready or restart required")
-        self._transition_voice(voice_state)
+        return self._compare_and_transition_voice(token, voice_state)
 
     def _transition(self, state: ConnectionState, detail: str = "") -> None:
         with self._state_lock:
@@ -233,6 +250,7 @@ class AgentRuntime:
         detail = _redact_voice_detail(detail)
         with self._state_lock:
             previous = self._snapshot
+            self._voice_revision += 1
             self._snapshot = AgentSnapshot(
                 previous.state,
                 previous.connection_enabled,
@@ -247,6 +265,36 @@ class AgentRuntime:
                 state.value,
                 ": " + detail if detail else "",
             )
+
+    def _compare_and_transition_voice(
+        self,
+        token: VoiceSetupToken,
+        state: VoiceState,
+        detail: str = "",
+    ) -> bool:
+        detail = _redact_voice_detail(detail)
+        with self._state_lock:
+            previous = self._snapshot
+            if (
+                token.revision != self._voice_revision
+                or previous.voice_state is not VoiceState.DRIVER_REQUIRED
+            ):
+                return False
+            self._voice_revision += 1
+            self._snapshot = AgentSnapshot(
+                previous.state,
+                previous.connection_enabled,
+                previous.detail,
+                voice_state=state,
+                voice_detail=detail,
+                codex=previous.codex,
+            )
+        LOGGER.info(
+            "Voice state: %s%s",
+            state.value,
+            ": " + detail if detail else "",
+        )
+        return True
 
     async def run(self) -> None:
         loop = asyncio.get_running_loop()
@@ -827,11 +875,18 @@ class AgentController:
     def refresh_voice_readiness(self) -> None:
         self._runtime.refresh_voice_readiness()
 
-    def report_voice_setup_failure(self, detail: str) -> None:
-        self._runtime.report_voice_setup_failure(detail)
+    def begin_voice_setup(self) -> Optional[VoiceSetupToken]:
+        return self._runtime.begin_voice_setup()
 
-    def report_voice_setup_result(self, state: DriverState) -> None:
-        self._runtime.report_voice_setup_result(state)
+    def report_voice_setup_failure(
+        self, token: VoiceSetupToken, detail: str
+    ) -> bool:
+        return self._runtime.report_voice_setup_failure(token, detail)
+
+    def report_voice_setup_result(
+        self, token: VoiceSetupToken, state: DriverState
+    ) -> bool:
+        return self._runtime.report_voice_setup_result(token, state)
 
     def stop(self, timeout: float = 5.0) -> bool:
         with self._stop_lock:

@@ -114,6 +114,7 @@ class MenuBarApplication(NSObject):
         )
         self.call_after = AppHelper.callAfter
         self._voice_install_thread = None
+        self._voice_setup_token = None
         self._stopping = False
         self._installing_voice = False
         self._last_alert_revision = None
@@ -339,13 +340,19 @@ class MenuBarApplication(NSObject):
             return
         if not self.voice_setup_confirmer():
             return
+        setup_token = self.controller.begin_voice_setup()
+        if setup_token is None:
+            self.refresh_(None)
+            return
         self._installing_voice = True
+        self._voice_setup_token = setup_token
         self.setup_voice_item.setEnabled_(False)
         worker = self.voice_worker_factory(self._install_voice)
         self._voice_install_thread = worker
         worker.start()
 
     def _install_voice(self):
+        setup_token = self._voice_setup_token
         try:
             state = self.voice_installer.install(self.voice_package_path)
         except DriverInstallCancelled as error:
@@ -354,6 +361,7 @@ class MenuBarApplication(NSObject):
                     self._finish_voice_setup,
                     DriverState.ERROR,
                     str(error),
+                    setup_token,
                 )
         except DriverInstallError as error:
             LOGGER.error("BlackHole installation failed: %s", error)
@@ -362,6 +370,7 @@ class MenuBarApplication(NSObject):
                     self._finish_voice_setup,
                     DriverState.ERROR,
                     str(error),
+                    setup_token,
                 )
         except Exception:
             LOGGER.exception("BlackHole installation failed")
@@ -370,20 +379,27 @@ class MenuBarApplication(NSObject):
                     self._finish_voice_setup,
                     DriverState.ERROR,
                     "Driver setup failed",
+                    setup_token,
                 )
         else:
             if not self._stopping:
-                self.call_after(self._finish_voice_setup, state, "")
+                self.call_after(
+                    self._finish_voice_setup,
+                    state,
+                    "",
+                    setup_token,
+                )
 
-    def _finish_voice_setup(self, state, detail=""):
+    def _finish_voice_setup(self, state, detail="", setup_token=None):
         self._installing_voice = False
         self._voice_install_thread = None
+        self._voice_setup_token = None
         if self._stopping:
             return
         if state is DriverState.ERROR:
-            self.controller.report_voice_setup_failure(detail)
+            self.controller.report_voice_setup_failure(setup_token, detail)
         if state in (DriverState.READY, DriverState.RESTART_REQUIRED):
-            self.controller.report_voice_setup_result(state)
+            self.controller.report_voice_setup_result(setup_token, state)
             self.controller.refresh_voice_readiness()
         self.refresh_(None)
 

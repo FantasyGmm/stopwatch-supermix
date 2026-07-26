@@ -130,6 +130,11 @@ _VOICE_STATE_LABELS = {
 
 def present(snapshot: AgentSnapshot) -> MenuPresentation:
     codex = snapshot.codex
+    voice_text = "Voice Input: {}".format(
+        _VOICE_STATE_LABELS[snapshot.voice_state]
+    )
+    if snapshot.voice_detail:
+        voice_text = "{} - {}".format(voice_text, snapshot.voice_detail)
     return MenuPresentation(
         model_text="Model: {}".format(codex.model or "--"),
         effort_text="Effort: {}".format(codex.effort.title() if codex.effort else "--"),
@@ -150,9 +155,7 @@ def present(snapshot: AgentSnapshot) -> MenuPresentation:
         bluetooth_text="Bluetooth: {}".format(_STATE_LABELS[snapshot.state]),
         device_text="Device: {}".format(DEVICE_NAME),
         voice_state=snapshot.voice_state,
-        voice_text="Voice Input: {}".format(
-            _VOICE_STATE_LABELS[snapshot.voice_state]
-        ),
+        voice_text=voice_text,
         voice_detail=snapshot.voice_detail,
         connection_checked=snapshot.connection_enabled,
         reconnect_enabled=snapshot.connection_enabled,
