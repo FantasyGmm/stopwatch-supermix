@@ -286,6 +286,7 @@ void AppCodexStatus::onOpen()
     _alert_carousel.reset();
     _trae_snapshot = {};
     _trae_carousel.reset();
+    _page_touch_wake_gate.reset();
     _page_swipe.cancel();
     _trae_card_tap.cancel();
     _current_page = 0;
@@ -1022,15 +1023,6 @@ void AppCodexStatus::render_trae_status()
 
 void AppCodexStatus::update_page_swipe(uint32_t now_ms)
 {
-    auto& controls = GetGlobalEdgeControlService();
-    if (_screen_off ||
-        controls.ownsTouch() || controls.lastReleaseConsumed()) {
-        _page_swipe.cancel();
-        _trae_card_tap.cancel();
-        _last_page_touch_state = LV_INDEV_STATE_REL;
-        return;
-    }
-
     lv_indev_t* indev = GetHAL().lvTouchpad;
     if (indev == nullptr) {
         _page_swipe.cancel();
@@ -1040,6 +1032,22 @@ void AppCodexStatus::update_page_swipe(uint32_t now_ms)
     }
 
     const lv_indev_state_t state = lv_indev_get_state(indev);
+    if (_page_touch_wake_gate.consume(state == LV_INDEV_STATE_PR)) {
+        _page_swipe.cancel();
+        _trae_card_tap.cancel();
+        _last_page_touch_state = LV_INDEV_STATE_REL;
+        return;
+    }
+
+    auto& controls = GetGlobalEdgeControlService();
+    if (_screen_off ||
+        controls.ownsTouch() || controls.lastReleaseConsumed()) {
+        _page_swipe.cancel();
+        _trae_card_tap.cancel();
+        _last_page_touch_state = LV_INDEV_STATE_REL;
+        return;
+    }
+
     lv_point_t point;
     lv_indev_get_point(indev, &point);
     if (state == LV_INDEV_STATE_PR) {
@@ -1146,10 +1154,13 @@ void AppCodexStatus::sync_pending_glow()
 
 void AppCodexStatus::sync_display_protection_presentation()
 {
+    const DisplayProtectionSnapshot protection =
+        GetGlobalDisplayProtectionService().snapshot();
     const bool screen_off =
-        GetGlobalDisplayProtectionService().snapshot().state ==
-        DisplayProtectionState::ScreenOff;
+        protection.state == DisplayProtectionState::ScreenOff;
     const bool woke_screen = _screen_off && !screen_off;
+    const bool touch_woke_screen =
+        woke_screen && protection.last_wake_reason == DisplayWakeReason::Touch;
     if (_screen_off == screen_off) {
         return;
     }
@@ -1158,6 +1169,9 @@ void AppCodexStatus::sync_display_protection_presentation()
     if (woke_screen) {
         _suppress_task_navigation = true;
         _screen_off_left_press_started_ms = 0;
+    }
+    if (touch_woke_screen) {
+        _page_touch_wake_gate.suppressUntilRelease();
     }
     _page_swipe.cancel();
     _trae_card_tap.cancel();

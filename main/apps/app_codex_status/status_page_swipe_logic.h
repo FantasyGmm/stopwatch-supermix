@@ -10,6 +10,34 @@ enum class StatusPageSwipeResult {
 };
 
 
+class StatusPageTouchWakeGate {
+public:
+    void suppressUntilRelease()
+    {
+        _waiting_for_release = true;
+    }
+
+    bool consume(bool touch_pressed)
+    {
+        if (!_waiting_for_release) {
+            return false;
+        }
+        if (!touch_pressed) {
+            _waiting_for_release = false;
+        }
+        return true;
+    }
+
+    void reset()
+    {
+        _waiting_for_release = false;
+    }
+
+private:
+    bool _waiting_for_release = false;
+};
+
+
 class StatusPageSwipeLogic {
 public:
     void press(int x, int y, uint32_t now_ms);

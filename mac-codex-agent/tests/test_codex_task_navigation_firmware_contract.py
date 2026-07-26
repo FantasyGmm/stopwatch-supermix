@@ -85,6 +85,42 @@ class CodexTaskNavigationFirmwareContractTests(unittest.TestCase):
         )
         self.assertLess(release, navigation)
 
+    def test_touch_wake_waits_for_physical_release_before_page_gestures(self):
+        header = (
+            ROOT / "main/apps/app_codex_status/app_codex_status.h"
+        ).read_text()
+        app = (
+            ROOT / "main/apps/app_codex_status/app_codex_status.cpp"
+        ).read_text()
+
+        self.assertIn("StatusPageTouchWakeGate _page_touch_wake_gate", header)
+        self.assertIn("_page_touch_wake_gate.reset()", app)
+
+        sync_start = app.index(
+            "void AppCodexStatus::sync_display_protection_presentation()"
+        )
+        sync_end = app.index(
+            "void AppCodexStatus::update_screen_off_control", sync_start
+        )
+        sync = app[sync_start:sync_end]
+        self.assertIn("DisplayWakeReason::Touch", sync)
+        self.assertIn("_page_touch_wake_gate.suppressUntilRelease()", sync)
+
+        update_start = app.index("void AppCodexStatus::update_page_swipe")
+        update_end = app.index("void AppCodexStatus::set_page", update_start)
+        update = app[update_start:update_end]
+        gate = update.index(
+            "_page_touch_wake_gate.consume(state == LV_INDEV_STATE_PR)"
+        )
+        swipe = update.index("_page_swipe.press(")
+        trae_tap = update.index("_trae_card_tap.press(")
+        self.assertLess(gate, swipe)
+        self.assertLess(gate, trae_tap)
+        gated_path = update[gate:swipe]
+        self.assertIn("_page_swipe.cancel()", gated_path)
+        self.assertIn("_trae_card_tap.cancel()", gated_path)
+        self.assertIn("_last_page_touch_state = LV_INDEV_STATE_REL", gated_path)
+
 
 if __name__ == "__main__":
     unittest.main()
