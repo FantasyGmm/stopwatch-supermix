@@ -1,4 +1,6 @@
+import hashlib
 import pathlib
+import re
 import unittest
 
 
@@ -123,6 +125,49 @@ class TraeStatusFirmwareContractTests(unittest.TestCase):
         self.assertNotEqual(
             source.index("_last_status_payload_ms"),
             source.index("_last_trae_status_payload_ms"),
+        )
+
+    def test_approved_trae_robot_sources_keep_exact_provenance(self):
+        expected = {
+            "trae_robot_head.png": "063ef188f4d0df29a2708616bda5f84f5a0c38c47f6f60df590bc2c53d7422d9",
+            "trae_robot_idle.png": "2927a2aab485b7b3b9f60f7189a6da132c2be28625a88c517204e345a0cf7c2e",
+            "trae_robot_action.png": "5a6fbb08418469414c615b69389bd92d1817f3a2a5af0b35a1e910e927f7defa",
+        }
+
+        for name, digest in expected.items():
+            source_path = self.app_root / "assets" / "source" / name
+            self.assertTrue(source_path.is_file(), f"missing approved source: {name}")
+            data = source_path.read_bytes()
+            self.assertEqual(hashlib.sha256(data).hexdigest(), digest)
+
+    def test_trae_robot_assets_expose_three_rgb565a8_descriptors(self):
+        header_path = self.app_root / "assets" / "trae_robot_assets.h"
+        source_path = self.app_root / "assets" / "trae_robot_assets.cpp"
+        self.assertTrue(header_path.is_file(), "missing generated asset header")
+        self.assertTrue(source_path.is_file(), "missing generated asset source")
+        header = header_path.read_text(encoding="utf-8")
+        source = source_path.read_text(encoding="utf-8")
+        names = (
+            "trae_robot_head",
+            "trae_robot_idle",
+            "trae_robot_action",
+        )
+
+        for name in names:
+            self.assertIn(f"extern const lv_image_dsc_t {name};", header)
+
+        descriptors = re.findall(
+            r"const lv_image_dsc_t ([a-z0-9_]+) = \{(.*?)\n\};",
+            source,
+            flags=re.DOTALL,
+        )
+        self.assertEqual([name for name, _ in descriptors], list(names))
+        self.assertEqual(
+            [
+                body.count("LV_COLOR_FORMAT_RGB565A8")
+                for _, body in descriptors
+            ],
+            [1, 1, 1],
         )
 
 
