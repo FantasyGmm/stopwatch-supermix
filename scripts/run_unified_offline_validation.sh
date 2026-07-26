@@ -197,6 +197,11 @@ echo "[23/27] Status page swipe and Pending glow logic host tests"
     -o "$HOST_TEST_DIR/status_page_swipe_logic_test"
 "$HOST_TEST_DIR/status_page_swipe_logic_test"
 "$CXX" -std=c++17 -Wall -Wextra -Werror -Imain \
+    tests/trae_card_tap_logic_test.cpp \
+    main/apps/app_codex_status/trae_card_tap_logic.cpp \
+    -o "$HOST_TEST_DIR/trae_card_tap_logic_test"
+"$HOST_TEST_DIR/trae_card_tap_logic_test"
+"$CXX" -std=c++17 -Wall -Wextra -Werror -Imain \
     tests/codex_pending_glow_logic_test.cpp \
     -o "$HOST_TEST_DIR/codex_pending_glow_logic_test"
 "$HOST_TEST_DIR/codex_pending_glow_logic_test"
