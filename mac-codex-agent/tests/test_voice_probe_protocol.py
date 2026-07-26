@@ -6,6 +6,7 @@ import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
+from ima_adpcm import decode_ima_adpcm_block
 from voice_probe_protocol import (
     DATA,
     ERROR,
@@ -16,7 +17,6 @@ from voice_probe_protocol import (
     SYNTHETIC,
     SYNTHETIC_AES_CCM,
     StopSummary,
-    decode_ima_adpcm_block,
     decode_error,
     decode_notification,
     decode_start_ack,
