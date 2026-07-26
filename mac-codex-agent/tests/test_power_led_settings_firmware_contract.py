@@ -68,8 +68,28 @@ class PowerLedSettingsFirmwareContractTests(unittest.TestCase):
         self.assertIn("_committed", self.device_worker)
         self.assertIn('"Off"', self.device_worker)
         self.assertIn('"On"', self.device_worker)
-        self.assertIn('"Blink 2s"', self.device_worker)
+        self.assertIn('"Blink"', self.device_worker)
         self.assertIn('label().setText("OK")', self.device_worker)
+
+    def test_power_led_page_shows_interval_slider_only_for_blink(self):
+        self.assertIn(
+            'createModeRow(160, "Blink", Hal::PowerLedMode::Blink)',
+            self.device_worker,
+        )
+        self.assertIn("_interval_slider->setRange(1, 10, false);", self.device_worker)
+        self.assertIn(
+            'std::snprintf(buffer, sizeof(buffer), "Interval: %ds",',
+            self.device_worker,
+        )
+        self.assertIn(
+            "setHidden(_current_mode != Hal::PowerLedMode::Blink)",
+            self.device_worker,
+        )
+
+    def test_power_led_worker_previews_commits_and_restores_interval(self):
+        self.assertIn("GetHAL().setPowerLedBlinkIntervalSeconds", self.device_worker)
+        self.assertIn("_original_interval_seconds", self.workers_header)
+        self.assertIn("_applied_interval_seconds", self.workers_header)
 
 
 if __name__ == "__main__":
