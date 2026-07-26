@@ -158,8 +158,17 @@ public:
     void factoryReset();
 
     /* ---------------------------------- Power --------------------------------- */
+    enum class PowerLedMode : uint8_t {
+        Off = 0,
+        On = 1,
+        Blink = 2,
+    };
+
     uint8_t getBatteryLevel();
     bool isBatteryCharging(bool strict = false);
+    void setPowerLedMode(PowerLedMode mode, bool saveToSettings = false);
+    PowerLedMode getPowerLedMode(bool loadFromSettings = false);
+    void updatePowerLed();
 
     /* --------------------------------- Display -------------------------------- */
     void setBackLightBrightness(int brightness, bool saveToSettings = false);
@@ -273,11 +282,17 @@ private:
     AudioSpectrumFrame _audio_spectrum;
     int _bl_brightness = 80;
     int _spk_volume    = 80;
+    PowerLedMode _power_led_mode = PowerLedMode::Off;
+    bool _power_led_output       = false;
+    bool _power_led_output_valid = false;
+    uint32_t _power_led_next_blink_ms = 0;
+    uint32_t _power_led_pulse_end_ms  = 0;
 
     void i2c_init();
     void i2c_detect();
     void pmic_init();
     bool pmic_get_pwr_btn_state();
+    void applyPowerLedOutput(bool enabled);
     void ioe_init();
     void ioe_tp_reset();
     void ioe_speaker_enable(bool enable);

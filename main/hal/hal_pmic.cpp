@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 #include "hal.h"
+#include <hal/utils/settings/settings.h>
 #include <mooncake_log.h>
 #include <M5PM1.h>
 #include <algorithm>
@@ -15,6 +16,26 @@ static const std::string_view _tag = "HAL-PMIC";
 static std::unique_ptr<M5PM1> _pm1;
 
 namespace {
+
+constexpr uint32_t _power_led_blink_period_ms = 2000;
+constexpr uint32_t _power_led_pulse_ms = 160;
+
+bool deadline_reached(uint32_t now, uint32_t deadline)
+{
+    return static_cast<int32_t>(now - deadline) >= 0;
+}
+
+Hal::PowerLedMode sanitize_power_led_mode(int32_t raw_mode)
+{
+    switch (raw_mode) {
+    case static_cast<int32_t>(Hal::PowerLedMode::On):
+        return Hal::PowerLedMode::On;
+    case static_cast<int32_t>(Hal::PowerLedMode::Blink):
+        return Hal::PowerLedMode::Blink;
+    default:
+        return Hal::PowerLedMode::Off;
+    }
+}
 
 uint8_t battery_millivolts_to_percent(uint16_t millivolts)
 {
@@ -100,6 +121,8 @@ void Hal::pmic_init()
     _pm1->setI2cSleepTime(0);
     _pm1->setI2cSleepTime(0);
 
+    setPowerLedMode(getPowerLedMode(true), false);
+
     // set button delay click 1s
     _pm1->btnSetConfig(M5PM1_BTN_TYPE_CLICK, M5PM1_BTN_CLICK_DELAY_1000MS);
     // disable WDT, default is open
@@ -164,4 +187,75 @@ bool Hal::isBatteryCharging(bool strict)
         return external_power_inserted && charging_active;
     }
     return external_power_inserted;
+}
+
+void Hal::applyPowerLedOutput(bool enabled)
+{
+    if (!_pm1 || (_power_led_output_valid && _power_led_output == enabled)) {
+        return;
+    }
+
+    if (_pm1->setLedEnLevel(enabled) != M5PM1_OK) {
+        mclog::tagWarn(_tag, "failed to set power LED to {}", enabled ? "on" : "off");
+        return;
+    }
+
+    _power_led_output       = enabled;
+    _power_led_output_valid = true;
+}
+
+void Hal::setPowerLedMode(PowerLedMode mode, bool saveToSettings)
+{
+    _power_led_mode = sanitize_power_led_mode(static_cast<int32_t>(mode));
+
+    const uint32_t now = millis();
+    switch (_power_led_mode) {
+    case PowerLedMode::Off:
+        _power_led_next_blink_ms = 0;
+        _power_led_pulse_end_ms  = 0;
+        applyPowerLedOutput(false);
+        break;
+    case PowerLedMode::On:
+        _power_led_next_blink_ms = 0;
+        _power_led_pulse_end_ms  = 0;
+        applyPowerLedOutput(true);
+        break;
+    case PowerLedMode::Blink:
+        applyPowerLedOutput(true);
+        _power_led_pulse_end_ms  = now + _power_led_pulse_ms;
+        _power_led_next_blink_ms = now + _power_led_blink_period_ms;
+        break;
+    }
+
+    if (saveToSettings) {
+        Settings settings(std::string(Hal::SettingsNs), true);
+        settings.SetInt("pwr_led_mode", static_cast<int32_t>(_power_led_mode));
+    }
+}
+
+Hal::PowerLedMode Hal::getPowerLedMode(bool loadFromSettings)
+{
+    if (loadFromSettings) {
+        Settings settings(std::string(Hal::SettingsNs), false);
+        _power_led_mode = sanitize_power_led_mode(settings.GetInt("pwr_led_mode", 0));
+    }
+    return _power_led_mode;
+}
+
+void Hal::updatePowerLed()
+{
+    if (_power_led_mode != PowerLedMode::Blink || !_pm1) {
+        return;
+    }
+
+    const uint32_t now = millis();
+    if (_power_led_output && deadline_reached(now, _power_led_pulse_end_ms)) {
+        applyPowerLedOutput(false);
+    }
+
+    if (!_power_led_output && deadline_reached(now, _power_led_next_blink_ms)) {
+        applyPowerLedOutput(true);
+        _power_led_pulse_end_ms  = now + _power_led_pulse_ms;
+        _power_led_next_blink_ms = now + _power_led_blink_period_ms;
+    }
 }

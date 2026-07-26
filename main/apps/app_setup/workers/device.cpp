@@ -243,6 +243,100 @@ private:
     bool _save_requested = false;
 };
 
+class PowerLedWorker::PowerLedConfigView {
+public:
+    explicit PowerLedConfigView(Hal::PowerLedMode initialMode) : _current_mode(initialMode)
+    {
+        _panel = std::make_unique<Container>(lv_screen_active());
+        _panel->align(LV_ALIGN_CENTER, 0, 0);
+        _panel->setSize(466, 466);
+        _panel->setRadius(0);
+        _panel->setBorderWidth(0);
+        _panel->setPaddingAll(0);
+        _panel->setBgColor(lv_color_hex(0x000000));
+        _panel->setBgOpa(LV_OPA_COVER);
+        _panel->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
+
+        createModeRow(44, "Off", Hal::PowerLedMode::Off);
+        createModeRow(133, "On", Hal::PowerLedMode::On);
+        createModeRow(222, "Blink 2s", Hal::PowerLedMode::Blink);
+        updateSelection();
+
+        _ok_button = std::make_unique<Button>(_panel->get());
+        _ok_button->align(LV_ALIGN_CENTER, 0, 175);
+        _ok_button->setSize(374, 130);
+        _ok_button->setRadius(77);
+        _ok_button->setBorderWidth(0);
+        _ok_button->setShadowWidth(0);
+        _ok_button->setBgColor(lv_color_hex(0x4AD78C));
+        _ok_button->label().setText("OK");
+        _ok_button->label().setTextFont(&lv_font_montserrat_28);
+        _ok_button->label().setTextColor(lv_color_hex(0x0F5831));
+        _ok_button->label().align(LV_ALIGN_CENTER, 0, 0);
+        _ok_button->onClick().connect([this]() { _save_requested = true; });
+    }
+
+    Hal::PowerLedMode currentMode() const
+    {
+        return _current_mode;
+    }
+
+    bool consumeSaveRequested()
+    {
+        const bool requested = _save_requested;
+        _save_requested      = false;
+        return requested;
+    }
+
+private:
+    struct ModeRow {
+        Hal::PowerLedMode mode;
+        std::unique_ptr<Button> button;
+        std::unique_ptr<Label> check;
+    };
+
+    void createModeRow(int y, const char* title, Hal::PowerLedMode mode)
+    {
+        auto button = std::make_unique<Button>(_panel->get());
+        button->setSize(374, 78);
+        button->align(LV_ALIGN_TOP_MID, 0, y);
+        button->setRadius(39);
+        button->setBorderWidth(0);
+        button->setShadowWidth(0);
+        button->setPaddingAll(0);
+        button->label().setText(title);
+        button->label().setTextFont(&lv_font_montserrat_24);
+        button->label().setTextColor(lv_color_hex(0xFFFFFF));
+        button->label().align(LV_ALIGN_LEFT_MID, 36, 0);
+        button->onClick().connect([this, mode]() {
+            _current_mode = mode;
+            updateSelection();
+        });
+
+        auto check = std::make_unique<Label>(button->get());
+        check->setTextFont(&lv_font_montserrat_24);
+        check->setTextColor(lv_color_hex(0x4AD78C));
+        check->align(LV_ALIGN_RIGHT_MID, -36, 0);
+
+        _rows.push_back({mode, std::move(button), std::move(check)});
+    }
+
+    void updateSelection()
+    {
+        for (auto& row : _rows) {
+            const bool selected = row.mode == _current_mode;
+            row.button->setBgColor(lv_color_hex(selected ? 0x4C4C4C : 0x242424));
+            row.check->setText(selected ? LV_SYMBOL_OK : "");
+        }
+    }
+
+    std::unique_ptr<Container> _panel;
+    std::vector<ModeRow> _rows;
+    std::unique_ptr<Button> _ok_button;
+    Hal::PowerLedMode _current_mode = Hal::PowerLedMode::Off;
+    bool _save_requested            = false;
+};
+
 }  // namespace setup_workers
 
 BrightnessWorker::BrightnessWorker()
@@ -335,4 +429,34 @@ void ButtonWorker::update()
 
 ButtonWorker::~ButtonWorker()
 {
+}
+
+PowerLedWorker::PowerLedWorker()
+{
+    mclog::tagInfo(_tag, "start power LED worker");
+
+    _original_mode = GetHAL().getPowerLedMode();
+    _applied_mode  = _original_mode;
+    _view          = std::make_unique<PowerLedConfigView>(_original_mode);
+}
+
+void PowerLedWorker::update()
+{
+    if (_view && _applied_mode != _view->currentMode()) {
+        _applied_mode = _view->currentMode();
+        GetHAL().setPowerLedMode(_applied_mode, false);
+    }
+
+    if (_view && _view->consumeSaveRequested()) {
+        GetHAL().setPowerLedMode(_view->currentMode(), true);
+        _committed = true;
+        _is_done   = true;
+    }
+}
+
+PowerLedWorker::~PowerLedWorker()
+{
+    if (!_committed && _applied_mode != _original_mode) {
+        GetHAL().setPowerLedMode(_original_mode, false);
+    }
 }

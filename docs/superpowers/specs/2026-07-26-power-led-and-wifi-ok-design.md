@@ -11,9 +11,15 @@ No other settings pages or menu styles change.
 
 ## Power LED Behavior
 
-The HAL owns the M5PM1 status LED state. It loads the `pwr_led` boolean from the existing `system` NVS namespace during PMIC initialization and applies it with `M5PM1::setLedEnLevel`. The default for devices without a saved value is off.
+The HAL owns three mutually exclusive M5PM1 status LED modes:
 
-The `Power LED` page contains one switch row styled exactly like the rows on the existing Button page and one existing-style green `OK` button. Moving the switch previews the LED state immediately. Pressing `OK` persists the value and returns to the settings menu. If the page is destroyed without confirmation, the worker restores the value that was active when the page opened.
+- `Off`: LED output remains low.
+- `On`: LED output remains high.
+- `Blink`: the LED emits a short 160 ms pulse every 2 seconds.
+
+It loads the `pwr_led_mode` integer from the existing `system` NVS namespace during PMIC initialization and applies it with `M5PM1::setLedEnLevel`. Unknown stored values fall back to `Off`, which is also the default for devices without a saved value. Blink scheduling runs from the existing firmware main loop and performs I2C writes only when the output changes.
+
+The `Power LED` page contains three Button-style option rows labeled `Off`, `On`, and `Blink 2s`, with one selected indicator at a time, plus one existing-style green `OK` button. Selecting a row previews the mode immediately. Pressing `OK` persists the value and returns to the settings menu. If the page is destroyed without confirmation, the worker restores the mode that was active when the page opened.
 
 Download-mode indication is unaffected because application-level LED configuration runs only after the firmware and PMIC HAL initialize.
 
@@ -32,4 +38,4 @@ The pairing action moves upward only as much as required to avoid overlapping th
 
 ## Validation
 
-Firmware contract tests cover the NVS key, HAL apply/persist methods, menu registration, Power LED worker behavior, and exact WiFi `OK` style. Existing WiFi controller/model tests continue to cover runtime behavior. A complete ESP-IDF unified build verifies the hardware-facing integration.
+Firmware contract tests cover the NVS key, mode validation, HAL apply/persist methods, blink timing constants and main-loop update, menu registration, Power LED worker behavior, and exact WiFi `OK` style. Existing WiFi controller/model tests continue to cover runtime behavior. A complete ESP-IDF unified build verifies the hardware-facing integration.
