@@ -15,6 +15,7 @@ from agent import BleStatusTransport
 from protocol import EVENT_MESSAGE, STATUS_MESSAGE
 from runtime import AgentCommand, AgentController, AgentRuntime, _create_voice_session
 from voice_audio import VoiceAudioDeviceNotFound, VoiceAudioError
+from voice_driver import DriverState
 from voice_input_crypto import VoiceKeyError
 from voice_input_protocol import (
     ACCESSIBILITY_REQUIRED,
@@ -223,6 +224,46 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.keychain_patch.start()
         self.addCleanup(self.keychain_patch.stop)
 
+    async def test_setup_failure_publishes_sanitized_error_without_changing_ble(self):
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            connection_enabled=True,
+        )
+        runtime._transition(ConnectionState.CONNECTED, "watch connected")
+        secret = "0123456789abcdef0123456789abcdef"
+        worker = threading.Thread(
+            target=lambda: runtime.report_voice_setup_failure(
+                "  Authorization\nfailed {} {}".format(secret, "detail " * 40)
+            )
+        )
+
+        worker.start()
+        worker.join(1)
+
+        self.assertFalse(worker.is_alive())
+        snapshot = runtime.snapshot()
+        self.assertIs(snapshot.state, ConnectionState.CONNECTED)
+        self.assertTrue(snapshot.connection_enabled)
+        self.assertEqual(snapshot.detail, "watch connected")
+        self.assertIs(snapshot.voice_state, VoiceState.ERROR)
+        self.assertNotIn(secret, snapshot.voice_detail)
+        self.assertNotIn("\n", snapshot.voice_detail)
+        self.assertIn("[redacted]", snapshot.voice_detail)
+        self.assertLessEqual(len(snapshot.voice_detail), 120)
+
+    async def test_setup_success_publishes_immediate_driver_state(self):
+        runtime = AgentRuntime(collector=FakeCollector())
+
+        runtime.report_voice_setup_result(DriverState.RESTART_REQUIRED)
+        restart_snapshot = runtime.snapshot()
+        runtime.report_voice_setup_result(DriverState.READY)
+        ready_snapshot = runtime.snapshot()
+
+        self.assertIs(restart_snapshot.voice_state, VoiceState.RESTART_REQUIRED)
+        self.assertEqual(restart_snapshot.voice_detail, "")
+        self.assertIs(ready_snapshot.voice_state, VoiceState.READY)
+        self.assertEqual(ready_snapshot.voice_detail, "")
+
     async def test_readiness_refresh_enables_voice_without_restarting_ble(self):
         factory = FakeTransportFactory([{}])
 
@@ -264,14 +305,19 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         else:
             self.fail("initial voice readiness was not published")
 
+        runtime.report_voice_setup_result(DriverState.READY)
         runtime.refresh_voice_readiness()
 
         for _ in range(100):
-            if runtime.snapshot().voice_state is VoiceState.READY:
+            if any(
+                entry[0] == "ready"
+                for entry in factory.instances[0].voice_payloads
+            ):
                 break
             await asyncio.sleep(0.01)
         else:
-            self.fail("refreshed voice readiness was not published")
+            self.fail("refreshed voice readiness did not enable the service")
+        self.assertIs(runtime.snapshot().voice_state, VoiceState.READY)
         self.assertIs(runtime.snapshot().state, ConnectionState.CONNECTED)
         self.assertEqual(len(factory.instances), 1)
         self.assertEqual(factory.instances[0].disconnect_count, 0)
@@ -1498,6 +1544,8 @@ class FakeRuntime:
     def __init__(self):
         self.commands = []
         self.voice_refresh_count = 0
+        self.voice_setup_failures = []
+        self.voice_setup_results = []
 
     def submit(self, command):
         self.commands.append(command)
@@ -1505,8 +1553,42 @@ class FakeRuntime:
     def refresh_voice_readiness(self):
         self.voice_refresh_count += 1
 
+    def report_voice_setup_failure(self, detail):
+        self.voice_setup_failures.append(detail)
+
+    def report_voice_setup_result(self, state):
+        self.voice_setup_results.append(state)
+
 
 class AgentControllerTests(unittest.TestCase):
+    def test_voice_setup_result_is_reported_through_the_runtime(self):
+        runtime = FakeRuntime()
+        controller = AgentController(
+            preferences=MemoryPreferences(True), runtime=runtime
+        )
+
+        controller.report_voice_setup_result(DriverState.RESTART_REQUIRED)
+
+        self.assertEqual(
+            runtime.voice_setup_results,
+            [DriverState.RESTART_REQUIRED],
+        )
+        self.assertEqual(runtime.commands, [])
+
+    def test_voice_setup_failure_is_reported_through_the_runtime(self):
+        runtime = FakeRuntime()
+        controller = AgentController(
+            preferences=MemoryPreferences(True), runtime=runtime
+        )
+
+        controller.report_voice_setup_failure("Driver package verification failed")
+
+        self.assertEqual(
+            runtime.voice_setup_failures,
+            ["Driver package verification failed"],
+        )
+        self.assertEqual(runtime.commands, [])
+
     def test_voice_readiness_refresh_is_scoped_to_the_runtime(self):
         runtime = FakeRuntime()
         controller = AgentController(

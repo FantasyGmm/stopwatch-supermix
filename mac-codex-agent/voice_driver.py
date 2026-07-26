@@ -1,8 +1,11 @@
 import enum
 import hashlib
 import hmac
+import os
 import pathlib
+import signal
 import subprocess
+import threading
 import time
 
 
@@ -56,8 +59,9 @@ def blackhole_receipt_present(run=None) -> bool:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             check=False,
+            timeout=2.0,
         )
-    except OSError:
+    except (OSError, subprocess.TimeoutExpired):
         return False
     return result.returncode == 0
 
@@ -76,12 +80,17 @@ class DriverInstallError(RuntimeError):
     pass
 
 
+class DriverInstallCancelled(DriverInstallError):
+    pass
+
+
 class BlackHoleInstaller:
     def __init__(
         self,
         *,
         expected_sha256=BLACKHOLE_SHA256,
-        run=None,
+        process_factory=None,
+        signal_process_group=None,
         receipt_checker=None,
         device_checker=None,
         sleep=time.sleep,
@@ -90,31 +99,151 @@ class BlackHoleInstaller:
         poll_timeout=5.0,
     ):
         self._expected_sha256 = expected_sha256
-        self._run = run or subprocess.run
-        self._receipt_checker = receipt_checker or (
-            lambda: blackhole_receipt_present(self._run)
-        )
+        self._process_factory = process_factory or subprocess.Popen
+        self._signal_process_group = signal_process_group or os.killpg
+        self._receipt_checker = receipt_checker
         self._device_checker = device_checker or blackhole_device_visible
         self._sleep = sleep
         self._monotonic = monotonic
         self._poll_interval = poll_interval
         self._poll_timeout = poll_timeout
+        self._lock = threading.Lock()
+        self._cancel_requested = threading.Event()
+        self._process = None
+        self._closed = False
 
     def install(self, package: pathlib.Path) -> DriverState:
         package = pathlib.Path(package)
-        if not verify_package(package, self._expected_sha256):
-            raise DriverInstallError("BlackHole package hash does not match the pin")
-        self._run(
-            ["/usr/bin/osascript", "-e", INSTALL_SCRIPT, str(package)],
-            check=True,
+        with self._lock:
+            if self._closed:
+                raise DriverInstallCancelled("Driver setup was cancelled")
+            if self._process is not None:
+                raise DriverInstallError("Driver setup is already running")
+            self._cancel_requested.clear()
+        try:
+            package_matches = verify_package(package, self._expected_sha256)
+        except OSError as error:
+            raise DriverInstallError("Driver package is unavailable") from error
+        if not package_matches:
+            raise DriverInstallError("Driver package verification failed")
+
+        command = ["/usr/bin/osascript", "-e", INSTALL_SCRIPT, str(package)]
+        process = self._start_owned_process(
+            command,
+            "Driver installer could not start",
         )
-        if not self._receipt_checker():
-            raise DriverInstallError("BlackHole package receipt was not installed")
+        returncode = self._wait_owned_process(process)
+
+        if self._cancel_requested.is_set():
+            raise DriverInstallCancelled("Driver setup was cancelled")
+        if returncode != 0:
+            raise DriverInstallError("Driver installation was cancelled or failed")
+        try:
+            if self._receipt_checker is not None:
+                receipt_present = self._receipt_checker()
+            else:
+                receipt_process = self._start_owned_process(
+                    ["/usr/sbin/pkgutil", "--pkg-info", BLACKHOLE_RECEIPT],
+                    "Driver receipt verification failed",
+                )
+                receipt_present = self._wait_owned_process(
+                    receipt_process,
+                    timeout=2.0,
+                ) == 0
+        except DriverInstallCancelled:
+            raise
+        except Exception as error:
+            raise DriverInstallError("Driver receipt verification failed") from error
+        if not receipt_present:
+            raise DriverInstallError("Driver receipt verification failed")
         deadline = self._monotonic() + self._poll_timeout
         while True:
-            if self._device_checker():
+            if self._cancel_requested.is_set():
+                raise DriverInstallCancelled("Driver setup was cancelled")
+            try:
+                device_visible = self._device_checker()
+            except Exception as error:
+                raise DriverInstallError("Core Audio verification failed") from error
+            if device_visible:
                 return DriverState.READY
             remaining = deadline - self._monotonic()
             if remaining <= 0:
                 return DriverState.RESTART_REQUIRED
             self._sleep(min(self._poll_interval, remaining))
+
+    def cancel(self, timeout: float = 1.0) -> bool:
+        self._cancel_requested.set()
+        with self._lock:
+            process = self._process
+        if process is None:
+            return True
+        return self._terminate_and_reap(process, timeout)
+
+    def close(self, timeout: float = 1.0) -> bool:
+        with self._lock:
+            self._closed = True
+        return self.cancel(timeout)
+
+    def _start_owned_process(self, command, start_error: str):
+        with self._lock:
+            if self._closed or self._cancel_requested.is_set():
+                raise DriverInstallCancelled("Driver setup was cancelled")
+            try:
+                process = self._process_factory(
+                    command,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+            except OSError as error:
+                raise DriverInstallError(start_error) from error
+            self._process = process
+            return process
+
+    def _wait_owned_process(self, process, timeout=None) -> int:
+        reaped = False
+        try:
+            returncode = process.wait(timeout=timeout)
+            reaped = True
+        except subprocess.TimeoutExpired:
+            reaped = self._terminate_and_reap(process, 0.5)
+            raise
+        except Exception:
+            reaped = self._terminate_and_reap(process, 0.5)
+            raise
+        finally:
+            if reaped:
+                with self._lock:
+                    if self._process is process:
+                        self._process = None
+        if self._cancel_requested.is_set():
+            raise DriverInstallCancelled("Driver setup was cancelled")
+        return returncode
+
+    def _send_group_signal(self, process, signum: int) -> None:
+        try:
+            self._signal_process_group(process.pid, signum)
+        except ProcessLookupError:
+            pass
+        except OSError:
+            operation = process.terminate if signum == signal.SIGTERM else process.kill
+            try:
+                operation()
+            except ProcessLookupError:
+                pass
+
+    def _terminate_and_reap(self, process, timeout: float) -> bool:
+        deadline = self._monotonic() + max(0.0, timeout)
+        self._send_group_signal(process, signal.SIGTERM)
+        if self._wait_until(process, min(deadline, self._monotonic() + 0.25)):
+            return True
+        self._send_group_signal(process, signal.SIGKILL)
+        return self._wait_until(process, deadline)
+
+    def _wait_until(self, process, deadline: float) -> bool:
+        timeout = max(0.0, deadline - self._monotonic())
+        try:
+            process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return False
+        return True

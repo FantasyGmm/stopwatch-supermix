@@ -6,10 +6,13 @@ import logging
 import logging.handlers
 import pathlib
 import threading
+import time
 from typing import Optional
 
 import objc
 from AppKit import (
+    NSAlert,
+    NSAlertFirstButtonReturn,
     NSApplication,
     NSApplicationActivationPolicyAccessory,
     NSColor,
@@ -34,7 +37,13 @@ from PyObjCTools import AppHelper
 
 from app_state import UserDefaultsPreferences, present
 from runtime import AgentController
-from voice_driver import BLACKHOLE_PACKAGE_NAME, BlackHoleInstaller, DriverState
+from voice_driver import (
+    BLACKHOLE_PACKAGE_NAME,
+    BlackHoleInstaller,
+    DriverInstallCancelled,
+    DriverInstallError,
+    DriverState,
+)
 from voice_session import VoiceState
 
 
@@ -47,6 +56,7 @@ STATUS_HEADER_HEIGHT = 27
 STATUS_LEFT_MARGIN = 18
 STATUS_CHILD_INDENT = 16
 ALERT_ROW_WIDTH = 360
+INSTALL_SHUTDOWN_TIMEOUT = 1.0
 
 
 def bundled_blackhole_package() -> pathlib.Path:
@@ -54,6 +64,18 @@ def bundled_blackhole_package() -> pathlib.Path:
     if not resource_path:
         resource_path = pathlib.Path(__file__).resolve().parent
     return pathlib.Path(resource_path) / "Drivers" / BLACKHOLE_PACKAGE_NAME
+
+
+def confirm_voice_setup(alert_factory=None) -> bool:
+    alert = alert_factory() if alert_factory is not None else NSAlert.alloc().init()
+    alert.setMessageText_("Set Up Watch Voice Input?")
+    alert.setInformativeText_(
+        "BlackHole requires administrator authorization. "
+        "A Mac restart may be required."
+    )
+    alert.addButtonWithTitle_("Install")
+    alert.addButtonWithTitle_("Cancel")
+    return alert.runModal() == NSAlertFirstButtonReturn
 
 
 def configure_logging(path: pathlib.Path = LOG_PATH) -> None:
@@ -84,10 +106,11 @@ class MenuBarApplication(NSObject):
         self.workspace = NSWorkspace.sharedWorkspace()
         self.voice_installer = BlackHoleInstaller()
         self.voice_package_path = bundled_blackhole_package()
+        self.voice_setup_confirmer = confirm_voice_setup
         self.voice_worker_factory = lambda target: threading.Thread(
             target=target,
             name="blackhole-installer",
-            daemon=False,
+            daemon=True,
         )
         self.call_after = AppHelper.callAfter
         self._voice_install_thread = None
@@ -314,6 +337,8 @@ class MenuBarApplication(NSObject):
             is not VoiceState.DRIVER_REQUIRED
         ):
             return
+        if not self.voice_setup_confirmer():
+            return
         self._installing_voice = True
         self.setup_voice_item.setEnabled_(False)
         worker = self.voice_worker_factory(self._install_voice)
@@ -323,18 +348,42 @@ class MenuBarApplication(NSObject):
     def _install_voice(self):
         try:
             state = self.voice_installer.install(self.voice_package_path)
+        except DriverInstallCancelled as error:
+            if not self._stopping:
+                self.call_after(
+                    self._finish_voice_setup,
+                    DriverState.ERROR,
+                    str(error),
+                )
+        except DriverInstallError as error:
+            LOGGER.error("BlackHole installation failed: %s", error)
+            if not self._stopping:
+                self.call_after(
+                    self._finish_voice_setup,
+                    DriverState.ERROR,
+                    str(error),
+                )
         except Exception:
             LOGGER.exception("BlackHole installation failed")
-            self.call_after(self._finish_voice_setup, None)
+            if not self._stopping:
+                self.call_after(
+                    self._finish_voice_setup,
+                    DriverState.ERROR,
+                    "Driver setup failed",
+                )
         else:
-            self.call_after(self._finish_voice_setup, state)
+            if not self._stopping:
+                self.call_after(self._finish_voice_setup, state, "")
 
-    def _finish_voice_setup(self, state):
+    def _finish_voice_setup(self, state, detail=""):
         self._installing_voice = False
         self._voice_install_thread = None
         if self._stopping:
             return
+        if state is DriverState.ERROR:
+            self.controller.report_voice_setup_failure(detail)
         if state in (DriverState.READY, DriverState.RESTART_REQUIRED):
+            self.controller.report_voice_setup_result(state)
             self.controller.refresh_voice_readiness()
         self.refresh_(None)
 
@@ -367,6 +416,22 @@ class MenuBarApplication(NSObject):
         self.reconnect_item.setEnabled_(False)
         self.setup_voice_item.setEnabled_(False)
         self.accessibility_item.setEnabled_(False)
+        worker = self._voice_install_thread
+        deadline = time.monotonic() + INSTALL_SHUTDOWN_TIMEOUT
+        close_installer = getattr(self.voice_installer, "close", None)
+        reaped = True
+        if close_installer is not None:
+            try:
+                reaped = close_installer(timeout=INSTALL_SHUTDOWN_TIMEOUT / 2)
+            except Exception:
+                reaped = False
+                LOGGER.exception("Could not cancel BlackHole installation")
+        if worker is not None and worker.is_alive():
+            worker.join(max(0.0, deadline - time.monotonic()))
+        if (worker is not None and worker.is_alive()) or not reaped:
+            LOGGER.error("BlackHole installer did not stop within one second")
+        else:
+            self._voice_install_thread = None
         stopped = self.controller.stop(timeout=5.0)
         if stopped:
             LOGGER.info("StopWatch Codex Agent stopped")

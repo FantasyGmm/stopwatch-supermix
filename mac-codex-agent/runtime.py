@@ -97,8 +97,9 @@ def _blackhole_receipt_present() -> bool:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             check=False,
+            timeout=2.0,
         )
-    except OSError:
+    except (OSError, subprocess.TimeoutExpired):
         return False
     return result.returncode == 0
 
@@ -197,6 +198,21 @@ class AgentRuntime:
 
     def refresh_voice_readiness(self) -> None:
         self._voice_refresh_requested.set()
+
+    def report_voice_setup_failure(self, detail: str) -> None:
+        self._transition_voice(
+            VoiceState.ERROR,
+            _sanitize_voice_setup_detail(detail),
+        )
+
+    def report_voice_setup_result(self, state: DriverState) -> None:
+        voice_state = {
+            DriverState.READY: VoiceState.READY,
+            DriverState.RESTART_REQUIRED: VoiceState.RESTART_REQUIRED,
+        }.get(state)
+        if voice_state is None:
+            raise ValueError("setup result must be ready or restart required")
+        self._transition_voice(voice_state)
 
     def _transition(self, state: ConnectionState, detail: str = "") -> None:
         with self._state_lock:
@@ -414,11 +430,16 @@ class AgentRuntime:
         await self._publish_voice_readiness(context)
 
     async def _refresh_voice_readiness(self, context: _BleSessionContext) -> None:
+        service_state = getattr(
+            context.voice_service,
+            "state",
+            self.snapshot().voice_state,
+        )
         if (
             context.voice_failed
             or context.voice_key is None
             or context.voice_service is None
-            or self.snapshot().voice_state
+            or service_state
             not in (VoiceState.DRIVER_REQUIRED, VoiceState.RESTART_REQUIRED)
         ):
             return
@@ -692,6 +713,11 @@ def _redact_voice_detail(detail: str) -> str:
     return _VOICE_SECRET_BASE64.sub("[redacted]", text)
 
 
+def _sanitize_voice_setup_detail(detail: str) -> str:
+    concise = " ".join(_redact_voice_detail(detail).split())
+    return (concise or "Driver setup failed")[:120]
+
+
 async def _run_in_daemon_thread(operation):
     loop = asyncio.get_running_loop()
     result_future = loop.create_future()
@@ -800,6 +826,12 @@ class AgentController:
 
     def refresh_voice_readiness(self) -> None:
         self._runtime.refresh_voice_readiness()
+
+    def report_voice_setup_failure(self, detail: str) -> None:
+        self._runtime.report_voice_setup_failure(detail)
+
+    def report_voice_setup_result(self, state: DriverState) -> None:
+        self._runtime.report_voice_setup_result(state)
 
     def stop(self, timeout: float = 5.0) -> bool:
         with self._stop_lock:
