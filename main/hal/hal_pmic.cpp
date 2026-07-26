@@ -64,6 +64,14 @@ uint16_t _bat_filtered_mv = 0;
 std::mutex _bat_level_mutex;
 ExternalPowerTracker _external_power_tracker;
 std::mutex _external_power_mutex;
+std::mutex _pmic_io_mutex;
+
+template <typename Operation>
+auto with_pmic_io_lock(Operation&& operation)
+{
+    std::lock_guard<std::mutex> lock(_pmic_io_mutex);
+    return operation();
+}
 
 void update_bat_level(uint8_t level)
 {
@@ -92,7 +100,9 @@ void bat_reading_task(void* param)
     while (true) {
         if (_pm1) {
             uint16_t vin_mv       = 0;
-            const auto vin_result = _pm1->readVin(&vin_mv);
+            const auto vin_result = with_pmic_io_lock([&] {
+                return _pm1->readVin(&vin_mv);
+            });
             {
                 std::lock_guard<std::mutex> lock(_external_power_mutex);
                 _external_power_tracker.observe(vin_result == M5PM1_OK, vin_mv > 4000);
@@ -102,7 +112,10 @@ void bat_reading_task(void* param)
             if (battery_sample_iteration == _battery_sample_iterations) {
                 battery_sample_iteration = 0;
                 uint16_t battery_mv       = 0;
-                if (_pm1->readVbat(&battery_mv) == M5PM1_OK) {
+                const auto battery_result = with_pmic_io_lock([&] {
+                    return _pm1->readVbat(&battery_mv);
+                });
+                if (battery_result == M5PM1_OK) {
                     update_bat_level_from_mv(battery_mv);
                 }
             }
@@ -169,7 +182,9 @@ bool Hal::pmic_get_pwr_btn_state()
 {
     bool result = false;
     if (_pm1) {
-        return _pm1->btnGetState(&result);
+        return with_pmic_io_lock([&] {
+            return _pm1->btnGetState(&result);
+        });
     }
     return result;
 }
@@ -198,7 +213,9 @@ bool Hal::isBatteryCharging(bool strict)
     }
 
     uint8_t charge_status = 1;
-    const auto chg_result = _pm1->gpioGetInput(PMG2_CHG_STAT, &charge_status);
+    const auto chg_result = with_pmic_io_lock([&] {
+        return _pm1->gpioGetInput(PMG2_CHG_STAT, &charge_status);
+    });
     if (chg_result != M5PM1_OK) {
         return false;
     }
@@ -212,7 +229,10 @@ void Hal::applyPowerLedOutput(bool enabled)
         return;
     }
 
-    if (_pm1->setLedEnLevel(enabled) != M5PM1_OK) {
+    const auto led_result = with_pmic_io_lock([&] {
+        return _pm1->setLedEnLevel(enabled);
+    });
+    if (led_result != M5PM1_OK) {
         mclog::tagWarn(_tag, "failed to set power LED to {}", enabled ? "on" : "off");
         return;
     }

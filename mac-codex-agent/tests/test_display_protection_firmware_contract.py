@@ -1,4 +1,5 @@
 import pathlib
+import re
 import unittest
 
 
@@ -6,6 +7,49 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
 class DisplayProtectionFirmwareContractTests(unittest.TestCase):
+    def test_runtime_pmic_driver_accesses_share_one_io_lock(self):
+        pmic_source = (ROOT / "main" / "hal" / "hal_pmic.cpp").read_text(
+            encoding="utf-8"
+        )
+
+        def function_body(signature):
+            start = pmic_source.index(signature)
+            opening_brace = pmic_source.index("{", start)
+            depth = 0
+            for index in range(opening_brace, len(pmic_source)):
+                if pmic_source[index] == "{":
+                    depth += 1
+                elif pmic_source[index] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        return pmic_source[start : index + 1]
+            self.fail(f"unterminated function: {signature}")
+
+        init_body = function_body("void Hal::pmic_init()")
+        runtime_source = pmic_source.replace(init_body, "")
+        runtime_calls = re.findall(r"_pm1->(\w+)\(", runtime_source)
+        guarded_calls = re.findall(
+            r"with_pmic_io_lock\(\[&\]\s*\{\s*"
+            r"return _pm1->(\w+)\(",
+            runtime_source,
+        )
+
+        self.assertCountEqual(
+            runtime_calls,
+            guarded_calls,
+            "every runtime M5PM1 access must go through with_pmic_io_lock",
+        )
+        self.assertEqual(
+            set(runtime_calls),
+            {"readVin", "readVbat", "gpioGetInput", "btnGetState", "setLedEnLevel"},
+        )
+        self.assertRegex(
+            pmic_source,
+            r"auto with_pmic_io_lock\(Operation&& operation\)[\s\S]*?"
+            r"std::lock_guard<std::mutex> lock\(_pmic_io_mutex\);[\s\S]*?"
+            r"return operation\(\);",
+        )
+
     def test_hal_caches_external_power_in_battery_task(self):
         hal_header = (ROOT / "main" / "hal" / "hal.h").read_text(encoding="utf-8")
         pmic_source = (ROOT / "main" / "hal" / "hal_pmic.cpp").read_text(
