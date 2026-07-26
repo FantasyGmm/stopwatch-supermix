@@ -1,7 +1,10 @@
+import json
 import os
 import pathlib
 import re
+import shlex
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -10,6 +13,35 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 RUNNER = ROOT / "scripts/run_unified_offline_validation.sh"
 README = ROOT / "mac-codex-agent/README.md"
 PROBE_DOC = ROOT / "docs/ble-voice-link-probe.md"
+
+EXPECTED_HOST_TESTS = (
+    "assistant_state_machine_test",
+    "assistant_close_controller_test",
+    "assistant_event_mailbox_test",
+    "assistant_update_notice_test",
+    "assistant_trace_test",
+    "resource_supervisor_test",
+    "button_feedback_policy_test",
+    "shared_wifi_policy_test",
+    "wifi_settings_model_test",
+    "wifi_settings_controller_test",
+    "debug_command_test",
+    "runtime_diagnostics_test",
+    "audio_jitter_buffer_policy_test",
+    "ble_voice_probe_protocol_test",
+    "voice_probe_crypto_test",
+    "voice_input_crypto_test",
+    "voice_input_protocol_test",
+    "voice_input_session_test",
+    "voice_capture_pipeline_test",
+    "voice_input_controller_test",
+    "codex_status_priority_test",
+    "ble_voice_probe_failure_transition_test",
+    "ble_voice_probe_session_test",
+    "ble_voice_probe_pcm_buffer_test",
+    "ima_adpcm_codec_test",
+    "voice_audio_ring_test",
+)
 
 
 class UnifiedVoiceValidationTests(unittest.TestCase):
@@ -30,6 +62,101 @@ class UnifiedVoiceValidationTests(unittest.TestCase):
             self.assertFalse(sentinel_key.exists())
         self.assertEqual(result.returncode, 0, result.stderr)
         return result.stdout.splitlines()
+
+    def contract_host_rows(self):
+        compile_rows = []
+        run_names = []
+        for line in self.run_contract():
+            fields = line.split("\t")
+            if fields[0] == "COMPILE":
+                self.assertGreaterEqual(len(fields), 4)
+                compile_rows.append((fields[1], fields[2:]))
+            elif fields[0] == "RUN":
+                self.assertEqual(len(fields), 2)
+                run_names.append(fields[1])
+        return compile_rows, run_names
+
+    def run_behavioral_runner(self, runner=RUNNER):
+        with tempfile.TemporaryDirectory() as temporary:
+            temp = pathlib.Path(temporary)
+            compiler_log = temp / "compiler.log"
+            executable_log = temp / "executables.log"
+            trace = temp / "runner.trace"
+            fake_cxx = temp / "fake-cxx.py"
+            fake_bin = temp / "bin"
+            fake_bin.mkdir()
+            fake_cmake = fake_bin / "cmake"
+            fake_cmake.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            fake_cmake.chmod(0o700)
+            fake_cxx.write_text(
+                """#!/usr/bin/env python3
+import json
+import os
+import pathlib
+import shlex
+import sys
+
+arguments = sys.argv[1:]
+with pathlib.Path(os.environ[\"FAKE_CXX_LOG\"]).open(\"a\", encoding=\"utf-8\") as log:
+    log.write(json.dumps(arguments) + \"\\n\")
+output = pathlib.Path(arguments[arguments.index(\"-o\") + 1])
+command = \"printf '%s\\n' \" + shlex.quote(output.name) + \" >> \" + shlex.quote(os.environ[\"FAKE_EXECUTABLE_LOG\"])
+output.write_text(\"#!/bin/sh\\n\" + command + \"\\n\", encoding=\"utf-8\")
+output.chmod(0o700)
+""",
+                encoding="utf-8",
+            )
+            fake_cxx.chmod(0o700)
+            result = subprocess.run(
+                [str(runner), "--host-tests-only"],
+                capture_output=True,
+                text=True,
+                check=False,
+                env={
+                    **os.environ,
+                    "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+                    "TMPDIR": str(temp),
+                    "CXX": str(fake_cxx),
+                    "PYTHON": sys.executable,
+                    "IDF_PATH": str(temp / "fake-idf"),
+                    "FAKE_CXX_LOG": str(compiler_log),
+                    "FAKE_EXECUTABLE_LOG": str(executable_log),
+                    "STOPWATCH_VALIDATION_TRACE_FILE": str(trace),
+                },
+            )
+            trace_lines = trace.read_text(encoding="utf-8").splitlines() if trace.exists() else []
+            compiler_lines = compiler_log.read_text(encoding="utf-8").splitlines() if compiler_log.exists() else []
+            executable_lines = executable_log.read_text(encoding="utf-8").splitlines() if executable_log.exists() else []
+            trace_mode = trace.stat().st_mode & 0o777 if trace.exists() else None
+            temporary_host_dirs = list(temp.glob("stopwatch-unified-validation.*"))
+        return result, trace_lines, compiler_lines, executable_lines, trace_mode, temporary_host_dirs
+
+    def assert_behavioral_host_execution(self, runner=RUNNER):
+        (
+            result,
+            trace_lines,
+            compiler_lines,
+            executable_lines,
+            trace_mode,
+            temporary_host_dirs,
+        ) = self.run_behavioral_runner(runner)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        expected_trace = [
+            row
+            for name in EXPECTED_HOST_TESTS
+            for row in (f"COMPILED\t{name}", f"RAN\t{name}")
+        ]
+        self.assertEqual(trace_lines, expected_trace)
+        self.assertEqual(
+            [
+                pathlib.Path(arguments[arguments.index("-o") + 1]).name
+                for arguments in map(json.loads, compiler_lines)
+            ],
+            list(EXPECTED_HOST_TESTS),
+        )
+        self.assertEqual(executable_lines, list(EXPECTED_HOST_TESTS))
+        self.assertEqual(trace_mode, 0o600)
+        self.assertEqual(temporary_host_dirs, [])
 
     def test_stage_contract_has_consistent_numbering_and_final_gates(self):
         lines = self.run_contract()
@@ -54,18 +181,11 @@ class UnifiedVoiceValidationTests(unittest.TestCase):
         )
 
     def test_contract_executes_exact_voice_compile_and_run_pairs(self):
-        lines = self.run_contract()
-        compile_rows = {}
-        run_names = []
-        for line in lines:
-            fields = line.split("\t")
-            if fields[0] == "COMPILE":
-                self.assertGreaterEqual(len(fields), 4)
-                self.assertNotIn(fields[1], compile_rows)
-                compile_rows[fields[1]] = fields[2:]
-            elif fields[0] == "RUN":
-                self.assertEqual(len(fields), 2)
-                run_names.append(fields[1])
+        compile_rows_list, run_names = self.contract_host_rows()
+        compile_names = [name for name, _ in compile_rows_list]
+        compile_rows = dict(compile_rows_list)
+        self.assertEqual(compile_names, list(EXPECTED_HOST_TESTS))
+        self.assertEqual(run_names, list(EXPECTED_HOST_TESTS))
 
         expected_sources = {
             "ble_voice_probe_protocol_test": {
@@ -117,6 +237,10 @@ class UnifiedVoiceValidationTests(unittest.TestCase):
             "ble_voice_probe_pcm_buffer_test": {
                 "tests/ble_voice_probe_pcm_buffer_test.cpp",
             },
+            "ima_adpcm_codec_test": {
+                "tests/ima_adpcm_codec_test.cpp",
+                "main/apps/app_codex_status/ima_adpcm_codec.cpp",
+            },
             "voice_audio_ring_test": {
                 "mac-codex-agent/native/voice_audio_ring_test.cpp",
             },
@@ -131,6 +255,36 @@ class UnifiedVoiceValidationTests(unittest.TestCase):
             self.assertIn("-Werror", arguments)
             self.assertEqual({argument for argument in arguments if argument.endswith(".cpp")}, sources)
             self.assertEqual(run_names.count(name), 1)
+
+    def test_normal_host_path_records_actual_compile_and_run_success(self):
+        self.assert_behavioral_host_execution()
+
+    def test_echo_only_contract_output_cannot_satisfy_behavioral_execution(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            fake_runner = pathlib.Path(temporary) / "echo-only-runner"
+            rows = []
+            for name in EXPECTED_HOST_TESTS:
+                rows.extend((f"COMPILE\\t{name}\\t-std=c++17\\ttests/{name}.cpp", f"RUN\\t{name}"))
+            fake_runner.write_text(
+                "#!/bin/sh\nprintf '%b\\n' " + shlex.quote("\n".join(rows)) + "\n",
+                encoding="utf-8",
+            )
+            fake_runner.chmod(0o700)
+            with self.assertRaises(AssertionError):
+                self.assert_behavioral_host_execution(fake_runner)
+
+    def test_contract_mode_never_creates_an_execution_trace(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            trace = pathlib.Path(temporary) / "must-not-exist.trace"
+            result = subprocess.run(
+                [str(RUNNER), "--contract"],
+                capture_output=True,
+                text=True,
+                check=False,
+                env={**os.environ, "STOPWATCH_VALIDATION_TRACE_FILE": str(trace)},
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(trace.exists())
 
     def test_user_and_diagnostic_docs_cover_the_production_contract(self):
         readme = README.read_text(encoding="utf-8")
@@ -169,6 +323,7 @@ class UnifiedVoiceValidationTests(unittest.TestCase):
         self.assertIn("fully quit", normalized_probe.casefold())
         self.assertIn("normal `StopWatch-Codex` identity", normalized_probe)
         self.assertIn("physical acceptance", normalized_probe)
+        self.assertIn("--host-tests-only", normalized_probe)
 
 
 if __name__ == "__main__":

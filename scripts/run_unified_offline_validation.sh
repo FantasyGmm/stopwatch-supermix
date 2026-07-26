@@ -7,12 +7,15 @@ PYTHON="${PYTHON:-$ROOT/mac-codex-agent/.venv/bin/python}"
 TOTAL_STAGES=29
 STAGE_INDEX=0
 CONTRACT_ONLY=0
+HOST_TESTS_ONLY=0
+TRACE_FD=""
 
 case "${1:-}" in
     "") ;;
     --contract) CONTRACT_ONLY=1 ;;
+    --host-tests-only) HOST_TESTS_ONLY=1 ;;
     *)
-        echo "Usage: $0 [--contract]" >&2
+        echo "Usage: $0 [--contract|--host-tests-only]" >&2
         exit 2
         ;;
 esac
@@ -31,8 +34,41 @@ run_host_test() {
         printf '\nRUN\t%s\n' "$name"
         return
     fi
-    "$CXX" "$@" -o "$HOST_TEST_DIR/$name"
-    "$HOST_TEST_DIR/$name"
+    "$CXX" "$@" -o "$HOST_TEST_DIR/$name" 9>&-
+    record_execution "COMPILED" "$name"
+    "$HOST_TEST_DIR/$name" 9>&-
+    record_execution "RAN" "$name"
+}
+
+open_execution_trace() {
+    local trace_file="${STOPWATCH_VALIDATION_TRACE_FILE:-}"
+    if [[ -z "$trace_file" || "$CONTRACT_ONLY" -eq 1 ]]; then
+        return
+    fi
+    if [[ "$trace_file" == *$'\n'* || ! -d "$(dirname "$trace_file")" ]]; then
+        echo "Validation trace path is invalid" >&2
+        exit 2
+    fi
+
+    local previous_umask
+    previous_umask="$(umask)"
+    umask 077
+    set -o noclobber
+    if ! { exec 9>"$trace_file"; } 2>/dev/null; then
+        set +o noclobber
+        umask "$previous_umask"
+        echo "Validation trace must be a new file: $trace_file" >&2
+        exit 2
+    fi
+    set +o noclobber
+    umask "$previous_umask"
+    TRACE_FD=9
+}
+
+record_execution() {
+    if [[ -n "$TRACE_FD" ]]; then
+        printf '%s\t%s\n' "$1" "$2" >&9
+    fi
 }
 
 verify_stage_count() {
@@ -47,19 +83,21 @@ cd "$ROOT"
 if [[ "$CONTRACT_ONLY" -eq 0 ]]; then
     HOST_TEST_DIR="$(mktemp -d "${TMPDIR:-/tmp}/stopwatch-unified-validation.XXXXXX")"
     trap 'rm -rf "$HOST_TEST_DIR"' EXIT
+    open_execution_trace
 
-    if [[ ! -x "$PYTHON" ]]; then
+    if [[ "$HOST_TESTS_ONLY" -eq 0 && ! -x "$PYTHON" ]]; then
         echo "Python environment is missing: $PYTHON" >&2
         echo "Create mac-codex-agent/.venv and install mac-codex-agent/requirements.txt." >&2
         exit 2
     fi
 
-    export STOPWATCH_VOICE_KEY_FILE="$HOST_TEST_DIR/device-key.hex"
-    export STOPWATCH_BUILD_DIR="$HOST_TEST_DIR/firmware-build"
-    export STOPWATCH_SDKCONFIG="$HOST_TEST_DIR/sdkconfig.unified"
-    (
-        umask 077
-        "$PYTHON" - <<'PY'
+    if [[ "$HOST_TESTS_ONLY" -eq 0 ]]; then
+        export STOPWATCH_VOICE_KEY_FILE="$HOST_TEST_DIR/device-key.hex"
+        export STOPWATCH_BUILD_DIR="$HOST_TEST_DIR/firmware-build"
+        export STOPWATCH_SDKCONFIG="$HOST_TEST_DIR/sdkconfig.unified"
+        (
+            umask 077
+            "$PYTHON" - <<'PY'
 import os
 import pathlib
 import secrets
@@ -67,18 +105,21 @@ import secrets
 path = pathlib.Path(os.environ["STOPWATCH_VOICE_KEY_FILE"])
 path.write_text(secrets.token_hex(16) + "\n", encoding="ascii")
 PY
-    )
+        )
 
-    if ! command -v idf.py >/dev/null 2>&1; then
-        IDF_EXPORT="${IDF_PATH:-$HOME/esp/esp-idf-v5.5.4}/export.sh"
-        if [[ ! -f "$IDF_EXPORT" ]]; then
-            echo "ESP-IDF environment is unavailable: $IDF_EXPORT" >&2
-            exit 2
+        if ! command -v idf.py >/dev/null 2>&1; then
+            IDF_EXPORT="${IDF_PATH:-$HOME/esp/esp-idf-v5.5.4}/export.sh"
+            if [[ ! -f "$IDF_EXPORT" ]]; then
+                echo "ESP-IDF environment is unavailable: $IDF_EXPORT" >&2
+                exit 2
+            fi
+            # ESP-IDF's supported export script selects its managed Python
+            # environment and toolchain before the isolated candidate build.
+            # shellcheck disable=SC1090
+            source "$IDF_EXPORT"
         fi
-        # ESP-IDF's supported export script selects its managed Python
-        # environment and toolchain before the isolated candidate build.
-        # shellcheck disable=SC1090
-        source "$IDF_EXPORT"
+    else
+        IDF_PATH="${IDF_PATH:-$HOME/esp/esp-idf-v5.5.4}"
     fi
 else
     HOST_TEST_DIR="<contract-host-test-dir>"
@@ -86,7 +127,7 @@ else
 fi
 
 stage "Python contract and tooling tests"
-if [[ "$CONTRACT_ONLY" -eq 0 ]]; then
+if [[ "$CONTRACT_ONLY" -eq 0 && "$HOST_TESTS_ONLY" -eq 0 ]]; then
     "$PYTHON" -m unittest discover -s mac-codex-agent/tests -p 'test_*.py'
 fi
 
@@ -273,16 +314,18 @@ run_host_test voice_audio_ring_test \
     mac-codex-agent/native/voice_audio_ring_test.cpp
 
 stage "Isolated unified candidate clean build and capacity gates"
-if [[ "$CONTRACT_ONLY" -eq 0 ]]; then
+if [[ "$CONTRACT_ONLY" -eq 0 && "$HOST_TESTS_ONLY" -eq 0 ]]; then
     ./scripts/build_unified_candidate.sh --clean
 fi
 
 stage "Whitespace error check"
-if [[ "$CONTRACT_ONLY" -eq 0 ]]; then
+if [[ "$CONTRACT_ONLY" -eq 0 && "$HOST_TESTS_ONLY" -eq 0 ]]; then
     git diff --check
 fi
 
 verify_stage_count
-if [[ "$CONTRACT_ONLY" -eq 0 ]]; then
+if [[ "$CONTRACT_ONLY" -eq 0 && "$HOST_TESTS_ONLY" -eq 0 ]]; then
     echo "Unified offline validation passed. Hardware status is tracked separately in the validation reports."
+elif [[ "$HOST_TESTS_ONLY" -eq 1 ]]; then
+    echo "Unified host-test validation passed."
 fi

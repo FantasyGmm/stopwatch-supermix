@@ -258,3 +258,9 @@ production pairing, MTU 256 delivery, authenticated 186-byte AUDIO values,
 microphone ownership, intelligible speech, paired Fn taps, reconnect cleanup,
 previous-input restoration, and Assistant recovery require tests on the watch
 and Mac. Keep those evidence categories separate in every report.
+
+For a maintainer-only host regression pass, run
+`./scripts/run_unified_offline_validation.sh --host-tests-only`. This mode uses
+the same compile-and-run helpers as the full 29-stage validation, including the
+mbedTLS host dependency, while skipping the Python suite and isolated firmware
+build. It does not replace the full offline validation or physical acceptance.
