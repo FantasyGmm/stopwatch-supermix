@@ -8,7 +8,6 @@
 
 namespace {
 constexpr std::string_view tag = "DisplayProtection";
-constexpr uint32_t PowerHealthRetryLogMs = 30000;
 GlobalDisplayProtectionService global_display_protection_service;
 }
 
@@ -53,12 +52,7 @@ bool GlobalDisplayProtectionService::init()
                                       displayProtectionScreenOffMs(_config),
                                       now_ms));
     _external_power = GetHAL().getExternalPowerSnapshot();
-    _last_power_health_log_ms = now_ms;
-    if (!_external_power.latest_sample_valid) {
-        mclog::tagWarn(tag, "power sample unhealthy state={} retry_ms={}",
-                       static_cast<unsigned>(_external_power.state),
-                       PowerHealthRetryLogMs);
-    }
+    _power_health_log_policy.reset(_external_power.latest_sample_valid, now_ms);
     recalculateAutomaticProtection(now_ms);
     _last_touch_state = lv_indev_get_state(indev);
     _last_buttons = GetHAL().readButtonPhysicalState();
@@ -86,21 +80,21 @@ void GlobalDisplayProtectionService::update()
         latest_power.state != previous_power.state;
     _external_power = latest_power;
 
-    const bool power_health_changed =
-        latest_power.latest_sample_valid != previous_power.latest_sample_valid;
-    const bool invalid_retry_due =
-        !latest_power.latest_sample_valid &&
-        now_ms - _last_power_health_log_ms >= PowerHealthRetryLogMs;
-    if (power_health_changed || invalid_retry_due) {
-        _last_power_health_log_ms = now_ms;
-        if (latest_power.latest_sample_valid) {
+    const ExternalPowerHealthLogEvent health_event =
+        _power_health_log_policy.update(latest_power.latest_sample_valid,
+                                        now_ms);
+    switch (health_event) {
+        case ExternalPowerHealthLogEvent::Healthy:
             mclog::tagInfo(tag, "power sample healthy state={}",
                            static_cast<unsigned>(latest_power.state));
-        } else {
+            break;
+        case ExternalPowerHealthLogEvent::Unhealthy:
             mclog::tagWarn(tag, "power sample unhealthy state={} retry_ms={}",
                            static_cast<unsigned>(latest_power.state),
-                           PowerHealthRetryLogMs);
-        }
+                           ExternalPowerHealthLogPolicy::RetryMs);
+            break;
+        case ExternalPowerHealthLogEvent::None:
+            break;
     }
 
     if (accepted_power_changed) {
@@ -171,7 +165,7 @@ void GlobalDisplayProtectionService::shutdown()
     _restore_brightness = 80;
     _pending_brightness = -1;
     _brightness_revision = 0;
-    _last_power_health_log_ms = 0;
+    _power_health_log_policy = {};
     _last_touch_state = LV_INDEV_STATE_REL;
     _last_buttons = {};
     _initialized = false;
@@ -210,14 +204,20 @@ void GlobalDisplayProtectionService::applyConfig(
         settings.SetInt("dim_idx", sanitized.dim_choice);
         settings.SetInt("off_idx", sanitized.screen_off_choice);
         settings.SetBool("chg_guard", sanitized.protect_while_charging);
+        mclog::tagInfo(tag,
+                       "configuration committed dim_choice={} off_choice={} "
+                       "charging_guard={}",
+                       static_cast<unsigned>(sanitized.dim_choice),
+                       static_cast<unsigned>(sanitized.screen_off_choice),
+                       static_cast<unsigned>(sanitized.protect_while_charging));
+    } else {
+        mclog::tagInfo(tag,
+                       "configuration applied dim_choice={} off_choice={} "
+                       "charging_guard={}",
+                       static_cast<unsigned>(sanitized.dim_choice),
+                       static_cast<unsigned>(sanitized.screen_off_choice),
+                       static_cast<unsigned>(sanitized.protect_while_charging));
     }
-    mclog::tagInfo(tag,
-                   "configuration committed dim_choice={} off_choice={} "
-                   "charging_guard={} persisted={}",
-                   static_cast<unsigned>(sanitized.dim_choice),
-                   static_cast<unsigned>(sanitized.screen_off_choice),
-                   static_cast<unsigned>(sanitized.protect_while_charging),
-                   static_cast<unsigned>(persist));
 
     _config = sanitized;
     if (!_initialized) {

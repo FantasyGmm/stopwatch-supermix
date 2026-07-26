@@ -1,22 +1,13 @@
 #pragma once
 
 #include "display_protection_config.h"
+#include "display_protection_diagnostics.h"
 #include "display_protection_logic.h"
 
 #include <hal/button_input_gate.h>
 #include <hal/external_power_state.h>
 #include <cstdint>
 #include <lvgl.h>
-
-enum class DisplayWakeReason : uint8_t {
-    Initialization,
-    Button,
-    Touch,
-    PowerInserted,
-    PowerRemoved,
-    ConfigurationChanged,
-    KeepAwakeActivated,
-};
 
 struct DisplayProtectionSnapshot {
     DisplayProtectionState state = DisplayProtectionState::Active;
@@ -59,7 +50,7 @@ private:
     int _restore_brightness = 80;
     int _pending_brightness = -1;
     uint32_t _brightness_revision = 0;
-    uint32_t _last_power_health_log_ms = 0;
+    ExternalPowerHealthLogPolicy _power_health_log_policy;
     lv_indev_state_t _last_touch_state = LV_INDEV_STATE_REL;
     ButtonPhysicalState _last_buttons{};
     bool _initialized = false;

@@ -14,7 +14,6 @@ class DebugCommandFirmwareContractTests(unittest.TestCase):
         service = (
             ROOT / "main" / "debug" / "debug_command_service.cpp"
         ).read_text(encoding="utf-8")
-
         self.assertIn("config STOPWATCH_DEBUG_COMMANDS", kconfig)
         self.assertIn("default n", kconfig)
         self.assertIn("CONFIG_STOPWATCH_DEBUG_COMMANDS=y", defaults)
@@ -52,6 +51,13 @@ class DebugCommandFirmwareContractTests(unittest.TestCase):
         service = (
             ROOT / "main" / "debug" / "debug_command_service.cpp"
         ).read_text(encoding="utf-8")
+        diagnostics = (
+            ROOT
+            / "main"
+            / "runtime"
+            / "display"
+            / "display_protection_diagnostics.cpp"
+        ).read_text(encoding="utf-8")
 
         self.assertIn("DisplayProtectionStatus", parser_header)
         self.assertIn(
@@ -75,9 +81,10 @@ class DebugCommandFirmwareContractTests(unittest.TestCase):
             "reasons=0x%02x",
             "last_wake=%s",
         )
-        self.assertIn('"DISPLAY PROTECTION state=%s ', service)
+        self.assertIn('"DISPLAY PROTECTION state=%s ', diagnostics)
         for field in required_fields:
-            self.assertIn(field, service)
+            self.assertIn(field, diagnostics)
+        self.assertIn("FormatDisplayProtectionDiagnostics", service)
         body_start = service.index("void log_display_protection_status()")
         body_end = service.index("\n}", body_start)
         display_status_body = service[body_start:body_end].lower()
@@ -86,7 +93,11 @@ class DebugCommandFirmwareContractTests(unittest.TestCase):
 
     def test_display_protection_status_has_stable_complete_enum_names(self):
         service = (
-            ROOT / "main" / "debug" / "debug_command_service.cpp"
+            ROOT
+            / "main"
+            / "runtime"
+            / "display"
+            / "display_protection_diagnostics.cpp"
         ).read_text(encoding="utf-8")
 
         expected_mappings = {
@@ -111,9 +122,9 @@ class DebugCommandFirmwareContractTests(unittest.TestCase):
             )
 
         helper_starts = [
-            service.index("const char* display_protection_state_name("),
-            service.index("const char* external_power_state_name("),
-            service.index("const char* display_wake_reason_name("),
+            service.index("const char* DisplayProtectionStateName("),
+            service.index("const char* ExternalPowerStateName("),
+            service.index("const char* DisplayWakeReasonName("),
         ]
         for helper_start in helper_starts:
             helper_end = service.index("\n}", helper_start)
@@ -127,6 +138,13 @@ class DebugCommandFirmwareContractTests(unittest.TestCase):
             / "display"
             / "global_display_protection_service.cpp"
         ).read_text(encoding="utf-8")
+        service_header = (
+            ROOT
+            / "main"
+            / "runtime"
+            / "display"
+            / "global_display_protection_service.h"
+        ).read_text(encoding="utf-8")
         pmic = (ROOT / "main" / "hal" / "hal_pmic.cpp").read_text(
             encoding="utf-8"
         )
@@ -137,11 +155,16 @@ class DebugCommandFirmwareContractTests(unittest.TestCase):
             "display action",
             "power sample unhealthy",
             "power sample healthy",
-            "PowerHealthRetryLogMs",
         ):
             self.assertIn(token, service)
         self.assertIn("latest_power.latest_sample_valid", service)
-        self.assertIn("_last_power_health_log_ms", service)
+        self.assertIn("_power_health_log_policy.update", service)
+        self.assertIn("ExternalPowerHealthLogPolicy _power_health_log_policy", service_header)
+        self.assertRegex(
+            service,
+            r"if \(persist\) \{[\s\S]*?configuration committed[\s\S]*?"
+            r"\} else \{[\s\S]*?configuration applied",
+        )
         sampler_start = pmic.index("void bat_reading_task")
         sampler_end = pmic.index("\n}\n\n}", sampler_start)
         sampler_body = pmic[sampler_start:sampler_end]
