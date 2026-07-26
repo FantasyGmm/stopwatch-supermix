@@ -235,6 +235,7 @@ void AppCodexStatus::onOpen()
     _screen_off_restore_brightness = std::max(10, GetHAL().getBackLightBrightness());
     _screen_off = false;
     _screen_off_wake_armed = true;
+    GetHAL().updateButtonStates();
     _voice_button_gate.reset(GetHAL().btnB.isPressed());
     _production_voice_ready = false;
     _production_voice_link_usable = false;
@@ -290,6 +291,7 @@ void AppCodexStatus::onRunning()
     const uint32_t now = GetHAL().millis();
     GetHAL().updateButtonStates();
     const bool woke_screen = update_screen_off_control(now);
+    const bool left_pressed = GetHAL().btnA.isPressed();
     const bool right_pressed = GetHAL().btnB.isPressed();
     input::KeyEvent key_event = input::KeyEvent::None;
     if (_key_manager) {
@@ -297,15 +299,22 @@ void AppCodexStatus::onRunning()
     }
 
     const VoiceButtonAction voice_button_action = _voice_button_gate.update(
+        left_pressed,
         right_pressed,
         woke_screen,
-        key_event == input::KeyEvent::GoHome);
+        key_event == input::KeyEvent::GoHome,
+        now);
     if (voice_button_action == VoiceButtonAction::CancelHome) {
         if (_voice_input) {
             _voice_input->cancel_for_home(now);
         }
         close();
         return;
+    }
+    if (voice_button_action == VoiceButtonAction::CancelVoice) {
+        if (_voice_input) {
+            _voice_input->cancel_for_home(now);
+        }
     }
     if (_voice_input &&
         (voice_button_action == VoiceButtonAction::Press ||

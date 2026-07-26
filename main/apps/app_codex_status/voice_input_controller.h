@@ -56,6 +56,7 @@ enum class VoiceButtonAction : uint8_t {
     None,
     Press,
     Release,
+    CancelVoice,
     CancelHome,
 };
 
@@ -67,12 +68,28 @@ enum class VoiceNotificationSendResult : uint8_t {
 
 class VoiceButtonEdgeGate {
 public:
-    void reset(bool pressed);
-    VoiceButtonAction update(bool pressed, bool woke_screen, bool go_home);
+    // Keeps PTT start latency below 100 ms while reserving A+B for GoHome.
+    static constexpr uint32_t kChordGuardMs = 90;
+
+    void reset(bool right_pressed);
+    VoiceButtonAction update(
+        bool left_pressed,
+        bool right_pressed,
+        bool woke_screen,
+        bool go_home,
+        uint32_t now_ms);
 
 private:
-    bool _pressed = false;
-    bool _suppressed_until_release = false;
+    enum class State : uint8_t {
+        Idle,
+        Pending,
+        Active,
+        SuppressedUntilRightRelease,
+        SuppressedUntilBothRelease,
+    };
+
+    State _state = State::Idle;
+    uint32_t _pending_since_ms = 0;
 };
 
 class VoiceInputController {

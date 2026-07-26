@@ -92,8 +92,22 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         self.assertIn("VoiceInputController", header)
         self.assertIn("std::atomic<VoiceInputUiState>", header)
         self.assertIn("handle_button", source)
+        self.assertIn("btnA.isPressed()", source)
         self.assertIn("btnB.isPressed()", source)
         self.assertIn("cancel_for_home", source)
+        controller_header = (
+            ROOT / "main/apps/app_codex_status/voice_input_controller.h"
+        ).read_text()
+        self.assertIn("kChordGuardMs = 90", controller_header)
+        self.assertIn("CancelVoice", controller_header)
+        opened = source.split("void AppCodexStatus::onOpen()", 1)[1].split(
+            "void AppCodexStatus::onRunning()", 1
+        )[0]
+        self.assertIn("updateButtonStates", opened)
+        self.assertLess(
+            opened.index("updateButtonStates"),
+            opened.index("_voice_button_gate.reset"),
+        )
         running = source.split("void AppCodexStatus::onRunning()", 1)[1].split(
             "void AppCodexStatus::onClose()", 1
         )[0]
@@ -106,6 +120,8 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
             running.index("handle_button"),
         )
         self.assertIn("_key_manager->update(false)", running)
+        self.assertIn("VoiceButtonAction::CancelVoice", running)
+        self.assertIn("_edge_controls->update()", running)
         self.assertIn("_voice_status.store", running)
         self.assertLess(running.index("cancel_for_home"), running.index("close();"))
         priority = (

@@ -567,18 +567,120 @@ void test_control_authentication_and_replay_guard()
     assert(!guard.decode_once(bytes.data(), bytes.size(), crypto, decoded));
 }
 
-void test_wake_suppression_and_button_edges()
+void test_simultaneous_buttons_are_reserved_for_home()
 {
     VoiceButtonEdgeGate gate;
     gate.reset(false);
-    assert(gate.update(true, true, false) == VoiceButtonAction::None);
-    assert(gate.update(true, false, false) == VoiceButtonAction::None);
-    assert(gate.update(false, false, false) == VoiceButtonAction::None);
-    assert(gate.update(false, false, false) == VoiceButtonAction::None);
-    assert(gate.update(true, false, false) == VoiceButtonAction::Press);
-    assert(gate.update(true, false, true) == VoiceButtonAction::CancelHome);
-    assert(gate.update(true, false, false) == VoiceButtonAction::None);
-    assert(gate.update(false, false, false) == VoiceButtonAction::None);
+    assert(gate.update(true, true, false, false, 10) == VoiceButtonAction::None);
+    assert(gate.update(true, true, false, true, 11) == VoiceButtonAction::CancelHome);
+    assert(gate.update(false, false, false, false, 12) == VoiceButtonAction::None);
+}
+
+void test_b_then_a_inside_guard_is_reserved_for_home()
+{
+    constexpr uint32_t guard = VoiceButtonEdgeGate::kChordGuardMs;
+    VoiceButtonEdgeGate gate;
+    gate.reset(false);
+    assert(gate.update(false, true, false, false, 30) == VoiceButtonAction::None);
+    assert(gate.update(true, true, false, false, 30 + guard - 1) ==
+           VoiceButtonAction::None);
+    assert(gate.update(true, true, false, true, 30 + guard) ==
+           VoiceButtonAction::CancelHome);
+    assert(gate.update(false, false, false, false, 31 + guard) ==
+           VoiceButtonAction::None);
+}
+
+void test_a_then_b_is_reserved_for_home()
+{
+    VoiceButtonEdgeGate gate;
+    gate.reset(false);
+    assert(gate.update(true, false, false, false, 40) == VoiceButtonAction::None);
+    assert(gate.update(true, true, false, false, 41) == VoiceButtonAction::None);
+    assert(gate.update(true, true, false, true, 42) == VoiceButtonAction::CancelHome);
+    assert(gate.update(false, false, false, false, 43) == VoiceButtonAction::None);
+}
+
+void test_short_b_tap_does_not_start_voice()
+{
+    constexpr uint32_t guard = VoiceButtonEdgeGate::kChordGuardMs;
+    VoiceButtonEdgeGate gate;
+    gate.reset(false);
+    assert(gate.update(false, true, false, false, 100) == VoiceButtonAction::None);
+    assert(gate.update(false, false, false, false, 100 + guard - 1) ==
+           VoiceButtonAction::None);
+}
+
+void test_b_hold_starts_once_at_guard_boundary()
+{
+    static_assert(VoiceButtonEdgeGate::kChordGuardMs <= 100);
+    constexpr uint32_t guard = VoiceButtonEdgeGate::kChordGuardMs;
+    VoiceButtonEdgeGate gate;
+    gate.reset(false);
+    assert(gate.update(false, true, false, false, 200) == VoiceButtonAction::None);
+    assert(gate.update(false, true, false, false, 200 + guard - 1) ==
+           VoiceButtonAction::None);
+    assert(gate.update(false, true, false, false, 200 + guard) ==
+           VoiceButtonAction::Press);
+    assert(gate.update(false, true, false, false, 201 + guard) ==
+           VoiceButtonAction::None);
+}
+
+void test_b_release_is_only_sent_after_press()
+{
+    constexpr uint32_t guard = VoiceButtonEdgeGate::kChordGuardMs;
+    VoiceButtonEdgeGate gate;
+    gate.reset(false);
+    assert(gate.update(false, true, false, false, 200) == VoiceButtonAction::None);
+    assert(gate.update(false, true, false, false, 200 + guard) ==
+           VoiceButtonAction::Press);
+    assert(gate.update(false, false, false, false, 202 + guard) ==
+           VoiceButtonAction::Release);
+
+    gate.reset(false);
+    assert(gate.update(false, true, false, false, 300) == VoiceButtonAction::None);
+    assert(gate.update(false, false, false, false, 301) == VoiceButtonAction::None);
+}
+
+void test_late_a_cancels_active_voice_before_home()
+{
+    constexpr uint32_t guard = VoiceButtonEdgeGate::kChordGuardMs;
+    VoiceButtonEdgeGate gate;
+    gate.reset(false);
+    assert(gate.update(false, true, false, false, 400) == VoiceButtonAction::None);
+    assert(gate.update(false, true, false, false, 400 + guard) ==
+           VoiceButtonAction::Press);
+    assert(gate.update(true, true, false, false, 401 + guard) ==
+           VoiceButtonAction::CancelVoice);
+    assert(gate.update(true, true, false, true, 402 + guard) ==
+           VoiceButtonAction::CancelHome);
+    assert(gate.update(false, false, false, false, 403 + guard) ==
+           VoiceButtonAction::None);
+}
+
+void test_wake_consumed_b_is_suppressed_through_release()
+{
+    constexpr uint32_t guard = VoiceButtonEdgeGate::kChordGuardMs;
+    VoiceButtonEdgeGate gate;
+    gate.reset(false);
+    assert(gate.update(false, true, true, false, 500) == VoiceButtonAction::None);
+    assert(gate.update(false, true, false, false, 500 + guard) ==
+           VoiceButtonAction::None);
+    assert(gate.update(false, false, false, false, 501 + guard) ==
+           VoiceButtonAction::None);
+}
+
+void test_b_held_on_entry_requires_release_and_new_press()
+{
+    constexpr uint32_t guard = VoiceButtonEdgeGate::kChordGuardMs;
+    VoiceButtonEdgeGate gate;
+    gate.reset(true);
+    assert(gate.update(false, true, false, false, 600 + guard) ==
+           VoiceButtonAction::None);
+    assert(gate.update(false, false, false, false, 601 + guard) ==
+           VoiceButtonAction::None);
+    assert(gate.update(false, true, false, false, 700) == VoiceButtonAction::None);
+    assert(gate.update(false, true, false, false, 700 + guard) ==
+           VoiceButtonAction::Press);
 }
 
 void test_cancel_waits_for_inflight_producer_cleanup()
@@ -642,6 +744,14 @@ int main()
     test_release_after_failed_attempt_clears_error_state();
     test_production_and_probe_pipeline_exclude_each_other();
     test_control_authentication_and_replay_guard();
-    test_wake_suppression_and_button_edges();
+    test_simultaneous_buttons_are_reserved_for_home();
+    test_b_then_a_inside_guard_is_reserved_for_home();
+    test_a_then_b_is_reserved_for_home();
+    test_short_b_tap_does_not_start_voice();
+    test_b_hold_starts_once_at_guard_boundary();
+    test_b_release_is_only_sent_after_press();
+    test_late_a_cancels_active_voice_before_home();
+    test_wake_consumed_b_is_suppressed_through_release();
+    test_b_held_on_entry_requires_release_and_new_press();
     test_cancel_waits_for_inflight_producer_cleanup();
 }

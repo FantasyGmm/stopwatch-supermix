@@ -101,39 +101,89 @@ void ControlReplayGuard::reset()
 
 }  // namespace voice_input
 
-void VoiceButtonEdgeGate::reset(bool pressed)
+void VoiceButtonEdgeGate::reset(bool right_pressed)
 {
-    _pressed = pressed;
-    _suppressed_until_release = false;
+    _state = right_pressed
+        ? State::SuppressedUntilRightRelease
+        : State::Idle;
+    _pending_since_ms = 0;
 }
 
 VoiceButtonAction VoiceButtonEdgeGate::update(
-    bool pressed,
+    bool left_pressed,
+    bool right_pressed,
     bool woke_screen,
-    bool go_home)
+    bool go_home,
+    uint32_t now_ms)
 {
     if (woke_screen) {
-        _pressed = pressed;
-        _suppressed_until_release = pressed;
-        return VoiceButtonAction::None;
-    }
-    if (go_home) {
-        _pressed = pressed;
-        _suppressed_until_release = pressed;
-        return VoiceButtonAction::CancelHome;
-    }
-    if (_suppressed_until_release) {
-        _pressed = pressed;
-        if (!pressed) {
-            _suppressed_until_release = false;
+        if (left_pressed && right_pressed) {
+            _state = State::SuppressedUntilBothRelease;
+        } else if (right_pressed) {
+            _state = State::SuppressedUntilRightRelease;
+        } else {
+            _state = State::Idle;
         }
         return VoiceButtonAction::None;
     }
-    if (pressed == _pressed) {
+    if (go_home) {
+        _state = State::SuppressedUntilBothRelease;
+        return VoiceButtonAction::CancelHome;
+    }
+
+    switch (_state) {
+    case State::Idle:
+        if (!right_pressed) {
+            return VoiceButtonAction::None;
+        }
+        if (left_pressed) {
+            _state = State::SuppressedUntilBothRelease;
+            return VoiceButtonAction::None;
+        }
+        _state = State::Pending;
+        _pending_since_ms = now_ms;
+        return VoiceButtonAction::None;
+
+    case State::Pending:
+        if (left_pressed) {
+            _state = State::SuppressedUntilBothRelease;
+            return VoiceButtonAction::None;
+        }
+        if (!right_pressed) {
+            _state = State::Idle;
+            return VoiceButtonAction::None;
+        }
+        if (now_ms - _pending_since_ms < kChordGuardMs) {
+            return VoiceButtonAction::None;
+        }
+        _state = State::Active;
+        return VoiceButtonAction::Press;
+
+    case State::Active:
+        if (left_pressed) {
+            _state = State::SuppressedUntilBothRelease;
+            return VoiceButtonAction::CancelVoice;
+        }
+        if (!right_pressed) {
+            _state = State::Idle;
+            return VoiceButtonAction::Release;
+        }
+        return VoiceButtonAction::None;
+
+    case State::SuppressedUntilRightRelease:
+        if (!right_pressed) {
+            _state = State::Idle;
+        }
+        return VoiceButtonAction::None;
+
+    case State::SuppressedUntilBothRelease:
+        if (!left_pressed && !right_pressed) {
+            _state = State::Idle;
+        }
         return VoiceButtonAction::None;
     }
-    _pressed = pressed;
-    return pressed ? VoiceButtonAction::Press : VoiceButtonAction::Release;
+
+    return VoiceButtonAction::None;
 }
 
 #if !defined(STOPWATCH_HOST_TEST)
