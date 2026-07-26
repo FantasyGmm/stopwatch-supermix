@@ -21,7 +21,6 @@ constexpr uint32_t kQuotaMint       = 0x53D7A4;
 constexpr uint32_t kSignalWhite     = 0xF2F6F8;
 constexpr uint32_t kEtchedGray      = 0x788391;
 constexpr uint32_t kAlertVermilion  = 0xFF6248;
-constexpr uint32_t kSecondaryText   = 0xB8C2CC;
 
 constexpr int kLogoX = 168;
 constexpr int kLogoY = 22;
@@ -51,19 +50,32 @@ constexpr int kQuotaBarX = 101;
 constexpr int kQuotaBarWidth = 248;
 constexpr int kQuotaPercentX = 351;
 constexpr int kQuotaPercentWidth = 60;
-constexpr int kFiveHourY = 220;
-constexpr int kWeekY = 260;
+constexpr int kWeekY = 220;
 
 constexpr int kAlertDividerX = 82;
-constexpr int kAlertDividerY = 304;
+constexpr int kAlertDividerY = 258;
 constexpr int kAlertDividerWidth = 302;
-constexpr int kAlertHeadingY = 328;
-constexpr int kAlertHeadingWidth = 310;
-constexpr int kAlertProjectY = 357;
-constexpr int kAlertProjectWidth = 340;
-constexpr int kAlertDetailY = 389;
-constexpr int kAlertDetailWidth = 320;
+
+constexpr int kPendingLabelX = 62;
+constexpr int kRunningLabelX = 308;
+constexpr int kPendingCountX = 78;
+constexpr int kRunningCountX = 324;
+constexpr int kStateLabelY = 278;
+constexpr int kStateLabelWidth = 96;
+constexpr int kStateCountY = 294;
+constexpr int kStateCountWidth = 64;
+
+constexpr int kTaskIndexX = 151;
+constexpr int kTaskIndexY = 284;
+constexpr int kTaskIndexWidth = 164;
+constexpr int kAlertProjectX = 145;
+constexpr int kAlertProjectY = 307;
+constexpr int kAlertProjectWidth = 176;
+constexpr int kAlertDetailX = 93;
+constexpr int kAlertDetailY = 359;
+constexpr int kAlertDetailWidth = 280;
+constexpr int kAlertDetailHeight = 41;
 constexpr int kPageIndicatorY = 416;
-constexpr int kBatteryY = 438;
+constexpr int kBatteryY = 432;
 
 }  // namespace codex_status_ui

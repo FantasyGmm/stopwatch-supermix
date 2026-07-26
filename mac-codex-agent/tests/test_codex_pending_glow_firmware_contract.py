@@ -18,18 +18,21 @@ class CodexPendingGlowFirmwareContractTests(unittest.TestCase):
         ).read_text()
 
         self.assertIn("lv_obj_t* _overlay", header)
-        self.assertIn("lv_opa_t _opacity", header)
+        self.assertIn("int32_t _phase", header)
         self.assertNotIn("std::array<lv_obj_t*, 3> _rings", header)
         self.assertIn("static void draw_event_cb", header)
-        self.assertIn("void invalidate_edges()", header)
+        self.assertIn("void invalidate_ring_segments()", header)
         self.assertIn("LV_EVENT_DRAW_MAIN_BEGIN", source)
         self.assertIn(
             "for (const auto& ring : codex_pending_glow::kRings)", source
         )
         self.assertIn("lv_draw_rect(layer, &dsc, &area)", source)
-        self.assertEqual(source.count("_opacity ="), 1)
-        self.assertIn("codex_pending_glow::opacity_for_phase(phase)", source)
-        self.assertIn("constexpr int kHalfCycleMs = 600", logic)
+        self.assertIn("_phase = codex_pending_glow::bounded_phase(phase)", source)
+        self.assertIn("codex_pending_glow::opacity_for_phase(", source)
+        self.assertIn("self->_phase", source)
+        self.assertIn("ring.minimum_opacity", source)
+        self.assertIn("ring.maximum_opacity", source)
+        self.assertIn("constexpr int kHalfCycleMs = 800", logic)
         self.assertIn(
             "constexpr int kFullCycleMs = kHalfCycleMs * 2", logic
         )
@@ -49,16 +52,23 @@ class CodexPendingGlowFirmwareContractTests(unittest.TestCase):
         self.assertIn(
             "lv_anim_set_path_cb(&animation, lv_anim_path_ease_in_out)", source
         )
-    def test_animation_invalidates_only_edge_bands_and_restores_heading(self):
+    def test_animation_invalidates_complete_ring_segments_and_restores_status_targets(self):
+        header = (
+            ROOT / "main/apps/app_codex_status/codex_pending_soft_glow.h"
+        ).read_text()
         source = (
             ROOT / "main/apps/app_codex_status/codex_pending_soft_glow.cpp"
         ).read_text()
 
+        self.assertIn("void set_status_targets(", header)
+        self.assertIn("void set_state(CodexTaskState state, bool screen_off)", header)
+        self.assertNotIn("void set_heading(", header)
+
         self.assertIn(
-            "void CodexPendingSoftGlow::invalidate_edges()", source
+            "void CodexPendingSoftGlow::invalidate_ring_segments()", source
         )
         invalidate_body = source.split(
-            "void CodexPendingSoftGlow::invalidate_edges()", 1
+            "void CodexPendingSoftGlow::invalidate_ring_segments()", 1
         )[1]
         invalidate_body = invalidate_body.split(
             "void CodexPendingSoftGlow::start()", 1
@@ -75,15 +85,15 @@ class CodexPendingGlowFirmwareContractTests(unittest.TestCase):
             "void CodexPendingSoftGlow::apply_phase", 1
         )[1]
         phase_body = phase_body.split(
-            "void CodexPendingSoftGlow::invalidate_edges", 1
+            "void CodexPendingSoftGlow::invalidate_ring_segments", 1
         )[0]
         self.assertNotIn("lv_obj_set_style_border_opa", phase_body)
-        self.assertIn("invalidate_edges()", phase_body)
+        self.assertIn("invalidate_ring_segments()", phase_body)
         self.assertIn("lv_anim_delete(this, animation_cb)", source)
         self.assertIn(
             "lv_obj_add_flag(_overlay, LV_OBJ_FLAG_HIDDEN)", source
         )
-        self.assertIn("lv_obj_set_style_opa(_heading, LV_OPA_COVER, 0)", source)
+        self.assertIn("restore_target_opacity()", source)
 
     def test_latest_codex_page_owns_effect_below_content_and_preserves_geometry(self):
         app = (
@@ -105,12 +115,11 @@ class CodexPendingGlowFirmwareContractTests(unittest.TestCase):
             app.index("lv_image_create(_codex_page)"),
         )
         self.assertLess(
-            app.index("_pending_glow->set_heading(_activity_title)"),
+            app.index("_pending_glow->set_status_targets("),
             app.index("_battery_label = lv_label_create(_panel)"),
         )
-        self.assertIn("codex_pending_glow::desired_active(", app)
         self.assertIn("_alert_carousel.display_state()", app)
-        self.assertIn("_pending_glow->set_active(active)", app)
+        self.assertIn("_pending_glow->set_state(", app)
         self.assertIn("_pending_glow->shutdown()", app)
         self.assertIn("constexpr uint32_t kInstrumentBlack = 0x000000", layout)
         self.assertIn("constexpr int kPetX = 73", layout)

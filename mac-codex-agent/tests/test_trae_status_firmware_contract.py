@@ -46,7 +46,7 @@ class TraeStatusFirmwareContractTests(unittest.TestCase):
             self.assertIn(token, source)
 
         self.assertIn("constexpr int kPageIndicatorY = 416;", layout)
-        self.assertIn("constexpr int kBatteryY = 438;", layout)
+        self.assertIn("constexpr int kBatteryY = 432;", layout)
 
         battery_create = source.index("_battery_label = lv_label_create(_panel)")
         strip_create = source.index("_page_strip = lv_obj_create(_panel)")

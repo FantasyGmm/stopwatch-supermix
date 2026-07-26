@@ -4,6 +4,8 @@
  * SPDX-License-Identifier: MIT
  */
 #pragma once
+#include "button_input_gate.h"
+#include "power_led_blink_config.h"
 #include "utils/button/Button_Class.hpp"
 #include <apps/common/common.h>
 #include <memory>
@@ -158,12 +160,26 @@ public:
     void factoryReset();
 
     /* ---------------------------------- Power --------------------------------- */
+    enum class PowerLedMode : uint8_t {
+        Off = 0,
+        On = 1,
+        Blink = 2,
+    };
+
     uint8_t getBatteryLevel();
     bool isBatteryCharging(bool strict = false);
+    void setPowerLedMode(PowerLedMode mode, bool saveToSettings = false);
+    PowerLedMode getPowerLedMode(bool loadFromSettings = false);
+    void setPowerLedBlinkIntervalSeconds(int seconds, bool saveToSettings = false);
+    int getPowerLedBlinkIntervalSeconds(bool loadFromSettings = false);
+    void updatePowerLed();
 
     /* --------------------------------- Display -------------------------------- */
     void setBackLightBrightness(int brightness, bool saveToSettings = false);
+    void setTemporaryBackLightBrightness(int brightness);
     int getBackLightBrightness(bool loadFromSettings = false);
+    int getUserBackLightBrightness() const;
+    uint32_t backLightBrightnessRevision() const;
 
     // M5GFX
     LGFX_Device& getDisplay();
@@ -252,6 +268,9 @@ public:
     };
 
     void updateButtonStates();
+    ButtonPhysicalState readButtonPhysicalState() const;
+    void suppressButtonInputUntilRelease();
+    bool buttonInputSuppressed() const;
     void setButtonConfig(ButtonConfig config, bool saveToSettings = false);
     const ButtonConfig& getButtonConfig(bool loadFromSettings = false);
 
@@ -272,12 +291,22 @@ private:
     ButtonConfig _btn_config;
     AudioSpectrumFrame _audio_spectrum;
     int _bl_brightness = 80;
+    int _user_bl_brightness = 80;
+    uint32_t _bl_brightness_revision = 0;
+    ButtonInputGate _button_input_gate;
     int _spk_volume    = 80;
+    PowerLedMode _power_led_mode = PowerLedMode::Off;
+    int _power_led_blink_interval_seconds = PowerLedBlinkIntervalDefaultSeconds;
+    bool _power_led_output       = false;
+    bool _power_led_output_valid = false;
+    uint32_t _power_led_next_blink_ms = 0;
+    uint32_t _power_led_pulse_end_ms  = 0;
 
     void i2c_init();
     void i2c_detect();
     void pmic_init();
     bool pmic_get_pwr_btn_state();
+    void applyPowerLedOutput(bool enabled);
     void ioe_init();
     void ioe_tp_reset();
     void ioe_speaker_enable(bool enable);

@@ -22,14 +22,39 @@ int main()
     };
 
     assert(carousel.apply(mixed, 0));
+    assert(carousel.pending_count() == 2);
+    assert(carousel.running_count() == 1);
     assert(carousel.current() != nullptr);
     assert(carousel.current()->title == "Pending A");
-    assert(carousel.heading() == "PENDING 1/2");
+    assert(carousel.heading() == "TASK 1/2");
     assert(carousel.update(3000));
     assert(carousel.current()->title == "Pending C");
-    assert(carousel.heading() == "PENDING 2/2");
+    assert(carousel.heading() == "TASK 2/2");
     assert(carousel.update(6000));
     assert(carousel.current()->title == "Pending A");
+
+    CodexAlertCarousel manual_carousel;
+    assert(manual_carousel.apply(mixed, 0));
+    assert(manual_carousel.step(-1, 1000));
+    assert(manual_carousel.current()->title == "Pending C");
+    assert(manual_carousel.heading() == "TASK 2/2");
+    assert(!manual_carousel.update(3999));
+    assert(manual_carousel.update(4000));
+    assert(manual_carousel.current()->title == "Pending A");
+    assert(manual_carousel.step(1, 4500));
+    assert(manual_carousel.current()->title == "Pending C");
+
+    CodexStatusSnapshot single;
+    single.alerts_valid = true;
+    single.alert_revision = 9;
+    single.pending_count = 1;
+    single.alerts = {
+        {"StopWatch", "Only", "", CodexTaskState::Pending},
+    };
+    CodexAlertCarousel single_carousel;
+    assert(single_carousel.apply(single, 0));
+    assert(!single_carousel.step(1, 1000));
+    assert(single_carousel.current()->title == "Only");
 
     CodexStatusSnapshot running;
     running.alerts_valid = true;
@@ -44,11 +69,13 @@ int main()
     };
 
     assert(carousel.apply(running, 7000));
+    assert(carousel.pending_count() == 0);
+    assert(carousel.running_count() == 2);
     assert(carousel.current()->title == "Running A");
-    assert(carousel.heading() == "RUNNING 1/2");
+    assert(carousel.heading() == "TASK 1/2");
     assert(carousel.update(10000));
     assert(carousel.current()->title == "Running C");
-    assert(carousel.heading() == "RUNNING 2/2");
+    assert(carousel.heading() == "TASK 2/2");
 
     CodexStatusSnapshot completed;
     completed.alerts_valid = true;
@@ -62,9 +89,26 @@ int main()
     };
 
     assert(carousel.apply(completed, 11000));
-    assert(carousel.heading() == "COMPLETED");
-    const std::string fixed_title = carousel.current()->title;
-    assert(!carousel.update(14000));
-    assert(carousel.current()->title == fixed_title);
+    assert(carousel.heading() == "TASK 1/2");
+    assert(carousel.update(14000));
+    assert(carousel.current()->title == "Improve UI");
+    assert(carousel.heading() == "TASK 2/2");
     assert(carousel.completed());
+
+    CodexStatusSnapshot truncated;
+    truncated.alerts_valid = true;
+    truncated.alert_revision = 4;
+    truncated.pending_count = 10;
+    truncated.running_count = 0;
+    truncated.completed_count = 0;
+    truncated.alerts = {
+        {"Project A", "Visible A", "10:02", CodexTaskState::Pending},
+        {"Project B", "Visible B", "10:01", CodexTaskState::Pending},
+    };
+
+    assert(carousel.apply(truncated, 15000));
+    assert(carousel.pending_count() == 10);
+    assert(carousel.heading() == "TASK 1/2");
+    assert(carousel.update(18000));
+    assert(carousel.heading() == "TASK 2/2");
 }

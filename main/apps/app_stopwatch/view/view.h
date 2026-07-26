@@ -23,11 +23,11 @@ public:
         std::string btnRightText;
     };
 
-    void init(lv_obj_t* parent);
+    void init(lv_obj_t* parent, model::Stopwatch& stopwatch);
     void update(bool updateButtonStates = true);
 
 private:
-    std::unique_ptr<model::Stopwatch> _stopwatch;
+    model::Stopwatch* _stopwatch = nullptr;
 
     std::unique_ptr<view::ArcTopClock> _arc_top_clock;
 

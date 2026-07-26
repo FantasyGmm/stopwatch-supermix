@@ -24,6 +24,6 @@ private:
     EdgeControlSide _visible_side = EdgeControlSide::None;
     int _current_value = 0;
 
-    void invalidate();
+    void invalidate(EdgeControlSide side);
     static void draw_event_cb(lv_event_t* event);
 };

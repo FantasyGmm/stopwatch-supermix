@@ -8,16 +8,15 @@
 namespace codex_pending_glow {
 
 constexpr int kPanelSize = 466;
-constexpr int kHalfCycleMs = 600;
+constexpr int kHalfCycleMs = 800;
 constexpr int kFullCycleMs = kHalfCycleMs * 2;
-constexpr int kEdgeBandSize = 20;
-constexpr uint8_t kMinimumOpacity = 102;
-constexpr uint8_t kMaximumOpacity = 255;
 
 struct RingGeometry {
     int inset;
     int size;
     int border_width;
+    uint8_t minimum_opacity;
+    uint8_t maximum_opacity;
 };
 
 struct EdgeArea {
@@ -27,23 +26,25 @@ struct EdgeArea {
     int y2;
 };
 
-constexpr bool operator==(EdgeArea lhs, EdgeArea rhs)
-{
-    return lhs.x1 == rhs.x1 && lhs.y1 == rhs.y1 &&
-           lhs.x2 == rhs.x2 && lhs.y2 == rhs.y2;
-}
-
 inline constexpr std::array<RingGeometry, 3> kRings{{
-    {1, 464, 2},
-    {5, 456, 4},
-    {11, 444, 6},
+    {1, 464, 2, 102, 255},
+    {5, 456, 4, 51, 153},
+    {11, 444, 6, 25, 76},
 }};
 
-inline constexpr std::array<EdgeArea, 4> kInvalidationAreas{{
-    {0, 0, 465, 19},
-    {0, 446, 465, 465},
-    {0, 20, 19, 445},
-    {446, 20, 465, 445},
+inline constexpr std::array<EdgeArea, 12> kInvalidationAreas{{
+    {414, 230, 465, 351},
+    {336, 336, 437, 437},
+    {230, 414, 351, 465},
+    {114, 414, 235, 465},
+    {28, 336, 129, 437},
+    {0, 230, 51, 351},
+    {0, 114, 51, 235},
+    {28, 28, 129, 129},
+    {113, 0, 235, 51},
+    {230, 0, 351, 51},
+    {336, 28, 437, 129},
+    {414, 113, 465, 235},
 }};
 
 enum class Transition {
@@ -52,16 +53,29 @@ enum class Transition {
     Stop,
 };
 
-constexpr uint8_t opacity_for_phase(int32_t phase)
+constexpr int32_t bounded_phase(int32_t phase)
 {
-    const int32_t bounded = phase < 0 ? 0 : (phase > 255 ? 255 : phase);
+    return phase < 0 ? 0 : (phase > 255 ? 255 : phase);
+}
+
+constexpr uint8_t opacity_for_phase(
+    int32_t phase,
+    uint8_t minimum,
+    uint8_t maximum
+)
+{
+    const int32_t bounded = bounded_phase(phase);
     return static_cast<uint8_t>(
-        kMinimumOpacity +
-        bounded * (kMaximumOpacity - kMinimumOpacity) / 255
+        minimum + bounded * (maximum - minimum) / 255
     );
 }
 
-constexpr bool desired_active(CodexTaskState state, bool screen_off)
+constexpr bool pulse_desired(CodexTaskState state, bool screen_off)
+{
+    return state != CodexTaskState::Completed && !screen_off;
+}
+
+constexpr bool ring_desired(CodexTaskState state, bool screen_off)
 {
     return state == CodexTaskState::Pending && !screen_off;
 }

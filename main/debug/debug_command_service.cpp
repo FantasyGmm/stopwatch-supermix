@@ -7,6 +7,7 @@
 #include <runtime/assistant/assistant_runtime.h>
 #include <runtime/assistant/assistant_trace.h>
 #include <runtime/runtime_supervisor.h>
+#include <runtime/display/global_display_protection_service.h>
 #include <runtime/services/shared_wifi_service.h>
 
 #include <cinttypes>
@@ -49,6 +50,30 @@ void log_assistant_status()
              static_cast<unsigned>(snapshot.internal_free_heap),
              static_cast<unsigned>(snapshot.psram_free),
              static_cast<unsigned>(snapshot.task_count));
+}
+
+const char* display_protection_state_name(DisplayProtectionState state)
+{
+    switch (state) {
+        case DisplayProtectionState::Active:
+            return "active";
+        case DisplayProtectionState::Dimmed:
+            return "dimmed";
+        case DisplayProtectionState::ScreenOff:
+            return "off";
+    }
+    return "active";
+}
+
+void log_display_protection_status()
+{
+    const auto snapshot = GetGlobalDisplayProtectionService().snapshot();
+    ESP_LOGI(tag,
+             "DISPLAY PROTECTION state=%s brightness=%d restore=%d automatic=%u reasons=0x%02x",
+             display_protection_state_name(snapshot.state),
+             snapshot.effective_brightness, snapshot.restore_brightness,
+             static_cast<unsigned>(snapshot.automatic_enabled),
+             static_cast<unsigned>(snapshot.reason_mask));
 }
 } // namespace
 
@@ -161,6 +186,10 @@ void DebugCommandService::dispatchLine()
                              : AssistantTraceResult::Rejected,
         });
         ESP_LOGI(tag, "DEBUG ASSISTANT WIFI CYCLE %s", cycled ? "OK" : "BUSY");
+        return;
+    }
+    if (command.kind == DebugCommandKind::DisplayProtectionStatus) {
+        log_display_protection_status();
         return;
     }
     if (command.kind == DebugCommandKind::VolumeSet) {

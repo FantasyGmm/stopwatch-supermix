@@ -48,11 +48,13 @@ private:
     lv_obj_t* _page_dot_trae     = nullptr;
     lv_obj_t* _model_value       = nullptr;
     lv_obj_t* _effort_value      = nullptr;
-    lv_obj_t* _five_hour_pct     = nullptr;
-    lv_obj_t* _five_hour_bar     = nullptr;
     lv_obj_t* _week_pct          = nullptr;
     lv_obj_t* _week_bar          = nullptr;
-    lv_obj_t* _activity_title    = nullptr;
+    lv_obj_t* _pending_label     = nullptr;
+    lv_obj_t* _pending_count     = nullptr;
+    lv_obj_t* _running_label     = nullptr;
+    lv_obj_t* _running_count     = nullptr;
+    lv_obj_t* _task_index        = nullptr;
     lv_obj_t* _alert_project     = nullptr;
     lv_obj_t* _alert_detail      = nullptr;
     lv_obj_t* _battery_label     = nullptr;
@@ -73,6 +75,7 @@ private:
     uint32_t _last_status_payload_ms = 0;
     uint32_t _last_trae_status_payload_ms = 0;
     uint32_t _screen_off_left_press_started_ms = 0;
+    uint32_t _last_power_policy_check_ms = 0;
     int _screen_off_restore_brightness = 80;
     bool _wifi_started           = false;
     bool _wifi_fallback_started  = false;
@@ -83,6 +86,9 @@ private:
     bool _trae_stale             = false;
     int _current_page            = 0;
     lv_indev_state_t _last_page_touch_state = LV_INDEV_STATE_REL;
+    bool _external_power_connected = false;
+    bool _power_policy_known = false;
+    bool _suppress_task_navigation = false;
     CodexAlertCarousel _alert_carousel;
     TraeStatusSnapshot _trae_snapshot;
     TraeTaskCarousel _trae_carousel;
@@ -107,6 +113,7 @@ private:
     void set_page(int page, bool animate);
     void update_page_indicator();
     bool update_screen_off_control(uint32_t now_ms);
+    void refresh_display_protection_policy(uint32_t now_ms, bool force);
     void enter_screen_off();
     void wake_screen();
     static void page_animation_cb(void* target, int32_t x);

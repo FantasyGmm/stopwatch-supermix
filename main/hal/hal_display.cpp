@@ -122,7 +122,7 @@ public:
 
         if (!LGFX_Device::init_impl(use_reset, use_clear)) return false;
 
-        enableFrameBuffer(true);
+        enableFrameBuffer(false);
 
         _panel_instance.setBrightness(128);
 
@@ -201,27 +201,48 @@ void Hal::updateCanvas()
 
 void Hal::setBackLightBrightness(int brightness, bool saveToSettings)
 {
+    const int user_brightness = uitk::clamp(brightness, 0, 100);
+    if (_user_bl_brightness != user_brightness) {
+        _user_bl_brightness = user_brightness;
+        _bl_brightness_revision++;
+    }
+    setTemporaryBackLightBrightness(user_brightness);
+
+    if (saveToSettings) {
+        Settings settings(std::string(Hal::SettingsNs), true);
+        settings.SetInt("bl_lev", _user_bl_brightness);
+        mclog::tagInfo(_tag, "brightness saved to settings: {}", _user_bl_brightness);
+    }
+}
+
+void Hal::setTemporaryBackLightBrightness(int brightness)
+{
     _bl_brightness = uitk::clamp(brightness, 0, 100);
 
     int set_target = uitk::map_range(_bl_brightness, 0, 100, 0, 255);
     _display->setBrightness(set_target);
-
-    if (saveToSettings) {
-        Settings settings(std::string(Hal::SettingsNs), true);
-        settings.SetInt("bl_lev", _bl_brightness);
-        mclog::tagInfo(_tag, "brightness saved to settings: {}", _bl_brightness);
-    }
 }
 
 int Hal::getBackLightBrightness(bool loadFromSettings)
 {
     if (loadFromSettings) {
         Settings settings(std::string(Hal::SettingsNs), false);
-        _bl_brightness = settings.GetInt("bl_lev", 80);
-        _bl_brightness = uitk::clamp(_bl_brightness, 10, 100);
-        mclog::tagInfo(_tag, "brightness loaded from settings: {}", _bl_brightness);
+        _user_bl_brightness = settings.GetInt("bl_lev", 80);
+        _user_bl_brightness = uitk::clamp(_user_bl_brightness, 10, 100);
+        _bl_brightness = _user_bl_brightness;
+        mclog::tagInfo(_tag, "brightness loaded from settings: {}", _user_bl_brightness);
     }
     return _bl_brightness;
+}
+
+int Hal::getUserBackLightBrightness() const
+{
+    return _user_bl_brightness;
+}
+
+uint32_t Hal::backLightBrightnessRevision() const
+{
+    return _bl_brightness_revision;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -322,6 +343,10 @@ static void lvgl_flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px
     }
 
     gfx.endWrite();
+
+    if (lv_display_flush_is_last(disp)) {
+        gfx.display();
+    }
 
     lv_display_flush_ready(disp);
 }

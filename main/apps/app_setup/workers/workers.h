@@ -100,6 +100,23 @@ private:
     Hal::ButtonConfig _applied_config;
 };
 
+class PowerLedWorker : public WorkerBase {
+public:
+    PowerLedWorker();
+    ~PowerLedWorker();
+    void update() override;
+
+private:
+    class PowerLedConfigView;
+
+    std::unique_ptr<PowerLedConfigView> _view;
+    Hal::PowerLedMode _original_mode = Hal::PowerLedMode::Off;
+    Hal::PowerLedMode _applied_mode  = Hal::PowerLedMode::Off;
+    int _original_interval_seconds   = PowerLedBlinkIntervalDefaultSeconds;
+    int _applied_interval_seconds    = PowerLedBlinkIntervalDefaultSeconds;
+    bool _committed                  = false;
+};
+
 /**
  * @brief
  *

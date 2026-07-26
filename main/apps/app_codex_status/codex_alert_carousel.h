@@ -12,11 +12,14 @@ class CodexAlertCarousel {
 public:
     bool apply(const CodexStatusSnapshot& snapshot, uint32_t now_ms);
     bool update(uint32_t now_ms);
+    bool step(int direction, uint32_t now_ms);
     void reset();
 
     const CodexTaskAlert* current() const;
     std::string heading() const;
     CodexTaskState display_state() const;
+    int pending_count() const;
+    int running_count() const;
     bool completed() const;
 
 private:

@@ -23,12 +23,13 @@ bool GlobalEdgeControlService::init()
 
     _overlay.init(top_layer);
     _initialized = true;
+    _enabled = true;
     return true;
 }
 
 void GlobalEdgeControlService::update()
 {
-    if (!_initialized) {
+    if (!_initialized || !_enabled) {
         return;
     }
 
@@ -52,7 +53,7 @@ void GlobalEdgeControlService::update()
         if (_last_touch_state == LV_INDEV_STATE_REL) {
             _last_release_consumed = false;
             _overlay.hide();
-            _logic.press(point.x, point.y, GetHAL().getBackLightBrightness(),
+            _logic.press(point.x, point.y, GetHAL().getUserBackLightBrightness(),
                          GetHAL().getSpeakerVolume(), now_ms);
         }
 
@@ -66,14 +67,54 @@ void GlobalEdgeControlService::update()
     _last_touch_state = state;
 }
 
+void GlobalEdgeControlService::applyPendingHardwareUpdate()
+{
+    const EdgeControlHardwareUpdate update = _apply_queue.take();
+    if (update.side == EdgeControlSide::Brightness) {
+        GetHAL().setBackLightBrightness(update.value, update.persist);
+        _brightness_revision++;
+    } else if (update.side == EdgeControlSide::Volume) {
+        GetHAL().setSpeakerVolume(update.value, update.persist);
+        _volume_revision++;
+        if (update.persist) {
+            GetRuntimeSupervisor().requestAssistantVolumeSync(update.value);
+        }
+    }
+
+    if (_restore_screen_off_after_apply) {
+        GetHAL().setTemporaryBackLightBrightness(0);
+        _restore_screen_off_after_apply = false;
+    }
+}
+
 void GlobalEdgeControlService::shutdown()
 {
     _overlay.shutdown();
     _logic.reset();
+    _apply_queue.reset();
     _last_touch_state = LV_INDEV_STATE_REL;
     _initialized = false;
+    _enabled = false;
     _owns_touch = false;
     _last_release_consumed = false;
+    _restore_screen_off_after_apply = false;
+}
+
+void GlobalEdgeControlService::setEnabled(bool enabled)
+{
+    if (!_initialized || _enabled == enabled) {
+        return;
+    }
+
+    _logic.reset();
+    _apply_queue.reset();
+    _overlay.hide();
+    _owns_touch = false;
+    _last_release_consumed = false;
+    _enabled = enabled;
+
+    lv_indev_t* indev = GetHAL().lvTouchpad;
+    _last_touch_state = indev == nullptr ? LV_INDEV_STATE_REL : lv_indev_get_state(indev);
 }
 
 bool GlobalEdgeControlService::ownsTouch() const
@@ -109,16 +150,7 @@ void GlobalEdgeControlService::apply(const EdgeControlUpdate& update, lv_indev_t
         _overlay.show(update.side, update.value);
     }
 
-    if (update.apply && update.side == EdgeControlSide::Brightness) {
-        GetHAL().setBackLightBrightness(update.value, update.persist);
-        _brightness_revision++;
-    } else if (update.apply && update.side == EdgeControlSide::Volume) {
-        GetHAL().setSpeakerVolume(update.value, update.persist);
-        _volume_revision++;
-        if (update.persist) {
-            GetRuntimeSupervisor().requestAssistantVolumeSync(update.value);
-        }
-    }
+    _apply_queue.push(update);
 
     if (update.persist && update.consumed) {
         _last_release_consumed = true;
@@ -135,7 +167,7 @@ void GlobalEdgeControlService::suspendForScreenOff(lv_indev_t* indev)
     const bool was_active = _logic.active();
     if (was_active) {
         apply(_logic.release(GetHAL().millis()), indev);
-        GetHAL().setBackLightBrightness(0, false);
+        _restore_screen_off_after_apply = true;
     }
 
     _logic.reset();

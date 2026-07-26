@@ -35,9 +35,10 @@ constexpr int kDefaultSsidLabelWidth =
 constexpr int kNonDefaultSsidLabelWidth = kListWidth - 2 * kRowHorizontalInset;
 constexpr int kActionHeight = 42;
 constexpr int kPrimaryActionWidth = 300;
-constexpr int kDoneActionWidth = 200;
-constexpr int kPrimaryActionY = 302;
-constexpr int kDoneActionY = 356;
+constexpr int kDoneActionWidth = 374;
+constexpr int kDoneActionHeight = 130;
+constexpr int kPrimaryActionY = 294;
+constexpr int kDoneActionCenterY = 175;
 
 const char* statusText(WifiSettingsState state)
 {
@@ -70,6 +71,19 @@ void applyCompactButtonStyle(Button& button, lv_color_t color)
     button.setBgOpa(LV_OPA_COVER);
     button.label().setTextFont(&lv_font_montserrat_18);
     button.label().setTextColor(lv_color_hex(0xFFFFFF));
+    button.label().setTextAlign(LV_TEXT_ALIGN_CENTER);
+    button.label().align(LV_ALIGN_CENTER, 0, 0);
+}
+
+void applyConfirmationButtonStyle(Button& button)
+{
+    button.setRadius(77);
+    button.setBorderWidth(0);
+    button.setShadowWidth(0);
+    button.setBgColor(lv_color_hex(0x4AD78C));
+    button.setBgOpa(LV_OPA_COVER);
+    button.label().setTextFont(&lv_font_montserrat_28);
+    button.label().setTextColor(lv_color_hex(0x0F5831));
     button.label().setTextAlign(LV_TEXT_ALIGN_CENTER);
     button.label().align(LV_ALIGN_CENTER, 0, 0);
 }
@@ -159,10 +173,10 @@ public:
         _pairing_action->onClick().connect([this]() { _pairing_action_requested = true; });
 
         _done_action = std::make_unique<Button>(_panel->get());
-        _done_action->setSize(kDoneActionWidth, kActionHeight);
-        _done_action->align(LV_ALIGN_TOP_MID, 0, kDoneActionY);
-        applyCompactButtonStyle(*_done_action, lv_color_hex(0x3A3A3A));
-        _done_action->label().setText("Done");
+        _done_action->setSize(kDoneActionWidth, kDoneActionHeight);
+        _done_action->align(LV_ALIGN_CENTER, 0, kDoneActionCenterY);
+        applyConfirmationButtonStyle(*_done_action);
+        _done_action->label().setText("OK");
         _done_action->onClick().connect([this]() { _done_requested = true; });
     }
 

@@ -243,6 +243,151 @@ private:
     bool _save_requested = false;
 };
 
+class PowerLedWorker::PowerLedConfigView {
+public:
+    PowerLedConfigView(Hal::PowerLedMode initialMode, int initialIntervalSeconds)
+        : _current_mode(initialMode),
+          _current_interval_seconds(normalize_power_led_blink_interval_seconds(initialIntervalSeconds))
+    {
+        _panel = std::make_unique<Container>(lv_screen_active());
+        _panel->align(LV_ALIGN_CENTER, 0, 0);
+        _panel->setSize(466, 466);
+        _panel->setRadius(0);
+        _panel->setBorderWidth(0);
+        _panel->setPaddingAll(0);
+        _panel->setBgColor(lv_color_hex(0x000000));
+        _panel->setBgOpa(LV_OPA_COVER);
+        _panel->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
+
+        createModeRow(28, "Off", Hal::PowerLedMode::Off);
+        createModeRow(94, "On", Hal::PowerLedMode::On);
+        createModeRow(160, "Blink", Hal::PowerLedMode::Blink);
+
+        _interval_label = std::make_unique<Label>(_panel->get());
+        _interval_label->setSize(374, 28);
+        _interval_label->align(LV_ALIGN_TOP_MID, 0, 228);
+        _interval_label->setTextFont(&lv_font_montserrat_20);
+        _interval_label->setTextColor(lv_color_hex(0xFFFFFF));
+        _interval_label->setTextAlign(LV_TEXT_ALIGN_CENTER);
+        updateIntervalLabel();
+
+        _interval_slider = std::make_unique<Slider>(_panel->get());
+        _interval_slider->align(LV_ALIGN_TOP_MID, 0, 272);
+        _interval_slider->setSize(374, 20);
+        _interval_slider->setRange(1, 10, false);
+        _interval_slider->setValue(_current_interval_seconds);
+        _interval_slider->setBgColor(lv_color_hex(0x343434), LV_PART_MAIN);
+        _interval_slider->setBgOpa(LV_OPA_COVER, LV_PART_MAIN);
+        _interval_slider->setBorderWidth(0, LV_PART_MAIN);
+        _interval_slider->setRadius(LV_RADIUS_CIRCLE, LV_PART_MAIN);
+        _interval_slider->setBgColor(lv_color_hex(0x4AD78C), LV_PART_INDICATOR);
+        _interval_slider->setBgOpa(LV_OPA_COVER, LV_PART_INDICATOR);
+        _interval_slider->setBorderWidth(0, LV_PART_INDICATOR);
+        _interval_slider->setRadius(LV_RADIUS_CIRCLE, LV_PART_INDICATOR);
+        lv_obj_set_style_bg_color(_interval_slider->get(), lv_color_hex(0xFFFFFF), LV_PART_KNOB);
+        lv_obj_set_style_bg_opa(_interval_slider->get(), LV_OPA_COVER, LV_PART_KNOB);
+        lv_obj_set_style_border_width(_interval_slider->get(), 0, LV_PART_KNOB);
+        lv_obj_set_style_radius(_interval_slider->get(), LV_RADIUS_CIRCLE, LV_PART_KNOB);
+        _interval_slider->onValueChanged().connect([this](int32_t value) {
+            _current_interval_seconds = normalize_power_led_blink_interval_seconds(static_cast<int>(value));
+            updateIntervalLabel();
+        });
+
+        updateSelection();
+
+        _ok_button = std::make_unique<Button>(_panel->get());
+        _ok_button->align(LV_ALIGN_CENTER, 0, 175);
+        _ok_button->setSize(374, 130);
+        _ok_button->setRadius(77);
+        _ok_button->setBorderWidth(0);
+        _ok_button->setShadowWidth(0);
+        _ok_button->setBgColor(lv_color_hex(0x4AD78C));
+        _ok_button->label().setText("OK");
+        _ok_button->label().setTextFont(&lv_font_montserrat_28);
+        _ok_button->label().setTextColor(lv_color_hex(0x0F5831));
+        _ok_button->label().align(LV_ALIGN_CENTER, 0, 0);
+        _ok_button->onClick().connect([this]() { _save_requested = true; });
+    }
+
+    Hal::PowerLedMode currentMode() const
+    {
+        return _current_mode;
+    }
+
+    int currentIntervalSeconds() const
+    {
+        return _current_interval_seconds;
+    }
+
+    bool consumeSaveRequested()
+    {
+        const bool requested = _save_requested;
+        _save_requested      = false;
+        return requested;
+    }
+
+private:
+    struct ModeRow {
+        Hal::PowerLedMode mode;
+        std::unique_ptr<Button> button;
+        std::unique_ptr<Label> check;
+    };
+
+    void createModeRow(int y, const char* title, Hal::PowerLedMode mode)
+    {
+        auto button = std::make_unique<Button>(_panel->get());
+        button->setSize(374, 60);
+        button->align(LV_ALIGN_TOP_MID, 0, y);
+        button->setRadius(30);
+        button->setBorderWidth(0);
+        button->setShadowWidth(0);
+        button->setPaddingAll(0);
+        button->label().setText(title);
+        button->label().setTextFont(&lv_font_montserrat_22);
+        button->label().setTextColor(lv_color_hex(0xFFFFFF));
+        button->label().align(LV_ALIGN_LEFT_MID, 36, 0);
+        button->onClick().connect([this, mode]() {
+            _current_mode = mode;
+            updateSelection();
+        });
+
+        auto check = std::make_unique<Label>(button->get());
+        check->setTextFont(&lv_font_montserrat_24);
+        check->setTextColor(lv_color_hex(0x4AD78C));
+        check->align(LV_ALIGN_RIGHT_MID, -36, 0);
+
+        _rows.push_back({mode, std::move(button), std::move(check)});
+    }
+
+    void updateSelection()
+    {
+        for (auto& row : _rows) {
+            const bool selected = row.mode == _current_mode;
+            row.button->setBgColor(lv_color_hex(selected ? 0x4C4C4C : 0x242424));
+            row.check->setText(selected ? LV_SYMBOL_OK : "");
+        }
+
+        _interval_label->setHidden(_current_mode != Hal::PowerLedMode::Blink);
+        _interval_slider->setHidden(_current_mode != Hal::PowerLedMode::Blink);
+    }
+
+    void updateIntervalLabel()
+    {
+        char buffer[20] = {};
+        std::snprintf(buffer, sizeof(buffer), "Interval: %ds", _current_interval_seconds);
+        _interval_label->setText(buffer);
+    }
+
+    std::unique_ptr<Container> _panel;
+    std::vector<ModeRow> _rows;
+    std::unique_ptr<Label> _interval_label;
+    std::unique_ptr<Slider> _interval_slider;
+    std::unique_ptr<Button> _ok_button;
+    Hal::PowerLedMode _current_mode = Hal::PowerLedMode::Off;
+    int _current_interval_seconds   = PowerLedBlinkIntervalDefaultSeconds;
+    bool _save_requested            = false;
+};
+
 }  // namespace setup_workers
 
 BrightnessWorker::BrightnessWorker()
@@ -335,4 +480,47 @@ void ButtonWorker::update()
 
 ButtonWorker::~ButtonWorker()
 {
+}
+
+PowerLedWorker::PowerLedWorker()
+{
+    mclog::tagInfo(_tag, "start power LED worker");
+
+    _original_mode = GetHAL().getPowerLedMode();
+    _applied_mode  = _original_mode;
+    _original_interval_seconds = GetHAL().getPowerLedBlinkIntervalSeconds();
+    _applied_interval_seconds  = _original_interval_seconds;
+    _view = std::make_unique<PowerLedConfigView>(_original_mode, _original_interval_seconds);
+}
+
+void PowerLedWorker::update()
+{
+    if (_view && _applied_interval_seconds != _view->currentIntervalSeconds()) {
+        _applied_interval_seconds = _view->currentIntervalSeconds();
+        GetHAL().setPowerLedBlinkIntervalSeconds(_applied_interval_seconds, false);
+    }
+
+    if (_view && _applied_mode != _view->currentMode()) {
+        _applied_mode = _view->currentMode();
+        GetHAL().setPowerLedMode(_applied_mode, false);
+    }
+
+    if (_view && _view->consumeSaveRequested()) {
+        GetHAL().setPowerLedBlinkIntervalSeconds(_view->currentIntervalSeconds(), true);
+        GetHAL().setPowerLedMode(_view->currentMode(), true);
+        _committed = true;
+        _is_done   = true;
+    }
+}
+
+PowerLedWorker::~PowerLedWorker()
+{
+    if (!_committed) {
+        if (_applied_interval_seconds != _original_interval_seconds) {
+            GetHAL().setPowerLedBlinkIntervalSeconds(_original_interval_seconds, false);
+        }
+        if (_applied_mode != _original_mode) {
+            GetHAL().setPowerLedMode(_original_mode, false);
+        }
+    }
 }

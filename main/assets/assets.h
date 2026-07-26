@@ -7,6 +7,7 @@
 #include <lvgl.h>
 
 LV_FONT_DECLARE(MontserratSemiBold26);
+LV_FONT_DECLARE(MontserratBold16);
 LV_FONT_DECLARE(CommissionerMedium64);
 LV_FONT_DECLARE(CommissionerMedium108);
 LV_FONT_DECLARE(lv_font_maple_mono_medium_24);

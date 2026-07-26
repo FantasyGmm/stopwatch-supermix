@@ -54,8 +54,9 @@ void Hal::button_init()
 
 void Hal::updateButtonStates()
 {
-    btnA.setRawState(millis(), !gpio_get_level(USER_BUTTONA_PIN));
-    btnB.setRawState(millis(), !gpio_get_level(USER_BUTTONB_PIN));
+    const auto buttons = _button_input_gate.filter(readButtonPhysicalState());
+    btnA.setRawState(millis(), buttons.a_pressed);
+    btnB.setRawState(millis(), buttons.b_pressed);
     // btnPwr.setRawState(millis(), pmic_get_pwr_btn_state());
 
     auto& config = getButtonConfig();
@@ -84,6 +85,24 @@ void Hal::updateButtonStates()
             vibrate(20, 60);
         }
     }
+}
+
+ButtonPhysicalState Hal::readButtonPhysicalState() const
+{
+    return {
+        .a_pressed = !gpio_get_level(USER_BUTTONA_PIN),
+        .b_pressed = !gpio_get_level(USER_BUTTONB_PIN),
+    };
+}
+
+void Hal::suppressButtonInputUntilRelease()
+{
+    _button_input_gate.suppressUntilRelease();
+}
+
+bool Hal::buttonInputSuppressed() const
+{
+    return _button_input_gate.suppressing();
 }
 
 void Hal::setButtonConfig(ButtonConfig config, bool saveToSettings)

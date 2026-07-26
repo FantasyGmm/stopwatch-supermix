@@ -36,10 +36,24 @@ int main()
     const EdgeControlUpdate volume = logic.move(382, 350, 2040);
     assert(volume.side == EdgeControlSide::Volume);
     assert(volume.activated);
-    assert(volume.value == 35);
-    assert(volume.value % 5 == 0);
+    assert(volume.value == 37);
+    assert(volume.hardware_value == 35);
     assert(volume.apply);
     assert(volume.consumed);
+
+    const EdgeControlUpdate volume_visual_only = logic.move(382, 344, 2050);
+    assert(volume_visual_only.value == 40);
+    assert(volume_visual_only.hardware_value == 40);
+    assert(!volume_visual_only.apply);
+
+    EdgeControlApplyQueue apply_queue;
+    apply_queue.push(volume);
+    assert(apply_queue.pending());
+    const EdgeControlHardwareUpdate hardware_update = apply_queue.take();
+    assert(hardware_update.side == EdgeControlSide::Volume);
+    assert(hardware_update.value == 35);
+    assert(!hardware_update.persist);
+    assert(!apply_queue.pending());
 
     logic.reset();
     logic.press(80, 300, 50, 60, 2000);

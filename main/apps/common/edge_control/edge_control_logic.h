@@ -11,12 +11,30 @@ enum class EdgeControlSide : uint8_t {
 struct EdgeControlUpdate {
     EdgeControlSide side = EdgeControlSide::None;
     int value = 0;
+    int hardware_value = 0;
     bool activated = false;
     bool apply = false;
     bool persist = false;
     bool consumed = false;
     bool cancelled = false;
     bool hide = false;
+};
+
+struct EdgeControlHardwareUpdate {
+    EdgeControlSide side = EdgeControlSide::None;
+    int value = 0;
+    bool persist = false;
+};
+
+class EdgeControlApplyQueue {
+public:
+    void push(const EdgeControlUpdate& update);
+    EdgeControlHardwareUpdate take();
+    void reset();
+    bool pending() const;
+
+private:
+    EdgeControlHardwareUpdate _pending;
 };
 
 class EdgeControlLogic {
@@ -32,7 +50,8 @@ public:
     EdgeControlSide visible_side() const;
 
 private:
-    static int normalize(EdgeControlSide side, int value);
+    static int normalize_visual(EdgeControlSide side, int value);
+    static int normalize_hardware(EdgeControlSide side, int value);
 
     EdgeControlSide _candidate = EdgeControlSide::None;
     EdgeControlSide _active = EdgeControlSide::None;
