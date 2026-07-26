@@ -72,5 +72,41 @@ int main()
     assert(DisplayProtectionLogic::dimBrightness(10) == 10);
     assert(DisplayProtectionLogic::dimBrightness(20) == 20);
     assert(DisplayProtectionLogic::dimBrightness(80) == 20);
+
+    logic.reset(1000);
+    logic.setTimeouts(30000U, 120000U, 1000U);
+    const auto fresh_timing = logic.timingSnapshot(1000U);
+    assert(fresh_timing.inactivity_ms == 0U);
+    assert(fresh_timing.dim_after_ms == 30000U);
+    assert(fresh_timing.screen_off_after_ms == 120000U);
+    assert(fresh_timing.dim_remaining_ms == 30000U);
+    assert(fresh_timing.screen_off_remaining_ms == 120000U);
+    assert(logic.update(30999U).action == DisplayProtectionAction::None);
+    assert(logic.update(31000U).action == DisplayProtectionAction::Dim);
+    const auto dimmed_timing = logic.timingSnapshot(31000U);
+    assert(dimmed_timing.dim_remaining_ms == 0U);
+    assert(dimmed_timing.screen_off_remaining_ms == 90000U);
+    assert(logic.update(120999U).action == DisplayProtectionAction::None);
+    assert(logic.update(121000U).action == DisplayProtectionAction::ScreenOff);
+
+    logic.reset(0);
+    auto manual_off = logic.screenOffNow(100);
+    assert(manual_off.action == DisplayProtectionAction::ScreenOff);
+    assert(logic.state() == DisplayProtectionState::ScreenOff);
+    auto manual_wake = logic.userActivity(101);
+    assert(manual_wake.action == DisplayProtectionAction::Restore);
+    assert(manual_wake.consume_input);
+
+    logic.reset(0);
+    logic.setKeepAwake(DisplayKeepAwakeReason::StopwatchRunning, true, 10);
+    logic.screenOffNow(20);
+    auto alarm_wake = logic.setKeepAwake(
+        DisplayKeepAwakeReason::AlarmRinging, true, 30);
+    assert(alarm_wake.action == DisplayProtectionAction::Restore);
+
+    logic.reset(UINT32_MAX - 5000U);
+    logic.setTimeouts(10000U, 30000U, UINT32_MAX - 5000U);
+    assert(logic.update(4999U).action == DisplayProtectionAction::Dim);
+    assert(logic.update(24999U).action == DisplayProtectionAction::ScreenOff);
     return 0;
 }
