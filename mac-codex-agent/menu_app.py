@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import logging.handlers
 import pathlib
+import threading
 from typing import Optional
 
 import objc
@@ -28,10 +29,13 @@ from AppKit import (
     NSView,
     NSWorkspace,
 )
-from Foundation import NSTimer, NSURL
+from Foundation import NSBundle, NSTimer, NSURL
+from PyObjCTools import AppHelper
 
 from app_state import UserDefaultsPreferences, present
 from runtime import AgentController
+from voice_driver import BLACKHOLE_PACKAGE_NAME, BlackHoleInstaller, DriverState
+from voice_session import VoiceState
 
 
 LOG_PATH = pathlib.Path.home() / "Library" / "Logs" / "stopwatch-codex-agent.log"
@@ -43,6 +47,13 @@ STATUS_HEADER_HEIGHT = 27
 STATUS_LEFT_MARGIN = 18
 STATUS_CHILD_INDENT = 16
 ALERT_ROW_WIDTH = 360
+
+
+def bundled_blackhole_package() -> pathlib.Path:
+    resource_path = NSBundle.mainBundle().resourcePath()
+    if not resource_path:
+        resource_path = pathlib.Path(__file__).resolve().parent
+    return pathlib.Path(resource_path) / "Drivers" / BLACKHOLE_PACKAGE_NAME
 
 
 def configure_logging(path: pathlib.Path = LOG_PATH) -> None:
@@ -70,7 +81,18 @@ class MenuBarApplication(NSObject):
         self.status_item = None
         self.menu = None
         self.timer: Optional[NSTimer] = None
+        self.workspace = NSWorkspace.sharedWorkspace()
+        self.voice_installer = BlackHoleInstaller()
+        self.voice_package_path = bundled_blackhole_package()
+        self.voice_worker_factory = lambda target: threading.Thread(
+            target=target,
+            name="blackhole-installer",
+            daemon=False,
+        )
+        self.call_after = AppHelper.callAfter
+        self._voice_install_thread = None
         self._stopping = False
+        self._installing_voice = False
         self._last_alert_revision = None
         self._alert_labels = []
         return self
@@ -122,6 +144,15 @@ class MenuBarApplication(NSObject):
         )
         self.device_item, self.device_label = self._informational_item(
             "Device: StopWatch-Codex", indent=STATUS_CHILD_INDENT
+        )
+        self.voice_item, self.voice_label = self._informational_item(
+            "Voice Input: Error", indent=STATUS_CHILD_INDENT
+        )
+        self.setup_voice_item = self._action_item(
+            "Set Up Watch Voice Input...", "setupVoice:"
+        )
+        self.accessibility_item = self._action_item(
+            "Open Accessibility Settings...", "openAccessibilitySettings:"
         )
         self.menu.addItem_(NSMenuItem.separatorItem())
         self.connection_item = self._action_item(
@@ -242,6 +273,19 @@ class MenuBarApplication(NSObject):
         self.agent_label.setStringValue_(view.agent_text)
         self.bluetooth_label.setStringValue_(view.bluetooth_text)
         self.device_label.setStringValue_(view.device_text)
+        self.voice_label.setStringValue_(view.voice_text)
+        setup_visible = view.voice_state is VoiceState.DRIVER_REQUIRED
+        accessibility_visible = (
+            view.voice_state is VoiceState.ACCESSIBILITY_REQUIRED
+        )
+        self.setup_voice_item.setHidden_(not setup_visible)
+        self.setup_voice_item.setEnabled_(
+            setup_visible and not self._installing_voice and not self._stopping
+        )
+        self.accessibility_item.setHidden_(not accessibility_visible)
+        self.accessibility_item.setEnabled_(
+            accessibility_visible and not self._stopping
+        )
         self.connection_item.setState_(
             NSControlStateValueOn if view.connection_checked else NSControlStateValueOff
         )
@@ -261,6 +305,44 @@ class MenuBarApplication(NSObject):
 
     def reconnect_(self, _sender):
         self.controller.reconnect()
+
+    def setupVoice_(self, _sender):
+        if self._installing_voice or self._stopping:
+            return
+        if (
+            present(self.controller.snapshot()).voice_state
+            is not VoiceState.DRIVER_REQUIRED
+        ):
+            return
+        self._installing_voice = True
+        self.setup_voice_item.setEnabled_(False)
+        worker = self.voice_worker_factory(self._install_voice)
+        self._voice_install_thread = worker
+        worker.start()
+
+    def _install_voice(self):
+        try:
+            state = self.voice_installer.install(self.voice_package_path)
+        except Exception:
+            LOGGER.exception("BlackHole installation failed")
+            self.call_after(self._finish_voice_setup, None)
+        else:
+            self.call_after(self._finish_voice_setup, state)
+
+    def _finish_voice_setup(self, state):
+        self._installing_voice = False
+        self._voice_install_thread = None
+        if self._stopping:
+            return
+        if state in (DriverState.READY, DriverState.RESTART_REQUIRED):
+            self.controller.refresh_voice_readiness()
+        self.refresh_(None)
+
+    def openAccessibilitySettings_(self, _sender):
+        url = NSURL.URLWithString_(
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+        )
+        self.workspace.openURL_(url)
 
     def openLog_(self, _sender):
         LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -283,6 +365,8 @@ class MenuBarApplication(NSObject):
             self.timer = None
         self.connection_item.setEnabled_(False)
         self.reconnect_item.setEnabled_(False)
+        self.setup_voice_item.setEnabled_(False)
+        self.accessibility_item.setEnabled_(False)
         stopped = self.controller.stop(timeout=5.0)
         if stopped:
             LOGGER.info("StopWatch Codex Agent stopped")

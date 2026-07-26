@@ -223,6 +223,66 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.keychain_patch.start()
         self.addCleanup(self.keychain_patch.stop)
 
+    async def test_readiness_refresh_enables_voice_without_restarting_ble(self):
+        factory = FakeTransportFactory([{}])
+
+        class VoiceSession:
+            def __init__(self):
+                self.prepare_count = 0
+                self.state = VoiceState.DRIVER_REQUIRED
+
+            async def prepare(self):
+                self.prepare_count += 1
+                self.state = (
+                    VoiceState.DRIVER_REQUIRED
+                    if self.prepare_count == 1
+                    else VoiceState.READY
+                )
+                return self.state
+
+            async def disconnect(self):
+                self.state = VoiceState.READY
+
+            async def handle(self, _payload):
+                pass
+
+        service = VoiceSession()
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            transport_factory=factory,
+            voice_key_loader=lambda: bytes(range(16)),
+            voice_session_factory=lambda _key: service,
+            voice_nonce_factory=lambda: b"12345678",
+            status_interval=0.01,
+        )
+        task = asyncio.create_task(runtime.run())
+        await wait_for_state(runtime, ConnectionState.CONNECTED)
+        for _ in range(100):
+            if runtime.snapshot().voice_state is VoiceState.DRIVER_REQUIRED:
+                break
+            await asyncio.sleep(0.01)
+        else:
+            self.fail("initial voice readiness was not published")
+
+        runtime.refresh_voice_readiness()
+
+        for _ in range(100):
+            if runtime.snapshot().voice_state is VoiceState.READY:
+                break
+            await asyncio.sleep(0.01)
+        else:
+            self.fail("refreshed voice readiness was not published")
+        self.assertIs(runtime.snapshot().state, ConnectionState.CONNECTED)
+        self.assertEqual(len(factory.instances), 1)
+        self.assertEqual(factory.instances[0].disconnect_count, 0)
+        self.assertEqual(
+            [entry[0] for entry in factory.instances[0].voice_payloads[:2]],
+            ["unavailable", "ready"],
+        )
+
+        runtime.submit(AgentCommand.STOP)
+        await asyncio.wait_for(task, 1)
+
     async def test_production_assembly_classifies_absent_blackhole_as_restart_required(self):
         class Bridge:
             def find_device_uid(self, _name):
@@ -1437,12 +1497,27 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
 class FakeRuntime:
     def __init__(self):
         self.commands = []
+        self.voice_refresh_count = 0
 
     def submit(self, command):
         self.commands.append(command)
 
+    def refresh_voice_readiness(self):
+        self.voice_refresh_count += 1
+
 
 class AgentControllerTests(unittest.TestCase):
+    def test_voice_readiness_refresh_is_scoped_to_the_runtime(self):
+        runtime = FakeRuntime()
+        controller = AgentController(
+            preferences=MemoryPreferences(True), runtime=runtime
+        )
+
+        controller.refresh_voice_readiness()
+
+        self.assertEqual(runtime.voice_refresh_count, 1)
+        self.assertEqual(runtime.commands, [])
+
     def test_stop_does_not_wait_for_blocked_voice_key_loader(self):
         loader_started = threading.Event()
         emergency_release = threading.Event()

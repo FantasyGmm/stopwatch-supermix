@@ -177,6 +177,7 @@ class AgentRuntime:
         self._commands: Optional[asyncio.Queue] = None
         self._latest_status = {}
         self._status_ready: Optional[asyncio.Event] = None
+        self._voice_refresh_requested = threading.Event()
 
     def snapshot(self) -> AgentSnapshot:
         with self._state_lock:
@@ -193,6 +194,9 @@ class AgentRuntime:
                 loop.call_soon_threadsafe(commands.put_nowait, command)
             except RuntimeError:
                 self._pending_commands.append(command)
+
+    def refresh_voice_readiness(self) -> None:
+        self._voice_refresh_requested.set()
 
     def _transition(self, state: ConnectionState, detail: str = "") -> None:
         with self._state_lock:
@@ -373,6 +377,9 @@ class AgentRuntime:
             if self._status_ready is not None:
                 await self._status_ready.wait()
             while transport.connected:
+                if self._voice_refresh_requested.is_set():
+                    self._voice_refresh_requested.clear()
+                    await self._refresh_voice_readiness(context)
                 failure = self._voice_failure(context)
                 if failure is not None:
                     await self._isolate_voice_failure(context, failure)
@@ -390,7 +397,6 @@ class AgentRuntime:
             await self._await_session_shutdown(context, voice_was_recording)
 
     async def _prepare_voice(self, context: _BleSessionContext) -> None:
-        transport = context.transport
         try:
             key = await _run_in_daemon_thread(self._voice_key_loader)
         except Exception as error:
@@ -404,6 +410,24 @@ class AgentRuntime:
             await self._isolate_voice_failure(context, error)
             return
         context.voice_service = service
+
+        await self._publish_voice_readiness(context)
+
+    async def _refresh_voice_readiness(self, context: _BleSessionContext) -> None:
+        if (
+            context.voice_failed
+            or context.voice_key is None
+            or context.voice_service is None
+            or self.snapshot().voice_state
+            not in (VoiceState.DRIVER_REQUIRED, VoiceState.RESTART_REQUIRED)
+        ):
+            return
+        await self._publish_voice_readiness(context)
+
+    async def _publish_voice_readiness(self, context: _BleSessionContext) -> None:
+        transport = context.transport
+        key = context.voice_key
+        service = context.voice_service
 
         try:
             state = await service.prepare()
@@ -773,6 +797,9 @@ class AgentController:
 
     def reconnect(self) -> None:
         self._runtime.submit(AgentCommand.RECONNECT)
+
+    def refresh_voice_readiness(self) -> None:
+        self._runtime.refresh_voice_readiness()
 
     def stop(self, timeout: float = 5.0) -> bool:
         with self._stop_lock:
