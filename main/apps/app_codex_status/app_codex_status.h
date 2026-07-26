@@ -36,11 +36,13 @@ private:
     lv_obj_t* _panel             = nullptr;
     lv_obj_t* _model_value       = nullptr;
     lv_obj_t* _effort_value      = nullptr;
-    lv_obj_t* _five_hour_pct     = nullptr;
-    lv_obj_t* _five_hour_bar     = nullptr;
     lv_obj_t* _week_pct          = nullptr;
     lv_obj_t* _week_bar          = nullptr;
-    lv_obj_t* _activity_title    = nullptr;
+    lv_obj_t* _pending_label     = nullptr;
+    lv_obj_t* _pending_count     = nullptr;
+    lv_obj_t* _running_label     = nullptr;
+    lv_obj_t* _running_count     = nullptr;
+    lv_obj_t* _task_index        = nullptr;
     lv_obj_t* _alert_project     = nullptr;
     lv_obj_t* _alert_detail      = nullptr;
     lv_obj_t* _battery_label     = nullptr;

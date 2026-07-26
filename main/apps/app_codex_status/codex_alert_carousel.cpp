@@ -42,9 +42,6 @@ bool CodexAlertCarousel::apply(const CodexStatusSnapshot& snapshot, uint32_t now
 bool CodexAlertCarousel::update(uint32_t now_ms)
 {
     const CodexTaskState selected_state = display_state();
-    if (selected_state == CodexTaskState::Completed) {
-        return false;
-    }
     const size_t available = static_cast<size_t>(std::count_if(
         _alerts.begin(),
         _alerts.end(),
@@ -99,6 +96,18 @@ CodexTaskState CodexAlertCarousel::display_state() const
 }
 
 
+int CodexAlertCarousel::pending_count() const
+{
+    return _pending_count;
+}
+
+
+int CodexAlertCarousel::running_count() const
+{
+    return _running_count;
+}
+
+
 bool CodexAlertCarousel::completed() const
 {
     return !_alerts.empty() && display_state() == CodexTaskState::Completed;
@@ -111,8 +120,15 @@ std::string CodexAlertCarousel::heading() const
         return "NO ALERTS";
     }
     const CodexTaskState selected_state = display_state();
-    if (selected_state == CodexTaskState::Completed) {
-        return "COMPLETED";
+    const int total = static_cast<int>(std::count_if(
+        _alerts.begin(),
+        _alerts.end(),
+        [selected_state](const CodexTaskAlert& alert) {
+            return alert.state == selected_state;
+        }
+    ));
+    if (total == 0) {
+        return "NO ALERTS";
     }
 
     int position = 0;
@@ -121,11 +137,7 @@ std::string CodexAlertCarousel::heading() const
             ++position;
         }
     }
-    const char* label = selected_state == CodexTaskState::Pending ? "PENDING" : "RUNNING";
-    const int total = selected_state == CodexTaskState::Pending
-                          ? _pending_count
-                          : _running_count;
     char text[32];
-    std::snprintf(text, sizeof(text), "%s %d/%d", label, position, std::max(total, 1));
+    std::snprintf(text, sizeof(text), "TASK %d/%d", position, total);
     return text;
 }

@@ -168,6 +168,24 @@ lv_obj_t* make_line(lv_obj_t* parent, int x, int y, int width)
     return line;
 }
 
+lv_obj_t* make_fixed_label(
+    lv_obj_t* parent,
+    const char* text,
+    int x,
+    int y,
+    int width,
+    const lv_font_t* font,
+    uint32_t color,
+    lv_text_align_t align
+)
+{
+    lv_obj_t* label = make_label(parent, text, x, y, font, color);
+    lv_obj_set_width(label, width);
+    lv_obj_set_style_text_align(label, align, 0);
+    lv_label_set_long_mode(label, LV_LABEL_LONG_MODE_CLIP);
+    return label;
+}
+
 const char* battery_symbol(int percent)
 {
     if (percent >= 88) {
@@ -453,35 +471,92 @@ void AppCodexStatus::create_view()
         _pet_timer = lv_timer_create(AppCodexStatus::pet_timer_cb, codex_pet_idle_durations_ms[0], this);
     }
 
-    QuotaWidgets five_hour = make_quota_row(_panel, kFiveHourY, "5H");
-    _five_hour_pct = five_hour.pct;
-    _five_hour_bar = five_hour.bar;
     QuotaWidgets week = make_quota_row(_panel, kWeekY, "7D");
     _week_pct = week.pct;
     _week_bar = week.bar;
 
     make_line(_panel, kAlertDividerX, kAlertDividerY, kAlertDividerWidth);
 
-    _activity_title = make_center_label(
-        _panel, "NO ALERTS", kAlertHeadingY, &lv_font_montserrat_20, kEtchedGray
+    _pending_label = make_fixed_label(
+        _panel,
+        "PENDING",
+        kPendingLabelX,
+        kStateLabelY,
+        kStateLabelWidth,
+        &lv_font_montserrat_10,
+        kAlertVermilion,
+        LV_TEXT_ALIGN_LEFT
     );
-    _alert_project = make_center_label(
-        _panel, "--", kAlertProjectY, &lv_font_montserrat_22, kBeaconViolet
+    _pending_count = make_fixed_label(
+        _panel,
+        "0",
+        kPendingCountX,
+        kStateCountY,
+        kStateCountWidth,
+        &MontserratSemiBold26,
+        kEtchedGray,
+        LV_TEXT_ALIGN_LEFT
     );
-    _alert_detail = make_center_label(
-        _panel, "", kAlertDetailY, &lv_font_montserrat_14, kSecondaryText
+    _running_label = make_fixed_label(
+        _panel,
+        "RUNNING",
+        kRunningLabelX,
+        kStateLabelY,
+        kStateLabelWidth,
+        &lv_font_montserrat_10,
+        kRunningCyan,
+        LV_TEXT_ALIGN_RIGHT
     );
-    lv_obj_set_style_text_font(_alert_detail, &font_puhui_14_1, 0);
-    const auto configure_alert_label = [](lv_obj_t* label, int y, int width) {
-        lv_obj_set_width(label, width);
-        lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
-        lv_label_set_long_mode(label, LV_LABEL_LONG_MODE_DOTS);
-        lv_obj_align(label, LV_ALIGN_TOP_MID, 0, y);
-    };
-    configure_alert_label(_activity_title, kAlertHeadingY, kAlertHeadingWidth);
-    configure_alert_label(_alert_project, kAlertProjectY, kAlertProjectWidth);
-    configure_alert_label(_alert_detail, kAlertDetailY, kAlertDetailWidth);
-    _pending_glow->set_heading(_activity_title);
+    _running_count = make_fixed_label(
+        _panel,
+        "0",
+        kRunningCountX,
+        kStateCountY,
+        kStateCountWidth,
+        &MontserratSemiBold26,
+        kEtchedGray,
+        LV_TEXT_ALIGN_RIGHT
+    );
+
+    _task_index = make_fixed_label(
+        _panel,
+        "NO ALERTS",
+        kTaskIndexX,
+        kTaskIndexY,
+        kTaskIndexWidth,
+        &lv_font_montserrat_14,
+        kEtchedGray,
+        LV_TEXT_ALIGN_CENTER
+    );
+    _alert_project = make_fixed_label(
+        _panel,
+        "--",
+        kAlertProjectX,
+        kAlertProjectY,
+        kAlertProjectWidth,
+        &lv_font_montserrat_22,
+        kBeaconViolet,
+        LV_TEXT_ALIGN_CENTER
+    );
+    lv_label_set_long_mode(_alert_project, LV_LABEL_LONG_MODE_DOTS);
+    _alert_detail = make_fixed_label(
+        _panel,
+        "",
+        kAlertDetailX,
+        kAlertDetailY,
+        kAlertDetailWidth,
+        &font_puhui_14_1,
+        kSignalWhite,
+        LV_TEXT_ALIGN_CENTER
+    );
+    lv_label_set_long_mode(_alert_detail, LV_LABEL_LONG_MODE_WRAP);
+    lv_obj_set_height(_alert_detail, kAlertDetailHeight);
+    _pending_glow->set_status_targets(
+        _pending_label,
+        _pending_count,
+        _running_label,
+        _running_count
+    );
 
     _battery_label = lv_label_create(_panel);
     lv_obj_set_style_text_font(_battery_label, &lv_font_montserrat_14, 0);
@@ -511,11 +586,13 @@ void AppCodexStatus::destroy_view()
 
     _model_value    = nullptr;
     _effort_value   = nullptr;
-    _five_hour_pct  = nullptr;
-    _five_hour_bar  = nullptr;
     _week_pct       = nullptr;
     _week_bar       = nullptr;
-    _activity_title = nullptr;
+    _pending_label  = nullptr;
+    _pending_count  = nullptr;
+    _running_label  = nullptr;
+    _running_count  = nullptr;
+    _task_index     = nullptr;
     _alert_project  = nullptr;
     _alert_detail   = nullptr;
     _battery_label  = nullptr;
@@ -701,7 +778,6 @@ bool AppCodexStatus::handle_status_json(const char* data, int length, const char
     if (_effort_value != nullptr && effort[0] != '\0') {
         lv_label_set_text(_effort_value, effort);
     }
-    set_percent(_five_hour_pct, _five_hour_bar, snapshot.five_hour_left_pct);
     set_percent(_week_pct, _week_bar, snapshot.week_left_pct);
 
     if (_alert_carousel.apply(snapshot, GetHAL().millis())) {
@@ -716,33 +792,61 @@ bool AppCodexStatus::handle_status_json(const char* data, int length, const char
 
 void AppCodexStatus::render_alert()
 {
-    if (_activity_title == nullptr || _alert_project == nullptr || _alert_detail == nullptr) {
+    if (_pending_count == nullptr || _running_count == nullptr ||
+        _task_index == nullptr || _alert_project == nullptr ||
+        _alert_detail == nullptr) {
         return;
     }
 
+    char pending_text[12];
+    char running_text[12];
+    std::snprintf(
+        pending_text,
+        sizeof(pending_text),
+        "%d",
+        std::max(_alert_carousel.pending_count(), 0)
+    );
+    std::snprintf(
+        running_text,
+        sizeof(running_text),
+        "%d",
+        std::max(_alert_carousel.running_count(), 0)
+    );
+    lv_label_set_text(_pending_count, pending_text);
+    lv_label_set_text(_running_count, running_text);
+    lv_obj_set_style_text_color(
+        _pending_count,
+        lv_color_hex(
+            _alert_carousel.pending_count() > 0 ? kAlertVermilion : kEtchedGray
+        ),
+        0
+    );
+    lv_obj_set_style_text_color(
+        _running_count,
+        lv_color_hex(
+            _alert_carousel.running_count() > 0 ? kRunningCyan : kEtchedGray
+        ),
+        0
+    );
+
     const std::string heading = _alert_carousel.heading();
     const CodexTaskAlert* alert = _alert_carousel.current();
-    lv_label_set_text(_activity_title, heading.c_str());
+    lv_label_set_text(_task_index, heading.c_str());
     if (alert == nullptr) {
         lv_label_set_text(_alert_project, "--");
         lv_obj_set_style_text_font(_alert_project, &lv_font_montserrat_22, 0);
         lv_label_set_text(_alert_detail, "");
-        lv_obj_set_style_text_color(_activity_title, lv_color_hex(kTextDim), 0);
+        lv_obj_set_style_text_color(_task_index, lv_color_hex(kTextDim), 0);
         sync_pending_glow();
         return;
     }
 
-    const char* state_label = "已完成";
     uint32_t state_color = kCompletedGreen;
     if (alert->state == CodexTaskState::Pending) {
-        state_label = "等待指令";
         state_color = kCodexRed;
     } else if (alert->state == CodexTaskState::Running) {
-        state_label = "正在处理";
         state_color = kRunningCyan;
     }
-    const std::string detail =
-        std::string(state_label) + " \xC2\xB7 " + alert->title;
     lv_label_set_text(_alert_project, alert->project.c_str());
     lv_obj_set_style_text_font(
         _alert_project,
@@ -751,9 +855,9 @@ void AppCodexStatus::render_alert()
             : &font_puhui_14_1,
         0
     );
-    lv_label_set_text(_alert_detail, detail.c_str());
+    lv_label_set_text(_alert_detail, alert->title.c_str());
     lv_obj_set_style_text_color(
-        _activity_title,
+        _task_index,
         lv_color_hex(state_color),
         0
     );
@@ -765,11 +869,10 @@ void AppCodexStatus::sync_pending_glow()
     if (_pending_glow == nullptr) {
         return;
     }
-    const bool active = codex_pending_glow::desired_active(
+    _pending_glow->set_state(
         _alert_carousel.display_state(),
         _screen_off
     );
-    _pending_glow->set_active(active);
 }
 
 bool AppCodexStatus::update_screen_off_control(uint32_t now_ms)

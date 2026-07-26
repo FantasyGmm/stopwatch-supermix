@@ -11,6 +11,7 @@ public:
     bool init();
     void update();
     void shutdown();
+    void setEnabled(bool enabled);
 
     bool ownsTouch() const;
     bool lastReleaseConsumed() const;
@@ -22,6 +23,7 @@ private:
     EdgeControlOverlay _overlay;
     lv_indev_state_t _last_touch_state = LV_INDEV_STATE_REL;
     bool _initialized = false;
+    bool _enabled = false;
     bool _owns_touch = false;
     bool _last_release_consumed = false;
     uint32_t _brightness_revision = 0;

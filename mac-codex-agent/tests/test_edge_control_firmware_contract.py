@@ -150,8 +150,42 @@ class EdgeControlFirmwareContractTests(unittest.TestCase):
             "GetHAL().getBackLightBrightness()",
             "GetHAL().getSpeakerVolume()",
             "_view->setCurrentValue",
-        ):
+            ):
             self.assertIn(token, source)
+
+    def test_settings_disables_global_swipe_adjustment_only_while_open(self):
+        service_header = (
+            ROOT
+            / "main"
+            / "apps"
+            / "common"
+            / "edge_control"
+            / "global_edge_control_service.h"
+        ).read_text(encoding="utf-8")
+        service_source = (
+            ROOT
+            / "main"
+            / "apps"
+            / "common"
+            / "edge_control"
+            / "global_edge_control_service.cpp"
+        ).read_text(encoding="utf-8")
+        settings = (
+            ROOT / "main" / "apps" / "app_setup" / "app_setup.cpp"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("void setEnabled(bool enabled)", service_header)
+        self.assertIn("if (!_initialized || !_enabled)", service_source)
+        self.assertIn("GetGlobalEdgeControlService().setEnabled(false);", settings)
+        self.assertIn("GetGlobalEdgeControlService().setEnabled(true);", settings)
+        self.assertLess(
+            settings.index("GetGlobalEdgeControlService().setEnabled(false);"),
+            settings.index("_menu_page = std::make_unique<view::SelectMenuPage>"),
+        )
+        self.assertGreater(
+            settings.index("GetGlobalEdgeControlService().setEnabled(true);"),
+            settings.index("void AppSetup::onClose()"),
+        )
 
     def test_global_volume_queues_assistant_volume_and_mute_sync(self):
         service = (

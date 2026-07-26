@@ -154,11 +154,20 @@ echo "[18/20] Global edge control host test"
     -o "$HOST_TEST_DIR/edge_control_logic_test"
 "$HOST_TEST_DIR/edge_control_logic_test"
 
-echo "[19/20] Pending glow logic host test"
+echo "[19/20] Codex status UI host tests"
 "$CXX" -std=c++17 -Wall -Wextra -Werror -Imain \
     tests/codex_pending_glow_logic_test.cpp \
     -o "$HOST_TEST_DIR/codex_pending_glow_logic_test"
 "$HOST_TEST_DIR/codex_pending_glow_logic_test"
+"$CXX" -std=c++17 -Wall -Wextra -Werror -Imain/apps/app_codex_status \
+    tests/codex_alert_carousel_test.cpp \
+    main/apps/app_codex_status/codex_alert_carousel.cpp \
+    -o "$HOST_TEST_DIR/codex_alert_carousel_test"
+"$HOST_TEST_DIR/codex_alert_carousel_test"
+"$CXX" -std=c++17 -Wall -Wextra -Werror -Imain \
+    tests/codex_status_ui_layout_test.cpp \
+    -o "$HOST_TEST_DIR/codex_status_ui_layout_test"
+"$HOST_TEST_DIR/codex_status_ui_layout_test"
 
 echo "[20/20] Isolated unified candidate clean build and capacity gates"
 ./scripts/build_unified_candidate.sh --clean

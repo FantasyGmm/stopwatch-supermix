@@ -8,7 +8,7 @@
 namespace codex_pending_glow {
 
 constexpr int kPanelSize = 466;
-constexpr int kHalfCycleMs = 600;
+constexpr int kHalfCycleMs = 800;
 constexpr int kFullCycleMs = kHalfCycleMs * 2;
 
 struct RingGeometry {
@@ -70,7 +70,12 @@ constexpr uint8_t opacity_for_phase(
     );
 }
 
-constexpr bool desired_active(CodexTaskState state, bool screen_off)
+constexpr bool pulse_desired(CodexTaskState state, bool screen_off)
+{
+    return state != CodexTaskState::Completed && !screen_off;
+}
+
+constexpr bool ring_desired(CodexTaskState state, bool screen_off)
 {
     return state == CodexTaskState::Pending && !screen_off;
 }

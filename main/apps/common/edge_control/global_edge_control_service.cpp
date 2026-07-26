@@ -23,12 +23,13 @@ bool GlobalEdgeControlService::init()
 
     _overlay.init(top_layer);
     _initialized = true;
+    _enabled = true;
     return true;
 }
 
 void GlobalEdgeControlService::update()
 {
-    if (!_initialized) {
+    if (!_initialized || !_enabled) {
         return;
     }
 
@@ -72,8 +73,25 @@ void GlobalEdgeControlService::shutdown()
     _logic.reset();
     _last_touch_state = LV_INDEV_STATE_REL;
     _initialized = false;
+    _enabled = false;
     _owns_touch = false;
     _last_release_consumed = false;
+}
+
+void GlobalEdgeControlService::setEnabled(bool enabled)
+{
+    if (!_initialized || _enabled == enabled) {
+        return;
+    }
+
+    _logic.reset();
+    _overlay.hide();
+    _owns_touch = false;
+    _last_release_consumed = false;
+    _enabled = enabled;
+
+    lv_indev_t* indev = GetHAL().lvTouchpad;
+    _last_touch_state = indev == nullptr ? LV_INDEV_STATE_REL : lv_indev_get_state(indev);
 }
 
 bool GlobalEdgeControlService::ownsTouch() const

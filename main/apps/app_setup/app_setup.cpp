@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 #include "app_setup.h"
+#include <apps/common/edge_control/global_edge_control_service.h>
 #include <hal/hal.h>
 #include <mooncake.h>
 #include <mooncake_log.h>
@@ -99,6 +100,7 @@ void AppSetup::onOpen()
     };
 
     LvglLockGuard lock;
+    GetGlobalEdgeControlService().setEnabled(false);
 
     _menu_page = std::make_unique<view::SelectMenuPage>(_menu_sections);
 }
@@ -156,6 +158,7 @@ void AppSetup::onClose()
     _menu_sections.clear();
     _menu_page.reset();
     _worker.reset();
+    GetGlobalEdgeControlService().setEnabled(true);
 
     if (_need_warm_reset) {
         // GetHAL().requestWarmReboot(6);

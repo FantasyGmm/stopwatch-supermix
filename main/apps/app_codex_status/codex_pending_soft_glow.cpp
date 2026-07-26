@@ -10,6 +10,8 @@
 
 namespace {
 
+constexpr lv_opa_t kInactiveOpacity = LV_OPA_60;
+
 void draw_ring(
     lv_layer_t* layer,
     const lv_area_t& overlay_coords,
@@ -72,17 +74,28 @@ void CodexPendingSoftGlow::init(lv_obj_t* parent)
     lv_obj_add_event_cb(_overlay, draw_event_cb, LV_EVENT_ALL, this);
 }
 
-void CodexPendingSoftGlow::set_heading(lv_obj_t* label)
+void CodexPendingSoftGlow::set_status_targets(
+    lv_obj_t* pending_label,
+    lv_obj_t* pending_count,
+    lv_obj_t* running_label,
+    lv_obj_t* running_count
+)
 {
-    _heading = label;
-    if (!_active && _heading != nullptr) {
-        lv_obj_set_style_opa(_heading, LV_OPA_COVER, 0);
-    }
+    _pending_label = pending_label;
+    _pending_count = pending_count;
+    _running_label = running_label;
+    _running_count = running_count;
+    restore_target_opacity();
 }
 
-void CodexPendingSoftGlow::set_active(bool active)
+void CodexPendingSoftGlow::set_state(CodexTaskState state, bool screen_off)
 {
-    switch (codex_pending_glow::transition_for(_active, active)) {
+    const bool state_changed = state != _state;
+    _state = state;
+    _ring_visible = codex_pending_glow::ring_desired(state, screen_off);
+    const bool requested_active =
+        codex_pending_glow::pulse_desired(state, screen_off);
+    switch (codex_pending_glow::transition_for(_active, requested_active)) {
         case codex_pending_glow::Transition::Start:
             start();
             break;
@@ -90,6 +103,15 @@ void CodexPendingSoftGlow::set_active(bool active)
             stop();
             break;
         case codex_pending_glow::Transition::None:
+            refresh_ring_visibility();
+            if (_active) {
+                if (state_changed) {
+                    restore_target_opacity();
+                }
+                apply_phase(_phase);
+            } else {
+                restore_target_opacity();
+            }
             break;
     }
 }
@@ -102,7 +124,10 @@ void CodexPendingSoftGlow::shutdown()
         lv_obj_delete(_overlay);
         _overlay = nullptr;
     }
-    _heading = nullptr;
+    _pending_label = nullptr;
+    _pending_count = nullptr;
+    _running_label = nullptr;
+    _running_count = nullptr;
 }
 
 bool CodexPendingSoftGlow::active() const
@@ -113,15 +138,53 @@ bool CodexPendingSoftGlow::active() const
 void CodexPendingSoftGlow::apply_phase(int32_t phase)
 {
     _phase = codex_pending_glow::bounded_phase(phase);
-    if (_heading != nullptr) {
-        const lv_opa_t heading = interpolate_opa(
-            _phase,
-            LV_OPA_70,
-            LV_OPA_COVER
-        );
-        lv_obj_set_style_opa(_heading, heading, 0);
+    const lv_opa_t active_opacity = interpolate_opa(
+        _phase,
+        kInactiveOpacity,
+        LV_OPA_COVER
+    );
+    lv_obj_t* active_label = _state == CodexTaskState::Pending
+                                 ? _pending_label
+                                 : _running_label;
+    lv_obj_t* active_count = _state == CodexTaskState::Pending
+                                 ? _pending_count
+                                 : _running_count;
+    if (active_label != nullptr) {
+        lv_obj_set_style_opa(active_label, active_opacity, 0);
     }
-    invalidate_ring_segments();
+    if (active_count != nullptr) {
+        lv_obj_set_style_opa(active_count, active_opacity, 0);
+    }
+    if (_ring_visible) {
+        invalidate_ring_segments();
+    }
+}
+
+void CodexPendingSoftGlow::restore_target_opacity()
+{
+    lv_obj_t* targets[] = {
+        _pending_label,
+        _pending_count,
+        _running_label,
+        _running_count,
+    };
+    for (lv_obj_t* target : targets) {
+        if (target != nullptr) {
+            lv_obj_set_style_opa(target, kInactiveOpacity, 0);
+        }
+    }
+}
+
+void CodexPendingSoftGlow::refresh_ring_visibility()
+{
+    if (_overlay == nullptr) {
+        return;
+    }
+    if (_ring_visible) {
+        lv_obj_remove_flag(_overlay, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(_overlay, LV_OBJ_FLAG_HIDDEN);
+    }
 }
 
 void CodexPendingSoftGlow::invalidate_ring_segments()
@@ -146,9 +209,8 @@ void CodexPendingSoftGlow::invalidate_ring_segments()
 void CodexPendingSoftGlow::start()
 {
     _active = true;
-    if (_overlay != nullptr) {
-        lv_obj_remove_flag(_overlay, LV_OBJ_FLAG_HIDDEN);
-    }
+    refresh_ring_visibility();
+    restore_target_opacity();
     apply_phase(0);
 
     lv_anim_delete(this, animation_cb);
@@ -170,9 +232,7 @@ void CodexPendingSoftGlow::stop()
     if (_overlay != nullptr) {
         lv_obj_add_flag(_overlay, LV_OBJ_FLAG_HIDDEN);
     }
-    if (_heading != nullptr) {
-        lv_obj_set_style_opa(_heading, LV_OPA_COVER, 0);
-    }
+    restore_target_opacity();
     _active = false;
 }
 
@@ -198,7 +258,7 @@ void CodexPendingSoftGlow::draw_event_cb(lv_event_t* event)
         lv_event_set_cover_res(event, LV_COVER_RES_NOT_COVER);
         return;
     }
-    if (code != LV_EVENT_DRAW_MAIN_BEGIN || !self->_active) {
+    if (code != LV_EVENT_DRAW_MAIN_BEGIN || !self->_ring_visible) {
         return;
     }
 

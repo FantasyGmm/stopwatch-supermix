@@ -29,8 +29,18 @@ class FirmwareFontContractTests(unittest.TestCase):
         self.assertIn("is_ascii_text(alert->project.c_str())", app)
         self.assertIn("? &lv_font_montserrat_22", app)
         self.assertIn(": &font_puhui_14_1", app)
-        self.assertIn("lv_obj_set_style_text_font(_alert_detail, &font_puhui_14_1", app)
-        self.assertIn("kSecondaryText", app)
+        self.assertIn(
+            '_alert_detail = make_fixed_label(\n'
+            '        _panel,\n'
+            '        "",\n'
+            '        kAlertDetailX,\n'
+            '        kAlertDetailY,\n'
+            '        kAlertDetailWidth,\n'
+            '        &font_puhui_14_1,\n'
+            '        kSignalWhite,\n'
+            '        LV_TEXT_ALIGN_CENTER',
+            app,
+        )
         for character in "中文项目进展监控":
             self.assertIn('U+{:04X} "{}"'.format(ord(character), character), font)
 
@@ -51,9 +61,14 @@ class FirmwareFontContractTests(unittest.TestCase):
         self.assertIn("CodexTaskState::Running", model_source)
         self.assertIn("CodexTaskState::Completed", model_source)
         self.assertIn("CodexTaskState display_state() const", carousel_header)
-        self.assertIn('"等待指令"', app)
-        self.assertIn('"正在处理"', app)
-        self.assertIn('"已完成"', app)
+        self.assertNotIn('"等待指令"', app)
+        self.assertNotIn('"正在处理"', app)
+        self.assertNotIn('"已完成"', app)
+        self.assertIn('"PENDING"', app)
+        self.assertIn('"RUNNING"', app)
+        self.assertIn(
+            "lv_label_set_text(_alert_detail, alert->title.c_str())", app
+        )
         self.assertNotIn('alert->time + " \\xC2\\xB7 "', app)
 
     def test_codex_alert_heading_uses_distinct_summary_colors(self):
@@ -88,7 +103,19 @@ class FirmwareFontContractTests(unittest.TestCase):
         )
         self.assertIsNotNone(running_branch)
         self.assertIn("state_color = kRunningCyan;", running_branch.group("body"))
-        self.assertEqual(app.count("kRunningCyan"), 1)
+        self.assertIn(
+            '        "RUNNING",\n'
+            '        kRunningLabelX,\n'
+            '        kStateLabelY,\n'
+            '        kStateLabelWidth,\n'
+            '        &lv_font_montserrat_10,\n'
+            '        kRunningCyan,',
+            app,
+        )
+        self.assertIn(
+            "_alert_carousel.running_count() > 0 ? kRunningCyan : kEtchedGray",
+            app,
+        )
         self.assertIn(
             "constexpr uint32_t kCodexBlue = kBeaconViolet;",
             app,
@@ -106,8 +133,19 @@ class FirmwareFontContractTests(unittest.TestCase):
             r"\);",
         )
         self.assertIn(
-            '_panel, "--", kAlertProjectY, &lv_font_montserrat_22, '
-            "kBeaconViolet",
+            '_alert_project = make_fixed_label(\n'
+            '        _panel,\n'
+            '        "--",\n'
+            '        kAlertProjectX,\n'
+            '        kAlertProjectY,\n'
+            '        kAlertProjectWidth,\n'
+            '        &lv_font_montserrat_22,\n'
+            '        kBeaconViolet,\n'
+            '        LV_TEXT_ALIGN_CENTER',
+            app,
+        )
+        self.assertIn(
+            "lv_label_set_long_mode(_alert_project, LV_LABEL_LONG_MODE_DOTS)",
             app,
         )
         self.assertNotRegex(
@@ -115,8 +153,8 @@ class FirmwareFontContractTests(unittest.TestCase):
             r"lv_obj_set_style_text_color\s*\(\s*_alert_project\b",
         )
         self.assertIn("kCompletedGreen", app)
-        self.assertIn('return "COMPLETED";', carousel)
-        self.assertIn('? "PENDING" : "RUNNING"', carousel)
+        self.assertNotIn('return "COMPLETED";', carousel)
+        self.assertIn('"TASK %d/%d"', carousel)
         self.assertNotIn("ALL HANDLED", carousel)
         self.assertNotIn("all_handled", carousel)
 
@@ -176,11 +214,27 @@ class FirmwareFontContractTests(unittest.TestCase):
             "lv_obj_set_style_text_letter_space(pct, 0, 0);", app
         )
         self.assertIn(
-            '_panel, "NO ALERTS", kAlertHeadingY, &lv_font_montserrat_20, kEtchedGray',
+            '_task_index = make_fixed_label(\n'
+            '        _panel,\n'
+            '        "NO ALERTS",\n'
+            '        kTaskIndexX,\n'
+            '        kTaskIndexY,\n'
+            '        kTaskIndexWidth,\n'
+            '        &lv_font_montserrat_14,\n'
+            '        kEtchedGray,\n'
+            '        LV_TEXT_ALIGN_CENTER',
             app,
         )
         self.assertIn(
-            '_panel, "--", kAlertProjectY, &lv_font_montserrat_22, kBeaconViolet',
+            '_alert_project = make_fixed_label(\n'
+            '        _panel,\n'
+            '        "--",\n'
+            '        kAlertProjectX,\n'
+            '        kAlertProjectY,\n'
+            '        kAlertProjectWidth,\n'
+            '        &lv_font_montserrat_22,\n'
+            '        kBeaconViolet,\n'
+            '        LV_TEXT_ALIGN_CENTER',
             app,
         )
         self.assertIn(

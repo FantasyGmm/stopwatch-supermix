@@ -21,13 +21,17 @@ bool invalidation_covers(double x, double y)
 
 int main()
 {
-    using codex_pending_glow::desired_active;
+    using codex_pending_glow::pulse_desired;
+    using codex_pending_glow::ring_desired;
     using codex_pending_glow::transition_for;
 
-    assert(desired_active(CodexTaskState::Pending, false));
-    assert(!desired_active(CodexTaskState::Pending, true));
-    assert(!desired_active(CodexTaskState::Running, false));
-    assert(!desired_active(CodexTaskState::Completed, false));
+    assert(pulse_desired(CodexTaskState::Pending, false));
+    assert(pulse_desired(CodexTaskState::Running, false));
+    assert(!pulse_desired(CodexTaskState::Pending, true));
+    assert(!pulse_desired(CodexTaskState::Completed, false));
+    assert(ring_desired(CodexTaskState::Pending, false));
+    assert(!ring_desired(CodexTaskState::Running, false));
+    assert(!ring_desired(CodexTaskState::Pending, true));
 
     assert(transition_for(false, false) == Transition::None);
     assert(transition_for(false, true) == Transition::Start);
@@ -36,8 +40,8 @@ int main()
 
     using namespace codex_pending_glow;
 
-    static_assert(kHalfCycleMs == 600);
-    static_assert(kFullCycleMs == 1200);
+    static_assert(kHalfCycleMs == 800);
+    static_assert(kFullCycleMs == 1600);
     static_assert(kPanelSize == 466);
     static_assert(kRings.size() == 3);
     static_assert(kInvalidationAreas.size() == 12);

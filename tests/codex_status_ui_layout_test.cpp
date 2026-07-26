@@ -42,30 +42,41 @@ int main()
     assert(kQuotaPercentWidth == 60);
     assert(kQuotaBarX + kQuotaBarWidth < kQuotaPercentX);
     assert(kQuotaPercentX + kQuotaPercentWidth == kQuotaX + kQuotaWidth);
-    assert(kFiveHourY == 220);
-    assert(kWeekY == 260);
-    assert(kFiveHourY < kWeekY);
+    assert(kWeekY == 220);
     assert(kWeekY < kAlertDividerY);
-    assert(kAlertDividerY < kAlertHeadingY);
-    assert(kAlertHeadingY < kAlertProjectY);
+    assert(kAlertDividerY < kStateLabelY);
+    assert(kStateLabelY < kStateCountY);
+    assert(kTaskIndexY < kAlertProjectY);
     assert(kAlertProjectY < kAlertDetailY);
     assert(kAlertDetailY < kBatteryY);
 
     assert(kAlertDividerX == 82);
-    assert(kAlertDividerY == 304);
+    assert(kAlertDividerY == 258);
     assert(kAlertDividerWidth == 302);
-    assert(kAlertHeadingY == 328);
-    assert(kAlertHeadingWidth == 310);
-    assert(kAlertProjectY == 357);
-    assert(kAlertProjectWidth == 340);
-    assert(kAlertDetailY == 389);
-    assert(kAlertDetailWidth == 320);
-    assert(kBatteryY == 438);
+    assert(kPendingLabelX == 58);
+    assert(kRunningLabelX == 312);
+    assert(kPendingCountX == 58);
+    assert(kRunningCountX == 344);
+    assert(kStateLabelY == 278);
+    assert(kStateLabelWidth == 96);
+    assert(kStateCountY == 294);
+    assert(kStateCountWidth == 64);
+    assert(kTaskIndexX == 151);
+    assert(kTaskIndexY == 284);
+    assert(kTaskIndexWidth == 164);
+    assert(kAlertProjectX == 145);
+    assert(kAlertProjectY == 307);
+    assert(kAlertProjectWidth == 176);
+    assert(kAlertDetailX == 93);
+    assert(kAlertDetailY == 359);
+    assert(kAlertDetailWidth == 280);
+    assert(kAlertDetailHeight == 41);
+    assert(kBatteryY == 432);
 
-    assert(kAlertHeadingY - kAlertDividerY == 24);
-    assert(kAlertProjectY - kAlertHeadingY == 29);
-    assert(kAlertDetailY - kAlertProjectY == 32);
-    assert(kBatteryY - kAlertDetailY == 49);
+    assert(kStateLabelY - kAlertDividerY == 20);
+    assert(kAlertProjectY - kTaskIndexY == 23);
+    assert(kAlertDetailY - kAlertProjectY == 52);
+    assert(kBatteryY - kAlertDetailY == 73);
     assert(kBatteryY < kScreenSize);
 
     assert(kPanelGraphite == 0x27303E);
@@ -75,5 +86,4 @@ int main()
     assert(kSignalWhite == 0xF2F6F8);
     assert(kEtchedGray == 0x788391);
     assert(kAlertVermilion == 0xFF6248);
-    assert(kSecondaryText == 0xB8C2CC);
 }

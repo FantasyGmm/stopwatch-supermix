@@ -17,6 +17,8 @@ public:
     const CodexTaskAlert* current() const;
     std::string heading() const;
     CodexTaskState display_state() const;
+    int pending_count() const;
+    int running_count() const;
     bool completed() const;
 
 private:
