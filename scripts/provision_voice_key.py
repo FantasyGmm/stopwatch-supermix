@@ -87,6 +87,38 @@ def _validate_private_key_descriptor(descriptor: int) -> None:
         raise ProvisioningError("voice key file owner is invalid")
 
 
+def _read_key_descriptor(descriptor: int) -> str:
+    _validate_private_key_descriptor(descriptor)
+    try:
+        raw = os.read(descriptor, MAX_KEY_FILE_BYTES + 1)
+    except OSError:
+        raise ProvisioningError("voice key file cannot be read") from None
+    try:
+        encoded = raw.decode("ascii")
+    except UnicodeDecodeError:
+        raise ProvisioningError("voice key file is malformed") from None
+    if KEY_PATTERN.fullmatch(encoded) is None:
+        raise ProvisioningError("voice key file is malformed")
+    return encoded[:-1]
+
+
+def _read_key_from_parent(parent_descriptor: int, name: str) -> str:
+    try:
+        descriptor = os.open(
+            name,
+            _descriptor_flags(os.O_RDONLY),
+            dir_fd=parent_descriptor,
+        )
+    except FileNotFoundError:
+        raise ProvisioningError("voice key file is missing") from None
+    except OSError:
+        raise ProvisioningError("voice key path is not a regular file") from None
+    try:
+        return _read_key_descriptor(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 def read_key_file(path: pathlib.Path) -> str:
     path = path.expanduser()
     try:
@@ -96,32 +128,18 @@ def read_key_file(path: pathlib.Path) -> str:
             raise ProvisioningError("voice key file is missing") from None
         raise
     try:
-        try:
-            descriptor = os.open(
-                path.name,
-                _descriptor_flags(os.O_RDONLY),
-                dir_fd=parent_descriptor,
-            )
-        except FileNotFoundError:
-            raise ProvisioningError("voice key file is missing") from None
-        except OSError:
-            raise ProvisioningError("voice key path is not a regular file") from None
-        try:
-            _validate_private_key_descriptor(descriptor)
-            raw = os.read(descriptor, MAX_KEY_FILE_BYTES + 1)
-        except OSError:
-            raise ProvisioningError("voice key file cannot be read") from None
-        finally:
-            os.close(descriptor)
+        return _read_key_from_parent(parent_descriptor, path.name)
     finally:
         os.close(parent_descriptor)
-    try:
-        encoded = raw.decode("ascii")
-    except UnicodeDecodeError:
-        raise ProvisioningError("voice key file is malformed") from None
-    if KEY_PATTERN.fullmatch(encoded) is None:
-        raise ProvisioningError("voice key file is malformed")
-    return encoded[:-1]
+
+
+def _write_complete(descriptor: int, contents: bytes) -> None:
+    offset = 0
+    while offset < len(contents):
+        written = os.write(descriptor, contents[offset:])
+        if written <= 0:
+            raise OSError("short write")
+        offset += written
 
 
 def ensure_key_file(path: pathlib.Path) -> str:
@@ -134,31 +152,66 @@ def ensure_key_file(path: pathlib.Path) -> str:
 
     encoded = secrets.token_hex(16)
     parent_descriptor = _open_trusted_parent(path.parent, create=True)
-    flags = _descriptor_flags(os.O_WRONLY | os.O_CREAT | os.O_EXCL)
+    temporary_name = f".{path.name}.{secrets.token_hex(8)}.tmp"
+    descriptor = -1
+    temporary_exists = False
     try:
         try:
-            descriptor = os.open(path.name, flags, 0o600, dir_fd=parent_descriptor)
-        except FileExistsError:
-            return read_key_file(path)
+            descriptor = os.open(
+                temporary_name,
+                _descriptor_flags(os.O_WRONLY | os.O_CREAT | os.O_EXCL),
+                0o600,
+                dir_fd=parent_descriptor,
+            )
+            temporary_exists = True
+        except OSError:
+            raise ProvisioningError("voice key temporary file cannot be created") from None
         try:
             os.fchmod(descriptor, 0o600)
-            with os.fdopen(descriptor, "wb") as stream:
-                stream.write((encoded + "\n").encode("ascii"))
-                stream.flush()
-                os.fsync(stream.fileno())
+            _validate_private_key_descriptor(descriptor)
+            _write_complete(descriptor, (encoded + "\n").encode("ascii"))
+            if os.fstat(descriptor).st_size != MAX_KEY_FILE_BYTES:
+                raise OSError("incomplete key file")
+            os.fsync(descriptor)
+        except OSError:
+            raise ProvisioningError("voice key temporary file cannot be written") from None
+        finally:
+            os.close(descriptor)
+            descriptor = -1
+
+        try:
+            os.link(
+                temporary_name,
+                path.name,
+                src_dir_fd=parent_descriptor,
+                dst_dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
+        except FileExistsError:
+            os.unlink(temporary_name, dir_fd=parent_descriptor)
+            temporary_exists = False
             os.fsync(parent_descriptor)
-        except Exception:
+            return _read_key_from_parent(parent_descriptor, path.name)
+        except OSError:
+            raise ProvisioningError("voice key file cannot be published") from None
+
+        os.fsync(parent_descriptor)
+        os.unlink(temporary_name, dir_fd=parent_descriptor)
+        temporary_exists = False
+        os.fsync(parent_descriptor)
+        return encoded
+    finally:
+        if descriptor >= 0:
             try:
                 os.close(descriptor)
             except OSError:
                 pass
+        if temporary_exists:
             try:
-                os.unlink(path.name, dir_fd=parent_descriptor)
+                os.unlink(temporary_name, dir_fd=parent_descriptor)
+                os.fsync(parent_descriptor)
             except OSError:
                 pass
-            raise
-        return encoded
-    finally:
         os.close(parent_descriptor)
 
 
