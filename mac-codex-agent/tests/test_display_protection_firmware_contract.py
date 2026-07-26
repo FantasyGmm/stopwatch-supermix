@@ -64,6 +64,37 @@ class DisplayProtectionFirmwareContractTests(unittest.TestCase):
             self.assertIn(token, service)
         self.assertNotIn("setBackLightBrightness", service)
 
+    def test_codex_policy_tracks_external_power_and_preserves_manual_off(self):
+        codex_source = (
+            ROOT / "main" / "apps" / "app_codex_status" / "app_codex_status.cpp"
+        ).read_text(encoding="utf-8")
+
+        for token in (
+            "kPowerPolicyCheckMs = 1000",
+            "GetHAL().isBatteryCharging(false)",
+            "setAutomaticProtection(!external_power)",
+            "refresh_display_protection_policy(now, true)",
+            "refresh_display_protection_policy(now, false)",
+        ):
+            self.assertIn(token, codex_source)
+
+        close_body = codex_source[
+            codex_source.index("void AppCodexStatus::onClose()") :
+            codex_source.index("void AppCodexStatus::create_view()")
+        ]
+        manual_off_body = codex_source[
+            codex_source.index("void AppCodexStatus::enter_screen_off()") :
+            codex_source.index("void AppCodexStatus::wake_screen()")
+        ]
+        wake_body = codex_source[
+            codex_source.index("void AppCodexStatus::wake_screen()") :
+            codex_source.index("void AppCodexStatus::set_percent")
+        ]
+        self.assertIn("setAutomaticProtection(true)", close_body)
+        self.assertIn("setAutomaticProtection(false, false)", manual_off_body)
+        self.assertIn("setTemporaryBackLightBrightness(0)", manual_off_body)
+        self.assertIn("setTemporaryBackLightBrightness", wake_body)
+
 
 if __name__ == "__main__":
     unittest.main()
