@@ -62,18 +62,68 @@ const char* display_protection_state_name(DisplayProtectionState state)
         case DisplayProtectionState::ScreenOff:
             return "off";
     }
-    return "active";
+    return "unknown";
+}
+
+const char* external_power_state_name(ExternalPowerState state)
+{
+    switch (state) {
+        case ExternalPowerState::Unknown:
+            return "unknown";
+        case ExternalPowerState::Battery:
+            return "battery";
+        case ExternalPowerState::ExternalPower:
+            return "external";
+    }
+    return "unknown";
+}
+
+const char* display_wake_reason_name(DisplayWakeReason reason)
+{
+    switch (reason) {
+        case DisplayWakeReason::Initialization:
+            return "initialization";
+        case DisplayWakeReason::Button:
+            return "button";
+        case DisplayWakeReason::Touch:
+            return "touch";
+        case DisplayWakeReason::PowerInserted:
+            return "power_inserted";
+        case DisplayWakeReason::PowerRemoved:
+            return "power_removed";
+        case DisplayWakeReason::ConfigurationChanged:
+            return "configuration_changed";
+        case DisplayWakeReason::KeepAwakeActivated:
+            return "keep_awake_activated";
+    }
+    return "unknown";
 }
 
 void log_display_protection_status()
 {
     const auto snapshot = GetGlobalDisplayProtectionService().snapshot();
     ESP_LOGI(tag,
-             "DISPLAY PROTECTION state=%s brightness=%d restore=%d automatic=%u reasons=0x%02x",
+             "DISPLAY PROTECTION state=%s effective=%d user=%d automatic=%u "
+             "power=%s power_valid=%u dim_choice=%u off_choice=%u "
+             "dim_ms=%" PRIu32 " off_ms=%" PRIu32 " idle_ms=%" PRIu32 " "
+             "dim_remaining_ms=%" PRIu32 " off_remaining_ms=%" PRIu32 " "
+             "charging_guard=%u reasons=0x%02x last_wake=%s",
              display_protection_state_name(snapshot.state),
              snapshot.effective_brightness, snapshot.restore_brightness,
              static_cast<unsigned>(snapshot.automatic_enabled),
-             static_cast<unsigned>(snapshot.reason_mask));
+             external_power_state_name(snapshot.external_power.state),
+             static_cast<unsigned>(
+                 snapshot.external_power.latest_sample_valid),
+             static_cast<unsigned>(snapshot.config.dim_choice),
+             static_cast<unsigned>(snapshot.config.screen_off_choice),
+             snapshot.timing.dim_after_ms,
+             snapshot.timing.screen_off_after_ms,
+             snapshot.timing.inactivity_ms,
+             snapshot.timing.dim_remaining_ms,
+             snapshot.timing.screen_off_remaining_ms,
+             static_cast<unsigned>(snapshot.config.protect_while_charging),
+             static_cast<unsigned>(snapshot.reason_mask),
+             display_wake_reason_name(snapshot.last_wake_reason));
 }
 } // namespace
 

@@ -59,6 +59,7 @@ private:
     int _restore_brightness = 80;
     int _pending_brightness = -1;
     uint32_t _brightness_revision = 0;
+    uint32_t _last_power_health_log_ms = 0;
     lv_indev_state_t _last_touch_state = LV_INDEV_STATE_REL;
     ButtonPhysicalState _last_buttons{};
     bool _initialized = false;
