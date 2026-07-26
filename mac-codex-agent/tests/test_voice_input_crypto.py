@@ -82,10 +82,27 @@ class VoiceInputCryptoTests(unittest.TestCase):
                         "StopWatch-Codex",
                         "-w",
                     ],
-                    {"capture_output": True, "text": True, "check": False},
+                    {
+                        "capture_output": True,
+                        "text": True,
+                        "check": False,
+                        "timeout": 2.0,
+                    },
                 )
             ],
         )
+
+    def test_keychain_subprocess_timeout_is_explicit_and_fail_closed(self):
+        calls = []
+
+        def timed_out_runner(command, **kwargs):
+            calls.append((command, kwargs))
+            raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+
+        with self.assertRaisesRegex(VoiceKeyError, "unavailable"):
+            load_key_from_keychain(runner=timed_out_runner)
+
+        self.assertEqual(calls[0][1]["timeout"], 2.0)
 
     def test_rejects_key_domain_nonce_sequence_and_authenticated_data_tampering(self):
         ciphertext = encrypt(

@@ -32,6 +32,7 @@ DOMAINS = frozenset(
 
 KEYCHAIN_SERVICE = "com.stopwatch.codex-agent.voice"
 KEYCHAIN_ACCOUNT = "StopWatch-Codex"
+KEYCHAIN_TIMEOUT_SECONDS = 2.0
 _KEY_PATTERN = re.compile(r"[0-9a-f]{32}")
 
 
@@ -97,8 +98,14 @@ def load_key_from_keychain(
         "-w",
     ]
     try:
-        result = runner(command, capture_output=True, text=True, check=False)
-    except OSError:
+        result = runner(
+            command,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=KEYCHAIN_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired):
         raise VoiceKeyError("voice key is unavailable from Keychain") from None
     if result.returncode != 0:
         raise VoiceKeyError("voice key is unavailable from Keychain")

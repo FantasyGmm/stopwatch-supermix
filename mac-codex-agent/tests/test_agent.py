@@ -19,6 +19,10 @@ from agent import (
 from protocol import EVENT_MESSAGE, STATUS_MESSAGE
 
 
+async def _append_async(target, value):
+    target.append(value)
+
+
 class FakeCollector:
     def __init__(self):
         self.calls = 0
@@ -209,6 +213,137 @@ class CodexStatusAgentTests(unittest.TestCase):
 
 
 class BleStatusTransportVoiceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_old_notification_callback_cannot_reach_reenabled_handler(self):
+        class Client:
+            is_connected = True
+
+            def __init__(self):
+                self.callbacks = []
+
+            async def start_notify(self, _uuid, callback):
+                self.callbacks.append(callback)
+
+            async def write_gatt_char(self, _uuid, _payload, response):
+                self.response = response
+
+            async def stop_notify(self, _uuid):
+                pass
+
+        client = Client()
+        transport = BleStatusTransport()
+        transport._client = client
+        old_handled = []
+        new_handled = []
+        new_payload = asyncio.Event()
+
+        await transport.enable_voice(
+            b"ready-1", lambda payload: _append_async(old_handled, payload)
+        )
+        old_callback = client.callbacks[-1]
+        await transport.disable_voice(None)
+
+        async def handle_new(payload):
+            new_handled.append(payload)
+            new_payload.set()
+
+        await transport.enable_voice(b"ready-2", handle_new)
+        old_callback(None, b"retired")
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        self.assertEqual(new_handled, [])
+
+        client.callbacks[-1](None, b"current")
+        await asyncio.wait_for(new_payload.wait(), 1)
+        self.assertEqual(new_handled, [b"current"])
+        await transport.disable_voice(None)
+
+    async def test_delayed_old_payload_and_overflow_handles_cannot_fail_new_generation(self):
+        class Client:
+            is_connected = True
+
+            def __init__(self):
+                self.callbacks = []
+
+            async def start_notify(self, _uuid, callback):
+                self.callbacks.append(callback)
+
+            async def write_gatt_char(self, _uuid, _payload, response):
+                self.response = response
+
+            async def stop_notify(self, _uuid):
+                pass
+
+        client = Client()
+        transport = BleStatusTransport()
+        transport._client = client
+        await transport.enable_voice(
+            b"ready-1", lambda _payload: asyncio.sleep(0)
+        )
+        old_callback = client.callbacks[-1]
+        delayed = []
+        loop = asyncio.get_running_loop()
+
+        def delay(callback, *args):
+            delayed.append((callback, args))
+
+        with patch.object(loop, "call_soon_threadsafe", side_effect=delay):
+            for index in range(VOICE_NOTIFICATION_QUEUE_SIZE + 1):
+                old_callback(None, bytes((index,)))
+
+        await transport.disable_voice(None)
+        new_handled = []
+        await transport.enable_voice(
+            b"ready-2", lambda payload: _append_async(new_handled, payload)
+        )
+        new_failure = transport.voice_failure
+
+        for callback, args in delayed:
+            callback(*args)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        self.assertEqual(new_handled, [])
+        self.assertFalse(new_failure.done())
+        await transport.disable_voice(None)
+
+    async def test_delayed_old_consumer_done_cannot_fail_new_generation(self):
+        class Client:
+            is_connected = True
+
+            async def start_notify(self, _uuid, callback):
+                self.callback = callback
+
+            async def write_gatt_char(self, _uuid, _payload, response):
+                self.response = response
+
+            async def stop_notify(self, _uuid):
+                pass
+
+        client = Client()
+        transport = BleStatusTransport()
+        transport._client = client
+        await transport.enable_voice(
+            b"ready-1", lambda _payload: asyncio.sleep(0)
+        )
+        old_generation = transport._voice_generation
+        await transport.disable_voice(None)
+        await transport.enable_voice(
+            b"ready-2", lambda _payload: asyncio.sleep(0)
+        )
+        new_generation = transport._voice_generation
+
+        async def fail_old_consumer():
+            raise RuntimeError("retired consumer failed")
+
+        retired_task = asyncio.create_task(fail_old_consumer())
+        await asyncio.sleep(0)
+        transport._voice_consumer_done(old_generation, retired_task)
+
+        self.assertTrue(old_generation.failure.done())
+        self.assertFalse(new_generation.failure.done())
+        self.assertFalse(new_generation.consumer.done())
+        await transport.disable_voice(None)
+
     async def test_cancelled_subscription_is_still_owned_for_notify_cleanup(self):
         class Client:
             is_connected = True

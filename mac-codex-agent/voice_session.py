@@ -73,6 +73,7 @@ class VoiceSessionService:
         self._cleanup_task = None
         self._cleanup_final_state = None
         self._cleanup_in_progress = False
+        self._force_cleanup_in_progress = False
 
     async def prepare(self) -> VoiceState:
         self._require_lifecycle_available(allow_active_session=False)
@@ -108,6 +109,44 @@ class VoiceSessionService:
 
     async def disconnect(self) -> None:
         await self._cleanup(VoiceState.READY)
+
+    async def disconnect_bounded(self, timeout: float) -> bool:
+        if timeout < 0:
+            raise ValueError("timeout must be nonnegative")
+        cleanup_task = self._ensure_cleanup(VoiceState.READY)
+        interrupted = False
+        forced = False
+        try:
+            try:
+                done, _ = await asyncio.wait(
+                    (cleanup_task,), timeout=timeout
+                )
+                forced = cleanup_task not in done
+            except asyncio.CancelledError:
+                interrupted = True
+                forced = True
+
+            if forced:
+                final_state = self._cleanup_final_state or VoiceState.READY
+                self._force_cleanup_in_progress = True
+                cleanup_task.cancel()
+                try:
+                    await cleanup_task
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    pass
+                failures = self._finish_cleanup(final_state)
+                if failures:
+                    raise failures[0]
+            else:
+                cleanup_task.result()
+        finally:
+            self._force_cleanup_in_progress = False
+            self._release_cleanup_task(cleanup_task)
+        if interrupted:
+            raise asyncio.CancelledError
+        return not forced
 
     async def close(self) -> None:
         await self._cleanup(VoiceState.READY)
@@ -221,21 +260,7 @@ class VoiceSessionService:
             raise operation_error from cleanup_error
 
     async def _cleanup(self, final_state: VoiceState) -> None:
-        if self._cleanup_task is None:
-            self._cleanup_in_progress = True
-            self._cleanup_final_state = (
-                VoiceState.ERROR
-                if self.state == VoiceState.ERROR
-                else final_state
-            )
-            self._cleanup_task = asyncio.create_task(
-                self._perform_cleanup()
-            )
-        elif final_state == VoiceState.ERROR:
-            self._cleanup_final_state = VoiceState.ERROR
-            if self._cleanup_task.done():
-                self.state = VoiceState.ERROR
-        cleanup_task = self._cleanup_task
+        cleanup_task = self._ensure_cleanup(final_state)
         cancelled = False
         try:
             while True:
@@ -259,15 +284,43 @@ class VoiceSessionService:
                 pass
             raise asyncio.CancelledError
         finally:
-            if cleanup_task.done() and self._cleanup_task is cleanup_task:
-                self._cleanup_task = None
-                self._cleanup_final_state = None
-                self._cleanup_in_progress = False
+            if cleanup_task.done():
+                self._release_cleanup_task(cleanup_task)
+
+    def _ensure_cleanup(self, final_state: VoiceState) -> asyncio.Task:
+        if self._cleanup_task is None:
+            self._cleanup_in_progress = True
+            self._cleanup_final_state = (
+                VoiceState.ERROR
+                if self.state == VoiceState.ERROR
+                else final_state
+            )
+            self._cleanup_task = asyncio.create_task(
+                self._perform_cleanup()
+            )
+        elif final_state == VoiceState.ERROR:
+            self._cleanup_final_state = VoiceState.ERROR
+            if self._cleanup_task.done():
+                self.state = VoiceState.ERROR
+        return self._cleanup_task
+
+    def _release_cleanup_task(self, cleanup_task: asyncio.Task) -> None:
+        if self._cleanup_task is cleanup_task:
+            if self._force_cleanup_in_progress:
+                return
+            self._cleanup_task = None
+            self._cleanup_final_state = None
+            self._cleanup_in_progress = False
 
     async def _perform_cleanup(self) -> None:
-        failures = []
         if self._shortcut_armed or self._route_armed:
             await self._sleep(DRAIN_SECONDS)
+        failures = self._finish_cleanup()
+        if failures:
+            raise failures[0]
+
+    def _finish_cleanup(self, final_state=None):
+        failures = []
         if self._shortcut_armed:
             self._shortcut_armed = False
             try:
@@ -284,7 +337,8 @@ class VoiceSessionService:
         self._session_nonce = None
         self._last_sequence = None
         self.state = (
-            VoiceState.ERROR if failures else self._cleanup_final_state
+            VoiceState.ERROR
+            if failures
+            else (final_state or self._cleanup_final_state)
         )
-        if failures:
-            raise failures[0]
+        return failures

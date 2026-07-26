@@ -3,6 +3,7 @@ import json
 import pathlib
 import sys
 import threading
+import time
 import unittest
 from unittest.mock import patch
 
@@ -10,6 +11,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from app_state import ConnectionState, MemoryPreferences
+from agent import BleStatusTransport
 from protocol import EVENT_MESSAGE, STATUS_MESSAGE
 from runtime import AgentCommand, AgentController, AgentRuntime, _create_voice_session
 from voice_audio import VoiceAudioDeviceNotFound, VoiceAudioError
@@ -20,12 +22,14 @@ from voice_input_protocol import (
     DRIVER_REQUIRED,
     IMA_ADPCM,
     PTT_BEGIN,
+    PTT_END,
     READY,
     RESTART_REQUIRED,
     TYPELESS_NOT_RUNNING,
     UNAVAILABLE,
     decode_control,
     pack_notification,
+    EndSummary,
 )
 from voice_session import VoiceSessionService, VoiceState
 
@@ -525,6 +529,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(shortcut.calls, ["start", "stop"])
         self.assertEqual(route.calls, ["start", "stop"])
+        self.assertIs(service.state, VoiceState.READY)
         self.assertEqual(transport.disconnect_count, 1)
 
     async def test_cancellation_during_key_load_still_disconnects_ble(self):
@@ -823,6 +828,215 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events.count("voice.disable"), 1)
         self.assertEqual(events.count("voice.disconnect"), 1)
         self.assertEqual(events.count("ble.disconnect"), 1)
+
+    async def test_real_voice_session_stalled_drain_obeys_aggregate_deadline(self):
+        key = bytes(range(16))
+        begin = pack_notification(
+            key,
+            PTT_BEGIN,
+            11,
+            0,
+            100,
+            BEGIN_BODY.pack(IMA_ADPCM, 16000, 320),
+            b"abcdefgh",
+        )
+        drain_started = asyncio.Event()
+        release_drain = asyncio.Event()
+
+        async def stalled_drain(_seconds):
+            drain_started.set()
+            await release_drain.wait()
+
+        class Resource:
+            def __init__(self):
+                self.calls = []
+
+            def start(self):
+                self.calls.append("start")
+
+            def stop(self):
+                self.calls.append("stop")
+
+            def write(self, samples):
+                return len(samples)
+
+        route = Resource()
+        shortcut = Resource()
+        service = VoiceSessionService(
+            route,
+            shortcut,
+            key,
+            readiness_checker=lambda: VoiceState.READY,
+            sleep=stalled_drain,
+        )
+        factory = FakeTransportFactory(
+            [
+                {
+                    "disconnect_after_voice": True,
+                    "voice_notification": begin,
+                }
+            ]
+        )
+        shutdown_budget = 0.03
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            transport_factory=factory,
+            voice_key_loader=lambda: key,
+            voice_session_factory=lambda _key: service,
+            voice_nonce_factory=lambda: b"12345678",
+            disconnect_timeout=shutdown_budget,
+        )
+        session = asyncio.create_task(runtime._run_session())
+        await asyncio.wait_for(drain_started.wait(), 1)
+        started = asyncio.get_running_loop().time()
+
+        completion_limit = shutdown_budget + 0.05
+        done, _ = await asyncio.wait(
+            {session}, timeout=completion_limit
+        )
+        completed_within_deadline = session in done
+        if not completed_within_deadline:
+            release_drain.set()
+        await session
+        elapsed = asyncio.get_running_loop().time() - started
+
+        self.assertTrue(completed_within_deadline)
+        self.assertLess(elapsed, completion_limit)
+        self.assertEqual(shortcut.calls, ["start", "stop"])
+        self.assertEqual(route.calls, ["start", "stop"])
+        self.assertEqual(factory.instances[0].disconnect_count, 1)
+        self.assertEqual(
+            [
+                task
+                for task in asyncio.all_tasks()
+                if task is not asyncio.current_task() and not task.done()
+            ],
+            [],
+        )
+
+    async def test_consumer_stalled_in_real_end_drain_cannot_block_shutdown(self):
+        key = bytes(range(16))
+        begin = pack_notification(
+            key,
+            PTT_BEGIN,
+            13,
+            0,
+            100,
+            BEGIN_BODY.pack(IMA_ADPCM, 16000, 320),
+            b"abcdefgh",
+        )
+        end = pack_notification(
+            key,
+            PTT_END,
+            13,
+            1,
+            101,
+            EndSummary(0, 0, 0, 0, 0, 1, 256).pack(),
+            b"abcdefgh",
+        )
+        drain_started = asyncio.Event()
+        release_drain = asyncio.Event()
+
+        async def stalled_drain(_seconds):
+            drain_started.set()
+            await release_drain.wait()
+
+        class Resource:
+            def __init__(self):
+                self.calls = []
+
+            def start(self):
+                self.calls.append("start")
+
+            def stop(self):
+                self.calls.append("stop")
+
+            def write(self, samples):
+                return len(samples)
+
+        route = Resource()
+        shortcut = Resource()
+        service = VoiceSessionService(
+            route,
+            shortcut,
+            key,
+            readiness_checker=lambda: VoiceState.READY,
+            sleep=stalled_drain,
+        )
+
+        class Client:
+            is_connected = True
+
+            def __init__(self):
+                self.callback = None
+                self.sent_notifications = False
+
+            async def start_notify(self, _uuid, callback):
+                self.callback = callback
+
+            async def write_gatt_char(self, _uuid, _payload, response):
+                self.response = response
+                if self.callback is not None and not self.sent_notifications:
+                    self.sent_notifications = True
+                    self.callback(None, begin)
+                    self.callback(None, end)
+
+            async def stop_notify(self, _uuid):
+                pass
+
+            async def disconnect(self):
+                self.is_connected = False
+
+        class Transport(BleStatusTransport):
+            def __init__(self):
+                super().__init__()
+                self._client = Client()
+                self.disconnect_count = 0
+
+            async def connect(self, on_device_found=None):
+                if on_device_found:
+                    on_device_found()
+                return True
+
+            async def send_json(self, _payload, _message_type):
+                await asyncio.sleep(0)
+
+            async def disconnect(self):
+                self.disconnect_count += 1
+                await super().disconnect()
+
+        transport = Transport()
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            transport_factory=lambda: transport,
+            voice_key_loader=lambda: key,
+            voice_session_factory=lambda _key: service,
+            voice_nonce_factory=lambda: b"12345678",
+            disconnect_timeout=0.03,
+        )
+        session = asyncio.create_task(runtime._run_session())
+        await asyncio.wait_for(drain_started.wait(), 1)
+
+        session.cancel()
+        done, _ = await asyncio.wait({session}, timeout=0.12)
+        completed_within_deadline = session in done
+        if not completed_within_deadline:
+            release_drain.set()
+        with self.assertRaises(asyncio.CancelledError):
+            await session
+
+        self.assertTrue(completed_within_deadline)
+        self.assertEqual(shortcut.calls, ["start", "stop"])
+        self.assertEqual(route.calls, ["start", "stop"])
+        self.assertEqual(transport.disconnect_count, 1)
+        self.assertEqual(
+            [
+                task
+                for task in asyncio.all_tasks()
+                if task is not asyncio.current_task() and not task.done()
+            ],
+            [],
+        )
 
     async def test_unavailable_encoding_failure_cannot_skip_cleanup(self):
         events = []
@@ -1229,6 +1443,116 @@ class FakeRuntime:
 
 
 class AgentControllerTests(unittest.TestCase):
+    def test_stop_does_not_wait_for_blocked_voice_key_loader(self):
+        loader_started = threading.Event()
+        emergency_release = threading.Event()
+        events = []
+
+        def blocked_loader():
+            loader_started.set()
+            emergency_release.wait()
+            return bytes(range(16))
+
+        factory = FakeTransportFactory([{"events": events}])
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            transport_factory=factory,
+            voice_key_loader=blocked_loader,
+            status_interval=0.01,
+            disconnect_timeout=0.03,
+        )
+        controller = AgentController(
+            preferences=MemoryPreferences(True), runtime=runtime
+        )
+        controller.start()
+        self.assertTrue(loader_started.wait(1))
+
+        started = time.monotonic()
+        stopped = controller.stop(timeout=0.5)
+        elapsed = time.monotonic() - started
+        if not stopped:
+            emergency_release.set()
+            controller.stop(timeout=1)
+
+        self.assertTrue(stopped)
+        self.assertLess(elapsed, 0.25)
+        self.assertEqual(events.count("ble.disconnect"), 1)
+
+    def test_stop_honors_voice_shutdown_deadline_with_stalled_real_drain(self):
+        key = bytes(range(16))
+        begin = pack_notification(
+            key,
+            PTT_BEGIN,
+            12,
+            0,
+            100,
+            BEGIN_BODY.pack(IMA_ADPCM, 16000, 320),
+            b"abcdefgh",
+        )
+        recording_started = threading.Event()
+        drain_holder = {}
+
+        async def stalled_drain(_seconds):
+            drain_holder["loop"] = asyncio.get_running_loop()
+            drain_holder["release"] = asyncio.Event()
+            await drain_holder["release"].wait()
+
+        class Resource:
+            def __init__(self, marks_recording=False):
+                self.calls = []
+                self.marks_recording = marks_recording
+
+            def start(self):
+                self.calls.append("start")
+                if self.marks_recording:
+                    recording_started.set()
+
+            def stop(self):
+                self.calls.append("stop")
+
+            def write(self, samples):
+                return len(samples)
+
+        route = Resource()
+        shortcut = Resource(marks_recording=True)
+        service = VoiceSessionService(
+            route,
+            shortcut,
+            key,
+            readiness_checker=lambda: VoiceState.READY,
+            sleep=stalled_drain,
+        )
+        factory = FakeTransportFactory([{"voice_notification": begin}])
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            transport_factory=factory,
+            voice_key_loader=lambda: key,
+            voice_session_factory=lambda _key: service,
+            voice_nonce_factory=lambda: b"12345678",
+            status_interval=0.01,
+            disconnect_timeout=0.03,
+        )
+        controller = AgentController(
+            preferences=MemoryPreferences(True), runtime=runtime
+        )
+        controller.start()
+        self.assertTrue(recording_started.wait(1))
+
+        started = time.monotonic()
+        stopped = controller.stop(timeout=0.5)
+        elapsed = time.monotonic() - started
+        if not stopped and "release" in drain_holder:
+            drain_holder["loop"].call_soon_threadsafe(
+                drain_holder["release"].set
+            )
+            controller.stop(timeout=1)
+
+        self.assertTrue(stopped)
+        self.assertLess(elapsed, 0.25)
+        self.assertEqual(shortcut.calls, ["start", "stop"])
+        self.assertEqual(route.calls, ["start", "stop"])
+        self.assertEqual(factory.instances[0].disconnect_count, 1)
+
     def test_connection_setting_is_persisted_before_command(self):
         preferences = MemoryPreferences()
         runtime = FakeRuntime()

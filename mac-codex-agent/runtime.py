@@ -392,7 +392,7 @@ class AgentRuntime:
     async def _prepare_voice(self, context: _BleSessionContext) -> None:
         transport = context.transport
         try:
-            key = await asyncio.to_thread(self._voice_key_loader)
+            key = await _run_in_daemon_thread(self._voice_key_loader)
         except Exception as error:
             self._transition_voice(VoiceState.ERROR, str(error))
             return
@@ -496,6 +496,7 @@ class AgentRuntime:
     ) -> None:
         context.voice_failed = True
         self._transition_voice(VoiceState.ERROR, str(error))
+        retired_consumer = self._retire_voice_generation(context.transport)
         unavailable_payload = None
         if context.voice_key is not None:
             unavailable_payload = self._encode_unavailable_payload(
@@ -503,12 +504,18 @@ class AgentRuntime:
             )
         await self._disable_voice(context.transport, unavailable_payload)
         if context.voice_service is not None:
-            cleaned = await self._bounded_cleanup(
-                context.voice_service.disconnect(),
+            cleaned = await self._cleanup_voice_service(
+                context.voice_service,
+                self._disconnect_timeout,
                 "Voice session cleanup",
             )
             if cleaned:
                 context.voice_service = None
+        if retired_consumer is not None:
+            await self._bounded_cleanup(
+                _await_voice_consumer(retired_consumer),
+                "Voice consumer cleanup",
+            )
 
     async def _await_session_shutdown(
         self, context: _BleSessionContext, voice_was_recording: bool
@@ -537,8 +544,11 @@ class AgentRuntime:
                 context.voice_key, INITIALIZATION_FAILED
             )
 
+        retired_consumer = self._retire_voice_generation(context.transport)
         has_service = context.voice_service is not None
-        future_steps = 2 if has_service else 1
+        future_steps = (
+            int(has_service) + int(retired_consumer is not None) + 1
+        )
         voice_cleaned = await self._cleanup_before_deadline(
             lambda: context.transport.disable_voice(unavailable_payload),
             "Voice notification cleanup",
@@ -555,11 +565,14 @@ class AgentRuntime:
 
         if context.voice_service is not None:
             service = context.voice_service
-            cleaned = await self._cleanup_before_deadline(
-                service.disconnect,
+            remaining = max(
+                0.0, deadline - asyncio.get_running_loop().time()
+            )
+            cleaned = await self._cleanup_voice_service(
+                service,
+                remaining
+                / (3 if retired_consumer is not None else 2),
                 "Voice session cleanup",
-                deadline,
-                2,
             )
             if cleaned:
                 context.voice_service = None
@@ -571,6 +584,14 @@ class AgentRuntime:
                         VoiceState.ERROR,
                         "Voice session cleanup failed",
                     )
+
+        if retired_consumer is not None:
+            await self._cleanup_before_deadline(
+                lambda: _await_voice_consumer(retired_consumer),
+                "Voice consumer cleanup",
+                deadline,
+                2,
+            )
 
         await self._cleanup_before_deadline(
             context.transport.disconnect,
@@ -601,9 +622,37 @@ class AgentRuntime:
             return False
         return True
 
-    async def _bounded_cleanup(self, awaitable, label: str) -> bool:
+    @staticmethod
+    def _retire_voice_generation(transport):
+        retire = getattr(transport, "retire_voice_generation", None)
+        return retire() if retire is not None else None
+
+    async def _cleanup_voice_service(
+        self, service, timeout: float, label: str
+    ) -> bool:
+        bounded_disconnect = getattr(service, "disconnect_bounded", None)
+        if bounded_disconnect is None:
+            return await self._bounded_cleanup(
+                service.disconnect(), label, timeout=timeout
+            )
         try:
-            await asyncio.wait_for(awaitable, timeout=self._disconnect_timeout)
+            cleaned = await bounded_disconnect(timeout)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            LOGGER.warning("%s failed", label)
+            return False
+        if not cleaned:
+            LOGGER.warning("%s timed out", label)
+        return cleaned
+
+    async def _bounded_cleanup(
+        self, awaitable, label: str, timeout: Optional[float] = None
+    ) -> bool:
+        if timeout is None:
+            timeout = self._disconnect_timeout
+        try:
+            await asyncio.wait_for(awaitable, timeout=timeout)
         except asyncio.TimeoutError:
             LOGGER.warning("%s timed out", label)
             return False
@@ -619,10 +668,59 @@ def _redact_voice_detail(detail: str) -> str:
     return _VOICE_SECRET_BASE64.sub("[redacted]", text)
 
 
+async def _run_in_daemon_thread(operation):
+    loop = asyncio.get_running_loop()
+    result_future = loop.create_future()
+    abandoned = threading.Event()
+
+    def deliver(succeeded, value) -> None:
+        if result_future.done():
+            return
+        if succeeded:
+            result_future.set_result(value)
+        else:
+            result_future.set_exception(value)
+
+    def worker() -> None:
+        try:
+            value = operation()
+        except Exception as error:
+            outcome = (False, error)
+        else:
+            outcome = (True, value)
+        if abandoned.is_set():
+            return
+        try:
+            loop.call_soon_threadsafe(deliver, *outcome)
+        except RuntimeError:
+            pass
+
+    threading.Thread(
+        target=worker,
+        name="voice-key-loader",
+        daemon=True,
+    ).start()
+    try:
+        return await result_future
+    except asyncio.CancelledError:
+        abandoned.set()
+        result_future.cancel()
+        raise
+
+
 async def _await_cancelled(task: asyncio.Task) -> None:
     try:
         await task
     except asyncio.CancelledError:
+        pass
+
+
+async def _await_voice_consumer(task: asyncio.Task) -> None:
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    except Exception:
         pass
 
 
