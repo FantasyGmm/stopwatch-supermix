@@ -53,7 +53,8 @@ uint8_t battery_millivolts_to_percent(uint16_t millivolts)
     return static_cast<uint8_t>(std::min<uint32_t>(scaled, 100U));
 }
 
-constexpr uint32_t _bat_reading_period_ms = 1000;
+constexpr uint32_t _power_sample_period_ms = 250;
+constexpr uint8_t _battery_sample_iterations = 4;
 constexpr uint16_t _bat_filter_weight_old = 7;
 constexpr uint16_t _bat_filter_weight_new = 1;
 constexpr uint16_t _bat_filter_weight_sum = _bat_filter_weight_old + _bat_filter_weight_new;
@@ -61,6 +62,8 @@ constexpr uint16_t _bat_filter_weight_sum = _bat_filter_weight_old + _bat_filter
 uint8_t _bat_level        = 0;
 uint16_t _bat_filtered_mv = 0;
 std::mutex _bat_level_mutex;
+ExternalPowerTracker _external_power_tracker;
+std::mutex _external_power_mutex;
 
 void update_bat_level(uint8_t level)
 {
@@ -85,15 +88,27 @@ void bat_reading_task(void* param)
 {
     mclog::tagInfo(_tag, "start bat reading task");
 
+    uint8_t battery_sample_iteration = 0;
     while (true) {
         if (_pm1) {
-            uint16_t battery_mv = 0;
-            if (_pm1->readVbat(&battery_mv) == M5PM1_OK) {
-                update_bat_level_from_mv(battery_mv);
+            uint16_t vin_mv       = 0;
+            const auto vin_result = _pm1->readVin(&vin_mv);
+            {
+                std::lock_guard<std::mutex> lock(_external_power_mutex);
+                _external_power_tracker.observe(vin_result == M5PM1_OK, vin_mv > 4000);
+            }
+
+            ++battery_sample_iteration;
+            if (battery_sample_iteration == _battery_sample_iterations) {
+                battery_sample_iteration = 0;
+                uint16_t battery_mv       = 0;
+                if (_pm1->readVbat(&battery_mv) == M5PM1_OK) {
+                    update_bat_level_from_mv(battery_mv);
+                }
             }
         }
 
-        vTaskDelay(pdMS_TO_TICKS(_bat_reading_period_ms));
+        vTaskDelay(pdMS_TO_TICKS(_power_sample_period_ms));
     }
 }
 
@@ -165,28 +180,30 @@ uint8_t Hal::getBatteryLevel()
     return _bat_level;
 }
 
+ExternalPowerSnapshot Hal::getExternalPowerSnapshot()
+{
+    std::lock_guard<std::mutex> lock(_external_power_mutex);
+    return _external_power_tracker.snapshot();
+}
+
 bool Hal::isBatteryCharging(bool strict)
 {
+    const bool external_power = getExternalPowerSnapshot().state == ExternalPowerState::ExternalPower;
+    if (!strict || !external_power) {
+        return external_power;
+    }
+
     if (!_pm1) {
         return false;
     }
 
-    uint16_t vin_mv       = 0;
     uint8_t charge_status = 1;
-
-    const auto vin_result = _pm1->readVin(&vin_mv);
     const auto chg_result = _pm1->gpioGetInput(PMG2_CHG_STAT, &charge_status);
-    if (vin_result != M5PM1_OK || chg_result != M5PM1_OK) {
+    if (chg_result != M5PM1_OK) {
         return false;
     }
 
-    const bool external_power_inserted = vin_mv > 4000;
-    const bool charging_active         = charge_status == 0;
-
-    if (strict) {
-        return external_power_inserted && charging_active;
-    }
-    return external_power_inserted;
+    return charge_status == 0;
 }
 
 void Hal::applyPowerLedOutput(bool enabled)

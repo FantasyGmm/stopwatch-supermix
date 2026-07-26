@@ -5,6 +5,7 @@
  */
 #pragma once
 #include "button_input_gate.h"
+#include "external_power_state.h"
 #include "power_led_blink_config.h"
 #include "utils/button/Button_Class.hpp"
 #include <apps/common/common.h>
@@ -167,6 +168,7 @@ public:
     };
 
     uint8_t getBatteryLevel();
+    ExternalPowerSnapshot getExternalPowerSnapshot();
     bool isBatteryCharging(bool strict = false);
     void setPowerLedMode(PowerLedMode mode, bool saveToSettings = false);
     PowerLedMode getPowerLedMode(bool loadFromSettings = false);

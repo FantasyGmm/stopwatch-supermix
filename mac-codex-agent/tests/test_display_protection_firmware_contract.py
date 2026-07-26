@@ -6,6 +6,17 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
 class DisplayProtectionFirmwareContractTests(unittest.TestCase):
+    def test_hal_caches_external_power_in_battery_task(self):
+        hal_header = (ROOT / "main" / "hal" / "hal.h").read_text(encoding="utf-8")
+        pmic_source = (ROOT / "main" / "hal" / "hal_pmic.cpp").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("ExternalPowerSnapshot getExternalPowerSnapshot()", hal_header)
+        self.assertIn("constexpr uint32_t _power_sample_period_ms = 250", pmic_source)
+        self.assertIn("_external_power_tracker.observe", pmic_source)
+        self.assertIn("readVin", pmic_source)
+
     def test_hal_separates_user_and_temporary_brightness(self):
         hal_header = (ROOT / "main" / "hal" / "hal.h").read_text(encoding="utf-8")
         display_source = (ROOT / "main" / "hal" / "hal_display.cpp").read_text(
