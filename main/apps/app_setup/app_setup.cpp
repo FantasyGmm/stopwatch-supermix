@@ -46,6 +46,11 @@ void AppSetup::onOpen()
                      _destroy_menu = true;
                      _worker       = std::make_unique<BrightnessWorker>();
                  }},
+                {"Display Protection",
+                 [&]() {
+                     _destroy_menu = true;
+                     _worker       = std::make_unique<DisplayProtectionWorker>();
+                 }},
                 {"Volume",
                  [&]() {
                      _destroy_menu = true;
