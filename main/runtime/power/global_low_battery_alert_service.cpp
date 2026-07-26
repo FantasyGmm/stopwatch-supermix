@@ -58,7 +58,7 @@ void GlobalLowBatteryAlertService::update()
         .now_ms = now_ms,
         .battery_sample_due = sample_due,
         .battery_sample_valid = sample_due,
-        .battery_percent = sample_due ? battery_sample.level : 0,
+        .battery_percent = static_cast<uint8_t>(sample_due ? battery_sample.level : 0),
         .external_power = _external_power,
         .display_visible = display_visible,
         .playback_available = playback_available,

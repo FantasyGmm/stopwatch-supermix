@@ -31,7 +31,7 @@ class LowBatteryAlertFirmwareContractTests(unittest.TestCase):
             "LowBatteryAlertOverlay _overlay",
             "GetHAL().batterySampleSnapshot()",
             "battery_sample.revision != _last_battery_revision",
-            ".battery_percent = sample_due ? battery_sample.level : 0,",
+            ".battery_percent = static_cast<uint8_t>(sample_due ? battery_sample.level : 0),",
             "GetHAL().isBatteryCharging(false)",
             "GetHAL().isDisplayVisible()",
             "GetHAL().isAudioPlaying()",
