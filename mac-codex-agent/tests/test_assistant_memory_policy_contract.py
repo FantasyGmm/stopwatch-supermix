@@ -55,6 +55,24 @@ class AssistantMemoryPolicyContractTests(unittest.TestCase):
         self.assertIn("list(REMOVE_ITEM audio_processor_sources", overlay)
         self.assertIn("target_sources(${audio_processor_lib}", overlay)
 
+    def test_light_audio_feeder_buffers_udp_bursts_without_blocking_receive(self):
+        overlay = (
+            ROOT / "main" / "cmake" / "audio_processor_light_overlay.cmake"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("AUDIO_LIGHT_FEED_QUEUE_LEN       (2)", overlay)
+        self.assertIn("AUDIO_LIGHT_FEED_QUEUE_LEN       (8)", overlay)
+        self.assertIn("buffered_feeder_queue", overlay)
+        self.assertIn("audio_feeder_worker_task", overlay)
+        self.assertIn(
+            "AUDIO_LIGHT_FEEDER_WORKER_STACK_DEFAULT (2048 * 12)", overlay
+        )
+        self.assertIn("AUDIO_LIGHT_FEEDER_WORKER_PRIO_DEFAULT  (6)", overlay)
+        self.assertIn("audio_feeder_worker_ensure_started", overlay)
+        self.assertIn("audio_feeder_worker_notify", overlay)
+        self.assertIn("worker_stopped", overlay)
+        self.assertIn("vTaskDeleteWithCaps(fd->worker_task)", overlay)
+
     def test_brookesia_audio_service_adapts_to_the_light_processor_contract(self):
         root_cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
         overlay = (
