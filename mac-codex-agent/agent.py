@@ -23,6 +23,7 @@ MAX_PROJECT_LENGTH = 32
 MAX_TITLE_LENGTH = 48
 MAX_DETAIL_LENGTH = 72
 MAX_TRAE_TASKS = 4
+MAX_TRAE_TASK_COUNT = 65535
 MAX_TRAE_MESSAGE_SIZE = 1024
 TRAE_HEARTBEAT_SECONDS = 6.0
 _CODEX_STATUS_KEYS = (
@@ -171,6 +172,8 @@ def _watch_trae_status(status: Mapping[str, object]):
         pending_count = sum(item.get("state") == "pending" for item in active_tasks)
     if "trae_running_count" not in status:
         running_count = sum(item.get("state") == "running" for item in active_tasks)
+    pending_count = min(pending_count, MAX_TRAE_TASK_COUNT)
+    running_count = min(running_count, MAX_TRAE_TASK_COUNT)
 
     result = {
         "type": "status",
@@ -212,6 +215,7 @@ def _watch_trae_status(status: Mapping[str, object]):
         for task in reversed(result["trae_tasks"]):
             if task["detail"]:
                 task["detail"] = task["detail"][:-1]
+                result["trae_tasks_truncated"] = True
                 shortened = True
                 break
         if not shortened:

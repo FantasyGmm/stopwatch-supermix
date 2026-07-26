@@ -278,6 +278,49 @@ class CodexStatusAgentTests(unittest.TestCase):
         self.assertLess(len(payload["trae_tasks"]), 4)
         self.assertLessEqual(len(_compact_json_bytes(payload)), 1024)
 
+    def test_trae_payload_marks_truncation_when_one_card_detail_is_shortened(self):
+        status = {
+            "trae_online": True,
+            "trae_tasks": [
+                {
+                    "id": "标" * 32,
+                    "project": "项" * 32,
+                    "title": "题" * 48,
+                    "detail": "态" * 72,
+                    "time": "12:34:56",
+                    "state": "running",
+                    "model": "模" * 64,
+                }
+            ],
+        }
+
+        payload = _watch_trae_status(status)
+
+        self.assertEqual(len(payload["trae_tasks"]), 1)
+        self.assertLess(len(payload["trae_tasks"][0]["detail"]), 72)
+        self.assertTrue(payload["trae_tasks_truncated"])
+        self.assertLessEqual(len(_compact_json_bytes(payload)), 1024)
+
+    def test_trae_payload_bounds_explicit_aggregate_counts_to_uint16(self):
+        cases = (
+            ("negative", -1, -1, 0, 0),
+            ("bool", True, True, 0, 0),
+            ("huge", 10**2000, 10**2000, 65535, 65535),
+        )
+
+        for case, pending, running, expected_pending, expected_running in cases:
+            with self.subTest(case=case):
+                payload = _watch_trae_status(
+                    {
+                        "trae_pending_count": pending,
+                        "trae_running_count": running,
+                    }
+                )
+
+                self.assertEqual(payload["trae_pending_count"], expected_pending)
+                self.assertEqual(payload["trae_running_count"], expected_running)
+                self.assertLessEqual(len(_compact_json_bytes(payload)), 1024)
+
     def test_trae_payload_keeps_full_counts_when_details_are_trimmed(self):
         status = trae_status()
         status.update(
