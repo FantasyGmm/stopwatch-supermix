@@ -799,6 +799,41 @@ class VoiceSessionServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(route.calls, ["start", "stop"])
         self.assertEqual(service.state, VoiceState.ERROR)
 
+    async def test_bounded_cleanup_caller_cancellation_dominates_stop_failure(self):
+        drain_started = asyncio.Event()
+        cleanup_task_cancelled = asyncio.Event()
+
+        async def cancellation_paused_sleep(seconds):
+            self.assertEqual(seconds, 0.150)
+            drain_started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cleanup_task_cancelled.set()
+                await asyncio.Event().wait()
+                raise
+
+        route = FakeRoute(fail_stop=True)
+        shortcut = FakeShortcut()
+        service = VoiceSessionService(
+            route,
+            shortcut,
+            TEST_KEY,
+            sleep=cancellation_paused_sleep,
+        )
+        await service.handle(begin_packet())
+        cleanup = asyncio.create_task(service.disconnect_bounded(0.01))
+        await drain_started.wait()
+        await asyncio.wait_for(cleanup_task_cancelled.wait(), 1)
+
+        cleanup.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await cleanup
+
+        self.assertEqual(shortcut.calls, ["start", "stop"])
+        self.assertEqual(route.calls, ["start", "stop"])
+        self.assertEqual(service.state, VoiceState.ERROR)
+
     async def test_concurrent_error_dominates_end_cleanup_final_state(self):
         drain_started = asyncio.Event()
         release_drain = asyncio.Event()

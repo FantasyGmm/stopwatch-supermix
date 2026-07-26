@@ -130,13 +130,19 @@ class VoiceSessionService:
                 final_state = self._cleanup_final_state or VoiceState.READY
                 self._force_cleanup_in_progress = True
                 cleanup_task.cancel()
-                try:
-                    await cleanup_task
-                except asyncio.CancelledError:
-                    pass
-                except Exception:
-                    pass
+                while not cleanup_task.done():
+                    try:
+                        await asyncio.shield(cleanup_task)
+                    except asyncio.CancelledError:
+                        if cleanup_task.done():
+                            break
+                        interrupted = True
+                        cleanup_task.cancel()
+                    except Exception:
+                        break
                 failures = self._finish_cleanup(final_state)
+                if interrupted:
+                    raise asyncio.CancelledError
                 if failures:
                     raise failures[0]
             else:

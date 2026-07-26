@@ -213,6 +213,118 @@ class CodexStatusAgentTests(unittest.TestCase):
 
 
 class BleStatusTransportVoiceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_start_notify_failure_is_clean_before_direct_retry(self):
+        class Client:
+            is_connected = True
+
+            def __init__(self):
+                self.start_calls = 0
+                self.stop_calls = 0
+                self.callbacks = []
+                self.writes = []
+
+            async def start_notify(self, _uuid, callback):
+                self.start_calls += 1
+                self.callbacks.append(callback)
+                if self.start_calls == 1:
+                    raise RuntimeError("subscribe failed")
+
+            async def write_gatt_char(self, _uuid, payload, response):
+                self.writes.append((payload, response))
+
+            async def stop_notify(self, _uuid):
+                self.stop_calls += 1
+
+        client = Client()
+        transport = BleStatusTransport()
+        transport._client = client
+
+        with self.assertRaisesRegex(RuntimeError, "subscribe failed"):
+            await transport.enable_voice(
+                b"ready-1", lambda _payload: asyncio.sleep(0)
+            )
+        old_callback = client.callbacks[0]
+        self.assertIsNone(transport.voice_failure)
+        self.assertEqual(
+            [
+                task
+                for task in asyncio.all_tasks()
+                if task is not asyncio.current_task() and not task.done()
+            ],
+            [],
+        )
+
+        handled = []
+        await transport.enable_voice(
+            b"ready-2", lambda payload: _append_async(handled, payload)
+        )
+        old_callback(None, b"stale")
+        client.callbacks[-1](None, b"current")
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        await transport.disable_voice(None)
+
+        self.assertEqual(handled, [b"current"])
+        self.assertEqual(client.start_calls, 2)
+        self.assertEqual(client.stop_calls, 2)
+        self.assertEqual(client.writes, [(b"ready-2", True)])
+
+    async def test_ready_write_failure_is_clean_before_direct_retry(self):
+        class Client:
+            is_connected = True
+
+            def __init__(self):
+                self.stop_calls = 0
+                self.callbacks = []
+                self.writes = []
+
+            async def start_notify(self, _uuid, callback):
+                self.callbacks.append(callback)
+
+            async def write_gatt_char(self, _uuid, payload, response):
+                self.writes.append((payload, response))
+                if payload == b"ready-1":
+                    raise RuntimeError("READY failed")
+
+            async def stop_notify(self, _uuid):
+                self.stop_calls += 1
+
+        client = Client()
+        transport = BleStatusTransport()
+        transport._client = client
+
+        with self.assertRaisesRegex(RuntimeError, "READY failed"):
+            await transport.enable_voice(
+                b"ready-1", lambda _payload: asyncio.sleep(0)
+            )
+        old_callback = client.callbacks[0]
+        self.assertIsNone(transport.voice_failure)
+        self.assertEqual(
+            [
+                task
+                for task in asyncio.all_tasks()
+                if task is not asyncio.current_task() and not task.done()
+            ],
+            [],
+        )
+
+        handled = []
+        await transport.enable_voice(
+            b"ready-2", lambda payload: _append_async(handled, payload)
+        )
+        old_callback(None, b"stale")
+        client.callbacks[-1](None, b"current")
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        await transport.disable_voice(None)
+
+        self.assertEqual(handled, [b"current"])
+        self.assertEqual(client.stop_calls, 2)
+        self.assertEqual(
+            client.writes,
+            [(b"ready-1", True), (b"ready-2", True)],
+        )
+
     async def test_old_notification_callback_cannot_reach_reenabled_handler(self):
         class Client:
             is_connected = True

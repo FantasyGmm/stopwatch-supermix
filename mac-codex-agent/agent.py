@@ -201,6 +201,10 @@ class BleStatusTransport:
     async def enable_voice(self, ready_payload: bytes, handler) -> None:
         if not self.connected:
             raise ConnectionError("StopWatch BLE connection is not active")
+        if self._voice_generation is not None:
+            raise RuntimeError("voice notification generation is already active")
+        if self._voice_notify_started:
+            raise RuntimeError("voice notification cleanup is incomplete")
         loop = asyncio.get_running_loop()
         self._voice_disabled = False
         queue = asyncio.Queue(maxsize=VOICE_NOTIFICATION_QUEUE_SIZE)
@@ -241,10 +245,30 @@ class BleStatusTransport:
                     self._release_voice_ingress(generation)
 
         self._voice_notify_started = True
-        await self._client.start_notify(VOICE_TX_UUID, on_notification)
-        await self._client.write_gatt_char(
-            VOICE_CONTROL_UUID, ready_payload, response=True
-        )
+        try:
+            await self._client.start_notify(VOICE_TX_UUID, on_notification)
+            await self._client.write_gatt_char(
+                VOICE_CONTROL_UUID, ready_payload, response=True
+            )
+        except BaseException:
+            consumer = self._retire_voice_generation(generation)
+            try:
+                if self.connected and self._voice_notify_started:
+                    try:
+                        await self._client.stop_notify(VOICE_TX_UUID)
+                    except Exception:
+                        pass
+                    else:
+                        self._voice_notify_started = False
+            finally:
+                if consumer is not None:
+                    try:
+                        await consumer
+                    except asyncio.CancelledError:
+                        pass
+                    except Exception:
+                        pass
+            raise
 
     async def disable_voice(self, unavailable_payload: Optional[bytes]) -> None:
         if self._voice_disabled:
@@ -283,8 +307,13 @@ class BleStatusTransport:
             raise failure
 
     def retire_voice_generation(self):
+        return self._retire_voice_generation()
+
+    def _retire_voice_generation(self, expected=None):
         generation = self._voice_generation
-        if generation is None:
+        if generation is None or (
+            expected is not None and generation is not expected
+        ):
             return None
         with generation.ingress.lock:
             generation.ingress.enabled = False
