@@ -11,6 +11,7 @@
 #include <hal/hal.h>
 #include <runtime/service_runtime.h>
 #include <runtime/runtime_supervisor.h>
+#include <runtime/display/global_display_protection_service.h>
 #include <sdkconfig.h>
 #if CONFIG_STOPWATCH_DEBUG_COMMANDS
 #include <debug/debug_command_service.h>
@@ -44,6 +45,9 @@ extern "C" void app_main(void)
 
     {
         LvglLockGuard lock;
+        if (!GetGlobalDisplayProtectionService().init()) {
+            mclog::tagError("Main", "global display protection unavailable");
+        }
         if (!GetGlobalEdgeControlService().init()) {
             mclog::tagError("Main", "global edge controls unavailable");
         }
@@ -69,8 +73,10 @@ extern "C" void app_main(void)
         GetRuntimeSupervisor().update(GetHAL().millis());
         {
             LvglLockGuard lock;
+            GetGlobalDisplayProtectionService().update();
             GetGlobalEdgeControlService().update();
         }
+        GetGlobalDisplayProtectionService().applyPendingHardwareUpdate();
         GetGlobalEdgeControlService().applyPendingHardwareUpdate();
         GetMooncake().update();
     }

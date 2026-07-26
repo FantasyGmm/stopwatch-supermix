@@ -56,9 +56,9 @@ static void apply_button_style(Button* button)
     button->label().setTextFont(&lv_font_maple_mono_medium_24);
 }
 
-void StopwatchView::init(lv_obj_t* parent)
+void StopwatchView::init(lv_obj_t* parent, model::Stopwatch& stopwatch)
 {
-    _stopwatch = std::make_unique<model::Stopwatch>();
+    _stopwatch = &stopwatch;
 
     lv_obj_remove_flag(parent, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_bg_color(parent, lv_color_hex(0x000000), LV_PART_MAIN);

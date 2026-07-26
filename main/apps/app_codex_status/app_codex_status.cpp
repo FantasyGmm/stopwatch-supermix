@@ -12,6 +12,7 @@
 #include <assets/assets.h>
 #include <hal/hal.h>
 #include <hal/utils/settings/settings.h>
+#include <runtime/display/global_display_protection_service.h>
 #include <wifi_manager.h>
 #include <esp_websocket_client.h>
 #include <mooncake_log.h>
@@ -40,6 +41,7 @@ constexpr const char* kDefaultBleName    = "StopWatch-Codex";
 constexpr uint32_t kWifiFallbackDelayMs  = 15000;
 constexpr uint32_t kStatusStaleMs        = 10000;
 constexpr uint32_t kScreenOffHoldMs      = 2000;
+constexpr uint32_t kPowerPolicyCheckMs = 1000;
 
 bool is_ascii_text(const char* text)
 {
@@ -243,14 +245,19 @@ void AppCodexStatus::onOpen()
 {
     mclog::tagInfo(getAppInfo().name, "on open");
 
+    const uint32_t now = GetHAL().millis();
     _key_manager     = std::make_unique<input::KeyManager>();
     _last_battery_ms = 0;
     _last_network_ms = 0;
     _last_status_payload_ms = 0;
     _screen_off_left_press_started_ms = 0;
-    _screen_off_restore_brightness = std::max(10, GetHAL().getBackLightBrightness());
+    _screen_off_restore_brightness = std::max(10, GetHAL().getUserBackLightBrightness());
     _screen_off = false;
     _screen_off_wake_armed = true;
+    _last_power_policy_check_ms = 0;
+    _external_power_connected = false;
+    _power_policy_known = false;
+    refresh_display_protection_policy(now, true);
     _suppress_task_navigation = false;
     _ws_connected    = false;
     _wifi_lease.reset();
@@ -264,7 +271,7 @@ void AppCodexStatus::onOpen()
     if (_transport_mode != "auto" && _transport_mode != "ble" && _transport_mode != "wifi") {
         _transport_mode = "auto";
     }
-    _ble_wait_started_ms = GetHAL().millis();
+    _ble_wait_started_ms = now;
 
     {
         LvglLockGuard lock;
@@ -293,6 +300,7 @@ void AppCodexStatus::onOpen()
 void AppCodexStatus::onRunning()
 {
     const uint32_t now = GetHAL().millis();
+    refresh_display_protection_policy(now, false);
     input::KeyEvent key_event = input::KeyEvent::None;
     if (_key_manager) {
         key_event = _key_manager->update();
@@ -391,6 +399,7 @@ void AppCodexStatus::onClose()
     if (_screen_off) {
         wake_screen();
     }
+    GetGlobalDisplayProtectionService().setAutomaticProtection(true);
     stop_network_fallback();
     if (_ble_transport) {
         _ble_transport->stop();
@@ -936,7 +945,7 @@ bool AppCodexStatus::update_screen_off_control(uint32_t now_ms)
 
 void AppCodexStatus::enter_screen_off()
 {
-    _screen_off_restore_brightness = std::max(10, GetHAL().getBackLightBrightness());
+    _screen_off_restore_brightness = std::max(10, GetHAL().getUserBackLightBrightness());
     _screen_off = true;
     {
         LvglLockGuard lock;
@@ -944,12 +953,13 @@ void AppCodexStatus::enter_screen_off()
     }
     _screen_off_wake_armed = false;
     _screen_off_left_press_started_ms = 0;
-    GetHAL().setBackLightBrightness(0, false);
+    GetGlobalDisplayProtectionService().setAutomaticProtection(false, false);
+    GetHAL().setTemporaryBackLightBrightness(0);
 }
 
 void AppCodexStatus::wake_screen()
 {
-    GetHAL().setBackLightBrightness(_screen_off_restore_brightness, false);
+    GetHAL().setTemporaryBackLightBrightness(_screen_off_restore_brightness);
     _screen_off = false;
     {
         LvglLockGuard lock;
@@ -957,7 +967,30 @@ void AppCodexStatus::wake_screen()
     }
     _screen_off_wake_armed = true;
     _screen_off_left_press_started_ms = 0;
+    refresh_display_protection_policy(GetHAL().millis(), true);
     _suppress_task_navigation = true;
+}
+
+void AppCodexStatus::refresh_display_protection_policy(uint32_t now_ms, bool force)
+{
+    if (!force && _power_policy_known &&
+        now_ms - _last_power_policy_check_ms < kPowerPolicyCheckMs) {
+        return;
+    }
+
+    _last_power_policy_check_ms = now_ms;
+    const bool external_power = GetHAL().isBatteryCharging(false);
+    const bool policy_changed =
+        !_power_policy_known || _external_power_connected != external_power;
+    _external_power_connected = external_power;
+    _power_policy_known = true;
+
+    if (_screen_off) {
+        return;
+    }
+    if (force || policy_changed) {
+        GetGlobalDisplayProtectionService().setAutomaticProtection(!external_power);
+    }
 }
 
 void AppCodexStatus::set_percent(lv_obj_t* label, lv_obj_t* bar, int value)

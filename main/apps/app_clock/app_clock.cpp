@@ -7,6 +7,7 @@
 #include <assets/assets.h>
 #include <hal/hal.h>
 #include <mooncake_log.h>
+#include <runtime/display/global_display_protection_service.h>
 
 using namespace mooncake;
 
@@ -19,6 +20,7 @@ AppClock::AppClock()
 void AppClock::onCreate()
 {
     mclog::tagInfo(getAppInfo().name, "on create");
+    _stopwatch = std::make_unique<model::Stopwatch>();
     _alarm_clock = std::make_unique<model::AlarmClock>();
     _alarm_ready = _alarm_clock->init();
     if (!_alarm_ready) {
@@ -27,6 +29,10 @@ void AppClock::onCreate()
     }
 
     _alarm_clock->onTriggered().connect([this](const model::AlarmClock::AlarmTriggeredEvent& event) {
+        auto& protection = GetGlobalDisplayProtectionService();
+        protection.setKeepAwake(DisplayKeepAwakeReason::AlarmRinging, true);
+        protection.applyPendingHardwareUpdate();
+
         std::unique_ptr<view::AlarmTriggerView> trigger_view;
         {
             LvglLockGuard lock;
@@ -45,6 +51,7 @@ void AppClock::onCreate()
             }
         }
         GetHAL().stopAlarm();
+        protection.setKeepAwake(DisplayKeepAwakeReason::AlarmRinging, false);
     });
 }
 
@@ -104,6 +111,7 @@ void AppClock::onRunning()
                 break;
         }
     }
+    syncStopwatchKeepAwake();
 
     switch (selection) {
         case clock_view::Selection::Alarm:
@@ -127,12 +135,14 @@ void AppClock::onSleeping()
     if (_alarm_ready && _alarm_clock) {
         _alarm_clock->update();
     }
+    syncStopwatchKeepAwake();
 }
 
 void AppClock::onClose()
 {
     mclog::tagInfo(getAppInfo().name, "on close");
     _key_manager.reset();
+    syncStopwatchKeepAwake();
     LvglLockGuard lock;
     destroyFeatureUi();
 }
@@ -141,6 +151,11 @@ void AppClock::onDestroy()
 {
     mclog::tagInfo(getAppInfo().name, "on destroy");
     _alarm_clock.reset();
+    _stopwatch.reset();
+    GetGlobalDisplayProtectionService().setKeepAwake(
+        DisplayKeepAwakeReason::StopwatchRunning, false);
+    GetGlobalDisplayProtectionService().setKeepAwake(
+        DisplayKeepAwakeReason::AlarmRinging, false);
 }
 
 void AppClock::transitionTo(Feature feature)
@@ -163,9 +178,10 @@ void AppClock::transitionTo(Feature feature)
             break;
         case Feature::Stopwatch:
             _stopwatch_view = std::make_unique<view::StopwatchView>();
-            _stopwatch_view->init(lv_screen_active());
+            _stopwatch_view->init(lv_screen_active(), *_stopwatch);
             break;
     }
+    syncStopwatchKeepAwake();
 }
 
 void AppClock::destroyFeatureUi()
@@ -194,4 +210,12 @@ void AppClock::updateAlarmFeature()
         _alarm_list_view = std::make_unique<view::AlarmListView>(*_alarm_clock);
         _alarm_list_view->init(lv_screen_active());
     }
+}
+
+void AppClock::syncStopwatchKeepAwake()
+{
+    const bool running = _stopwatch &&
+        _stopwatch->getState() == model::Stopwatch::State_t::Running;
+    GetGlobalDisplayProtectionService().setKeepAwake(
+        DisplayKeepAwakeReason::StopwatchRunning, running);
 }

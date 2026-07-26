@@ -37,6 +37,7 @@ private:
     bool _alarm_ready = false;
     std::unique_ptr<input::KeyManager> _key_manager;
     std::unique_ptr<model::AlarmClock> _alarm_clock;
+    std::unique_ptr<model::Stopwatch> _stopwatch;
     std::unique_ptr<clock_view::ClockSelectionView> _selection_view;
     std::unique_ptr<view::AlarmListView> _alarm_list_view;
     std::unique_ptr<view::AlarmAddView> _alarm_add_view;
@@ -47,4 +48,5 @@ private:
     void transitionTo(Feature feature);
     void destroyFeatureUi();
     void updateAlarmFeature();
+    void syncStopwatchKeepAwake();
 };

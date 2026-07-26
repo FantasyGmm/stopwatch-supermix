@@ -10,6 +10,7 @@
 #include <mooncake_log.h>
 #include <runtime/assistant/assistant_runtime.h>
 #include <runtime/assistant/assistant_trace.h>
+#include <runtime/display/global_display_protection_service.h>
 #include <runtime/runtime_supervisor.h>
 #if CONFIG_STOPWATCH_DEBUG_COMMANDS
 #include <esp_log.h>
@@ -51,6 +52,9 @@ void AppAssistant::onOpen()
     _key_manager = std::make_unique<input::KeyManager>();
     _close_controller.reset();
     _presentation.reset();
+    _display_activity.reset();
+    GetGlobalDisplayProtectionService().setKeepAwake(
+        DisplayKeepAwakeReason::AssistantInteraction, false);
     _last_telemetry_ms = 0;
     _retry_available = false;
     _has_conversation_text = false;
@@ -110,6 +114,7 @@ void AppAssistant::onRunning()
         runtime.assistantState() == AssistantRuntimeState::Stopped) {
         _retry_available = false;
         _has_conversation_text = false;
+        _display_activity.observe(AssistantDisplayActivitySignal::Idle, true, now);
         {
             LvglLockGuard lock;
             applyPresentationSignal(AssistantPresentationSignal::Connecting);
@@ -122,6 +127,7 @@ void AppAssistant::onRunning()
         GetRuntimeSupervisor().requestStopAssistant();
     }
 
+    syncDisplayKeepAwake(now);
     if (_close_controller.requested() && runtime.assistantState() == AssistantRuntimeState::Stopped) {
         close();
     }
@@ -145,6 +151,9 @@ bool AppAssistant::requestGracefulClose(AssistantCloseTrigger trigger)
         });
         return false;
     }
+
+    _display_activity.observe(AssistantDisplayActivitySignal::Idle, true,
+                              GetHAL().millis());
 
     {
         LvglLockGuard lock;
@@ -215,6 +224,9 @@ void AppAssistant::onClose()
     _key_manager.reset();
     _last_telemetry_ms = 0;
     _has_conversation_text = false;
+    _display_activity.reset();
+    GetGlobalDisplayProtectionService().setKeepAwake(
+        DisplayKeepAwakeReason::AssistantInteraction, false);
 
     LvglLockGuard lock;
     if (_view) {
@@ -275,15 +287,24 @@ void AppAssistant::applyRuntimeEvent(const AssistantEvent& event,
                 return;
             }
             if (event.text == "Starting" || event.text == "Connecting") {
+                _display_activity.observe(AssistantDisplayActivitySignal::Idle, true,
+                                          GetHAL().millis());
                 _has_conversation_text = false;
                 applyPresentationSignal(AssistantPresentationSignal::Connecting);
             } else if (event.text == "Activating" || event.text == "Activated") {
                 applyPresentationSignal(AssistantPresentationSignal::Activating);
             } else if (event.text == "Running") {
+                _display_activity.observe(AssistantDisplayActivitySignal::Idle, true,
+                                          GetHAL().millis());
                 _has_conversation_text = false;
                 applyPresentationSignal(AssistantPresentationSignal::Running);
             } else if (event.text == "Stopping") {
+                _display_activity.observe(AssistantDisplayActivitySignal::Idle, true,
+                                          GetHAL().millis());
                 applyPresentationSignal(AssistantPresentationSignal::Closing);
+            } else if (event.text == "Stopped") {
+                _display_activity.observe(AssistantDisplayActivitySignal::Idle, true,
+                                          GetHAL().millis());
             }
             break;
         case AssistantEventKind::ActivationCode:
@@ -291,6 +312,8 @@ void AppAssistant::applyRuntimeEvent(const AssistantEvent& event,
             _view->setConversationText(event.text.c_str());
             break;
         case AssistantEventKind::Error:
+            _display_activity.observe(AssistantDisplayActivitySignal::Idle, true,
+                                      GetHAL().millis());
             if (runtime_state == AssistantRuntimeState::StopTimedOut) {
                 applyPresentationSignal(AssistantPresentationSignal::StopTimedOut);
             } else if (_close_controller.requested()) {
@@ -302,16 +325,24 @@ void AppAssistant::applyRuntimeEvent(const AssistantEvent& event,
             _view->setConversationText(event.text.c_str());
             break;
         case AssistantEventKind::UserText:
+            _display_activity.observe(AssistantDisplayActivitySignal::UserText, true,
+                                      GetHAL().millis());
             _has_conversation_text = true;
             applyPresentationSignal(AssistantPresentationSignal::UserText);
             _view->setConversationText(event.text.c_str());
             break;
         case AssistantEventKind::AgentText:
+            _display_activity.observe(AssistantDisplayActivitySignal::AgentText, true,
+                                      GetHAL().millis());
             _has_conversation_text = true;
             applyPresentationSignal(AssistantPresentationSignal::AgentText);
             _view->setConversationText(event.text.c_str());
             break;
         case AssistantEventKind::Emotion:
+            if (!event.text.empty()) {
+                _display_activity.observe(AssistantDisplayActivitySignal::Emotion, true,
+                                          GetHAL().millis());
+            }
             if (!_has_conversation_text && !event.text.empty()) {
                 _view->setConversationText(event.text.c_str());
             }
@@ -320,12 +351,18 @@ void AppAssistant::applyRuntimeEvent(const AssistantEvent& event,
             _view->setUpdateVersion(event.text.c_str());
             break;
         case AssistantEventKind::WakeDetected:
+            _display_activity.observe(AssistantDisplayActivitySignal::WakeDetected, true,
+                                      GetHAL().millis());
             applyPresentationSignal(AssistantPresentationSignal::WakeDetected);
             break;
         case AssistantEventKind::ListeningStatus:
+            _display_activity.observe(AssistantDisplayActivitySignal::Listening,
+                                      event.active, GetHAL().millis());
             applyPresentationSignal(AssistantPresentationSignal::ListeningChanged, event.active);
             break;
         case AssistantEventKind::SpeakingStatus: {
+            _display_activity.observe(AssistantDisplayActivitySignal::Speaking,
+                                      event.active, GetHAL().millis());
             const AssistantVisualState previous_state = _presentation.state();
             applyPresentationSignal(AssistantPresentationSignal::SpeakingChanged, event.active);
             if (!event.active &&
@@ -336,6 +373,13 @@ void AppAssistant::applyRuntimeEvent(const AssistantEvent& event,
             break;
         }
     }
+}
+
+void AppAssistant::syncDisplayKeepAwake(uint32_t now_ms)
+{
+    GetGlobalDisplayProtectionService().setKeepAwake(
+        DisplayKeepAwakeReason::AssistantInteraction,
+        _display_activity.active(now_ms));
 }
 
 void AppAssistant::applyPresentationSignal(AssistantPresentationSignal signal, bool active)

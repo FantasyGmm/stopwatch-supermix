@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 #pragma once
+#include "button_input_gate.h"
 #include "utils/button/Button_Class.hpp"
 #include <apps/common/common.h>
 #include <memory>
@@ -172,7 +173,10 @@ public:
 
     /* --------------------------------- Display -------------------------------- */
     void setBackLightBrightness(int brightness, bool saveToSettings = false);
+    void setTemporaryBackLightBrightness(int brightness);
     int getBackLightBrightness(bool loadFromSettings = false);
+    int getUserBackLightBrightness() const;
+    uint32_t backLightBrightnessRevision() const;
 
     // M5GFX
     LGFX_Device& getDisplay();
@@ -261,6 +265,9 @@ public:
     };
 
     void updateButtonStates();
+    ButtonPhysicalState readButtonPhysicalState() const;
+    void suppressButtonInputUntilRelease();
+    bool buttonInputSuppressed() const;
     void setButtonConfig(ButtonConfig config, bool saveToSettings = false);
     const ButtonConfig& getButtonConfig(bool loadFromSettings = false);
 
@@ -281,6 +288,9 @@ private:
     ButtonConfig _btn_config;
     AudioSpectrumFrame _audio_spectrum;
     int _bl_brightness = 80;
+    int _user_bl_brightness = 80;
+    uint32_t _bl_brightness_revision = 0;
+    ButtonInputGate _button_input_gate;
     int _spk_volume    = 80;
     PowerLedMode _power_led_mode = PowerLedMode::Off;
     bool _power_led_output       = false;

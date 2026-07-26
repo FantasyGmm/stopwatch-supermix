@@ -62,6 +62,7 @@ private:
     uint32_t _ble_wait_started_ms = 0;
     uint32_t _last_status_payload_ms = 0;
     uint32_t _screen_off_left_press_started_ms = 0;
+    uint32_t _last_power_policy_check_ms = 0;
     int _screen_off_restore_brightness = 80;
     bool _wifi_started           = false;
     bool _wifi_fallback_started  = false;
@@ -69,6 +70,8 @@ private:
     bool _ws_connected           = false;
     bool _screen_off             = false;
     bool _screen_off_wake_armed  = true;
+    bool _external_power_connected = false;
+    bool _power_policy_known = false;
     bool _suppress_task_navigation = false;
     CodexAlertCarousel _alert_carousel;
 
@@ -86,6 +89,7 @@ private:
     void render_alert();
     void sync_pending_glow();
     bool update_screen_off_control(uint32_t now_ms);
+    void refresh_display_protection_policy(uint32_t now_ms, bool force);
     void enter_screen_off();
     void wake_screen();
     static void pet_timer_cb(lv_timer_t* timer);
