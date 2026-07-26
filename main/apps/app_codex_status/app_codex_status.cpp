@@ -483,9 +483,9 @@ void AppCodexStatus::create_view()
         kPendingLabelX,
         kStateLabelY,
         kStateLabelWidth,
-        &lv_font_montserrat_10,
+        &MontserratBold16,
         kAlertVermilion,
-        LV_TEXT_ALIGN_LEFT
+        LV_TEXT_ALIGN_CENTER
     );
     _pending_count = make_fixed_label(
         _panel,
@@ -495,7 +495,7 @@ void AppCodexStatus::create_view()
         kStateCountWidth,
         &MontserratSemiBold26,
         kEtchedGray,
-        LV_TEXT_ALIGN_LEFT
+        LV_TEXT_ALIGN_CENTER
     );
     _running_label = make_fixed_label(
         _panel,
@@ -503,9 +503,9 @@ void AppCodexStatus::create_view()
         kRunningLabelX,
         kStateLabelY,
         kStateLabelWidth,
-        &lv_font_montserrat_10,
+        &MontserratBold16,
         kRunningCyan,
-        LV_TEXT_ALIGN_RIGHT
+        LV_TEXT_ALIGN_CENTER
     );
     _running_count = make_fixed_label(
         _panel,
@@ -515,7 +515,7 @@ void AppCodexStatus::create_view()
         kStateCountWidth,
         &MontserratSemiBold26,
         kEtchedGray,
-        LV_TEXT_ALIGN_RIGHT
+        LV_TEXT_ALIGN_CENTER
     );
 
     _task_index = make_fixed_label(

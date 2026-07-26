@@ -24,8 +24,10 @@ class CodexStatusFLayoutContractTests(unittest.TestCase):
         self.assertIn("constexpr int kWeekY = 220", layout)
         self.assertIn("constexpr int kAlertDividerY = 258", layout)
 
-        self.assertIn("constexpr int kPendingLabelX = 58", layout)
-        self.assertIn("constexpr int kRunningLabelX = 312", layout)
+        self.assertIn("constexpr int kPendingLabelX = 62", layout)
+        self.assertIn("constexpr int kRunningLabelX = 308", layout)
+        self.assertIn("constexpr int kPendingCountX = 78", layout)
+        self.assertIn("constexpr int kRunningCountX = 324", layout)
         self.assertIn("constexpr int kStateLabelY = 278", layout)
         self.assertIn("constexpr int kStateCountY = 294", layout)
         self.assertIn("constexpr int kTaskIndexY = 284", layout)
@@ -33,6 +35,36 @@ class CodexStatusFLayoutContractTests(unittest.TestCase):
         self.assertIn("constexpr int kAlertDetailY = 359", layout)
         self.assertIn("constexpr int kAlertDetailHeight = 41", layout)
         self.assertIn("constexpr int kBatteryY = 432", layout)
+
+        pending_block = app.split("_pending_label =", 1)[1].split(
+            "_pending_count =", 1
+        )[0]
+        running_block = app.split("_running_label =", 1)[1].split(
+            "_running_count =", 1
+        )[0]
+        self.assertIn("&MontserratBold16", pending_block)
+        self.assertIn("LV_TEXT_ALIGN_CENTER", pending_block)
+        self.assertIn("&MontserratBold16", running_block)
+        self.assertIn("LV_TEXT_ALIGN_CENTER", running_block)
+
+        pending_count_block = app.split("_pending_count =", 1)[1].split(
+            "_running_label =", 1
+        )[0]
+        running_count_block = app.split("_running_count =", 1)[1].split(
+            "_task_index =", 1
+        )[0]
+        self.assertIn("LV_TEXT_ALIGN_CENTER", pending_count_block)
+        self.assertIn("LV_TEXT_ALIGN_CENTER", running_count_block)
+
+    def test_state_words_use_bundled_true_bold_font(self):
+        assets_header = (ROOT / "main/assets/assets.h").read_text()
+        bold_font_path = ROOT / "main/assets/fonts/MontserratBold16.c"
+
+        self.assertIn("LV_FONT_DECLARE(MontserratBold16);", assets_header)
+        self.assertTrue(bold_font_path.is_file())
+        bold_font = bold_font_path.read_text()
+        self.assertIn("Size: 16 px", bold_font)
+        self.assertIn("const lv_font_t MontserratBold16", bold_font)
 
     def test_global_counts_and_centered_two_line_task_are_rendered_without_duplicate_state_copy(self):
         app = (

@@ -70,6 +70,7 @@ extern "C" void app_main(void)
             LvglLockGuard lock;
             GetGlobalEdgeControlService().update();
         }
+        GetGlobalEdgeControlService().applyPendingHardwareUpdate();
         GetMooncake().update();
     }
 }

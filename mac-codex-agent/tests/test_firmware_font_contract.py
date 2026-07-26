@@ -108,7 +108,7 @@ class FirmwareFontContractTests(unittest.TestCase):
             '        kRunningLabelX,\n'
             '        kStateLabelY,\n'
             '        kStateLabelWidth,\n'
-            '        &lv_font_montserrat_10,\n'
+            '        &MontserratBold16,\n'
             '        kRunningCyan,',
             app,
         )

@@ -22,9 +22,9 @@ void EdgeControlLogic::press(int x, int y, int brightness, int volume, uint32_t 
     _candidate = y > kTopExclusionPx
         ? (x < kHalfWidthPx ? EdgeControlSide::Brightness : EdgeControlSide::Volume)
         : EdgeControlSide::None;
-    _start_value = normalize(_candidate, _candidate == EdgeControlSide::Brightness ? brightness : volume);
+    _start_value = normalize_visual(_candidate, _candidate == EdgeControlSide::Brightness ? brightness : volume);
     _current_value = _start_value;
-    _applied_value = _start_value;
+    _applied_value = normalize_hardware(_candidate, _start_value);
     _last_apply_ms = now_ms;
 }
 
@@ -56,14 +56,15 @@ EdgeControlUpdate EdgeControlLogic::move(int x, int y, uint32_t now_ms)
     }
 
     const int value_range = _active == EdgeControlSide::Brightness ? 90 : 100;
-    _current_value = normalize(_active, _start_value + (delta_y * value_range) / kDragRangePx);
+    _current_value = normalize_visual(_active, _start_value + (delta_y * value_range) / kDragRangePx);
 
     update.side = _active;
     update.value = _current_value;
+    update.hardware_value = normalize_hardware(_active, _current_value);
     update.consumed = true;
-    if (now_ms - _last_apply_ms >= kLiveApplyPeriodMs && _current_value != _applied_value) {
+    if (now_ms - _last_apply_ms >= kLiveApplyPeriodMs && update.hardware_value != _applied_value) {
         update.apply = true;
-        _applied_value = _current_value;
+        _applied_value = update.hardware_value;
         _last_apply_ms = now_ms;
     }
     return update;
@@ -79,11 +80,12 @@ EdgeControlUpdate EdgeControlLogic::release(uint32_t now_ms)
 
     update.side = _active;
     update.value = _current_value;
+    update.hardware_value = normalize_hardware(_active, _current_value);
     update.apply = true;
     update.persist = true;
     update.consumed = true;
 
-    _applied_value = _current_value;
+    _applied_value = update.hardware_value;
     _active = EdgeControlSide::None;
     _candidate = EdgeControlSide::None;
     _hide_at_ms = now_ms + kHideDelayMs;
@@ -105,16 +107,51 @@ EdgeControlUpdate EdgeControlLogic::tick(uint32_t now_ms)
     return update;
 }
 
-int EdgeControlLogic::normalize(EdgeControlSide side, int value)
+int EdgeControlLogic::normalize_visual(EdgeControlSide side, int value)
 {
     if (side == EdgeControlSide::Brightness) {
         return std::clamp(value, 10, 100);
     }
     if (side == EdgeControlSide::Volume) {
-        value = std::clamp(value, 0, 100);
+        return std::clamp(value, 0, 100);
+    }
+    return value;
+}
+
+int EdgeControlLogic::normalize_hardware(EdgeControlSide side, int value)
+{
+    value = normalize_visual(side, value);
+    if (side == EdgeControlSide::Volume) {
         return ((value + 2) / 5) * 5;
     }
     return value;
+}
+
+void EdgeControlApplyQueue::push(const EdgeControlUpdate& update)
+{
+    if (!update.apply || update.side == EdgeControlSide::None) {
+        return;
+    }
+    _pending.side = update.side;
+    _pending.value = update.hardware_value;
+    _pending.persist = update.persist;
+}
+
+EdgeControlHardwareUpdate EdgeControlApplyQueue::take()
+{
+    EdgeControlHardwareUpdate update = _pending;
+    reset();
+    return update;
+}
+
+void EdgeControlApplyQueue::reset()
+{
+    _pending = {};
+}
+
+bool EdgeControlApplyQueue::pending() const
+{
+    return _pending.side != EdgeControlSide::None;
 }
 
 bool EdgeControlLogic::active() const

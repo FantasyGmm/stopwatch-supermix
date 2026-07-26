@@ -184,16 +184,29 @@ void EdgeControlOverlay::show(EdgeControlSide side, int value)
         return;
     }
 
+    const bool hidden = lv_obj_has_flag(_overlay->get(), LV_OBJ_FLAG_HIDDEN);
+    const EdgeControlSide previous_side = _visible_side;
+    if (!hidden && previous_side == side && _current_value == value) {
+        return;
+    }
+
     _visible_side  = side;
     _current_value = value;
-    _overlay->setHidden(false);
-    _overlay->moveForeground();
-    invalidate();
+    if (hidden) {
+        _overlay->setHidden(false);
+        _overlay->moveForeground();
+        return;
+    }
+
+    if (previous_side != side && previous_side != EdgeControlSide::None) {
+        invalidate(previous_side);
+    }
+    invalidate(side);
 }
 
 void EdgeControlOverlay::hide()
 {
-    if (_overlay != nullptr) {
+    if (_overlay != nullptr && !lv_obj_has_flag(_overlay->get(), LV_OBJ_FLAG_HIDDEN)) {
         _overlay->setHidden(true);
     }
     _visible_side = EdgeControlSide::None;
@@ -209,11 +222,22 @@ void EdgeControlOverlay::shutdown()
     _current_value = 0;
 }
 
-void EdgeControlOverlay::invalidate()
+void EdgeControlOverlay::invalidate(EdgeControlSide side)
 {
-    if (_overlay != nullptr) {
-        lv_obj_invalidate(_overlay->get());
+    if (_overlay == nullptr || side == EdgeControlSide::None) {
+        return;
     }
+
+    lv_area_t coords;
+    lv_obj_get_coords(_overlay->get(), &coords);
+    const bool brightness = side == EdgeControlSide::Brightness;
+    lv_area_t area = {
+        static_cast<lv_coord_t>(coords.x1 + (brightness ? 18 : 292)),
+        static_cast<lv_coord_t>(coords.y1 + 48),
+        static_cast<lv_coord_t>(coords.x1 + (brightness ? 174 : 448)),
+        static_cast<lv_coord_t>(coords.y1 + 383),
+    };
+    lv_obj_invalidate_area(_overlay->get(), &area);
 }
 
 void EdgeControlOverlay::draw_event_cb(lv_event_t* event)

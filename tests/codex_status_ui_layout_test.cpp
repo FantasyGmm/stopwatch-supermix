@@ -53,14 +53,20 @@ int main()
     assert(kAlertDividerX == 82);
     assert(kAlertDividerY == 258);
     assert(kAlertDividerWidth == 302);
-    assert(kPendingLabelX == 58);
-    assert(kRunningLabelX == 312);
-    assert(kPendingCountX == 58);
-    assert(kRunningCountX == 344);
+    assert(kPendingLabelX == 62);
+    assert(kRunningLabelX == 308);
+    assert(kPendingCountX == 78);
+    assert(kRunningCountX == 324);
     assert(kStateLabelY == 278);
     assert(kStateLabelWidth == 96);
     assert(kStateCountY == 294);
     assert(kStateCountWidth == 64);
+    assert(kPendingLabelX == kScreenSize - (kRunningLabelX + kStateLabelWidth));
+    assert(kPendingCountX == kScreenSize - (kRunningCountX + kStateCountWidth));
+    assert(kPendingLabelX + kStateLabelWidth / 2 ==
+           kPendingCountX + kStateCountWidth / 2);
+    assert(kRunningLabelX + kStateLabelWidth / 2 ==
+           kRunningCountX + kStateCountWidth / 2);
     assert(kTaskIndexX == 151);
     assert(kTaskIndexY == 284);
     assert(kTaskIndexWidth == 164);
