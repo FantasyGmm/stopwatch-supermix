@@ -25,7 +25,32 @@ class DisplayProtectionFirmwareContractTests(unittest.TestCase):
                         return pmic_source[start : index + 1]
             self.fail(f"unterminated function: {signature}")
 
+        def call_end(source, name):
+            call = re.search(rf"\b{re.escape(name)}\s*\(", source)
+            self.assertIsNotNone(call, f"missing call: {name}")
+            opening_parenthesis = source.index("(", call.start())
+            depth = 0
+            for index in range(opening_parenthesis, len(source)):
+                if source[index] == "(":
+                    depth += 1
+                elif source[index] == ")":
+                    depth -= 1
+                    if depth == 0:
+                        terminator = re.match(r"\s*;", source[index + 1 :])
+                        self.assertIsNotNone(
+                            terminator, f"unterminated call statement: {name}"
+                        )
+                        return index + 1 + terminator.end()
+            self.fail(f"unterminated call: {name}")
+
         init_body = function_body("void Hal::pmic_init()")
+        post_task_start = init_body[call_end(init_body, "xTaskCreate") :]
+        self.assertNotRegex(
+            post_task_start,
+            r"_pm1\s*->\s*\w+\s*\(",
+            "direct M5PM1 access after xTaskCreate would race the background task",
+        )
+
         runtime_source = pmic_source.replace(init_body, "")
         runtime_calls = re.findall(r"_pm1->(\w+)\(", runtime_source)
         guarded_calls = re.findall(
