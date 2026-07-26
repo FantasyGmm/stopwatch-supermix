@@ -6,6 +6,27 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class LowBatteryAlertFirmwareContractTests(unittest.TestCase):
+    def test_overlay_uses_circular_safe_layout_and_remains_presentation_only(self):
+        layout = (ROOT / "main" / "apps" / "common" / "low_battery" / "low_battery_alert_layout.h").read_text(
+            encoding="utf-8"
+        )
+        overlay_header = (
+            ROOT / "main" / "apps" / "common" / "low_battery" / "low_battery_alert_overlay.h"
+        ).read_text(encoding="utf-8")
+        overlay_source = (
+            ROOT / "main" / "apps" / "common" / "low_battery" / "low_battery_alert_overlay.cpp"
+        ).read_text(encoding="utf-8")
+
+        for token in ("screenSize = 466", "safeDiameter = 420", "bannerWidth = 260", "bannerHeight = 96"):
+            self.assertIn(token, layout)
+        for token in (
+            "font_puhui_14_1", "MontserratSemiBold26", "电量低", "请及时充电",
+            "removeFlag(LV_OBJ_FLAG_CLICKABLE)",
+            "removeFlag(LV_OBJ_FLAG_SCROLLABLE)", "moveForeground()",
+        ):
+            self.assertIn(token, overlay_source)
+        self.assertNotIn("GetHAL()", overlay_header + overlay_source)
+
     def test_hal_exposes_low_battery_observations(self):
         header = (ROOT / "main" / "hal" / "hal.h").read_text(encoding="utf-8")
         pmic = (ROOT / "main" / "hal" / "hal_pmic.cpp").read_text(encoding="utf-8")

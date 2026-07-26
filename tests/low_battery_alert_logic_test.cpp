@@ -1,7 +1,14 @@
 #include <cassert>
 #include <cstdint>
 
+#include "apps/common/low_battery/low_battery_alert_layout.h"
 #include "runtime/power/low_battery_alert_logic.h"
+
+static_assert(low_battery_alert_layout::screenSize == 466);
+static_assert(low_battery_alert_layout::bannerWidth == 260);
+static_assert(low_battery_alert_layout::bannerHeight == 96);
+static_assert(low_battery_alert_layout::bannerWidth <=
+              low_battery_alert_layout::safeDiameter);
 
 LowBatteryAlertInput sample(uint32_t now_ms, uint8_t percent,
                             bool valid = true, bool external_power = false,
