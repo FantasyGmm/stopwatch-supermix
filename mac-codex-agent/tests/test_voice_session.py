@@ -1,3 +1,4 @@
+import asyncio
 import dataclasses
 import pathlib
 import sys
@@ -78,12 +79,20 @@ def end_packet(sequence, summary, session=7, nonce=TEST_NONCE):
 
 
 class FakeRoute:
-    def __init__(self, fail_start=False, fail_stop=False):
+    def __init__(
+        self,
+        fail_start=False,
+        fail_stop=False,
+        accepted_frames=None,
+        write_error=None,
+    ):
         self.active = False
         self.calls = []
         self.written = []
         self.fail_start = fail_start
         self.fail_stop = fail_stop
+        self.accepted_frames = accepted_frames
+        self.write_error = write_error
 
     def start(self):
         self.calls.append("start")
@@ -93,8 +102,12 @@ class FakeRoute:
 
     def write(self, samples):
         self.calls.append("write:{}".format(len(samples)))
+        if self.write_error is not None:
+            raise self.write_error
         self.written.append(list(samples))
-        return len(samples)
+        if self.accepted_frames is None:
+            return len(samples)
+        return self.accepted_frames
 
     def stop(self):
         self.calls.append("stop")
@@ -136,6 +149,31 @@ class VoiceSessionServiceTests(unittest.IsolatedAsyncioTestCase):
         )
         return service, route, shortcut
 
+    async def test_prepare_uses_injected_readiness_without_starting_resources(self):
+        states = (
+            VoiceState.DRIVER_REQUIRED,
+            VoiceState.RESTART_REQUIRED,
+            VoiceState.ACCESSIBILITY_REQUIRED,
+            VoiceState.TYPELESS_NOT_RUNNING,
+            VoiceState.READY,
+        )
+        for expected in states:
+            with self.subTest(expected=expected):
+                route = FakeRoute()
+                shortcut = FakeShortcut()
+                service = VoiceSessionService(
+                    route,
+                    shortcut,
+                    TEST_KEY,
+                    readiness_checker=lambda expected=expected: expected,
+                    sleep=no_sleep,
+                )
+
+                self.assertEqual(await service.prepare(), expected)
+                self.assertEqual(service.state, expected)
+                self.assertEqual(route.calls, [])
+                self.assertEqual(shortcut.calls, [])
+
     async def test_begin_audio_end_pairs_route_and_shortcut(self):
         route = FakeRoute()
         shortcut = FakeShortcut()
@@ -172,6 +210,33 @@ class VoiceSessionServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(shortcut.calls, ["start", "stop"])
         self.assertEqual(service.state, VoiceState.ERROR)
 
+    async def test_unauthenticated_idle_traffic_preserves_readiness_without_drain(self):
+        drain_calls = []
+
+        async def record_sleep(seconds):
+            drain_calls.append(seconds)
+
+        route = FakeRoute()
+        shortcut = FakeShortcut()
+        service = VoiceSessionService(
+            route,
+            shortcut,
+            TEST_KEY,
+            readiness_checker=lambda: VoiceState.TYPELESS_NOT_RUNNING,
+            sleep=record_sleep,
+        )
+        await service.prepare()
+        tampered = bytearray(begin_packet())
+        tampered[-1] ^= 1
+
+        with self.assertRaises(InvalidTag):
+            await service.handle(bytes(tampered))
+
+        self.assertEqual(service.state, VoiceState.TYPELESS_NOT_RUNNING)
+        self.assertEqual(drain_calls, [])
+        self.assertEqual(route.calls, [])
+        self.assertEqual(shortcut.calls, [])
+
     async def test_duplicate_recent_session_nonce_is_rejected_before_start(self):
         service, route, shortcut = self.make_service()
         await service.handle(begin_packet())
@@ -207,6 +272,53 @@ class VoiceSessionServiceTests(unittest.IsolatedAsyncioTestCase):
             end_packet(5, EndSummary(4, 4, 0, 0, 1280, 80, 256))
         )
         self.assertEqual(service.state, VoiceState.READY)
+
+    async def test_short_normal_write_aborts_and_drains_before_cleanup(self):
+        drain_calls = []
+
+        async def record_sleep(seconds):
+            drain_calls.append(seconds)
+
+        route = FakeRoute(accepted_frames=319)
+        shortcut = FakeShortcut()
+        service = VoiceSessionService(
+            route, shortcut, TEST_KEY, sleep=record_sleep
+        )
+        await service.handle(begin_packet())
+
+        with self.assertRaisesRegex(RuntimeError, "short audio write"):
+            await service.handle(audio_packet(1))
+
+        self.assertEqual(drain_calls, [0.150])
+        self.assertEqual(route.calls, ["start", "write:320", "stop"])
+        self.assertEqual(shortcut.calls, ["start", "stop"])
+        self.assertEqual(service.state, VoiceState.ERROR)
+
+    async def test_short_silence_write_aborts_before_decoding_next_audio(self):
+        drain_calls = []
+
+        async def record_sleep(seconds):
+            drain_calls.append(seconds)
+
+        route = FakeRoute()
+        shortcut = FakeShortcut()
+        service = VoiceSessionService(
+            route, shortcut, TEST_KEY, sleep=record_sleep
+        )
+        await service.handle(begin_packet())
+        await service.handle(audio_packet(1))
+        route.accepted_frames = 319
+
+        with mock.patch("voice_session.decode_ima_adpcm_block") as decoder:
+            with self.assertRaisesRegex(RuntimeError, "short audio write"):
+                await service.handle(audio_packet(3))
+
+        decoder.assert_not_called()
+        self.assertEqual(drain_calls, [0.150])
+        self.assertEqual(route.written, [[0] * 320, [0] * 320])
+        self.assertEqual(route.calls[-1], "stop")
+        self.assertEqual(shortcut.calls[-1], "stop")
+        self.assertEqual(service.state, VoiceState.ERROR)
 
     async def test_stale_session_is_rejected_before_start(self):
         service, route, shortcut = self.make_service()
@@ -292,6 +404,8 @@ class VoiceSessionServiceTests(unittest.IsolatedAsyncioTestCase):
             "overflow": dataclasses.replace(valid, queue_overflows=1),
             "encode": dataclasses.replace(valid, encode_failures=1),
             "captured": dataclasses.replace(valid, captured_samples=319),
+            "elapsed zero": dataclasses.replace(valid, elapsed_ms=0),
+            "elapsed implausible": dataclasses.replace(valid, elapsed_ms=41),
             "mtu too small": dataclasses.replace(valid, negotiated_mtu=188),
             "mtu too large": dataclasses.replace(valid, negotiated_mtu=528),
         }
@@ -315,6 +429,17 @@ class VoiceSessionServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(route.calls[-1], "stop")
         self.assertEqual(shortcut.calls[-1], "stop")
         self.assertEqual(service.state, VoiceState.ERROR)
+
+    async def test_end_allows_one_final_block_of_elapsed_quantization(self):
+        service, _route, _shortcut = self.make_service()
+        await service.handle(begin_packet())
+        await service.handle(audio_packet(1))
+
+        await service.handle(
+            end_packet(2, EndSummary(1, 1, 0, 0, 320, 40, 256))
+        )
+
+        self.assertEqual(service.state, VoiceState.READY)
 
     async def test_shortcut_start_failure_cleans_only_armed_route(self):
         route = FakeRoute()
@@ -374,18 +499,38 @@ class VoiceSessionServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(route.written, [])
         self.assertEqual(service.state, VoiceState.ERROR)
 
-    async def test_authenticated_voice_error_aborts_active_session(self):
+    async def test_voice_error_requires_active_session_and_exact_next_sequence(self):
         service, route, shortcut = self.make_service()
         await service.handle(begin_packet())
 
-        with self.assertRaises(ValueError):
+        with self.assertRaisesRegex(ValueError, "active session"):
             await service.handle(
-                encrypted_packet(VOICE_ERROR, 1, ERROR_PAYLOAD.pack(4, 9))
+                encrypted_packet(
+                    VOICE_ERROR,
+                    1,
+                    ERROR_PAYLOAD.pack(4, 9),
+                    session=8,
+                )
             )
-
         self.assertEqual(route.calls, ["start", "stop"])
         self.assertEqual(shortcut.calls, ["start", "stop"])
         self.assertEqual(service.state, VoiceState.ERROR)
+
+        service, _route, _shortcut = self.make_service()
+        await service.handle(begin_packet())
+        with self.assertRaisesRegex(ValueError, "VOICE_ERROR sequence"):
+            await service.handle(
+                encrypted_packet(VOICE_ERROR, 2, ERROR_PAYLOAD.pack(4, 9))
+            )
+
+        service, _route, _shortcut = self.make_service()
+        await service.handle(begin_packet())
+        with self.assertRaisesRegex(
+            RuntimeError, "watch reported voice error 4.*detail 9"
+        ):
+            await service.handle(
+                encrypted_packet(VOICE_ERROR, 1, ERROR_PAYLOAD.pack(4, 9))
+            )
 
     async def test_start_drain_and_stop_order_is_bounded(self):
         events = []
@@ -435,6 +580,112 @@ class VoiceSessionServiceTests(unittest.IsolatedAsyncioTestCase):
                 "route.stop",
             ],
         )
+
+    async def test_cancellation_during_drain_finishes_cleanup_then_propagates(self):
+        drain_started = asyncio.Event()
+        release_drain = asyncio.Event()
+
+        async def blocked_sleep(seconds):
+            self.assertEqual(seconds, 0.150)
+            drain_started.set()
+            await release_drain.wait()
+
+        route = FakeRoute()
+        shortcut = FakeShortcut()
+        service = VoiceSessionService(
+            route, shortcut, TEST_KEY, sleep=blocked_sleep
+        )
+        await service.handle(begin_packet())
+        await service.handle(audio_packet(1))
+        handler = asyncio.create_task(
+            service.handle(
+                end_packet(2, EndSummary(1, 1, 0, 0, 320, 20, 256))
+            )
+        )
+        await drain_started.wait()
+
+        handler.cancel()
+        await asyncio.sleep(0)
+        self.assertFalse(handler.done())
+        release_drain.set()
+        with self.assertRaises(asyncio.CancelledError):
+            await handler
+
+        self.assertEqual(shortcut.calls, ["start", "stop"])
+        self.assertEqual(route.calls, ["start", "write:320", "stop"])
+        self.assertEqual(service.state, VoiceState.READY)
+
+    async def test_all_active_failure_cleanup_paths_drain_once(self):
+        async def exercise(case):
+            drain_calls = []
+
+            async def record_sleep(seconds):
+                drain_calls.append(seconds)
+
+            route = FakeRoute(
+                fail_start=case == "route_start",
+                fail_stop=case == "route_stop",
+                write_error=(
+                    RuntimeError("route write failed")
+                    if case == "write"
+                    else None
+                ),
+            )
+            shortcut = FakeShortcut(fail_start=case == "shortcut_start")
+            service = VoiceSessionService(
+                route, shortcut, TEST_KEY, sleep=record_sleep
+            )
+
+            if case in ("route_start", "shortcut_start"):
+                with self.assertRaises(RuntimeError):
+                    await service.handle(begin_packet())
+                return drain_calls
+
+            await service.handle(begin_packet())
+            if case == "disconnect":
+                await service.disconnect()
+            elif case == "close":
+                await service.close()
+            elif case == "auth":
+                tampered = bytearray(audio_packet(1))
+                tampered[-1] ^= 1
+                with self.assertRaises(InvalidTag):
+                    await service.handle(bytes(tampered))
+            elif case == "malformed":
+                with self.assertRaises(ValueError):
+                    await service.handle(audio_packet(1)[:-1])
+            elif case == "voice_error":
+                with self.assertRaises(RuntimeError):
+                    await service.handle(
+                        encrypted_packet(
+                            VOICE_ERROR, 1, ERROR_PAYLOAD.pack(4, 9)
+                        )
+                    )
+            elif case == "write":
+                with self.assertRaisesRegex(RuntimeError, "route write failed"):
+                    await service.handle(audio_packet(1))
+            elif case == "route_stop":
+                with self.assertRaisesRegex(RuntimeError, "route stop failed"):
+                    await service.disconnect()
+            else:
+                self.fail("unknown cleanup case {}".format(case))
+            return drain_calls
+
+        active_cases = (
+            "disconnect",
+            "close",
+            "auth",
+            "malformed",
+            "voice_error",
+            "write",
+            "shortcut_start",
+            "route_stop",
+        )
+        for case in active_cases:
+            with self.subTest(case=case):
+                self.assertEqual(await exercise(case), [0.150])
+
+        self.assertEqual(await exercise("route_start"), [])
 
     async def test_recent_nonce_cache_has_a_small_bounded_window(self):
         service, _route, _shortcut = self.make_service()
