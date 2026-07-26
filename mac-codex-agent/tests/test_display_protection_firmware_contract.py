@@ -83,7 +83,6 @@ class DisplayProtectionFirmwareContractTests(unittest.TestCase):
                     "tests/display_protection_diagnostics_test.cpp",
                     "main/runtime/display/display_protection_diagnostics.cpp",
                     "main/runtime/display/display_protection_logic.cpp",
-                    "main/runtime/display/display_protection_config.cpp",
                 ),
             ),
             "external_power_state_test": (
@@ -111,7 +110,11 @@ class DisplayProtectionFirmwareContractTests(unittest.TestCase):
                 flags=re.MULTILINE,
             )
             self.assertEqual(sources, list(expected_sources))
-            self.assertIn(f'"$HOST_TEST_DIR/{executable}"', body[output_index:])
+            after_output = body[output_index + len(output) :]
+            self.assertRegex(
+                after_output,
+                rf'(?m)^"\$HOST_TEST_DIR/{re.escape(executable)}"$',
+            )
 
     def test_runtime_pmic_driver_accesses_share_one_io_lock(self):
         pmic_source = (ROOT / "main" / "hal" / "hal_pmic.cpp").read_text(

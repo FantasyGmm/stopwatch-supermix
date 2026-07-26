@@ -219,7 +219,6 @@ echo "[25/32] AMOLED protection state machine host test"
     tests/display_protection_diagnostics_test.cpp \
     main/runtime/display/display_protection_diagnostics.cpp \
     main/runtime/display/display_protection_logic.cpp \
-    main/runtime/display/display_protection_config.cpp \
     -o "$HOST_TEST_DIR/display_protection_diagnostics_test"
 "$HOST_TEST_DIR/display_protection_diagnostics_test"
 
