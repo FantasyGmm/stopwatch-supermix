@@ -121,6 +121,33 @@ class DisplayProtectionFirmwareContractTests(unittest.TestCase):
         self.assertIn("StaleAfterMs = 60000", tracker)
         self.assertNotIn("_view->update", tracker)
 
+    def test_stopwatch_model_and_running_hold_outlive_subpage(self):
+        clock_header = (
+            ROOT / "main" / "apps" / "app_clock" / "app_clock.h"
+        ).read_text(encoding="utf-8")
+        clock_source = (
+            ROOT / "main" / "apps" / "app_clock" / "app_clock.cpp"
+        ).read_text(encoding="utf-8")
+        stopwatch_view_header = (
+            ROOT / "main" / "apps" / "app_stopwatch" / "view" / "view.h"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("std::unique_ptr<model::Stopwatch> _stopwatch", clock_header)
+        self.assertNotIn(
+            "std::unique_ptr<model::Stopwatch> _stopwatch", stopwatch_view_header
+        )
+        self.assertIn("model::Stopwatch* _stopwatch", stopwatch_view_header)
+        self.assertIn(
+            "void init(lv_obj_t* parent, model::Stopwatch& stopwatch)",
+            stopwatch_view_header,
+        )
+        for token in (
+            "DisplayKeepAwakeReason::StopwatchRunning",
+            "model::Stopwatch::State_t::Running",
+            "setKeepAwake",
+        ):
+            self.assertIn(token, clock_source)
+
 
 if __name__ == "__main__":
     unittest.main()
