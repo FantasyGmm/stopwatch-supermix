@@ -56,27 +56,32 @@ class TraeStatusFirmwareContractTests(unittest.TestCase):
             "class TraeStatusPage",
             "void init(lv_obj_t* parent)",
             "void render(",
+            "void set_active(bool active)",
+            "bool contains_deck_point(int x, int y) const",
             "void shutdown()",
+            '"TRAE"',
             '"MODEL"',
             '"EFFORT"',
-            '"STATE"',
-            '"PROJECT"',
-            '"TASK"',
-            "make_signal_mark",
+            '"BT LIVE"',
+            '"TRAE LIVE"',
+            '"待确认"',
+            '"运行中"',
             "lv_obj_set_style_border_width",
             "LV_LABEL_LONG_MODE_DOTS",
         ):
             self.assertIn(token, header + source)
 
         for forbidden in (
+            "make_signal_mark",
+            "kColumnDividerX",
+            '"已完成"',
             "lv_bar_create",
             "make_quota_row",
             "logo_trae",
-            "lv_image_set_src",
         ):
             self.assertNotIn(forbidden, source)
 
-    def test_trae_page_renders_all_visible_states_and_split_columns(self):
+    def test_trae_page_renders_aggregate_deck_and_empty_states(self):
         source = (self.app_root / "trae_status_page.cpp").read_text(
             encoding="utf-8"
         )
@@ -85,21 +90,20 @@ class TraeStatusFirmwareContractTests(unittest.TestCase):
         )
 
         for text in (
-            '"TRAE OFFLINE"',
-            '"TRAE WAIT"',
-            '"空闲"',
-            '"等待指令"',
-            '"正在处理"',
-            '"已完成"',
+            '"暂无进行中的任务"',
+            '"等待连接"',
+            '"TRAE 未运行"',
+            '"状态不可用"',
         ):
             self.assertIn(text, source)
 
         for token in (
-            "kLeftColumnX",
-            "kLeftColumnWidth",
-            "kRightColumnX",
-            "kRightColumnWidth",
-            "kColumnDividerX",
+            "kBrandIconX",
+            "kHealthX",
+            "kRobotX",
+            "kSummaryY",
+            "kDeckX",
+            "kCardWidth",
         ):
             self.assertIn(token, layout)
 

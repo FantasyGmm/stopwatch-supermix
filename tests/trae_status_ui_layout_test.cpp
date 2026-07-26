@@ -7,25 +7,17 @@ int main()
 {
     using namespace trae_status_ui;
 
-    assert(kDividerX == 82);
-    assert(kDividerY == 223);
-    assert(kDividerWidth == 302);
-    assert(kLowerPanelX == 69);
-    assert(kLowerPanelY == 246);
-    assert(kLowerPanelWidth == 328);
-    assert(kLowerPanelHeight == 118);
-    assert(kColumnDividerX == 210);
-    assert(kColumnDividerY == kLowerPanelY);
-    assert(kColumnDividerHeight == 98);
-    assert(kLeftColumnX == 69);
-    assert(kLeftColumnWidth == 126);
-    assert(kRightColumnX == 228);
-    assert(kRightColumnWidth == 169);
-    assert(kLeftColumnX + kLeftColumnWidth < kColumnDividerX);
-    assert(kColumnDividerX < kRightColumnX);
-    assert(kRightColumnX + kRightColumnWidth <=
-           kLowerPanelX + kLowerPanelWidth);
-    assert(kLowerPanelY + kLowerPanelHeight < kPageIndicatorY);
-    assert(kPageIndicatorY == 416);
-    assert(kBatteryY == 438);
+    assert(kBrandIconX == 168 && kBrandIconY == 22);
+    assert(kBrandX == 218 && kBrandY == 32);
+    assert(kHealthX == 118 && kHealthY == 67 && kHealthWidth == 230);
+    assert(kRobotX == 96 && kRobotY == 105);
+    assert(kRobotWidth == 77 && kRobotHeight == 86);
+    assert(kTelemetryX == 214);
+    assert(kDividerX == 82 && kDividerY == 223 && kDividerWidth == 302);
+    assert(kSummaryY == 240);
+    assert(kDeckX == 108 && kDeckY == 268);
+    assert(kDeckWidth == 250 && kDeckHeight == 120);
+    assert(kCardWidth == 250 && kCardHeight == 98);
+    assert(kDeckY + kDeckHeight < kPageIndicatorY);
+    assert(kPageIndicatorY == 416 && kBatteryY == 438);
 }
