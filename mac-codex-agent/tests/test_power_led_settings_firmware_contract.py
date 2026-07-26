@@ -1,3 +1,4 @@
+import re
 import unittest
 from pathlib import Path
 
@@ -41,11 +42,16 @@ class PowerLedSettingsFirmwareContractTests(unittest.TestCase):
         self.assertIn('GetInt("pwr_led_mode", 0)', self.hal_pmic)
         self.assertIn('SetInt("pwr_led_mode"', self.hal_pmic)
         self.assertIn(
-            'GetInt("pwr_led_interval_s", PowerLedBlinkIntervalDefaultSeconds)',
+            'GetInt("pwr_led_int_s", PowerLedBlinkIntervalDefaultSeconds)',
             self.hal_pmic,
         )
-        self.assertIn('SetInt("pwr_led_interval_s"', self.hal_pmic)
+        self.assertIn('SetInt("pwr_led_int_s"', self.hal_pmic)
         self.assertIn("setLedEnLevel", self.hal_pmic)
+
+    def test_power_led_nvs_keys_fit_esp_idf_limit(self):
+        keys = re.findall(r'(?:GetInt|SetInt)\("([^"]+)"', self.hal_pmic)
+        self.assertGreater(len(keys), 0)
+        self.assertEqual([], [key for key in keys if len(key) > 15])
 
     def test_blink_mode_uses_short_pulse_on_configurable_period(self):
         self.assertIn("constexpr uint32_t _power_led_pulse_ms = 160", self.hal_pmic)

@@ -254,7 +254,7 @@ void Hal::setPowerLedBlinkIntervalSeconds(int seconds, bool saveToSettings)
 
     if (saveToSettings) {
         Settings settings(std::string(Hal::SettingsNs), true);
-        settings.SetInt("pwr_led_interval_s", _power_led_blink_interval_seconds);
+        settings.SetInt("pwr_led_int_s", _power_led_blink_interval_seconds);
     }
 }
 
@@ -263,7 +263,7 @@ int Hal::getPowerLedBlinkIntervalSeconds(bool loadFromSettings)
     if (loadFromSettings) {
         Settings settings(std::string(Hal::SettingsNs), false);
         _power_led_blink_interval_seconds = normalize_power_led_blink_interval_seconds(
-            settings.GetInt("pwr_led_interval_s", PowerLedBlinkIntervalDefaultSeconds));
+            settings.GetInt("pwr_led_int_s", PowerLedBlinkIntervalDefaultSeconds));
     }
     return _power_led_blink_interval_seconds;
 }
