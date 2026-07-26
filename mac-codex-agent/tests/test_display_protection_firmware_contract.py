@@ -154,36 +154,52 @@ class DisplayProtectionFirmwareContractTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("GetHAL().getUserBackLightBrightness()", edge_service)
 
-    def test_codex_policy_tracks_external_power_and_preserves_manual_off(self):
-        codex_source = (
-            ROOT / "main" / "apps" / "app_codex_status" / "app_codex_status.cpp"
+    def test_global_service_owns_configuration_and_power_policy(self):
+        service_header = (
+            ROOT
+            / "main"
+            / "runtime"
+            / "display"
+            / "global_display_protection_service.h"
         ).read_text(encoding="utf-8")
+        service_source = (
+            ROOT
+            / "main"
+            / "runtime"
+            / "display"
+            / "global_display_protection_service.cpp"
+        ).read_text(encoding="utf-8")
+        service = service_header + service_source
 
         for token in (
-            "kPowerPolicyCheckMs = 1000",
-            "GetHAL().isBatteryCharging(false)",
-            "setAutomaticProtection(!external_power)",
-            "refresh_display_protection_policy(now, true)",
-            "refresh_display_protection_policy(now, false)",
+            'Settings settings("disp_guard")',
+            'GetInt("dim_idx"',
+            'GetInt("off_idx"',
+            'GetBool("chg_guard"',
+            'SetInt("dim_idx"',
+            'SetInt("off_idx"',
+            'SetBool("chg_guard"',
+            "getExternalPowerSnapshot()",
+            "screenOffNow()",
+            "applyConfig(const DisplayProtectionConfig& config, bool persist)",
         ):
-            self.assertIn(token, codex_source)
+            self.assertIn(token, service)
 
-        close_body = codex_source[
-            codex_source.index("void AppCodexStatus::onClose()") :
-            codex_source.index("void AppCodexStatus::create_view()")
-        ]
-        manual_off_body = codex_source[
-            codex_source.index("void AppCodexStatus::enter_screen_off()") :
-            codex_source.index("void AppCodexStatus::wake_screen()")
-        ]
-        wake_body = codex_source[
-            codex_source.index("void AppCodexStatus::wake_screen()") :
-            codex_source.index("void AppCodexStatus::set_percent")
-        ]
-        self.assertIn("setAutomaticProtection(true)", close_body)
-        self.assertIn("setAutomaticProtection(false, false)", manual_off_body)
-        self.assertIn("setTemporaryBackLightBrightness(0)", manual_off_body)
-        self.assertIn("setTemporaryBackLightBrightness", wake_body)
+        nvs_keys = re.findall(
+            r'(?:GetInt|GetBool|SetInt|SetBool)\("([^"]+)"', service_source
+        )
+        self.assertEqual({"dim_idx", "off_idx", "chg_guard"}, set(nvs_keys))
+        for key in nvs_keys:
+            self.assertLessEqual(len(key), 15)
+
+        self.assertIn(
+            "_config.protect_while_charging || "
+            "_external_power.state != ExternalPowerState::ExternalPower",
+            service,
+        )
+        self.assertIn(
+            "_logic.automaticEnabled() && _logic.reasonMask() == 0", service
+        )
 
     def test_assistant_publishes_semantic_activity_only(self):
         assistant_source = (
