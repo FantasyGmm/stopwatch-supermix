@@ -50,6 +50,11 @@ struct AlarmStorageSnapshot {
     std::array<AlarmStorageEntry, maxAlarmCount> alarms = {};
 };
 
+struct BatterySampleSnapshot {
+    uint8_t level = 0;
+    uint32_t revision = 0;
+};
+
 /**
  * @brief
  *
@@ -159,6 +164,7 @@ public:
 
     /* ---------------------------------- Power --------------------------------- */
     uint8_t getBatteryLevel();
+    BatterySampleSnapshot batterySampleSnapshot();
     uint32_t batterySampleRevision();
     bool isBatteryCharging(bool strict = false);
 

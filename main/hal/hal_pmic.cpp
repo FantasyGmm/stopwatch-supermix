@@ -144,6 +144,12 @@ uint8_t Hal::getBatteryLevel()
     return _bat_level;
 }
 
+BatterySampleSnapshot Hal::batterySampleSnapshot()
+{
+    std::lock_guard<std::mutex> lock(_bat_level_mutex);
+    return {_bat_level, _bat_sample_revision};
+}
+
 uint32_t Hal::batterySampleRevision()
 {
     std::lock_guard<std::mutex> lock(_bat_level_mutex);

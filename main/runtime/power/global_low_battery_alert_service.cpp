@@ -30,11 +30,24 @@ void GlobalLowBatteryAlertService::update()
 
     const uint32_t now_ms = GetHAL().millis();
     const auto resources = GetResourceSupervisor().snapshot();
-    const uint32_t battery_revision = GetHAL().batterySampleRevision();
+    const BatterySampleSnapshot battery_sample = GetHAL().batterySampleSnapshot();
     const bool sample_due =
-        battery_revision != 0 && battery_revision != _last_battery_revision;
+        battery_sample.revision != 0 &&
+        battery_sample.revision != _last_battery_revision;
     if (sample_due) {
-        _last_battery_revision = battery_revision;
+        _last_battery_revision = battery_sample.revision;
+    }
+    const bool display_visible = GetHAL().isDisplayVisible();
+    const bool display_woke = display_visible && !_last_display_visible;
+    _last_display_visible = display_visible;
+    const bool charging_refresh_due =
+        !_charging_observed || sample_due || display_woke ||
+        static_cast<uint32_t>(now_ms - _last_charging_poll_ms) >=
+            chargingPollIntervalMs;
+    if (charging_refresh_due) {
+        _external_power = GetHAL().isBatteryCharging(false);
+        _last_charging_poll_ms = now_ms;
+        _charging_observed = true;
     }
     const bool playback_available =
         !_system_playback_owned && !resources.blocked &&
@@ -45,9 +58,9 @@ void GlobalLowBatteryAlertService::update()
         .now_ms = now_ms,
         .battery_sample_due = sample_due,
         .battery_sample_valid = sample_due,
-        .battery_percent = sample_due ? GetHAL().getBatteryLevel() : 0,
-        .external_power = GetHAL().isBatteryCharging(false),
-        .display_visible = GetHAL().isDisplayVisible(),
+        .battery_percent = sample_due ? battery_sample.level : 0,
+        .external_power = _external_power,
+        .display_visible = display_visible,
         .playback_available = playback_available,
         .speaker_audible = GetHAL().getSpeakerVolume() > 0,
     };
@@ -134,6 +147,10 @@ void GlobalLowBatteryAlertService::shutdown()
     _initialized = false;
     _overlay_available = false;
     _last_battery_revision = 0;
+    _charging_observed = false;
+    _external_power = false;
+    _last_display_visible = false;
+    _last_charging_poll_ms = 0;
     _show_pending = false;
     _hide_pending = false;
     _show_percent = 0;

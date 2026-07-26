@@ -22,7 +22,9 @@ class LowBatteryAlertFirmwareContractTests(unittest.TestCase):
         for token in (
             "LowBatteryAlertLogic _logic",
             "LowBatteryAlertOverlay _overlay",
-            "GetHAL().batterySampleRevision()",
+            "GetHAL().batterySampleSnapshot()",
+            "battery_sample.revision != _last_battery_revision",
+            ".battery_percent = sample_due ? battery_sample.level : 0,",
             "GetHAL().isBatteryCharging(false)",
             "GetHAL().isDisplayVisible()",
             "GetHAL().isAudioPlaying()",
@@ -31,7 +33,30 @@ class LowBatteryAlertFirmwareContractTests(unittest.TestCase):
             "_logic.deferSound()",
         ):
             self.assertIn(token, service)
+        self.assertNotIn("GetHAL().batterySampleRevision()", service_source)
+        self.assertNotIn("GetHAL().getBatteryLevel()", service_source)
         self.assertIn(
+            "static constexpr uint32_t chargingPollIntervalMs = 1000;",
+            service_header,
+        )
+        for token in (
+            "const bool display_woke = display_visible && !_last_display_visible;",
+            "!_charging_observed || sample_due || display_woke",
+            "static_cast<uint32_t>(now_ms - _last_charging_poll_ms) >=",
+            "chargingPollIntervalMs",
+            "if (charging_refresh_due)",
+            "_external_power = GetHAL().isBatteryCharging(false);",
+            ".external_power = _external_power,",
+        ):
+            self.assertIn(token, service)
+        self.assertEqual(
+            service_source.count("GetHAL().isBatteryCharging(false)"), 1
+        )
+        self.assertLess(
+            service_source.index("if (charging_refresh_due)"),
+            service_source.index("_logic.update(input)"),
+        )
+        self.assertNotIn(
             ".external_power = GetHAL().isBatteryCharging(false),", service_source
         )
         self.assertNotIn(
@@ -94,9 +119,22 @@ class LowBatteryAlertFirmwareContractTests(unittest.TestCase):
         display = (ROOT / "main" / "hal" / "hal_display.cpp").read_text(encoding="utf-8")
         audio = (ROOT / "main" / "hal" / "hal_audio.cpp").read_text(encoding="utf-8")
 
-        for token in ("batterySampleRevision()", "isDisplayVisible()", "isAudioPlaying()"):
+        for token in (
+            "struct BatterySampleSnapshot",
+            "batterySampleSnapshot()",
+            "batterySampleRevision()",
+            "isDisplayVisible()",
+            "isAudioPlaying()",
+        ):
             self.assertIn(token, header)
         self.assertIn("_bat_sample_revision++", pmic)
+        self.assertIn("BatterySampleSnapshot Hal::batterySampleSnapshot()", pmic)
+        snapshot_getter = pmic[
+            pmic.index("BatterySampleSnapshot Hal::batterySampleSnapshot()") :
+            pmic.index("uint32_t Hal::batterySampleRevision()")
+        ]
+        self.assertEqual(snapshot_getter.count("lock(_bat_level_mutex)"), 1)
+        self.assertIn("return {_bat_level, _bat_sample_revision};", snapshot_getter)
         self.assertIn("uint32_t Hal::batterySampleRevision()", pmic)
         self.assertIn("bool Hal::isDisplayVisible()", display)
         self.assertIn("return _bl_brightness > 0", display)
