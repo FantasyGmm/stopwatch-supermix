@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import datetime
 import json
 import os
 import pathlib
@@ -13,6 +14,9 @@ from typing import Dict, Iterable, Literal, Optional, Sequence, Tuple
 _IDENTIFIER = r"[A-Za-z0-9_.:-]{1,128}"
 _SESSION_RE = re.compile(r"\bsession_id=(?P<value>{})\b".format(_IDENTIFIER))
 _TASK_RE = re.compile(r"\btask_id=(?P<value>{})\b".format(_IDENTIFIER))
+_TIMESTAMP_RE = re.compile(
+    r"^(?P<value>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:[.,]\d{1,6})?)"
+)
 _MODEL_RE = re.compile(
     r'model_info:\s*CustomModel\s*\{[^}\r\n]{0,512}?'
     r'display_model_name:\s*Some\("(?P<model>[^"\r\n]{1,64})"\)'
@@ -29,6 +33,7 @@ class TraeLogEvent:
     task_id: Optional[str] = None
     model: Optional[str] = None
     effort: Optional[str] = None
+    occurred_at: Optional[float] = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -64,12 +69,27 @@ def parse_trae_log_event(line: str) -> Optional[TraeLogEvent]:
     if not isinstance(line, str) or not line:
         return None
 
+    occurred_at = None
+    timestamp_match = _TIMESTAMP_RE.search(line)
+    if timestamp_match is not None:
+        timestamp = timestamp_match.group("value").replace(",", ".")
+        timestamp_format = "%Y-%m-%d %H:%M:%S.%f" if "." in timestamp else (
+            "%Y-%m-%d %H:%M:%S"
+        )
+        try:
+            occurred_at = datetime.datetime.strptime(
+                timestamp, timestamp_format
+            ).timestamp()
+        except (OverflowError, ValueError):
+            occurred_at = None
+
     model_match = _MODEL_RE.search(line)
     if model_match is not None:
         return TraeLogEvent(
             kind="model",
             model=model_match.group("model"),
             effort=model_match.group("effort"),
+            occurred_at=occurred_at,
         )
 
     kind = None
@@ -94,6 +114,7 @@ def parse_trae_log_event(line: str) -> Optional[TraeLogEvent]:
         kind=kind,
         session_id=session_match.group("value"),
         task_id=task_match.group("value"),
+        occurred_at=occurred_at,
     )
 
 
@@ -101,6 +122,8 @@ def apply_trae_log_event(
     tasks: Iterable[TraeTask],
     event: TraeLogEvent,
     now: float,
+    model: Optional[str] = None,
+    effort: Optional[str] = None,
 ) -> Tuple[TraeTask, ...]:
     current = list(tasks)
     if event.kind == "model" or event.session_id is None or event.task_id is None:
@@ -130,8 +153,16 @@ def apply_trae_log_event(
         detail=existing.detail if existing is not None else "",
         state=state,
         updated_at=now,
-        model=existing.model if existing is not None else "",
-        effort=existing.effort if existing is not None else "",
+        model=(
+            model
+            if model is not None
+            else (existing.model if existing is not None else "")
+        ),
+        effort=(
+            (effort or "")
+            if model is not None
+            else (existing.effort if existing is not None else "")
+        ),
     )
     if matching_index is None:
         current.append(replacement)
@@ -181,6 +212,8 @@ class TraeTaskTracker:
             return self._snapshot()
 
         changed = False
+        activity_events = []
+        model_events = []
         for path in paths:
             try:
                 stat = path.stat()
@@ -195,10 +228,28 @@ class TraeTaskTracker:
                 or stat.st_size < cursor.offset
             )
             if requires_baseline:
-                if self._baseline(path, stat):
-                    changed = True
+                model_event = self._baseline(path, stat)
+                if model_event is not None:
+                    model_events.append(
+                        (
+                            self._event_time(model_event, stat.st_mtime_ns, 0),
+                            key,
+                            0,
+                            model_event,
+                        )
+                    )
                 continue
 
+            local_model = self._latest_model_from_tail(path, cursor.offset)
+            if local_model is not None:
+                model_events.append(
+                    (
+                        self._event_time(local_model, cursor.mtime_ns, 0),
+                        key,
+                        0,
+                        local_model,
+                    )
+                )
             try:
                 with path.open("rb") as stream:
                     stream.seek(cursor.offset)
@@ -207,22 +258,35 @@ class TraeTaskTracker:
                 continue
             complete_length = appended.rfind(b"\n") + 1
             if complete_length > 0:
-                for line in appended[:complete_length].decode(
+                decoded_lines = appended[:complete_length].decode(
                     "utf-8", errors="replace"
-                ).splitlines():
+                ).splitlines()
+                for line_index, line in enumerate(decoded_lines, start=1):
                     event = parse_trae_log_event(line)
                     if event is None:
                         continue
                     if event.kind == "model":
-                        next_pair = (event.model, event.effort)
-                        if next_pair != (self._model, self._effort):
-                            self._model, self._effort = next_pair
-                            changed = True
+                        local_model = event
+                        model_events.append(
+                            (
+                                self._event_time(
+                                    event, stat.st_mtime_ns, line_index
+                                ),
+                                key,
+                                line_index,
+                                event,
+                            )
+                        )
                         continue
-                    updated = apply_trae_log_event(self._tasks, event, now)
-                    if updated != self._tasks:
-                        self._tasks = updated
-                        changed = True
+                    activity_events.append(
+                        (
+                            self._event_time(event, stat.st_mtime_ns, line_index),
+                            key,
+                            line_index,
+                            event,
+                            local_model,
+                        )
+                    )
 
             self._cursors[key] = TraeLogCursor(
                 path=key,
@@ -231,18 +295,34 @@ class TraeTaskTracker:
                 mtime_ns=stat.st_mtime_ns,
             )
 
+        if model_events:
+            latest_model = max(
+                model_events,
+                key=lambda item: (item[0], item[1], item[2]),
+            )[3]
+            next_pair = (latest_model.model, latest_model.effort)
+            if next_pair != (self._model, self._effort):
+                self._model, self._effort = next_pair
+                changed = True
+
+        for activity_time, _path_key, _line_index, event, local_model in sorted(
+            activity_events,
+            key=lambda item: (item[0], item[1], item[2]),
+        ):
+            updated = apply_trae_log_event(
+                self._tasks,
+                event,
+                activity_time,
+                model=local_model.model if local_model is not None else None,
+                effort=local_model.effort if local_model is not None else None,
+            )
+            if updated != self._tasks:
+                self._tasks = updated
+                changed = True
+
         if changed:
             self._revision += 1
-            self._tasks = tuple(
-                sorted(
-                    self._tasks,
-                    key=lambda item: (
-                        -item.updated_at,
-                        item.session_id,
-                        item.task_id,
-                    ),
-                )[: self._MAX_LEDGER_TASKS]
-            )
+            self._tasks = self._retain_ledger_tasks(self._tasks)
             self._save_ledger()
         self._save_cursors()
         return self._snapshot()
@@ -254,6 +334,14 @@ class TraeTaskTracker:
             effort=self._effort,
             revision=self._revision,
         )
+
+    def remember_tasks(self, tasks: Iterable[TraeTask]) -> TraeTaskSnapshot:
+        retained = self._retain_ledger_tasks(tasks)
+        if retained != self._tasks:
+            self._tasks = retained
+            self._revision += 1
+            self._save_ledger()
+        return self._snapshot()
 
     @staticmethod
     def _existing_logs(
@@ -270,11 +358,10 @@ class TraeTaskTracker:
             )
         )
 
-    def _baseline(self, path: pathlib.Path, stat: os.stat_result) -> bool:
+    def _baseline(
+        self, path: pathlib.Path, stat: os.stat_result
+    ) -> Optional[TraeLogEvent]:
         model = self._latest_model_from_tail(path, stat.st_size)
-        changed = model is not None and model != (self._model, self._effort)
-        if model is not None:
-            self._model, self._effort = model
         key = str(path)
         self._cursors[key] = TraeLogCursor(
             path=key,
@@ -282,22 +369,32 @@ class TraeTaskTracker:
             offset=stat.st_size,
             mtime_ns=stat.st_mtime_ns,
         )
-        return changed
+        return model
+
+    @staticmethod
+    def _event_time(
+        event: TraeLogEvent,
+        mtime_ns: int,
+        line_index: int,
+    ) -> float:
+        if event.occurred_at is not None:
+            return event.occurred_at
+        return (mtime_ns / 1_000_000_000.0) + (line_index / 1_000_000.0)
 
     def _latest_model_from_tail(
         self,
         path: pathlib.Path,
         size: int,
-    ) -> Optional[Tuple[Optional[str], Optional[str]]]:
+    ) -> Optional[TraeLogEvent]:
         start = max(0, size - self._METADATA_TAIL_BYTES)
         with path.open("rb") as stream:
             stream.seek(start)
-            tail = stream.read(self._METADATA_TAIL_BYTES)
+            tail = stream.read(size - start)
         latest = None
         for line in tail.decode("utf-8", errors="replace").splitlines():
             event = parse_trae_log_event(line)
             if event is not None and event.kind == "model":
-                latest = (event.model, event.effort)
+                latest = event
         return latest
 
     @staticmethod
@@ -368,7 +465,7 @@ class TraeTaskTracker:
             model = value.get("model")
             effort = value.get("effort")
             return (
-                tuple(tasks[: self._MAX_LEDGER_TASKS]),
+                self._retain_ledger_tasks(tasks),
                 model if isinstance(model, str) else None,
                 effort if isinstance(effort, str) else None,
                 int(value.get("revision", 0)),
@@ -381,6 +478,23 @@ class TraeTaskTracker:
             json.JSONDecodeError,
         ):
             return (), None, None, 0
+
+    def _retain_ledger_tasks(
+        self, tasks: Iterable[TraeTask]
+    ) -> Tuple[TraeTask, ...]:
+        def newest_first(item: TraeTask) -> Tuple[float, str, str]:
+            return (-item.updated_at, item.session_id, item.task_id)
+
+        active = sorted(
+            (item for item in tasks if item.state != "completed"),
+            key=newest_first,
+        )
+        completed = sorted(
+            (item for item in tasks if item.state == "completed"),
+            key=newest_first,
+        )
+        terminal_capacity = max(0, self._MAX_LEDGER_TASKS - len(active))
+        return tuple(active + completed[:terminal_capacity])
 
     def _save_cursors(self) -> None:
         self._atomic_json_write(

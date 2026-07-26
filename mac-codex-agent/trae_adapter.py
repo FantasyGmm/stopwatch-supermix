@@ -18,7 +18,8 @@ from trae_tasks import TraeTask, TraeTaskTracker, ordered_active_tasks
 
 _TRAE_BUNDLE_ID = "cn.trae.app"
 _CURRENT_AGENT_KEY = "trae.currentAgent"
-_VALID_STATES = {"pending", "running", "completed"}
+_ACTIVE_METADATA_STATES = {"pending", "running"}
+_TERMINAL_METADATA_STATES = {"completed", "cancelled", "failed"}
 
 
 @dataclasses.dataclass(frozen=True)
@@ -108,13 +109,15 @@ class TraeStateCollector:
 
         now = self._now()
         snapshot = self._tracker.refresh(self._log_paths(), now)
-        metadata = self._current_agent_metadata()
+        metadata = self._current_agent_metadata(snapshot.tasks)
         fallback_project = self._workspace_project()
-        model = snapshot.model or _clean_text(metadata.get("selected_model"), 64)
+        metadata_model = _clean_text(metadata.get("selected_model"), 64)
+        metadata_effort = _clean_text(metadata.get("selected_effort"), 32)
+        model = metadata_model or snapshot.model
         effort = (
-            snapshot.effort
-            if snapshot.model is not None
-            else _clean_text(metadata.get("selected_effort"), 32)
+            metadata_effort
+            if metadata_model
+            else snapshot.effort
         )
         enriched_tasks = self._enrich_tasks(
             snapshot.tasks,
@@ -122,6 +125,10 @@ class TraeStateCollector:
             fallback_project,
             now,
         )
+        remember_tasks = getattr(self._tracker, "remember_tasks", None)
+        if callable(remember_tasks):
+            snapshot = remember_tasks(enriched_tasks)
+            enriched_tasks = snapshot.tasks
         active_tasks = ordered_active_tasks(enriched_tasks)
         transport_tasks = active_tasks[:4]
         pending_count = sum(item.state == "pending" for item in active_tasks)
@@ -155,11 +162,24 @@ class TraeStateCollector:
         except OSError:
             return ()
 
-    def _current_agent_metadata(self) -> Dict[str, object]:
+    def _current_agent_metadata(
+        self, tasks: Iterable[TraeTask]
+    ) -> Dict[str, object]:
         candidates = self._sandbox_metadata() + self._state_db_metadata()
         if not candidates:
             return {}
-        _, value = max(candidates, key=lambda item: item[0])
+        task_keys = {(item.session_id, item.task_id) for item in tasks}
+        _, value = max(
+            candidates,
+            key=lambda item: (
+                item[0],
+                (
+                    item[1].get("session_id"),
+                    item[1].get("task_id"),
+                )
+                in task_keys,
+            ),
+        )
         return value
 
     def _sandbox_metadata(self) -> List[Tuple[int, Dict[str, object]]]:
@@ -230,6 +250,10 @@ class TraeStateCollector:
         task_id = _clean_text(value.get("task_id"), 128)
         if not session_id or not task_id:
             return {}
+        raw_state = value.get("state")
+        state = raw_state if raw_state in _ACTIVE_METADATA_STATES else (
+            "completed" if raw_state in _TERMINAL_METADATA_STATES else "running"
+        )
         return {
             "session_id": session_id,
             "task_id": task_id,
@@ -238,11 +262,7 @@ class TraeStateCollector:
             "project_path": _clean_text(value.get("project_path"), 512),
             "task_title": _clean_text(value.get("task_title"), 48),
             "task_detail": _clean_text(value.get("task_detail"), 72),
-            "state": (
-                value.get("state")
-                if value.get("state") in _VALID_STATES
-                else "running"
-            ),
+            "state": state,
         }
 
     def _workspace_project(self) -> str:
@@ -288,7 +308,11 @@ class TraeStateCollector:
                         or task.title,
                         detail=_clean_text(metadata.get("task_detail"), 72)
                         or task.detail,
-                        state=task.state,
+                        state=(
+                            "completed"
+                            if metadata.get("state") == "completed"
+                            else task.state
+                        ),
                         updated_at=task.updated_at,
                         model=task.model
                         or _clean_text(metadata.get("selected_model"), 64),

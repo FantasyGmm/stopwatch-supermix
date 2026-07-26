@@ -1,4 +1,5 @@
 import json
+import os
 import pathlib
 import sqlite3
 import sys
@@ -310,6 +311,114 @@ class TraeStateCollectorTests(unittest.TestCase):
         self.assertEqual(task["effort"], "high")
         self.assertNotIn("session_id", task)
         self.assertNotIn("task_id", task)
+
+    def _assert_terminal_metadata_is_excluded(self, raw_state):
+        for existing in (False, True):
+            with self.subTest(raw_state=raw_state, existing=existing):
+                self.write_sandbox(
+                    {
+                        "session_id": "session-a",
+                        "task_id": "task-a",
+                        "project_path": "/work/Project",
+                        "task_title": "Terminal task",
+                        "state": raw_state,
+                    }
+                )
+                collector = self.collector(online=True)
+                collector._tracker = FakeTracker(
+                    tasks=(
+                        TraeTask(
+                            "session-a",
+                            "task-a",
+                            "Project",
+                            "Terminal task",
+                            "",
+                            "running",
+                            9.0,
+                        ),
+                    )
+                    if existing
+                    else ()
+                )
+
+                state = collector.get_state()
+
+                self.assertEqual(state["trae_pending_count"], 0)
+                self.assertEqual(state["trae_running_count"], 0)
+                self.assertEqual(state["trae_tasks"], [])
+
+    def test_completed_metadata_retires_synthesized_and_existing_tasks(self):
+        self._assert_terminal_metadata_is_excluded("completed")
+
+    def test_cancelled_metadata_retires_synthesized_and_existing_tasks(self):
+        self._assert_terminal_metadata_is_excluded("cancelled")
+
+    def test_failed_metadata_retires_synthesized_and_existing_tasks(self):
+        self._assert_terminal_metadata_is_excluded("failed")
+
+    def test_two_project_task_telemetry_is_persisted_and_newest_metadata_wins(self):
+        self.paths.ledger.parent.mkdir(parents=True, exist_ok=True)
+        self.paths.ledger.write_text(
+            json.dumps(
+                {
+                    "version": 2,
+                    "model": "Path Ordered Model",
+                    "effort": "low",
+                    "revision": 1,
+                    "tasks": [
+                        {
+                            "session_id": "session-a",
+                            "task_id": "task-a",
+                            "project": "Project A",
+                            "title": "Task A",
+                            "detail": "",
+                            "state": "running",
+                            "updated_at": 20.0,
+                            "model": "",
+                            "effort": "",
+                        },
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        metadata_a = self.write_sandbox(
+            {
+                "session_id": "session-a",
+                "task_id": "task-a",
+                "selected_model": "Model A",
+                "selected_effort": "medium",
+                "project_path": "/work/Project A",
+                "task_title": "Task A",
+                "state": "running",
+            },
+            name="project-a.json",
+        )
+        os.utime(metadata_a, ns=(100, 100))
+        self.collector(online=True).get_state()
+        metadata_b = self.write_sandbox(
+            {
+                "session_id": "session-b",
+                "task_id": "task-b",
+                "selected_model": "Model B",
+                "selected_effort": "high",
+                "project_path": "/work/Project B",
+                "task_title": "Task B",
+                "state": "running",
+            },
+            name="project-b.json",
+        )
+        os.utime(metadata_b, ns=(200, 200))
+
+        state = self.collector(online=True).get_state()
+        by_title = {item["title"]: item for item in state["trae_tasks"]}
+
+        self.assertEqual(state["trae_model"], "Model B")
+        self.assertEqual(state["trae_effort"], "high")
+        self.assertEqual(by_title["Task A"]["model"], "Model A")
+        self.assertEqual(by_title["Task A"]["effort"], "medium")
+        self.assertEqual(by_title["Task B"]["model"], "Model B")
+        self.assertEqual(by_title["Task B"]["effort"], "high")
 
 
 if __name__ == "__main__":

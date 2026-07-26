@@ -313,6 +313,127 @@ class TraeTaskTrackerTests(unittest.TestCase):
             {("session-a", "task-a"), ("session-b", "task-b")},
         )
 
+    def test_completed_history_never_evicts_active_tasks_from_bounded_ledger(self):
+        self.log.touch()
+        tracker = self.tracker()
+        tracker.refresh((self.log,), now=1.0)
+        self.append(
+            *(
+                "execute_task:start session_id=session-active "
+                "task_id=active-{}".format(index)
+                for index in range(3)
+            )
+        )
+        tracker.refresh((self.log,), now=2.0)
+
+        for index in range(40):
+            self.append(
+                "execute_task:start session_id=session-history "
+                "task_id=history-{}".format(index),
+                "[append_resume_listener] exiting session_id=session-history "
+                "task_id=history-{}".format(index),
+            )
+            tracker.refresh((self.log,), now=float(index + 3))
+
+        snapshot = tracker.refresh((self.log,), now=100.0)
+        active = ordered_active_tasks(snapshot.tasks)
+        saved = json.loads(self.ledger.read_text(encoding="utf-8"))
+
+        self.assertEqual(
+            {item.task_id for item in active},
+            {"active-0", "active-1", "active-2"},
+        )
+        self.assertEqual(len(active), 3)
+        self.assertEqual(
+            {item.task_id for item in select_transport_tasks(snapshot.tasks)},
+            {"active-0", "active-1", "active-2"},
+        )
+        self.assertEqual(len(saved["tasks"]), 32)
+        self.assertEqual(
+            {
+                item["task_id"]
+                for item in saved["tasks"]
+                if item["state"] != "completed"
+            },
+            {"active-0", "active-1", "active-2"},
+        )
+
+    def test_two_project_models_are_correlated_and_fallback_uses_newest_event(self):
+        log_a = self.root / "a-project.log"
+        log_z = self.root / "z-project.log"
+        log_a.write_text("baseline\n", encoding="utf-8")
+        log_z.write_text("baseline\n", encoding="utf-8")
+        tracker = self.tracker()
+        tracker.refresh((log_a, log_z), now=1.0)
+        with log_a.open("a", encoding="utf-8") as stream:
+            stream.write(
+                "2026-07-24 10:00:04 model_info: CustomModel { "
+                'display_model_name: Some("New Model"), '
+                'reasoning_effort: Some("high") }\n'
+                "2026-07-24 10:00:05 execute_task:start "
+                "session_id=session-a task_id=task-a\n"
+            )
+        with log_z.open("a", encoding="utf-8") as stream:
+            stream.write(
+                "2026-07-24 10:00:01 model_info: CustomModel { "
+                'display_model_name: Some("Old Model"), '
+                'reasoning_effort: Some("low") }\n'
+                "2026-07-24 10:00:02 execute_task:start "
+                "session_id=session-z task_id=task-z\n"
+            )
+
+        snapshot = tracker.refresh((log_a, log_z), now=2.0)
+        by_task = {item.task_id: item for item in snapshot.tasks}
+
+        self.assertEqual(snapshot.model, "New Model")
+        self.assertEqual(snapshot.effort, "high")
+        self.assertEqual(by_task["task-a"].model, "New Model")
+        self.assertEqual(by_task["task-a"].effort, "high")
+        self.assertEqual(by_task["task-z"].model, "Old Model")
+        self.assertEqual(by_task["task-z"].effort, "low")
+
+    def test_timestamped_activity_orders_tasks_when_identifier_order_opposes_it(self):
+        log_a = self.root / "a-project.log"
+        log_z = self.root / "z-project.log"
+        log_a.write_text("baseline\n", encoding="utf-8")
+        log_z.write_text("baseline\n", encoding="utf-8")
+        tracker = self.tracker()
+        tracker.refresh((log_a, log_z), now=1.0)
+        with log_a.open("a", encoding="utf-8") as stream:
+            stream.write(
+                "2026-07-24 10:00:02 execute_task:start "
+                "session_id=session-z task_id=z-new\n"
+            )
+        with log_z.open("a", encoding="utf-8") as stream:
+            stream.write(
+                "2026-07-24 10:00:01 execute_task:start "
+                "session_id=session-a task_id=a-old\n"
+            )
+
+        snapshot = tracker.refresh((log_a, log_z), now=2.0)
+        ordered = ordered_active_tasks(snapshot.tasks)
+
+        self.assertEqual([item.task_id for item in ordered], ["z-new", "a-old"])
+        self.assertGreater(ordered[0].updated_at, ordered[1].updated_at)
+
+    def test_model_after_task_is_not_backdated_onto_that_task(self):
+        self.log.write_text("baseline\n", encoding="utf-8")
+        tracker = self.tracker()
+        tracker.refresh((self.log,), now=1.0)
+        self.append(
+            "2026-07-24 10:00:01 execute_task:start "
+            "session_id=session-a task_id=task-a",
+            "2026-07-24 10:00:02 model_info: CustomModel { "
+            'display_model_name: Some("Future Model"), '
+            'reasoning_effort: Some("high") }',
+        )
+
+        snapshot = tracker.refresh((self.log,), now=2.0)
+
+        self.assertEqual(snapshot.model, "Future Model")
+        self.assertEqual(snapshot.tasks[0].model, "")
+        self.assertEqual(snapshot.tasks[0].effort, "")
+
 
 if __name__ == "__main__":
     unittest.main()
