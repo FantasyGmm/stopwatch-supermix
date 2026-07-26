@@ -48,11 +48,9 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         identity_setup = source.split("void on_sync()", 1)[1].split(
             "void host_task", 1
         )[0]
-        self.assertIn("kVoiceProbeIdentityXor", source)
-        self.assertIn(
-            "identity_address[0] ^= kVoiceProbeIdentityXor",
-            identity_setup,
-        )
+        self.assertNotIn("kVoiceProbeIdentityXor", source)
+        self.assertIn("ble_hs_util_ensure_addr(0)", identity_setup)
+        self.assertIn("ble_hs_id_infer_auto(0", identity_setup)
         voice_tx_definition = source.split("&kVoiceTxUuid.u", 1)[1].split("},", 1)[0]
         self.assertIn("voice_tx_access", voice_tx_definition)
         self.assertNotIn("nullptr,\n        nullptr,\n        nullptr,", voice_tx_definition)
@@ -71,6 +69,55 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         self.assertIn("kVoiceControlQueueDepth", source)
         self.assertIn("event->mtu.value", source)
         self.assertIn("negotiated_mtu - 3", source)
+
+    def test_production_voice_control_is_authenticated_and_separate_from_probe(self):
+        header = (ROOT / "main/apps/app_codex_status/codex_ble_transport.h").read_text()
+        source = (ROOT / "main/apps/app_codex_status/codex_ble_transport.cpp").read_text()
+        app_header = (ROOT / "main/apps/app_codex_status/app_codex_status.h").read_text()
+        self.assertIn("take_production_voice_control", header)
+        self.assertIn("voice_input::kProtocolVersion", source)
+        self.assertIn("ControlReplayGuard", header)
+        self.assertIn("decode_once", source)
+        self.assertIn("_production_voice_control_queue", header)
+        self.assertIn("_voice_control_queue", header)
+        self.assertIn("connection_epoch", header)
+        self.assertIn("_production_voice_connection_epoch", app_header)
+        disconnect = source.split("void CodexBleTransport::handle_gap_disconnected", 1)[1]
+        self.assertIn("_production_control_guard.reset()", disconnect)
+        self.assertIn("_connection_epoch.fetch_add", disconnect)
+
+    def test_app_routes_button_edges_after_wake_and_cancels_before_home(self):
+        header = (ROOT / "main/apps/app_codex_status/app_codex_status.h").read_text()
+        source = (ROOT / "main/apps/app_codex_status/app_codex_status.cpp").read_text()
+        self.assertIn("VoiceInputController", header)
+        self.assertIn("handle_button", source)
+        self.assertIn("btnB.isPressed()", source)
+        self.assertIn("cancel_for_home", source)
+        running = source.split("void AppCodexStatus::onRunning()", 1)[1].split(
+            "void AppCodexStatus::onClose()", 1
+        )[0]
+        self.assertLess(
+            running.index("update_screen_off_control"),
+            running.index("btnB.isPressed()"),
+        )
+        self.assertLess(
+            running.index("update_screen_off_control"),
+            running.index("handle_button"),
+        )
+        self.assertLess(running.index("cancel_for_home"), running.index("close();"))
+        for label in ("VOICE", "VOICE OFF", "VOICE ERR"):
+            self.assertIn(f'"{label}"', source)
+
+    def test_production_controller_has_bounded_task_and_encrypted_queue(self):
+        header = (ROOT / "main/apps/app_codex_status/voice_input_controller.h").read_text()
+        source = (ROOT / "main/apps/app_codex_status/voice_input_controller.cpp").read_text()
+        self.assertIn("VoiceCapturePipeline", header)
+        self.assertIn("VoiceInputSession", header)
+        self.assertIn("kProducerStackBytes = 8192", source)
+        self.assertIn("kMaxBufferedAudioMs = 300", source)
+        self.assertIn("encode_notification", source)
+        self.assertIn("take_notification", source)
+        self.assertIn("cancel_for_home", source)
 
     def test_gap_security_outcomes_are_logged_for_physical_diagnosis(self):
         source = (ROOT / "main/apps/app_codex_status/codex_ble_transport.cpp").read_text()
@@ -413,6 +460,8 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         self.assertIn("tests/voice_input_protocol_test.cpp", runner)
         self.assertIn("[19/25] Production voice session host test", runner)
         self.assertIn("tests/voice_input_session_test.cpp", runner)
+        self.assertIn("tests/voice_input_controller_test.cpp", runner)
+        self.assertIn("main/apps/app_codex_status/voice_input_controller.cpp", runner)
         self.assertIn(
             "[22/25] BLE voice probe PCM buffer and capture pipeline host tests",
             runner,

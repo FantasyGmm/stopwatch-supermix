@@ -2,6 +2,7 @@
 
 #include "codex_ble_framing.h"
 #include "ble_voice_probe_protocol.h"
+#include "voice_input_controller.h"
 
 #include <array>
 #include <atomic>
@@ -16,6 +17,10 @@ struct CodexBleVoiceControl {
     std::array<uint8_t, ble_voice_probe::kControlCommandSize> data = {};
 };
 
+struct CodexProductionVoiceControl {
+    voice_input::VoiceControl control = {};
+};
+
 enum class CodexBleNotifyResult { Accepted, NotReady, Congested, InvalidSize };
 
 
@@ -25,8 +30,10 @@ public:
     void stop();
     void poll(uint32_t now_ms);
     bool connected() const;
+    uint32_t connection_epoch() const;
     bool take_message(CodexBleMessage& message);
     bool take_voice_control(CodexBleVoiceControl& control);
+    bool take_production_voice_control(CodexProductionVoiceControl& control);
     bool voice_subscribed() const;
     uint16_t negotiated_mtu() const;
     size_t voice_notification_limit() const;
@@ -43,6 +50,8 @@ public:
 private:
     void* _frame_queue = nullptr;
     void* _voice_control_queue = nullptr;
+    void* _production_voice_control_queue = nullptr;
+    voice_input::ControlReplayGuard _production_control_guard;
     CodexBleReassembler _reassembler;
     std::deque<CodexBleMessage> _messages;
     std::atomic<bool> _connected{false};
@@ -51,4 +60,5 @@ private:
     std::atomic<uint16_t> _negotiated_mtu{23};
     bool _initialized = false;
     std::atomic<uint16_t> _connection_handle{0xffff};
+    std::atomic<uint32_t> _connection_epoch{0};
 };

@@ -7,6 +7,7 @@
 #include "assets/codex_pet_assets.h"
 #include "codex_ble_transport.h"
 #include "ble_voice_probe_controller.h"
+#include "voice_input_controller.h"
 #include "codex_status_ui_layout.h"
 #include "codex_status_model.h"
 #include <assets/assets.h>
@@ -233,6 +234,11 @@ void AppCodexStatus::onOpen()
     _screen_off_restore_brightness = std::max(10, GetHAL().getBackLightBrightness());
     _screen_off = false;
     _screen_off_wake_armed = true;
+    _voice_button_gate.reset(GetHAL().btnB.isPressed());
+    _production_voice_ready = false;
+    _production_voice_link_usable = false;
+    _production_voice_mtu = 23;
+    _production_voice_connection_epoch = 0;
     _ws_connected    = false;
     _wifi_lease.reset();
     _wifi_started    = false;
@@ -259,6 +265,8 @@ void AppCodexStatus::onOpen()
             if (!_voice_probe->initialize()) {
                 _voice_probe.reset();
             }
+            _voice_input = std::make_unique<VoiceInputController>();
+            (void)_voice_input->initialize();
             set_status("BLE PAIR", kTextDim);
             set_host_text(_ble_name.c_str());
         } else {
@@ -278,15 +286,29 @@ void AppCodexStatus::onOpen()
 void AppCodexStatus::onRunning()
 {
     const uint32_t now = GetHAL().millis();
+    const bool woke_screen = update_screen_off_control(now);
+    const bool right_pressed = GetHAL().btnB.isPressed();
     input::KeyEvent key_event = input::KeyEvent::None;
     if (_key_manager) {
         key_event = _key_manager->update();
     }
 
-    const bool woke_screen = update_screen_off_control(now);
-    if (!woke_screen && key_event == input::KeyEvent::GoHome) {
+    const VoiceButtonAction voice_button_action = _voice_button_gate.update(
+        right_pressed,
+        woke_screen,
+        key_event == input::KeyEvent::GoHome);
+    if (voice_button_action == VoiceButtonAction::CancelHome) {
+        if (_voice_input) {
+            _voice_input->cancel_for_home(now);
+        }
         close();
         return;
+    }
+    if (_voice_input &&
+        (voice_button_action == VoiceButtonAction::Press ||
+         voice_button_action == VoiceButtonAction::Release)) {
+        _voice_input->handle_button(
+            voice_button_action == VoiceButtonAction::Press, now);
     }
 
     {
@@ -301,6 +323,41 @@ void AppCodexStatus::onRunning()
     const bool ble_connected = _ble_transport && _ble_transport->connected();
     if (_ble_transport) {
         _ble_transport->poll(now);
+        if (_voice_input) {
+            const uint32_t connection_epoch =
+                _ble_transport->connection_epoch();
+            if (connection_epoch != _production_voice_connection_epoch) {
+                _production_voice_connection_epoch = connection_epoch;
+                _production_voice_ready = false;
+            }
+            CodexProductionVoiceControl production_control;
+            while (_ble_transport->take_production_voice_control(production_control)) {
+                _production_voice_ready =
+                    production_control.control.kind == voice_input::ControlKind::Ready;
+            }
+            const uint16_t voice_mtu = _ble_transport->negotiated_mtu();
+            const bool production_link_usable =
+                ble_connected && _production_voice_ready &&
+                _ble_transport->voice_subscribed() &&
+                _ble_transport->voice_notification_limit() >=
+                    voice_input::kAudioCharacteristicValueSize;
+            if (production_link_usable != _production_voice_link_usable ||
+                voice_mtu != _production_voice_mtu) {
+                _production_voice_link_usable = production_link_usable;
+                _production_voice_mtu = voice_mtu;
+                _voice_input->set_ready(production_link_usable, voice_mtu);
+            }
+            _voice_input->poll(now);
+            voice_input::Notification notification;
+            while (_voice_input->take_notification(notification)) {
+                const CodexBleNotifyResult result = _ble_transport->notify_voice(
+                    notification.bytes.data(), notification.size);
+                _voice_input->record_notification_result(
+                    notification.kind,
+                    result == CodexBleNotifyResult::Accepted,
+                    now);
+            }
+        }
         if (_voice_probe) {
             CodexBleVoiceControl control;
             while (_ble_transport->take_voice_control(control)) {
@@ -340,6 +397,10 @@ void AppCodexStatus::onRunning()
             set_status("BLE WAIT", kTextDim);
             set_host_text(_ble_name.c_str());
         } else if (!ble_connected && _ble_was_connected) {
+            _production_voice_ready = false;
+            if (_voice_input) {
+                _voice_input->handle_disconnect();
+            }
             if (_voice_probe) {
                 _voice_probe->handle_disconnect();
             }
@@ -376,6 +437,17 @@ void AppCodexStatus::onRunning()
         LvglLockGuard lock;
         update_battery();
     }
+
+    if (_voice_input) {
+        const VoiceInputUiState voice_state = _voice_input->ui_state();
+        if (voice_state == VoiceInputUiState::Error) {
+            set_status("VOICE ERR", kCodexRed);
+        } else if (voice_state == VoiceInputUiState::Active) {
+            set_status("VOICE", kCodexBlue);
+        } else {
+            set_status("VOICE OFF", kTextDim);
+        }
+    }
 }
 
 void AppCodexStatus::onClose()
@@ -387,6 +459,10 @@ void AppCodexStatus::onClose()
         wake_screen();
     }
     stop_network_fallback();
+    if (_voice_input) {
+        _voice_input->shutdown();
+        _voice_input.reset();
+    }
     if (_voice_probe) {
         _voice_probe->shutdown();
         _voice_probe.reset();

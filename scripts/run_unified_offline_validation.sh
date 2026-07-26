@@ -189,6 +189,17 @@ echo "[19/25] Production voice session host test"
     main/apps/app_codex_status/voice_input_session.cpp \
     -o "$HOST_TEST_DIR/voice_input_session_test"
 "$HOST_TEST_DIR/voice_input_session_test"
+"$CXX" -std=c++17 -Wall -Wextra -Werror -pthread -DSTOPWATCH_HOST_TEST -I. \
+    -I"$MBEDTLS_SOURCE/include" \
+    tests/voice_input_controller_test.cpp \
+    main/apps/app_codex_status/voice_input_controller.cpp \
+    main/apps/app_codex_status/voice_capture_pipeline.cpp \
+    main/apps/app_codex_status/voice_input_session.cpp \
+    main/apps/app_codex_status/voice_input_protocol.cpp \
+    main/apps/app_codex_status/voice_input_crypto.cpp \
+    "$MBEDTLS_BUILD/library/libmbedcrypto.a" \
+    -o "$HOST_TEST_DIR/voice_input_controller_test"
+"$HOST_TEST_DIR/voice_input_controller_test"
 
 echo "[20/25] BLE voice probe failure transition host test"
 "$CXX" -std=c++17 -Wall -Wextra -Werror -I. \

@@ -13,6 +13,7 @@
 #include <string>
 #include <esp_event_base.h>
 #include "codex_alert_carousel.h"
+#include "voice_input_controller.h"
 #include "runtime/services/shared_wifi_service.h"
 
 class CodexBleTransport;
@@ -52,6 +53,7 @@ private:
     esp_websocket_client_handle_t _ws_client = nullptr;
     std::unique_ptr<CodexBleTransport> _ble_transport;
     std::unique_ptr<BleVoiceProbeController> _voice_probe;
+    std::unique_ptr<VoiceInputController> _voice_input;
     WifiStaLease _wifi_lease;
     std::string _server_host;
     std::string _transport_mode;
@@ -69,6 +71,11 @@ private:
     bool _ws_connected           = false;
     bool _screen_off             = false;
     bool _screen_off_wake_armed  = true;
+    VoiceButtonEdgeGate _voice_button_gate;
+    bool _production_voice_ready = false;
+    bool _production_voice_link_usable = false;
+    uint16_t _production_voice_mtu = 23;
+    uint32_t _production_voice_connection_epoch = 0;
     CodexAlertCarousel _alert_carousel;
 
     void create_view();
