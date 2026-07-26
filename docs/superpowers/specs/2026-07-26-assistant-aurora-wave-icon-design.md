@@ -9,7 +9,7 @@ Replace only the Assistant launcher icon with the user-selected H2 Aurora Wave d
 - Five centered vertical waveform bars with rounded ends.
 - The H2 reference uses a symmetric `42 / 80 / 124 / 80 / 42` silhouette. The watch asset scales the five bars uniformly by about 10% to `46 / 88 / 136 / 88 / 46`, following the user's on-device size correction.
 - Each bar independently uses the H2 diagonal gradient from teal `#4AE7D5`, through cyan-blue `#42B6F0` at 46%, to restrained violet `#8064F0`; no bar is pure white.
-- The glow follows the H2 reference's centered 86 px radial field: cyan `#38DCE9` at 31% opacity, violet `#7356ED` at 16% opacity at 58%, then transparent black. It has no visible circle, ring, frame, or hard boundary.
+- The glow keeps the H2 reference's centered 86 px radial field and color stops, but uses the user-selected B medium on-device strength so it survives RGB565 and the watch display: cyan `#38DCE9` at 55% opacity, violet `#7356ED` at 30% opacity at 58%, then transparent black. It has no visible circle, ring, frame, or hard boundary.
 - The design remains legible at 72 x 72 and 45 x 45 pixels.
 
 ## Family constraints
@@ -17,6 +17,7 @@ Replace only the Assistant launcher icon with the user-selected H2 Aurora Wave d
 - Canvas remains pure black.
 - The visible subject stays centered and has similar optical weight to Setup, Badge, and Codex.
 - Cyan remains the dominant family color; blue adds depth and violet is limited to the gradient tail and glow.
+- The glow must be clearly visible on the watch against pure black, while its outer edge remains soft enough that no circular boundary is perceptible.
 - No runtime drawing, animation, launcher layout, label, or Assistant behavior changes.
 
 ## Asset contract
