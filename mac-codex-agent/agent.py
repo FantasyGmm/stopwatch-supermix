@@ -14,6 +14,8 @@ from protocol import EVENT_MESSAGE, MAX_MESSAGE_SIZE, STATUS_MESSAGE, encode_mes
 DEVICE_NAME = "StopWatch-Codex"
 SERVICE_UUID = "7a230001-5474-4f50-5741-544348434f44"
 STATUS_RX_UUID = "7a230002-5474-4f50-5741-544348434f44"
+VOICE_CONTROL_UUID = "7a230003-5474-4f50-5741-544348434f44"
+VOICE_TX_UUID = "7a230004-5474-4f50-5741-544348434f44"
 STATUS_INTERVAL_SECONDS = 2.0
 SAFE_WRITE_SIZE = 20
 FRAME_BURST_SIZE = 8
@@ -21,6 +23,7 @@ FRAME_BURST_PAUSE_SECONDS = 0.02
 MAX_WATCH_ALERTS = 8
 MAX_PROJECT_LENGTH = 32
 MAX_TITLE_LENGTH = 48
+VOICE_NOTIFICATION_QUEUE_SIZE = 32
 
 
 def _unix_time_ms() -> int:
@@ -112,10 +115,19 @@ class BleStatusTransport:
         self._client = None
         self._sequence = 0
         self._disconnected = asyncio.Event()
+        self._voice_queue = None
+        self._voice_consumer = None
+        self._voice_failure = None
+        self._voice_notify_started = False
+        self._voice_disabled = False
 
     @property
     def connected(self) -> bool:
         return bool(self._client and self._client.is_connected)
+
+    @property
+    def voice_failure(self):
+        return self._voice_failure
 
     async def connect(self, on_device_found: Optional[Callable[[], None]] = None) -> bool:
         try:
@@ -137,6 +149,7 @@ class BleStatusTransport:
             on_device_found()
 
         self._disconnected.clear()
+        self._voice_disabled = False
 
         def on_disconnect(_client) -> None:
             self._disconnected.set()
@@ -145,6 +158,95 @@ class BleStatusTransport:
         await client.connect()
         self._client = client
         return client.is_connected
+
+    async def enable_voice(self, ready_payload: bytes, handler) -> None:
+        if not self.connected:
+            raise ConnectionError("StopWatch BLE connection is not active")
+        loop = asyncio.get_running_loop()
+        self._voice_disabled = False
+        self._voice_queue = asyncio.Queue(maxsize=VOICE_NOTIFICATION_QUEUE_SIZE)
+        self._voice_failure = loop.create_future()
+        self._voice_consumer = asyncio.create_task(self._consume_voice(handler))
+        self._voice_consumer.add_done_callback(self._voice_consumer_done)
+
+        def on_notification(_sender, data) -> None:
+            payload = bytes(data)
+            try:
+                loop.call_soon_threadsafe(self._enqueue_voice, payload)
+            except RuntimeError:
+                pass
+
+        await self._client.start_notify(VOICE_TX_UUID, on_notification)
+        self._voice_notify_started = True
+        await self._client.write_gatt_char(
+            VOICE_CONTROL_UUID, ready_payload, response=True
+        )
+
+    async def disable_voice(self, unavailable_payload: Optional[bytes]) -> None:
+        if self._voice_disabled:
+            return
+        failure = None
+        stop_failed = False
+        try:
+            if self.connected and unavailable_payload is not None:
+                try:
+                    await self._client.write_gatt_char(
+                        VOICE_CONTROL_UUID, unavailable_payload, response=True
+                    )
+                except Exception as error:
+                    failure = error
+            if self.connected and self._voice_notify_started:
+                try:
+                    await self._client.stop_notify(VOICE_TX_UUID)
+                except Exception as error:
+                    stop_failed = True
+                    if failure is None:
+                        failure = error
+                else:
+                    self._voice_notify_started = False
+            if not stop_failed:
+                self._voice_disabled = True
+        finally:
+            consumer = self._voice_consumer
+            self._voice_consumer = None
+            self._voice_queue = None
+            self._voice_failure = None
+            if consumer is not None and not consumer.done():
+                consumer.cancel()
+            if consumer is not None:
+                try:
+                    await consumer
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    pass
+        if failure is not None:
+            raise failure
+
+    def _enqueue_voice(self, payload: bytes) -> None:
+        queue = self._voice_queue
+        failure = self._voice_failure
+        if queue is None or failure is None or failure.done():
+            return
+        try:
+            queue.put_nowait(payload)
+        except asyncio.QueueFull:
+            failure.set_result(RuntimeError("voice notification queue overflow"))
+            if self._voice_consumer is not None:
+                self._voice_consumer.cancel()
+
+    async def _consume_voice(self, handler) -> None:
+        while True:
+            payload = await self._voice_queue.get()
+            await handler(payload)
+
+    def _voice_consumer_done(self, task: asyncio.Task) -> None:
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None and self._voice_failure is not None:
+            if not self._voice_failure.done():
+                self._voice_failure.set_result(error)
 
     async def disconnect(self) -> None:
         client = self._client

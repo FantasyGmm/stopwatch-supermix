@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import enum
 import logging
+import secrets
+import subprocess
 import threading
 from typing import Callable, List, Optional, Sequence
 
@@ -22,10 +24,94 @@ from app_state import (
 )
 from codex_adapter import CodexStateCollector
 from task_alerts import TaskAlertTracker
+from voice_audio import VoiceAudioBridge, VoiceAudioRoute
+from voice_driver import (
+    BLACKHOLE_DEVICE_NAME,
+    BLACKHOLE_RECEIPT,
+    DriverState,
+    detect_driver_state,
+)
+from voice_input_crypto import load_key_from_keychain
+from voice_input_protocol import (
+    ACCESSIBILITY_REQUIRED,
+    DRIVER_REQUIRED,
+    INITIALIZATION_FAILED,
+    RESTART_REQUIRED,
+    TYPELESS_NOT_RUNNING,
+    encode_ready,
+    encode_unavailable,
+)
+from voice_session import VoiceSessionService, VoiceState
+from voice_shortcut import (
+    FnShortcutController,
+    _is_accessibility_trusted,
+    _is_typeless_running,
+)
 
 
 LOGGER = logging.getLogger(__name__)
 DEFAULT_RETRY_DELAYS = (1.0, 2.0, 4.0, 8.0, 16.0, 30.0)
+VOICE_TARGET_BPS = 8192
+
+_VOICE_UNAVAILABLE_REASONS = {
+    VoiceState.DRIVER_REQUIRED: DRIVER_REQUIRED,
+    VoiceState.RESTART_REQUIRED: RESTART_REQUIRED,
+    VoiceState.ACCESSIBILITY_REQUIRED: ACCESSIBILITY_REQUIRED,
+    VoiceState.TYPELESS_NOT_RUNNING: TYPELESS_NOT_RUNNING,
+    VoiceState.ERROR: INITIALIZATION_FAILED,
+}
+
+
+def _new_voice_nonce() -> bytes:
+    nonce = bytes(8)
+    while not any(nonce):
+        nonce = secrets.token_bytes(8)
+    return nonce
+
+
+def _blackhole_receipt_present() -> bool:
+    try:
+        result = subprocess.run(
+            ["/usr/sbin/pkgutil", "--pkg-info", BLACKHOLE_RECEIPT],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+    except OSError:
+        return False
+    return result.returncode == 0
+
+
+def _create_voice_session(key: bytes) -> VoiceSessionService:
+    bridge = VoiceAudioBridge()
+    route = VoiceAudioRoute(bridge)
+    shortcut = FnShortcutController()
+
+    def readiness() -> VoiceState:
+        try:
+            bridge.find_device_uid(BLACKHOLE_DEVICE_NAME)
+            device_visible = True
+        except Exception:
+            device_visible = False
+        driver_state = detect_driver_state(
+            _blackhole_receipt_present(), device_visible
+        )
+        if driver_state is DriverState.DRIVER_REQUIRED:
+            return VoiceState.DRIVER_REQUIRED
+        if driver_state is DriverState.RESTART_REQUIRED:
+            return VoiceState.RESTART_REQUIRED
+        if not _is_accessibility_trusted():
+            return VoiceState.ACCESSIBILITY_REQUIRED
+        if not _is_typeless_running():
+            return VoiceState.TYPELESS_NOT_RUNNING
+        return VoiceState.READY
+
+    return VoiceSessionService(
+        route,
+        shortcut,
+        key,
+        readiness_checker=readiness,
+    )
 
 
 class AgentCommand(enum.Enum):
@@ -44,6 +130,9 @@ class AgentRuntime:
         status_interval: float = STATUS_INTERVAL_SECONDS,
         retry_delays: Sequence[float] = DEFAULT_RETRY_DELAYS,
         disconnect_timeout: float = 2.0,
+        voice_key_loader=None,
+        voice_session_factory=None,
+        voice_nonce_factory=None,
     ):
         self._collector = collector
         self._transport_factory = transport_factory
@@ -51,6 +140,9 @@ class AgentRuntime:
         self._status_interval = status_interval
         self._retry_delays = tuple(retry_delays) or (1.0,)
         self._disconnect_timeout = disconnect_timeout
+        self._voice_key_loader = voice_key_loader or load_key_from_keychain
+        self._voice_session_factory = voice_session_factory or _create_voice_session
+        self._voice_nonce_factory = voice_nonce_factory or _new_voice_nonce
         self._state_lock = threading.Lock()
         self._snapshot = AgentSnapshot(
             ConnectionState.SCANNING
@@ -88,11 +180,31 @@ class AgentRuntime:
                 state,
                 self._connection_enabled,
                 detail,
+                voice_state=previous.voice_state,
+                voice_detail=previous.voice_detail,
                 codex=previous.codex,
             )
             self._snapshot = snapshot
         if previous.state is not state or previous.detail != detail:
             LOGGER.info("Bluetooth state: %s%s", state.value, ": " + detail if detail else "")
+
+    def _transition_voice(self, state: VoiceState, detail: str = "") -> None:
+        with self._state_lock:
+            previous = self._snapshot
+            self._snapshot = AgentSnapshot(
+                previous.state,
+                previous.connection_enabled,
+                previous.detail,
+                voice_state=state,
+                voice_detail=detail,
+                codex=previous.codex,
+            )
+        if previous.voice_state is not state or previous.voice_detail != detail:
+            LOGGER.info(
+                "Voice state: %s%s",
+                state.value,
+                ": " + detail if detail else "",
+            )
 
     async def run(self) -> None:
         loop = asyncio.get_running_loop()
@@ -207,6 +319,8 @@ class AgentRuntime:
                         previous.state,
                         previous.connection_enabled,
                         previous.detail,
+                        voice_state=previous.voice_state,
+                        voice_detail=previous.voice_detail,
                         codex=codex,
                     )
                 self._latest_status = status
@@ -222,6 +336,8 @@ class AgentRuntime:
 
     async def _run_session(self) -> str:
         transport = self._transport_factory()
+        voice_service = None
+        voice_key = None
         self._transition(ConnectionState.SCANNING)
         try:
             connected = await transport.connect(
@@ -232,21 +348,171 @@ class AgentRuntime:
             self._transition(ConnectionState.CONNECTED)
             status_agent = CodexStatusAgent(self._collector, transport)
             await status_agent.sync_time()
+            voice_service, voice_key = await self._prepare_voice(transport)
             if self._status_ready is not None:
                 await self._status_ready.wait()
             while transport.connected:
+                self._raise_voice_failure(transport)
                 await status_agent.tick(status=dict(self._latest_status))
-                await asyncio.sleep(self._status_interval)
+                await self._wait_for_status_interval(transport)
             return "disconnected"
         finally:
-            try:
-                await asyncio.wait_for(
-                    transport.disconnect(), timeout=self._disconnect_timeout
+            voice_was_recording = (
+                self.snapshot().voice_state is VoiceState.RECORDING
+            )
+            unavailable_payload = None
+            if voice_key is not None:
+                unavailable_payload = self._encode_unavailable_payload(
+                    voice_key, INITIALIZATION_FAILED
                 )
-            except asyncio.TimeoutError:
-                LOGGER.warning("Bluetooth disconnect timed out")
-            except Exception:
-                LOGGER.exception("Bluetooth disconnect failed")
+            await self._disable_voice(transport, unavailable_payload)
+            if voice_service is not None:
+                cleaned = await self._bounded_cleanup(
+                    voice_service.disconnect(),
+                    "Voice session cleanup",
+                )
+                if voice_was_recording:
+                    if cleaned:
+                        self._transition_voice(voice_service.state)
+                    else:
+                        self._transition_voice(
+                            VoiceState.ERROR,
+                            "Voice session cleanup failed",
+                        )
+            await self._bounded_cleanup(
+                transport.disconnect(),
+                "Bluetooth disconnect",
+            )
+
+    async def _prepare_voice(self, transport):
+        try:
+            key = await asyncio.to_thread(self._voice_key_loader)
+        except Exception as error:
+            self._transition_voice(VoiceState.ERROR, str(error))
+            return None, None
+
+        try:
+            service = self._voice_session_factory(key)
+        except Exception as error:
+            self._transition_voice(VoiceState.ERROR, str(error))
+            payload = self._encode_unavailable_payload(
+                key, INITIALIZATION_FAILED
+            )
+            await self._disable_voice(transport, payload)
+            return None, key
+
+        try:
+            state = await service.prepare()
+        except Exception as error:
+            self._transition_voice(VoiceState.ERROR, str(error))
+            payload = self._encode_unavailable_payload(
+                key, INITIALIZATION_FAILED
+            )
+            await self._disable_voice(transport, payload)
+            return service, key
+
+        self._transition_voice(state)
+        if state is not VoiceState.READY:
+            reason = _VOICE_UNAVAILABLE_REASONS.get(
+                state, INITIALIZATION_FAILED
+            )
+            payload = self._encode_unavailable_payload(key, reason)
+            await self._disable_voice(transport, payload)
+            return service, key
+
+        async def handle_notification(payload: bytes) -> None:
+            try:
+                await service.handle(payload)
+            except Exception as error:
+                self._transition_voice(service.state, str(error))
+                raise
+            else:
+                self._transition_voice(service.state)
+
+        try:
+            ready_payload = encode_ready(
+                key, self._voice_nonce_factory(), VOICE_TARGET_BPS
+            )
+        except Exception as error:
+            self._transition_voice(VoiceState.ERROR, str(error))
+            unavailable_payload = self._encode_unavailable_payload(
+                key, INITIALIZATION_FAILED
+            )
+            await self._disable_voice(transport, unavailable_payload)
+            await self._bounded_cleanup(
+                service.disconnect(),
+                "Voice session cleanup",
+            )
+            return None, key
+        try:
+            await transport.enable_voice(ready_payload, handle_notification)
+        except Exception as error:
+            self._transition_voice(VoiceState.ERROR, str(error))
+            unavailable_payload = self._encode_unavailable_payload(
+                key, INITIALIZATION_FAILED
+            )
+            await self._disable_voice(transport, unavailable_payload)
+            await self._bounded_cleanup(
+                service.disconnect(),
+                "Voice session cleanup",
+            )
+            raise
+        return service, key
+
+    def _encode_unavailable_payload(self, key: bytes, reason: int):
+        try:
+            return encode_unavailable(
+                key, self._voice_nonce_factory(), reason
+            )
+        except Exception as error:
+            self._transition_voice(VoiceState.ERROR, str(error))
+            LOGGER.exception("Could not encode voice UNAVAILABLE control")
+            return None
+
+    async def _disable_voice(self, transport, unavailable_payload) -> None:
+        cleaned = await self._bounded_cleanup(
+            transport.disable_voice(unavailable_payload),
+            "Voice notification cleanup",
+        )
+        if not cleaned:
+            await self._bounded_cleanup(
+                transport.disable_voice(None),
+                "Voice notification stop",
+            )
+
+    @staticmethod
+    def _raise_voice_failure(transport) -> None:
+        failure = getattr(transport, "voice_failure", None)
+        if failure is not None and failure.done():
+            raise failure.result()
+
+    async def _wait_for_status_interval(self, transport) -> None:
+        failure = getattr(transport, "voice_failure", None)
+        if failure is None:
+            await asyncio.sleep(self._status_interval)
+            return
+        sleep_task = asyncio.create_task(asyncio.sleep(self._status_interval))
+        try:
+            done, _ = await asyncio.wait(
+                (sleep_task, failure), return_when=asyncio.FIRST_COMPLETED
+            )
+            if failure in done:
+                raise failure.result()
+        finally:
+            if not sleep_task.done():
+                sleep_task.cancel()
+            await _await_cancelled(sleep_task)
+
+    async def _bounded_cleanup(self, awaitable, label: str) -> bool:
+        try:
+            await asyncio.wait_for(awaitable, timeout=self._disconnect_timeout)
+        except asyncio.TimeoutError:
+            LOGGER.warning("%s timed out", label)
+            return False
+        except Exception:
+            LOGGER.exception("%s failed", label)
+            return False
+        return True
 
 
 async def _await_cancelled(task: asyncio.Task) -> None:

@@ -7,6 +7,8 @@ import enum
 import time
 from typing import Any, Callable, Mapping, Optional, Protocol, Tuple
 
+from voice_session import VoiceState
+
 
 DEVICE_NAME = "StopWatch-Codex"
 CONNECTION_ENABLED_KEY = "connectionEnabled"
@@ -77,6 +79,8 @@ class AgentSnapshot:
     state: ConnectionState
     connection_enabled: bool
     detail: str = ""
+    voice_state: VoiceState = VoiceState.ERROR
+    voice_detail: str = ""
     codex: CodexSnapshot = dataclasses.field(default_factory=CodexSnapshot)
     changed_at: float = dataclasses.field(default_factory=time.time)
 
@@ -93,6 +97,9 @@ class MenuPresentation:
     agent_text: str
     bluetooth_text: str
     device_text: str
+    voice_state: VoiceState
+    voice_text: str
+    voice_detail: str
     connection_checked: bool
     reconnect_enabled: bool
     symbol_name: str
@@ -108,6 +115,16 @@ _STATE_LABELS = {
     ConnectionState.UNAUTHORIZED: "Permission Required",
     ConnectionState.UNAVAILABLE: "Unavailable",
     ConnectionState.ERROR: "Connection Error",
+}
+
+_VOICE_STATE_LABELS = {
+    VoiceState.DRIVER_REQUIRED: "Driver Required",
+    VoiceState.RESTART_REQUIRED: "Restart Required",
+    VoiceState.ACCESSIBILITY_REQUIRED: "Accessibility Required",
+    VoiceState.TYPELESS_NOT_RUNNING: "Typeless Not Running",
+    VoiceState.READY: "Ready",
+    VoiceState.RECORDING: "Recording",
+    VoiceState.ERROR: "Error",
 }
 
 
@@ -132,6 +149,11 @@ def present(snapshot: AgentSnapshot) -> MenuPresentation:
         agent_text="Agent: Running",
         bluetooth_text="Bluetooth: {}".format(_STATE_LABELS[snapshot.state]),
         device_text="Device: {}".format(DEVICE_NAME),
+        voice_state=snapshot.voice_state,
+        voice_text="Voice Input: {}".format(
+            _VOICE_STATE_LABELS[snapshot.voice_state]
+        ),
+        voice_detail=snapshot.voice_detail,
         connection_checked=snapshot.connection_enabled,
         reconnect_enabled=snapshot.connection_enabled,
         symbol_name=(

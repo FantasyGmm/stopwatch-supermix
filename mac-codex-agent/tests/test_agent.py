@@ -8,7 +8,13 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
-from agent import BleStatusTransport, CodexStatusAgent
+from agent import (
+    VOICE_NOTIFICATION_QUEUE_SIZE,
+    VOICE_CONTROL_UUID,
+    VOICE_TX_UUID,
+    BleStatusTransport,
+    CodexStatusAgent,
+)
 from protocol import EVENT_MESSAGE, STATUS_MESSAGE
 
 
@@ -199,6 +205,178 @@ class CodexStatusAgentTests(unittest.TestCase):
         self.assertGreater(client.writes, 32)
         self.assertTrue(client.assert_response)
         self.assertGreater(sleep_count, 0)
+
+
+class BleStatusTransportVoiceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_enable_voice_subscribes_before_announcing_ready(self):
+        class Client:
+            is_connected = True
+
+            def __init__(self):
+                self.calls = []
+
+            async def start_notify(self, uuid, callback):
+                self.calls.append(("start_notify", uuid, callback))
+
+            async def write_gatt_char(self, uuid, payload, response):
+                self.calls.append(("write", uuid, payload, response))
+
+            async def stop_notify(self, _uuid):
+                pass
+
+        client = Client()
+        transport = BleStatusTransport()
+        transport._client = client
+
+        async def handle(_payload):
+            pass
+
+        await transport.enable_voice(b"authenticated-ready", handle)
+
+        self.assertEqual(
+            [(call[0], call[1]) for call in client.calls],
+            [("start_notify", VOICE_TX_UUID), ("write", VOICE_CONTROL_UUID)],
+        )
+        self.assertEqual(client.calls[1][2:], (b"authenticated-ready", True))
+        await transport.disable_voice(None)
+
+    async def test_disable_voice_announces_unavailable_then_stops_once(self):
+        class Client:
+            is_connected = True
+
+            def __init__(self):
+                self.calls = []
+
+            async def start_notify(self, uuid, callback):
+                self.calls.append(("start_notify", uuid))
+
+            async def write_gatt_char(self, uuid, payload, response):
+                self.calls.append(("write", uuid, payload, response))
+
+            async def stop_notify(self, uuid):
+                self.calls.append(("stop_notify", uuid))
+
+        client = Client()
+        transport = BleStatusTransport()
+        transport._client = client
+
+        await transport.enable_voice(b"ready", lambda _payload: asyncio.sleep(0))
+        await transport.disable_voice(b"unavailable")
+        await transport.disable_voice(b"unavailable")
+
+        self.assertEqual(
+            client.calls,
+            [
+                ("start_notify", VOICE_TX_UUID),
+                ("write", VOICE_CONTROL_UUID, b"ready", True),
+                ("write", VOICE_CONTROL_UUID, b"unavailable", True),
+                ("stop_notify", VOICE_TX_UUID),
+            ],
+        )
+
+    async def test_notification_callback_only_copies_and_schedules_consumer(self):
+        class Client:
+            is_connected = True
+
+            async def start_notify(self, _uuid, callback):
+                self.callback = callback
+
+            async def write_gatt_char(self, _uuid, _payload, response):
+                self.response = response
+
+            async def stop_notify(self, _uuid):
+                pass
+
+        client = Client()
+        transport = BleStatusTransport()
+        transport._client = client
+        handled = []
+        consumed = asyncio.Event()
+
+        async def handle(payload):
+            handled.append(payload)
+            consumed.set()
+
+        await transport.enable_voice(b"ready", handle)
+        source = bytearray(b"voice-packet")
+
+        client.callback(None, source)
+        self.assertEqual(handled, [])
+        source[:] = b"changed-data"
+        await asyncio.wait_for(consumed.wait(), 1)
+
+        self.assertEqual(handled, [b"voice-packet"])
+        await transport.disable_voice(b"unavailable")
+
+    async def test_notification_queue_overflow_fails_closed(self):
+        class Client:
+            is_connected = True
+
+            async def start_notify(self, _uuid, callback):
+                self.callback = callback
+
+            async def write_gatt_char(self, _uuid, _payload, response):
+                self.response = response
+
+            async def stop_notify(self, _uuid):
+                pass
+
+        client = Client()
+        transport = BleStatusTransport()
+        transport._client = client
+        handler_started = asyncio.Event()
+
+        async def blocked_handler(_payload):
+            handler_started.set()
+            await asyncio.Event().wait()
+
+        await transport.enable_voice(b"ready", blocked_handler)
+        client.callback(None, b"active")
+        await asyncio.wait_for(handler_started.wait(), 1)
+        failure = transport.voice_failure
+
+        for index in range(VOICE_NOTIFICATION_QUEUE_SIZE + 1):
+            client.callback(None, bytes((index,)))
+        error = await asyncio.wait_for(failure, 1)
+
+        self.assertIsInstance(error, RuntimeError)
+        self.assertEqual(str(error), "voice notification queue overflow")
+        self.assertTrue(transport._voice_consumer.done())
+        await transport.disable_voice(b"unavailable")
+
+    async def test_timed_out_unavailable_write_can_retry_notify_cleanup(self):
+        class Client:
+            is_connected = True
+
+            def __init__(self):
+                self.stop_calls = 0
+
+            async def start_notify(self, _uuid, _callback):
+                pass
+
+            async def write_gatt_char(self, _uuid, payload, response):
+                self.response = response
+                if payload == b"unavailable":
+                    await asyncio.Event().wait()
+
+            async def stop_notify(self, _uuid):
+                self.stop_calls += 1
+
+        client = Client()
+        transport = BleStatusTransport()
+        transport._client = client
+        await transport.enable_voice(
+            b"ready", lambda _payload: asyncio.sleep(0)
+        )
+
+        with self.assertRaises(asyncio.TimeoutError):
+            await asyncio.wait_for(
+                transport.disable_voice(b"unavailable"), timeout=0.01
+            )
+        await transport.disable_voice(None)
+
+        self.assertEqual(client.stop_calls, 1)
+        self.assertIsNone(transport._voice_consumer)
 
 
 if __name__ == "__main__":
