@@ -72,6 +72,7 @@ class VoiceSessionService:
         self._highest_session = 0
         self._cleanup_task = None
         self._cleanup_final_state = None
+        self._cleanup_in_progress = False
 
     async def prepare(self) -> VoiceState:
         state = self._readiness_checker()
@@ -84,9 +85,9 @@ class VoiceSessionService:
     async def handle(self, raw: bytes) -> None:
         try:
             packet = decode_notification(self._key, raw, self._session_nonce)
-        except Exception:
+        except Exception as operation_error:
             if self._has_active_resources():
-                await self._abort()
+                await self._abort_preserving(operation_error)
             raise
         try:
             if packet.kind == PTT_BEGIN:
@@ -99,8 +100,8 @@ class VoiceSessionService:
                 await self._voice_error(packet)
             else:
                 raise ValueError("unknown voice notification kind")
-        except Exception:
-            await self._abort()
+        except Exception as operation_error:
+            await self._abort_preserving(operation_error)
             raise
 
     async def disconnect(self) -> None:
@@ -110,7 +111,7 @@ class VoiceSessionService:
         await self._cleanup(VoiceState.READY)
 
     async def _begin(self, packet) -> None:
-        if self.state != VoiceState.READY:
+        if self.state != VoiceState.READY or self._cleanup_in_progress:
             raise ValueError("voice session is not ready to begin")
         if packet.session_nonce in self._recent_nonces:
             raise ValueError("session nonce was recently used")
@@ -201,9 +202,20 @@ class VoiceSessionService:
     async def _abort(self) -> None:
         await self._cleanup(VoiceState.ERROR)
 
+    async def _abort_preserving(self, operation_error: Exception) -> None:
+        try:
+            await self._abort()
+        except Exception as cleanup_error:
+            raise operation_error from cleanup_error
+
     async def _cleanup(self, final_state: VoiceState) -> None:
         if self._cleanup_task is None:
-            self._cleanup_final_state = final_state
+            self._cleanup_in_progress = True
+            self._cleanup_final_state = (
+                VoiceState.ERROR
+                if self.state == VoiceState.ERROR
+                else final_state
+            )
             self._cleanup_task = asyncio.create_task(
                 self._perform_cleanup()
             )
@@ -238,6 +250,7 @@ class VoiceSessionService:
             if cleanup_task.done() and self._cleanup_task is cleanup_task:
                 self._cleanup_task = None
                 self._cleanup_final_state = None
+                self._cleanup_in_progress = False
 
     async def _perform_cleanup(self) -> None:
         failures = []

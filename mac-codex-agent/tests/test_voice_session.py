@@ -385,6 +385,26 @@ class VoiceSessionServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(shortcut.calls, ["start", "stop"])
         self.assertEqual(route.calls, ["start", "stop"])
 
+    async def test_idle_cleanup_cannot_downgrade_error_before_prepare(self):
+        route = FakeRoute(fail_stop=True)
+        shortcut = FakeShortcut()
+        service = VoiceSessionService(
+            route, shortcut, TEST_KEY, sleep=no_sleep
+        )
+        await service.handle(begin_packet())
+
+        with self.assertRaisesRegex(RuntimeError, "route stop failed"):
+            await service.disconnect()
+        self.assertEqual(service.state, VoiceState.ERROR)
+
+        await service.disconnect()
+        self.assertEqual(service.state, VoiceState.ERROR)
+        await service.close()
+        self.assertEqual(service.state, VoiceState.ERROR)
+
+        self.assertEqual(await service.prepare(), VoiceState.READY)
+        self.assertEqual(service.state, VoiceState.READY)
+
     async def test_overlapping_begin_aborts_without_second_start(self):
         service, route, shortcut = self.make_service()
         await service.handle(begin_packet())
@@ -468,6 +488,31 @@ class VoiceSessionServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(shortcut.active)
         self.assertEqual(service.state, VoiceState.READY)
 
+    async def test_begin_cannot_race_same_tick_idle_cleanup(self):
+        for cleanup_method in ("disconnect", "close"):
+            with self.subTest(cleanup_method=cleanup_method):
+                route = FakeRoute()
+                shortcut = FakeShortcut()
+                service = VoiceSessionService(
+                    route, shortcut, TEST_KEY, sleep=no_sleep
+                )
+                cleanup = asyncio.create_task(
+                    getattr(service, cleanup_method)()
+                )
+                await asyncio.sleep(0)
+
+                try:
+                    with self.assertRaisesRegex(
+                        ValueError, "not ready to begin"
+                    ):
+                        await service.handle(begin_packet())
+                finally:
+                    await cleanup
+
+                self.assertEqual(route.calls, [])
+                self.assertEqual(shortcut.calls, [])
+                self.assertEqual(service.state, VoiceState.ERROR)
+
     async def test_sequence_regression_and_oversized_gap_fail_before_decode(self):
         service, route, _shortcut = self.make_service()
         await service.handle(begin_packet())
@@ -531,6 +576,47 @@ class VoiceSessionServiceTests(unittest.IsolatedAsyncioTestCase):
             await service.handle(
                 encrypted_packet(VOICE_ERROR, 1, ERROR_PAYLOAD.pack(4, 9))
             )
+
+    async def test_handle_preserves_triggering_error_when_cleanup_fails(self):
+        cases = (
+            (
+                "write",
+                RuntimeError("route write failed"),
+                audio_packet(1),
+                "route write failed",
+                ["start", "write:320", "stop"],
+            ),
+            (
+                "voice_error",
+                None,
+                encrypted_packet(
+                    VOICE_ERROR, 1, ERROR_PAYLOAD.pack(4, 9)
+                ),
+                "watch reported voice error 4",
+                ["start", "stop"],
+            ),
+        )
+        for name, write_error, raw, message, route_calls in cases:
+            with self.subTest(name=name):
+                route = FakeRoute(
+                    fail_stop=True, write_error=write_error
+                )
+                shortcut = FakeShortcut()
+                service = VoiceSessionService(
+                    route, shortcut, TEST_KEY, sleep=no_sleep
+                )
+                await service.handle(begin_packet())
+
+                with self.assertRaisesRegex(RuntimeError, message) as raised:
+                    await service.handle(raw)
+
+                self.assertIsInstance(raised.exception.__cause__, RuntimeError)
+                self.assertEqual(
+                    str(raised.exception.__cause__), "route stop failed"
+                )
+                self.assertEqual(route.calls, route_calls)
+                self.assertEqual(shortcut.calls, ["start", "stop"])
+                self.assertEqual(service.state, VoiceState.ERROR)
 
     async def test_start_drain_and_stop_order_is_bounded(self):
         events = []
