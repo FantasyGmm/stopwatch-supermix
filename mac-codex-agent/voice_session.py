@@ -71,6 +71,7 @@ class VoiceSessionService:
         self._recent_nonces = deque(maxlen=RECENT_NONCE_LIMIT)
         self._highest_session = 0
         self._cleanup_task = None
+        self._cleanup_completion = None
         self._cleanup_final_state = None
         self._cleanup_in_progress = False
         self._force_cleanup_in_progress = False
@@ -114,49 +115,59 @@ class VoiceSessionService:
         if timeout < 0:
             raise ValueError("timeout must be nonnegative")
         cleanup_task = self._ensure_cleanup(VoiceState.READY)
+        completion = self._cleanup_completion
         interrupted = False
         forced = False
+        forced_owner = False
         try:
             try:
                 done, _ = await asyncio.wait(
-                    (cleanup_task,), timeout=timeout
+                    (completion,), timeout=timeout
                 )
-                forced = cleanup_task not in done
+                forced = completion not in done
             except asyncio.CancelledError:
                 interrupted = True
                 forced = True
 
             if forced:
-                final_state = self._cleanup_final_state or VoiceState.READY
-                self._force_cleanup_in_progress = True
-                cleanup_task.cancel()
-                while not cleanup_task.done():
-                    try:
-                        await asyncio.wait((cleanup_task,))
-                    except asyncio.CancelledError:
-                        interrupted = True
-                        cleanup_task.cancel()
-                failure = None
-                if cleanup_task.cancelled():
-                    failures = self._finish_cleanup(final_state)
-                    if failures:
-                        failure = failures[0]
+                if not self._force_cleanup_in_progress:
+                    self._force_cleanup_in_progress = True
+                    forced_owner = True
+                    cleanup_task.cancel()
+                    while not cleanup_task.done():
+                        try:
+                            await asyncio.wait((cleanup_task,))
+                        except asyncio.CancelledError:
+                            interrupted = True
+                            cleanup_task.cancel()
+                    failure = None
+                    if cleanup_task.cancelled():
+                        final_state = (
+                            self._cleanup_final_state or VoiceState.READY
+                        )
+                        failures = self._finish_cleanup(final_state)
+                        if failures:
+                            failure = failures[0]
+                    else:
+                        try:
+                            cleanup_task.result()
+                        except Exception as error:
+                            failure = error
+                    self._complete_cleanup(failure)
                 else:
-                    try:
-                        cleanup_task.result()
-                    except Exception as error:
-                        failure = error
-                if interrupted:
-                    raise asyncio.CancelledError
-                if failure is not None:
-                    raise failure
-            else:
-                cleanup_task.result()
+                    interrupted = await self._wait_for_cleanup_completion(
+                        completion, interrupted
+                    )
+            failure = completion.result()
+            if interrupted:
+                raise asyncio.CancelledError
+            if failure is not None:
+                raise failure
         finally:
-            self._force_cleanup_in_progress = False
-            self._release_cleanup_task(cleanup_task)
-        if interrupted:
-            raise asyncio.CancelledError
+            if forced_owner:
+                self._force_cleanup_in_progress = False
+            if completion.done():
+                self._release_cleanup_task(cleanup_task)
         return not forced
 
     async def close(self) -> None:
@@ -272,31 +283,26 @@ class VoiceSessionService:
 
     async def _cleanup(self, final_state: VoiceState) -> None:
         cleanup_task = self._ensure_cleanup(final_state)
-        cancelled = False
+        completion = self._cleanup_completion
         try:
-            while True:
-                try:
-                    await asyncio.shield(cleanup_task)
-                    break
-                except asyncio.CancelledError:
-                    cancelled = True
-                    if cleanup_task.done():
-                        break
-                except Exception:
-                    if not cancelled:
-                        raise
-                    break
-            if not cancelled:
-                cleanup_task.result()
-                return
-            try:
-                cleanup_task.result()
-            except Exception:
-                pass
-            raise asyncio.CancelledError
+            cancelled = await self._wait_for_cleanup_completion(completion)
+            failure = completion.result()
+            if cancelled:
+                raise asyncio.CancelledError
+            if failure is not None:
+                raise failure
         finally:
-            if cleanup_task.done():
+            if completion.done():
                 self._release_cleanup_task(cleanup_task)
+
+    @staticmethod
+    async def _wait_for_cleanup_completion(completion, interrupted=False):
+        while not completion.done():
+            try:
+                await asyncio.wait((completion,))
+            except asyncio.CancelledError:
+                interrupted = True
+        return interrupted
 
     def _ensure_cleanup(self, final_state: VoiceState) -> asyncio.Task:
         if self._cleanup_task is None:
@@ -306,8 +312,14 @@ class VoiceSessionService:
                 if self.state == VoiceState.ERROR
                 else final_state
             )
+            self._cleanup_completion = (
+                asyncio.get_running_loop().create_future()
+            )
             self._cleanup_task = asyncio.create_task(
                 self._perform_cleanup()
+            )
+            self._cleanup_task.add_done_callback(
+                self._cleanup_worker_done
             )
         elif final_state == VoiceState.ERROR:
             self._cleanup_final_state = VoiceState.ERROR
@@ -315,11 +327,31 @@ class VoiceSessionService:
                 self.state = VoiceState.ERROR
         return self._cleanup_task
 
+    def _cleanup_worker_done(self, cleanup_task: asyncio.Task) -> None:
+        if self._force_cleanup_in_progress:
+            return
+        if cleanup_task.cancelled():
+            failure = RuntimeError("voice cleanup worker was cancelled")
+        else:
+            try:
+                cleanup_task.result()
+            except Exception as error:
+                failure = error
+            else:
+                failure = None
+        self._complete_cleanup(failure)
+
+    def _complete_cleanup(self, failure) -> None:
+        completion = self._cleanup_completion
+        if completion is not None and not completion.done():
+            completion.set_result(failure)
+
     def _release_cleanup_task(self, cleanup_task: asyncio.Task) -> None:
         if self._cleanup_task is cleanup_task:
             if self._force_cleanup_in_progress:
                 return
             self._cleanup_task = None
+            self._cleanup_completion = None
             self._cleanup_final_state = None
             self._cleanup_in_progress = False
 

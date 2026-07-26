@@ -905,6 +905,110 @@ class VoiceSessionServiceTests(unittest.IsolatedAsyncioTestCase):
             cancel_caller=True,
         )
 
+    async def test_forced_cleanup_serializes_error_upgrade_for_all_waiters(self):
+        await self._assert_forced_cleanup_serializes_waiters(fail_stop=False)
+
+    async def test_forced_cleanup_preserves_operation_error_over_stop_failure(self):
+        await self._assert_forced_cleanup_serializes_waiters(fail_stop=True)
+
+    async def _assert_forced_cleanup_serializes_waiters(self, fail_stop):
+        drain_started = asyncio.Event()
+        cleanup_task_cancelled = asyncio.Event()
+        allow_forced_finish = asyncio.Event()
+        unhandled = []
+        tasks = []
+        loop = asyncio.get_running_loop()
+        previous_handler = loop.get_exception_handler()
+
+        def capture_unhandled(_loop, context):
+            unhandled.append(context)
+
+        async def cancellation_paused_sleep(seconds):
+            self.assertEqual(seconds, 0.150)
+            drain_started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cleanup_task_cancelled.set()
+                await allow_forced_finish.wait()
+                raise
+
+        route = FakeRoute(fail_stop=fail_stop)
+        shortcut = FakeShortcut()
+        service = VoiceSessionService(
+            route,
+            shortcut,
+            TEST_KEY,
+            sleep=cancellation_paused_sleep,
+        )
+        await service.handle(begin_packet())
+        loop.set_exception_handler(capture_unhandled)
+        try:
+            ready_waiter = asyncio.create_task(service.disconnect())
+            tasks.append(ready_waiter)
+            await drain_started.wait()
+            bounded_waiter = asyncio.create_task(
+                service.disconnect_bounded(0.01)
+            )
+            tasks.append(bounded_waiter)
+            await asyncio.wait_for(cleanup_task_cancelled.wait(), 1)
+            child = service._cleanup_task
+
+            cancelled_waiter = asyncio.create_task(service.disconnect())
+            operation_waiter = asyncio.create_task(
+                service.handle(audio_packet(1))
+            )
+            tasks.extend((cancelled_waiter, operation_waiter))
+            await asyncio.sleep(0)
+            cancelled_waiter.cancel()
+            await asyncio.sleep(0)
+
+            self.assertFalse(ready_waiter.done())
+            self.assertFalse(cancelled_waiter.done())
+            self.assertFalse(operation_waiter.done())
+            self.assertEqual(service._cleanup_final_state, VoiceState.ERROR)
+
+            allow_forced_finish.set()
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            if fail_stop:
+                self.assertIsInstance(results[0], RuntimeError)
+                self.assertEqual(str(results[0]), "route stop failed")
+                self.assertIsInstance(results[1], RuntimeError)
+                self.assertEqual(str(results[1]), "route stop failed")
+            else:
+                self.assertIsNone(results[0])
+                self.assertFalse(results[1])
+            self.assertIsInstance(results[2], asyncio.CancelledError)
+            self.assertIsInstance(results[3], ValueError)
+            self.assertEqual(str(results[3]), "voice cleanup is in progress")
+            if fail_stop:
+                self.assertIsInstance(results[3].__cause__, RuntimeError)
+                self.assertEqual(
+                    str(results[3].__cause__), "route stop failed"
+                )
+            else:
+                self.assertIsNone(results[3].__cause__)
+
+            self.assertEqual(shortcut.calls, ["start", "stop"])
+            self.assertEqual(route.calls, ["start", "stop"])
+            self.assertEqual(service.state, VoiceState.ERROR)
+            self.assertIsNone(service._cleanup_task)
+            self.assertTrue(child.done())
+            del child
+            gc.collect()
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            self.assertEqual(unhandled, [])
+        finally:
+            allow_forced_finish.set()
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            loop.set_exception_handler(previous_handler)
+
     async def _assert_cancel_suppressing_child_outcome(
         self, *, fail_stop, cancel_caller
     ):
@@ -936,6 +1040,8 @@ class VoiceSessionServiceTests(unittest.IsolatedAsyncioTestCase):
             sleep=cancellation_suppressing_sleep,
         )
         await service.handle(begin_packet())
+        cleanup = None
+        child = None
         loop.set_exception_handler(capture_unhandled)
         try:
             with mock.patch.object(
@@ -975,13 +1081,25 @@ class VoiceSessionServiceTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertIsNone(service._cleanup_task)
             self.assertTrue(child.done())
-            del child
-            del cleanup
+            child = None
+            cleanup = None
             gc.collect()
             await asyncio.sleep(0)
             await asyncio.sleep(0)
             self.assertEqual(unhandled, [])
         finally:
+            release_drain.set()
+            for task in (cleanup, child):
+                if task is not None and not task.done():
+                    task.cancel()
+            await asyncio.gather(
+                *(
+                    task
+                    for task in (cleanup, child)
+                    if task is not None
+                ),
+                return_exceptions=True,
+            )
             loop.set_exception_handler(previous_handler)
 
     async def test_concurrent_error_dominates_end_cleanup_final_state(self):
