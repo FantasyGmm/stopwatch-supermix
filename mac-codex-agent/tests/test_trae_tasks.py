@@ -12,6 +12,7 @@ from trae_tasks import (
     TraeTask,
     TraeTaskTracker,
     apply_trae_log_event,
+    ordered_active_tasks,
     parse_trae_log_event,
     select_transport_tasks,
 )
@@ -96,24 +97,15 @@ class TraeTaskTests(unittest.TestCase):
         self.assertNotIn("raw", {field.name for field in dataclasses.fields(event)})
         self.assertNotIn("do-not-retain-this", repr(event))
 
-    def test_priority_is_pending_then_running_then_latest_completed(self):
-        selected = select_transport_tasks(
-            (
-                task("completed-old", "completed", 1.0),
-                task("running", "running", 3.0),
-                task("pending", "pending", 2.0),
-                task("completed-new", "completed", 4.0),
-            )
+    def test_ordered_active_tasks_excludes_terminal_and_is_stable(self):
+        tasks = (
+            TraeTask("s3", "t3", "P3", "Done", "", "completed", 30.0),
+            TraeTask("s2", "t2", "P2", "Run", "", "running", 20.0),
+            TraeTask("s1", "t1", "P1", "Ask", "", "pending", 10.0),
+            TraeTask("s0", "t0", "P0", "Ask newer", "", "pending", 40.0),
         )
-
-        self.assertEqual(
-            [item.task_id for item in selected],
-            ["pending", "running", "completed-new", "completed-old"],
-        )
-        self.assertEqual(
-            {item.state for item in selected},
-            {"pending", "running", "completed"},
-        )
+        ordered = ordered_active_tasks(tasks)
+        self.assertEqual([item.task_id for item in ordered], ["t0", "t1", "t2"])
 
     def test_transport_selection_is_stable_and_limited_to_four(self):
         tasks = tuple(task(str(index), "running", 5.0) for index in range(8))
@@ -159,7 +151,9 @@ class TraeTaskTrackerTests(unittest.TestCase):
         snapshot = self.tracker().refresh((self.log,), now=10.0)
 
         self.assertEqual(snapshot.tasks, ())
-        cursor = json.loads(self.cursor.read_text(encoding="utf-8"))
+        saved = json.loads(self.cursor.read_text(encoding="utf-8"))
+        self.assertEqual(saved["version"], 2)
+        cursor = saved["cursors"][str(self.log)]
         self.assertEqual(cursor["path"], str(self.log))
         self.assertEqual(cursor["offset"], self.log.stat().st_size)
         self.assertEqual(cursor["inode"], self.log.stat().st_ino)
@@ -204,7 +198,9 @@ class TraeTaskTrackerTests(unittest.TestCase):
         self.assertEqual(updated.tasks[0].task_id, "task-a")
         self.assertEqual(updated.tasks[0].state, "running")
         self.assertEqual(
-            json.loads(self.cursor.read_text(encoding="utf-8"))["offset"],
+            json.loads(self.cursor.read_text(encoding="utf-8"))["cursors"][
+                str(self.log)
+            ]["offset"],
             self.log.stat().st_size,
         )
 
@@ -225,6 +221,30 @@ class TraeTaskTrackerTests(unittest.TestCase):
         self.assertEqual(first.tasks[0].state, "running")
         self.assertEqual(second.tasks[0].state, "pending")
         self.assertGreater(second.revision, first.revision)
+
+    def test_legacy_single_cursor_is_migrated_without_replaying_history(self):
+        self.log.write_text("baseline\n", encoding="utf-8")
+        stat = self.log.stat()
+        self.cursor.write_text(
+            json.dumps(
+                {
+                    "path": str(self.log),
+                    "inode": stat.st_ino,
+                    "offset": stat.st_size,
+                    "mtime_ns": stat.st_mtime_ns,
+                }
+            ),
+            encoding="utf-8",
+        )
+        tracker = self.tracker()
+        self.append("execute_task:start session_id=session-a task_id=task-a")
+
+        snapshot = tracker.refresh((self.log,), now=11.0)
+
+        self.assertEqual([item.task_id for item in snapshot.tasks], ["task-a"])
+        saved = json.loads(self.cursor.read_text(encoding="utf-8"))
+        self.assertEqual(saved["version"], 2)
+        self.assertEqual(set(saved["cursors"]), {str(self.log)})
 
     def test_truncation_or_inode_change_rebaselines_safely(self):
         self.log.touch()
@@ -269,6 +289,29 @@ class TraeTaskTrackerTests(unittest.TestCase):
         self.assertNotIn("private-tool-data", serialized)
         self.assertNotIn("raw", serialized)
         self.assertLessEqual(len(saved["tasks"]), 32)
+
+    def test_tracker_reads_appends_from_two_project_logs(self):
+        log_a = self.root / "project-a.log"
+        log_b = self.root / "project-b.log"
+        log_a.write_text("baseline\n", encoding="utf-8")
+        log_b.write_text("baseline\n", encoding="utf-8")
+        tracker = self.tracker()
+        tracker.refresh((log_a, log_b), now=1.0)
+        with log_a.open("a", encoding="utf-8") as stream:
+            stream.write(
+                "execute_task:start session_id=session-a task_id=task-a\n"
+            )
+        with log_b.open("a", encoding="utf-8") as stream:
+            stream.write(
+                "execute_task:start session_id=session-b task_id=task-b\n"
+            )
+
+        snapshot = tracker.refresh((log_a, log_b), now=2.0)
+
+        self.assertEqual(
+            {(item.session_id, item.task_id) for item in snapshot.tasks},
+            {("session-a", "task-a"), ("session-b", "task-b")},
+        )
 
 
 if __name__ == "__main__":

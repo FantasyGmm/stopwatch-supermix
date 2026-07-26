@@ -7,7 +7,7 @@ import json
 import os
 import pathlib
 import re
-from typing import Iterable, Literal, Optional, Sequence, Tuple
+from typing import Dict, Iterable, Literal, Optional, Sequence, Tuple
 
 
 _IDENTIFIER = r"[A-Za-z0-9_.:-]{1,128}"
@@ -40,6 +40,8 @@ class TraeTask:
     detail: str
     state: Literal["pending", "running", "completed"]
     updated_at: float
+    model: str = ""
+    effort: str = ""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -128,6 +130,8 @@ def apply_trae_log_event(
         detail=existing.detail if existing is not None else "",
         state=state,
         updated_at=now,
+        model=existing.model if existing is not None else "",
+        effort=existing.effort if existing is not None else "",
     )
     if matching_index is None:
         current.append(replacement)
@@ -136,21 +140,25 @@ def apply_trae_log_event(
     return tuple(current)
 
 
-def select_transport_tasks(
-    tasks: Iterable[TraeTask],
-    limit: int = 4,
-) -> Tuple[TraeTask, ...]:
-    state_order = {"pending": 0, "running": 1, "completed": 2}
-    selected = sorted(
-        tasks,
-        key=lambda item: (
-            state_order[item.state],
-            -item.updated_at,
-            item.session_id,
-            item.task_id,
-        ),
+def ordered_active_tasks(tasks: Iterable[TraeTask]) -> Tuple[TraeTask, ...]:
+    state_order = {"pending": 0, "running": 1}
+    return tuple(
+        sorted(
+            (item for item in tasks if item.state in state_order),
+            key=lambda item: (
+                state_order[item.state],
+                -item.updated_at,
+                item.session_id,
+                item.task_id,
+            ),
+        )
     )
-    return tuple(selected[: max(0, limit)])
+
+
+def select_transport_tasks(
+    tasks: Iterable[TraeTask], limit: int = 4
+) -> Tuple[TraeTask, ...]:
+    return ordered_active_tasks(tasks)[: max(0, limit)]
 
 
 class TraeTaskTracker:
@@ -160,7 +168,7 @@ class TraeTaskTracker:
     def __init__(self, cursor_path: pathlib.Path, ledger_path: pathlib.Path):
         self._cursor_path = pathlib.Path(cursor_path)
         self._ledger_path = pathlib.Path(ledger_path)
-        self._cursor = self._load_cursor()
+        self._cursors = self._load_cursors()
         self._tasks, self._model, self._effort, self._revision = self._load_ledger()
 
     def refresh(
@@ -168,50 +176,61 @@ class TraeTaskTracker:
         log_paths: Sequence[pathlib.Path],
         now: float,
     ) -> TraeTaskSnapshot:
-        path = self._select_log(log_paths)
-        if path is None:
+        paths = self._existing_logs(log_paths)
+        if not paths:
             return self._snapshot()
 
-        stat = path.stat()
-        requires_baseline = (
-            self._cursor is None
-            or self._cursor.path != str(path)
-            or self._cursor.inode != stat.st_ino
-            or stat.st_size < self._cursor.offset
-        )
-        if requires_baseline:
-            self._baseline(path, stat)
-            return self._snapshot()
-
-        with path.open("rb") as stream:
-            stream.seek(self._cursor.offset)
-            appended = stream.read()
-        complete_length = appended.rfind(b"\n") + 1
         changed = False
-        if complete_length > 0:
-            for line in appended[:complete_length].decode(
-                "utf-8", errors="replace"
-            ).splitlines():
-                event = parse_trae_log_event(line)
-                if event is None:
-                    continue
-                if event.kind == "model":
-                    next_pair = (event.model, event.effort)
-                    if next_pair != (self._model, self._effort):
-                        self._model, self._effort = next_pair
-                        changed = True
-                    continue
-                updated = apply_trae_log_event(self._tasks, event, now)
-                if updated != self._tasks:
-                    self._tasks = updated
+        for path in paths:
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            key = str(path)
+            cursor = self._cursors.get(key)
+            requires_baseline = (
+                cursor is None
+                or cursor.path != key
+                or cursor.inode != stat.st_ino
+                or stat.st_size < cursor.offset
+            )
+            if requires_baseline:
+                if self._baseline(path, stat):
                     changed = True
+                continue
 
-        self._cursor = TraeLogCursor(
-            path=str(path),
-            inode=stat.st_ino,
-            offset=self._cursor.offset + complete_length,
-            mtime_ns=stat.st_mtime_ns,
-        )
+            try:
+                with path.open("rb") as stream:
+                    stream.seek(cursor.offset)
+                    appended = stream.read()
+            except OSError:
+                continue
+            complete_length = appended.rfind(b"\n") + 1
+            if complete_length > 0:
+                for line in appended[:complete_length].decode(
+                    "utf-8", errors="replace"
+                ).splitlines():
+                    event = parse_trae_log_event(line)
+                    if event is None:
+                        continue
+                    if event.kind == "model":
+                        next_pair = (event.model, event.effort)
+                        if next_pair != (self._model, self._effort):
+                            self._model, self._effort = next_pair
+                            changed = True
+                        continue
+                    updated = apply_trae_log_event(self._tasks, event, now)
+                    if updated != self._tasks:
+                        self._tasks = updated
+                        changed = True
+
+            self._cursors[key] = TraeLogCursor(
+                path=key,
+                inode=stat.st_ino,
+                offset=cursor.offset + complete_length,
+                mtime_ns=stat.st_mtime_ns,
+            )
+
         if changed:
             self._revision += 1
             self._tasks = tuple(
@@ -225,48 +244,45 @@ class TraeTaskTracker:
                 )[: self._MAX_LEDGER_TASKS]
             )
             self._save_ledger()
-        self._save_cursor()
+        self._save_cursors()
         return self._snapshot()
 
     def _snapshot(self) -> TraeTaskSnapshot:
         return TraeTaskSnapshot(
-            tasks=select_transport_tasks(self._tasks),
+            tasks=self._tasks,
             model=self._model,
             effort=self._effort,
             revision=self._revision,
         )
 
     @staticmethod
-    def _select_log(
+    def _existing_logs(
         log_paths: Sequence[pathlib.Path],
-    ) -> Optional[pathlib.Path]:
-        candidates = [
-            pathlib.Path(path)
-            for path in log_paths
-            if pathlib.Path(path).is_file()
-        ]
-        if not candidates:
-            return None
-        return max(
-            candidates,
-            key=lambda path: (path.stat().st_mtime_ns, str(path)),
+    ) -> Tuple[pathlib.Path, ...]:
+        return tuple(
+            sorted(
+                {
+                    pathlib.Path(path)
+                    for path in log_paths
+                    if pathlib.Path(path).is_file()
+                },
+                key=str,
+            )
         )
 
-    def _baseline(self, path: pathlib.Path, stat: os.stat_result) -> None:
+    def _baseline(self, path: pathlib.Path, stat: os.stat_result) -> bool:
         model = self._latest_model_from_tail(path, stat.st_size)
         changed = model is not None and model != (self._model, self._effort)
         if model is not None:
             self._model, self._effort = model
-        self._cursor = TraeLogCursor(
-            path=str(path),
+        key = str(path)
+        self._cursors[key] = TraeLogCursor(
+            path=key,
             inode=stat.st_ino,
             offset=stat.st_size,
             mtime_ns=stat.st_mtime_ns,
         )
-        if changed:
-            self._revision += 1
-        self._save_cursor()
-        self._save_ledger()
+        return changed
 
     def _latest_model_from_tail(
         self,
@@ -284,17 +300,39 @@ class TraeTaskTracker:
                 latest = (event.model, event.effort)
         return latest
 
-    def _load_cursor(self) -> Optional[TraeLogCursor]:
+    @staticmethod
+    def _cursor_from_value(value: object) -> Optional[TraeLogCursor]:
+        if not isinstance(value, dict):
+            return None
         try:
-            value = json.loads(self._cursor_path.read_text(encoding="utf-8"))
             return TraeLogCursor(
                 path=str(value["path"]),
                 inode=int(value["inode"]),
                 offset=int(value["offset"]),
                 mtime_ns=int(value["mtime_ns"]),
             )
-        except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError):
+        except (ValueError, TypeError, KeyError):
             return None
+
+    def _load_cursors(self) -> Dict[str, TraeLogCursor]:
+        try:
+            value = json.loads(self._cursor_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            return {}
+
+        if isinstance(value, dict) and value.get("version") == 2:
+            raw_cursors = value.get("cursors")
+            if not isinstance(raw_cursors, dict):
+                return {}
+            cursors = {}
+            for raw in raw_cursors.values():
+                cursor = self._cursor_from_value(raw)
+                if cursor is not None:
+                    cursors[cursor.path] = cursor
+            return cursors
+
+        cursor = self._cursor_from_value(value)
+        return {cursor.path: cursor} if cursor is not None else {}
 
     def _load_ledger(
         self,
@@ -315,6 +353,16 @@ class TraeTaskTracker:
                         detail=str(item.get("detail", ""))[:72],
                         state=state,
                         updated_at=float(item["updated_at"]),
+                        model=(
+                            str(item.get("model", ""))[:64]
+                            if isinstance(item.get("model", ""), str)
+                            else ""
+                        ),
+                        effort=(
+                            str(item.get("effort", ""))[:32]
+                            if isinstance(item.get("effort", ""), str)
+                            else ""
+                        ),
                     )
                 )
             model = value.get("model")
@@ -334,19 +382,23 @@ class TraeTaskTracker:
         ):
             return (), None, None, 0
 
-    def _save_cursor(self) -> None:
-        if self._cursor is None:
-            return
+    def _save_cursors(self) -> None:
         self._atomic_json_write(
             self._cursor_path,
-            dataclasses.asdict(self._cursor),
+            {
+                "version": 2,
+                "cursors": {
+                    path: dataclasses.asdict(cursor)
+                    for path, cursor in sorted(self._cursors.items())
+                },
+            },
         )
 
     def _save_ledger(self) -> None:
         self._atomic_json_write(
             self._ledger_path,
             {
-                "version": 1,
+                "version": 2,
                 "model": self._model,
                 "effort": self._effort,
                 "revision": self._revision,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 import datetime
+import hashlib
 import json
 import pathlib
 import sqlite3
@@ -12,7 +13,7 @@ import unicodedata
 import urllib.parse
 from typing import Callable, Dict, Iterable, List, Mapping, Optional, Tuple
 
-from trae_tasks import TraeTask, TraeTaskTracker, select_transport_tasks
+from trae_tasks import TraeTask, TraeTaskTracker, ordered_active_tasks
 
 
 _TRAE_BUNDLE_ID = "cn.trae.app"
@@ -44,7 +45,7 @@ def _default_paths() -> TraePaths:
 DEFAULT_PATHS = _default_paths()
 
 
-def trae_process_is_running() -> bool:
+def trae_process_is_running() -> Optional[bool]:
     try:
         from AppKit import NSWorkspace
 
@@ -53,7 +54,7 @@ def trae_process_is_running() -> bool:
             for application in NSWorkspace.sharedWorkspace().runningApplications()
         )
     except (ImportError, AttributeError, TypeError):
-        return False
+        return None
 
 
 def _clean_text(value: object, limit: int) -> str:
@@ -79,7 +80,7 @@ class TraeStateCollector:
     def __init__(
         self,
         paths: TraePaths = DEFAULT_PATHS,
-        process_is_running: Callable[[], bool] = trae_process_is_running,
+        process_is_running: Callable[[], Optional[bool]] = trae_process_is_running,
         now: Callable[[], float] = time.time,
     ):
         self._paths = paths
@@ -88,12 +89,20 @@ class TraeStateCollector:
         self._tracker = TraeTaskTracker(paths.cursor, paths.ledger)
 
     def get_state(self) -> Dict[str, object]:
-        if not self._process_is_running():
+        process_result = self._process_is_running()
+        process_state = "live" if process_result is True else (
+            "off" if process_result is False else "unknown"
+        )
+        if process_result is not True:
             return {
                 "trae_online": False,
+                "trae_process_state": process_state,
                 "trae_model": "--",
                 "trae_effort": "--",
                 "trae_revision": 0,
+                "trae_pending_count": 0,
+                "trae_running_count": 0,
+                "trae_tasks_truncated": False,
                 "trae_tasks": [],
             }
 
@@ -107,18 +116,29 @@ class TraeStateCollector:
             if snapshot.model is not None
             else _clean_text(metadata.get("selected_effort"), 32)
         )
-        tasks = self._enrich_tasks(
+        enriched_tasks = self._enrich_tasks(
             snapshot.tasks,
             metadata,
             fallback_project,
             now,
         )
+        active_tasks = ordered_active_tasks(enriched_tasks)
+        transport_tasks = active_tasks[:4]
+        pending_count = sum(item.state == "pending" for item in active_tasks)
+        running_count = sum(item.state == "running" for item in active_tasks)
         return {
             "trae_online": True,
+            "trae_process_state": "live",
             "trae_model": model or "--",
             "trae_effort": effort or "--",
             "trae_revision": snapshot.revision,
-            "trae_tasks": [self._task_payload(task) for task in tasks],
+            "trae_pending_count": pending_count,
+            "trae_running_count": running_count,
+            "trae_tasks_truncated": len(active_tasks) > len(transport_tasks),
+            "trae_tasks": [
+                self._task_payload(task, model or "", effort or "")
+                for task in transport_tasks
+            ],
         }
 
     def _log_paths(self) -> Tuple[pathlib.Path, ...]:
@@ -270,6 +290,10 @@ class TraeStateCollector:
                         or task.detail,
                         state=task.state,
                         updated_at=task.updated_at,
+                        model=task.model
+                        or _clean_text(metadata.get("selected_model"), 64),
+                        effort=task.effort
+                        or _clean_text(metadata.get("selected_effort"), 32),
                     )
                 )
             else:
@@ -288,19 +312,32 @@ class TraeStateCollector:
                     detail=_clean_text(metadata.get("task_detail"), 72),
                     state=metadata.get("state", "running"),
                     updated_at=now,
+                    model=_clean_text(metadata.get("selected_model"), 64),
+                    effort=_clean_text(metadata.get("selected_effort"), 32),
                 )
             )
-        return select_transport_tasks(enriched)
+        return tuple(enriched)
 
     @staticmethod
-    def _task_payload(task: TraeTask) -> Dict[str, object]:
+    def _task_payload(
+        task: TraeTask,
+        snapshot_model: str,
+        snapshot_effort: str,
+    ) -> Dict[str, object]:
         timestamp = datetime.datetime.fromtimestamp(task.updated_at)
         return {
-            "session_id": task.session_id,
-            "task_id": task.task_id,
+            "id": hashlib.sha256(
+                (task.session_id + "\0" + task.task_id).encode("utf-8")
+            ).hexdigest()[:16],
             "project": _clean_text(task.project, 32) or "--",
             "title": _clean_text(task.title, 48) or "Trae task",
             "detail": _clean_text(task.detail, 72),
             "time": timestamp.strftime("%H:%M"),
             "state": task.state,
+            "model": _clean_text(task.model, 64)
+            or _clean_text(snapshot_model, 64)
+            or "--",
+            "effort": _clean_text(task.effort, 32)
+            or _clean_text(snapshot_effort, 32)
+            or "--",
         }

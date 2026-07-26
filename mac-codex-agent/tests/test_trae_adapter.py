@@ -9,6 +9,20 @@ import unittest
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from trae_adapter import TraePaths, TraeStateCollector
+from trae_tasks import TraeTask, TraeTaskSnapshot
+
+
+class FakeTracker:
+    def __init__(self, tasks):
+        self.tasks = tuple(tasks)
+
+    def refresh(self, log_paths, now):
+        return TraeTaskSnapshot(
+            tasks=self.tasks,
+            model=None,
+            effort=None,
+            revision=9,
+        )
 
 
 def create_state_db(path, key, value):
@@ -240,6 +254,62 @@ class TraeStateCollectorTests(unittest.TestCase):
         self.assertNotIn("private-sandbox-prompt", serialized)
         self.assertNotIn("private-sandbox-response", serialized)
         self.assertNotIn("private-tool-output", serialized)
+
+    def test_collector_counts_all_active_tasks_before_detail_limit(self):
+        collector = self.collector(online=True)
+        collector._tracker = FakeTracker(
+            tasks=tuple(
+                TraeTask(
+                    "session-{}".format(index),
+                    "task-{}".format(index),
+                    "Project {}".format(index),
+                    "Task {}".format(index),
+                    "detail",
+                    "pending" if index < 3 else "running",
+                    float(100 - index),
+                )
+                for index in range(7)
+            )
+        )
+
+        state = collector.get_state()
+
+        self.assertEqual(state["trae_pending_count"], 3)
+        self.assertEqual(state["trae_running_count"], 4)
+        self.assertEqual(len(state["trae_tasks"]), 4)
+        self.assertTrue(state["trae_tasks_truncated"])
+
+    def test_process_probe_unknown_is_not_reported_as_off(self):
+        state = self.collector(online=None).get_state()
+        self.assertEqual(state["trae_process_state"], "unknown")
+        self.assertFalse(state["trae_online"])
+        self.assertEqual(state["trae_tasks"], [])
+
+    def test_task_payload_uses_opaque_id_and_task_telemetry(self):
+        collector = self.collector(online=True)
+        collector._tracker = FakeTracker(
+            tasks=(
+                TraeTask(
+                    "session-a",
+                    "task-a",
+                    "Project",
+                    "Task",
+                    "detail",
+                    "running",
+                    10.0,
+                    model="Task Model",
+                    effort="high",
+                ),
+            )
+        )
+
+        task = collector.get_state()["trae_tasks"][0]
+
+        self.assertEqual(task["id"], "db278aeb083e3771")
+        self.assertEqual(task["model"], "Task Model")
+        self.assertEqual(task["effort"], "high")
+        self.assertNotIn("session_id", task)
+        self.assertNotIn("task_id", task)
 
 
 if __name__ == "__main__":
