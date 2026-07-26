@@ -21,10 +21,22 @@ class LowBatteryAlertFirmwareContractTests(unittest.TestCase):
             self.assertIn(token, layout)
         for token in (
             "font_puhui_14_1", "MontserratSemiBold26", "电量低", "请及时充电",
-            "removeFlag(LV_OBJ_FLAG_CLICKABLE)",
-            "removeFlag(LV_OBJ_FLAG_SCROLLABLE)", "moveForeground()",
+            "moveForeground()",
         ):
             self.assertIn(token, overlay_source)
+
+        objects = ("root", "banner", "title", "percent", "message")
+        for index, name in enumerate(objects):
+            start = overlay_source.index(f"_{name} = std::make_unique")
+            end = (
+                overlay_source.index(f"_{objects[index + 1]} = std::make_unique", start)
+                if index + 1 < len(objects)
+                else overlay_source.index("return true;", start)
+            )
+            initialization = overlay_source[start:end]
+            self.assertIn(f"_{name}->removeFlag(LV_OBJ_FLAG_CLICKABLE)", initialization)
+            self.assertIn(f"_{name}->removeFlag(LV_OBJ_FLAG_SCROLLABLE)", initialization)
+
         self.assertNotIn("GetHAL()", overlay_header + overlay_source)
 
     def test_hal_exposes_low_battery_observations(self):

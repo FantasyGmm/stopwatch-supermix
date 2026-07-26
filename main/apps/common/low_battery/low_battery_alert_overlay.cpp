@@ -49,17 +49,23 @@ bool LowBatteryAlertOverlay::init(lv_obj_t* parent)
     _banner->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
 
     _title = std::make_unique<Label>(_banner->get());
+    _title->removeFlag(LV_OBJ_FLAG_CLICKABLE);
+    _title->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
     _title->setTextFont(&font_puhui_14_1);
     _title->align(LV_ALIGN_TOP_LEFT, 22, 18);
     _title->setText("电量低");
 
     _percent = std::make_unique<Label>(_banner->get());
+    _percent->removeFlag(LV_OBJ_FLAG_CLICKABLE);
+    _percent->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
     _percent->setTextFont(&MontserratSemiBold26);
     _percent->setTextColor(lv_color_hex(0xFF8066));
     _percent->align(LV_ALIGN_TOP_RIGHT, -22, 10);
     _percent->setText("");
 
     _message = std::make_unique<Label>(_banner->get());
+    _message->removeFlag(LV_OBJ_FLAG_CLICKABLE);
+    _message->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
     _message->setTextFont(&font_puhui_14_1);
     _message->align(LV_ALIGN_BOTTOM_MID, 0, -15);
     _message->setText("请及时充电");
