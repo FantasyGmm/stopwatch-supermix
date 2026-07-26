@@ -95,6 +95,32 @@ class DisplayProtectionFirmwareContractTests(unittest.TestCase):
         self.assertIn("setTemporaryBackLightBrightness(0)", manual_off_body)
         self.assertIn("setTemporaryBackLightBrightness", wake_body)
 
+    def test_assistant_publishes_semantic_activity_only(self):
+        assistant_source = (
+            ROOT / "main" / "apps" / "app_assistant" / "app_assistant.cpp"
+        ).read_text(encoding="utf-8")
+        tracker = (
+            ROOT
+            / "main"
+            / "apps"
+            / "app_assistant"
+            / "assistant_display_activity.h"
+        ).read_text(encoding="utf-8")
+
+        for token in (
+            "AssistantDisplayActivitySignal::WakeDetected",
+            "AssistantDisplayActivitySignal::Listening",
+            "AssistantDisplayActivitySignal::UserText",
+            "AssistantDisplayActivitySignal::AgentText",
+            "AssistantDisplayActivitySignal::Emotion",
+            "AssistantDisplayActivitySignal::Speaking",
+            "AssistantDisplayActivitySignal::Idle",
+            "DisplayKeepAwakeReason::AssistantInteraction",
+        ):
+            self.assertIn(token, assistant_source)
+        self.assertIn("StaleAfterMs = 60000", tracker)
+        self.assertNotIn("_view->update", tracker)
+
 
 if __name__ == "__main__":
     unittest.main()
