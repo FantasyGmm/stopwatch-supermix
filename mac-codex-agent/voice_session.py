@@ -75,6 +75,7 @@ class VoiceSessionService:
         self._cleanup_in_progress = False
 
     async def prepare(self) -> VoiceState:
+        self._require_lifecycle_available(allow_active_session=False)
         state = self._readiness_checker()
         if state not in READINESS_STATES:
             self.state = VoiceState.ERROR
@@ -90,6 +91,7 @@ class VoiceSessionService:
                 await self._abort_preserving(operation_error)
             raise
         try:
+            self._require_lifecycle_available(allow_active_session=True)
             if packet.kind == PTT_BEGIN:
                 await self._begin(packet)
             elif packet.kind == AUDIO:
@@ -111,7 +113,8 @@ class VoiceSessionService:
         await self._cleanup(VoiceState.READY)
 
     async def _begin(self, packet) -> None:
-        if self.state != VoiceState.READY or self._cleanup_in_progress:
+        self._require_lifecycle_available(allow_active_session=False)
+        if self.state != VoiceState.READY:
             raise ValueError("voice session is not ready to begin")
         if packet.session_nonce in self._recent_nonces:
             raise ValueError("session nonce was recently used")
@@ -198,6 +201,15 @@ class VoiceSessionService:
 
     def _has_active_resources(self) -> bool:
         return self._shortcut_armed or self._route_armed
+
+    def _require_lifecycle_available(self, *, allow_active_session) -> None:
+        if self._cleanup_in_progress:
+            raise ValueError("voice cleanup is in progress")
+        if not allow_active_session and (
+            self.state == VoiceState.RECORDING
+            or self._has_active_resources()
+        ):
+            raise ValueError("voice session is active")
 
     async def _abort(self) -> None:
         await self._cleanup(VoiceState.ERROR)

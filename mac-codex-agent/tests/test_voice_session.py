@@ -174,6 +174,73 @@ class VoiceSessionServiceTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(route.calls, [])
                 self.assertEqual(shortcut.calls, [])
 
+    async def test_prepare_rejects_recording_without_permitting_second_begin(self):
+        readiness = mock.Mock(return_value=VoiceState.READY)
+        route = FakeRoute()
+        shortcut = FakeShortcut()
+        service = VoiceSessionService(
+            route,
+            shortcut,
+            TEST_KEY,
+            readiness_checker=readiness,
+            sleep=no_sleep,
+        )
+        await service.handle(begin_packet())
+
+        try:
+            with self.assertRaisesRegex(ValueError, "session is active"):
+                await service.prepare()
+            readiness.assert_not_called()
+            self.assertEqual(service.state, VoiceState.RECORDING)
+
+            with self.assertRaisesRegex(ValueError, "session is active"):
+                await service.handle(
+                    begin_packet(session=8, nonce=nonce_for(8))
+                )
+        finally:
+            await service.disconnect()
+
+        self.assertEqual(route.calls.count("start"), 1)
+        self.assertEqual(shortcut.calls.count("start"), 1)
+
+    async def test_prepare_rejects_blocked_cleanup_without_overwriting_state(self):
+        drain_started = asyncio.Event()
+        release_drain = asyncio.Event()
+        readiness = mock.Mock(return_value=VoiceState.READY)
+
+        async def blocked_sleep(seconds):
+            self.assertEqual(seconds, 0.150)
+            drain_started.set()
+            await release_drain.wait()
+
+        route = FakeRoute()
+        shortcut = FakeShortcut()
+        service = VoiceSessionService(
+            route,
+            shortcut,
+            TEST_KEY,
+            readiness_checker=readiness,
+            sleep=blocked_sleep,
+        )
+        await service.handle(begin_packet())
+        cleanup = asyncio.create_task(service.close())
+        await drain_started.wait()
+
+        try:
+            with self.assertRaisesRegex(ValueError, "cleanup is in progress"):
+                await service.prepare()
+            readiness.assert_not_called()
+            self.assertEqual(service.state, VoiceState.RECORDING)
+            self.assertEqual(route.calls.count("start"), 1)
+            self.assertEqual(shortcut.calls.count("start"), 1)
+        finally:
+            release_drain.set()
+            await cleanup
+
+        self.assertEqual(service.state, VoiceState.READY)
+        self.assertEqual(route.calls, ["start", "stop"])
+        self.assertEqual(shortcut.calls, ["start", "stop"])
+
     async def test_begin_audio_end_pairs_route_and_shortcut(self):
         route = FakeRoute()
         shortcut = FakeShortcut()
@@ -503,7 +570,7 @@ class VoiceSessionServiceTests(unittest.IsolatedAsyncioTestCase):
 
                 try:
                     with self.assertRaisesRegex(
-                        ValueError, "not ready to begin"
+                        ValueError, "cleanup is in progress"
                     ):
                         await service.handle(begin_packet())
                 finally:
@@ -765,13 +832,73 @@ class VoiceSessionServiceTests(unittest.IsolatedAsyncioTestCase):
 
         release_drain.set()
         await end_handler
-        with self.assertRaisesRegex(RuntimeError, "voice error 4"):
+        with self.assertRaisesRegex(ValueError, "cleanup is in progress"):
             await error_handler
 
         self.assertEqual(drain_calls, [0.150])
         self.assertEqual(shortcut.calls, ["start", "stop"])
         self.assertEqual(route.calls, ["start", "write:320", "stop"])
         self.assertEqual(service.state, VoiceState.ERROR)
+
+    async def test_cleanup_ownership_rejects_all_concurrent_session_traffic(self):
+        summary = EndSummary(1, 1, 0, 0, 320, 20, 256)
+        traffic = (
+            ("audio", audio_packet(2)),
+            ("begin", begin_packet(session=8, nonce=nonce_for(8))),
+            ("end", end_packet(2, summary)),
+            (
+                "voice_error",
+                encrypted_packet(
+                    VOICE_ERROR, 2, ERROR_PAYLOAD.pack(4, 9)
+                ),
+            ),
+        )
+        for name, raw in traffic:
+            with self.subTest(name=name):
+                drain_started = asyncio.Event()
+                release_drain = asyncio.Event()
+                drain_calls = []
+
+                async def blocked_sleep(seconds):
+                    drain_calls.append(seconds)
+                    drain_started.set()
+                    await release_drain.wait()
+
+                route = FakeRoute()
+                shortcut = FakeShortcut()
+                service = VoiceSessionService(
+                    route, shortcut, TEST_KEY, sleep=blocked_sleep
+                )
+                await service.handle(begin_packet())
+                await service.handle(audio_packet(1))
+                cleanup = asyncio.create_task(service.disconnect())
+                await drain_started.wait()
+
+                with mock.patch(
+                    "voice_session.decode_ima_adpcm_block",
+                    return_value=[1] * 320,
+                ) as decoder:
+                    concurrent = asyncio.create_task(service.handle(raw))
+                    try:
+                        await asyncio.sleep(0)
+                        self.assertFalse(concurrent.done())
+                    finally:
+                        release_drain.set()
+                        await cleanup
+
+                    with self.assertRaisesRegex(
+                        ValueError, "cleanup is in progress"
+                    ):
+                        await concurrent
+                    decoder.assert_not_called()
+
+                self.assertEqual(drain_calls, [0.150])
+                self.assertEqual(route.written, [[0] * 320])
+                self.assertEqual(
+                    route.calls, ["start", "write:320", "stop"]
+                )
+                self.assertEqual(shortcut.calls, ["start", "stop"])
+                self.assertEqual(service.state, VoiceState.ERROR)
 
     async def test_all_active_failure_cleanup_paths_drain_once(self):
         async def exercise(case):
