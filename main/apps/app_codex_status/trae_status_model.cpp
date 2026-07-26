@@ -50,7 +50,7 @@ bool parse_revision(cJSON* root, int& revision)
     cJSON* item = cJSON_GetObjectItemCaseSensitive(root, "trae_revision");
     if (!cJSON_IsNumber(item) || !std::isfinite(item->valuedouble) ||
         std::floor(item->valuedouble) != item->valuedouble ||
-        item->valuedouble < -2147483648.0 || item->valuedouble > 2147483647.0) {
+        item->valuedouble < 0 || item->valuedouble > 2147483647.0) {
         return false;
     }
     revision = static_cast<int>(item->valuedouble);

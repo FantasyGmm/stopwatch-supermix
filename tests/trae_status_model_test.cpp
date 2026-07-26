@@ -20,6 +20,34 @@ static bool parse(
 }
 
 
+static void assert_same_snapshot(
+    const TraeStatusSnapshot& actual,
+    const TraeStatusSnapshot& expected
+)
+{
+    assert(actual.online == expected.online);
+    assert(actual.process_state == expected.process_state);
+    assert(actual.model == expected.model);
+    assert(actual.effort == expected.effort);
+    assert(actual.revision == expected.revision);
+    assert(actual.received_at_ms == expected.received_at_ms);
+    assert(actual.pending_count == expected.pending_count);
+    assert(actual.running_count == expected.running_count);
+    assert(actual.tasks_truncated == expected.tasks_truncated);
+    assert(actual.task_count == expected.task_count);
+    for (size_t index = 0; index < actual.tasks.size(); ++index) {
+        assert(actual.tasks[index].id == expected.tasks[index].id);
+        assert(actual.tasks[index].project == expected.tasks[index].project);
+        assert(actual.tasks[index].title == expected.tasks[index].title);
+        assert(actual.tasks[index].detail == expected.tasks[index].detail);
+        assert(actual.tasks[index].time == expected.tasks[index].time);
+        assert(actual.tasks[index].model == expected.tasks[index].model);
+        assert(actual.tasks[index].effort == expected.tasks[index].effort);
+        assert(actual.tasks[index].state == expected.tasks[index].state);
+    }
+}
+
+
 int main()
 {
     TraeStatusSnapshot snapshot;
@@ -38,14 +66,14 @@ int main()
     assert(std::string(snapshot.tasks[1].id.data()).empty());
 
     assert(parse(
-        R"({"type":"status","source":"trae","trae_online":true,"trae_model":"Model A","trae_effort":"high","trae_revision":-12,"trae_tasks":[{"project":"StopWatch","title":"Pending task","detail":"Question","time":"10:00","state":"pending"},{"project":"Docs","title":"Running task","detail":"Writing","time":"09:59","state":"running"},{"project":"Web","title":"Completed task","detail":"Done","time":"09:58","state":"completed"}]})",
+        R"({"type":"status","source":"trae","trae_online":true,"trae_model":"Model A","trae_effort":"high","trae_revision":12,"trae_tasks":[{"project":"StopWatch","title":"Pending task","detail":"Question","time":"10:00","state":"pending"},{"project":"Docs","title":"Running task","detail":"Writing","time":"09:59","state":"running"},{"project":"Web","title":"Completed task","detail":"Done","time":"09:58","state":"completed"}]})",
         4321,
         snapshot
     ));
     assert(snapshot.online);
     assert(std::string(snapshot.model.data()) == "Model A");
     assert(std::string(snapshot.effort.data()) == "high");
-    assert(snapshot.revision == -12);
+    assert(snapshot.revision == 12);
     assert(snapshot.received_at_ms == 4321);
     assert(snapshot.process_state == TraeProcessState::Live);
     assert(snapshot.pending_count == 1);
@@ -58,6 +86,20 @@ int main()
     assert(snapshot.tasks[0].state == TraeTaskState::Pending);
     assert(snapshot.tasks[1].state == TraeTaskState::Running);
     assert(snapshot.tasks[2].state == TraeTaskState::Completed);
+
+    const TraeStatusSnapshot before_invalid_revision = snapshot;
+    assert(!parse(
+        R"({"type":"status","source":"trae","trae_online":false,"trae_model":"Negative","trae_effort":"low","trae_revision":-1,"trae_tasks":[]})",
+        4322,
+        snapshot
+    ));
+    assert_same_snapshot(snapshot, before_invalid_revision);
+    assert(!parse(
+        R"({"type":"status","source":"trae","trae_online":false,"trae_model":"Overflow","trae_effort":"low","trae_revision":2147483648,"trae_tasks":[]})",
+        4323,
+        snapshot
+    ));
+    assert_same_snapshot(snapshot, before_invalid_revision);
 
     std::string mutable_json =
         R"({"type":"status","source":"trae","trae_online":true,"trae_model":"Owned","trae_effort":"medium","trae_revision":13,"trae_tasks":[{"project":"Project","title":"Title","detail":"Detail","time":"10:01","state":"running"}]})";
