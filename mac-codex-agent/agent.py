@@ -155,6 +155,23 @@ def _watch_codex_status(status: Mapping[str, object]):
 
 
 def _watch_trae_status(status: Mapping[str, object]):
+    raw_tasks = status.get("trae_tasks")
+    source_tasks = raw_tasks if isinstance(raw_tasks, list) else []
+    active_tasks = [
+        item
+        for item in source_tasks
+        if isinstance(item, Mapping) and item.get("state") in ("pending", "running")
+    ]
+    process_state = status.get("trae_process_state")
+    if process_state not in ("live", "off", "unknown"):
+        process_state = "live" if status.get("trae_online") is True else "off"
+    pending_count = _nonnegative_integer(status.get("trae_pending_count"))
+    running_count = _nonnegative_integer(status.get("trae_running_count"))
+    if "trae_pending_count" not in status:
+        pending_count = sum(item.get("state") == "pending" for item in active_tasks)
+    if "trae_running_count" not in status:
+        running_count = sum(item.get("state") == "running" for item in active_tasks)
+
     result = {
         "type": "status",
         "source": "trae",
@@ -162,30 +179,34 @@ def _watch_trae_status(status: Mapping[str, object]):
         "trae_model": _bounded_text(status.get("trae_model"), 64) or "--",
         "trae_effort": _bounded_text(status.get("trae_effort"), 32) or "--",
         "trae_revision": _nonnegative_integer(status.get("trae_revision")),
+        "trae_process_state": process_state,
+        "trae_pending_count": pending_count,
+        "trae_running_count": running_count,
+        "trae_tasks_truncated": (
+            status.get("trae_tasks_truncated") is True
+            or len(active_tasks) > MAX_TRAE_TASKS
+        ),
         "trae_tasks": [],
     }
-    tasks = status.get("trae_tasks")
-    if isinstance(tasks, list):
-        result["trae_tasks"] = [
-            {
-                "project": _bounded_text(item.get("project"), MAX_PROJECT_LENGTH),
-                "title": _bounded_text(item.get("title"), MAX_TITLE_LENGTH),
-                "detail": _bounded_text(item.get("detail"), MAX_DETAIL_LENGTH),
-                "time": _bounded_text(item.get("time"), 8),
-                "state": (
-                    item.get("state")
-                    if item.get("state") in ("pending", "running", "completed")
-                    else "completed"
-                ),
-            }
-            for item in tasks[:MAX_TRAE_TASKS]
-            if isinstance(item, Mapping)
-        ]
+    result["trae_tasks"] = [
+        {
+            "id": _bounded_text(item.get("id"), 32),
+            "project": _bounded_text(item.get("project"), MAX_PROJECT_LENGTH),
+            "title": _bounded_text(item.get("title"), MAX_TITLE_LENGTH),
+            "detail": _bounded_text(item.get("detail"), MAX_DETAIL_LENGTH),
+            "time": _bounded_text(item.get("time"), 8),
+            "state": item.get("state"),
+            "model": _bounded_text(item.get("model"), 64),
+            "effort": _bounded_text(item.get("effort"), 32),
+        }
+        for item in active_tasks[:MAX_TRAE_TASKS]
+    ]
 
     while len(_compact_json_bytes(result)) > MAX_TRAE_MESSAGE_SIZE and len(
         result["trae_tasks"]
     ) > 1:
         result["trae_tasks"].pop()
+        result["trae_tasks_truncated"] = True
     while len(_compact_json_bytes(result)) > MAX_TRAE_MESSAGE_SIZE:
         shortened = False
         for task in reversed(result["trae_tasks"]):
@@ -194,6 +215,8 @@ def _watch_trae_status(status: Mapping[str, object]):
                 shortened = True
                 break
         if not shortened:
+            if result["trae_tasks"]:
+                result["trae_tasks_truncated"] = True
             result["trae_tasks"].clear()
             break
     return result

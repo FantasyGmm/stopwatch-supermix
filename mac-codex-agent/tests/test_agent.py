@@ -11,6 +11,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 from agent import (
     BleStatusTransport,
     CodexStatusAgent,
+    _compact_json_bytes,
     _watch_codex_status,
     _watch_trae_status,
 )
@@ -249,6 +250,79 @@ class CodexStatusAgentTests(unittest.TestCase):
         payload = _watch_trae_status(status)
 
         self.assertEqual(len(payload["trae_tasks"]), 4)
+        self.assertTrue(payload["trae_tasks_truncated"])
+
+    def test_trae_payload_marks_truncation_when_byte_limit_removes_cards(self):
+        status = {
+            "trae_online": True,
+            "trae_model": "模" * 64,
+            "trae_effort": "力" * 32,
+            "trae_tasks": [
+                {
+                    "id": "标" * 32,
+                    "project": "项" * 32,
+                    "title": "题" * 48,
+                    "detail": "态" * 72,
+                    "time": "12:34:56",
+                    "state": "running",
+                    "model": "模" * 64,
+                    "effort": "力" * 32,
+                }
+                for _ in range(4)
+            ],
+        }
+
+        payload = _watch_trae_status(status)
+
+        self.assertTrue(payload["trae_tasks_truncated"])
+        self.assertLess(len(payload["trae_tasks"]), 4)
+        self.assertLessEqual(len(_compact_json_bytes(payload)), 1024)
+
+    def test_trae_payload_keeps_full_counts_when_details_are_trimmed(self):
+        status = trae_status()
+        status.update(
+            {
+                "trae_process_state": "live",
+                "trae_pending_count": 3,
+                "trae_running_count": 4,
+                "trae_tasks_truncated": True,
+            }
+        )
+        status["trae_tasks"] = [
+            {
+                "id": "id-{}".format(index),
+                "project": "P",
+                "title": "T{}".format(index),
+                "detail": "状态" * 72,
+                "time": "10:00",
+                "state": "pending" if index < 3 else "running",
+                "model": "Doubao",
+                "effort": "High",
+            }
+            for index in range(7)
+        ]
+
+        payload = _watch_trae_status(status)
+
+        self.assertEqual(payload["trae_pending_count"], 3)
+        self.assertEqual(payload["trae_running_count"], 4)
+        self.assertTrue(payload["trae_tasks_truncated"])
+        self.assertLessEqual(len(payload["trae_tasks"]), 4)
+        self.assertLessEqual(len(_compact_json_bytes(payload)), 1024)
+
+    def test_legacy_status_derives_counts_and_process_state(self):
+        payload = _watch_trae_status(trae_status())
+
+        self.assertEqual(payload["trae_process_state"], "live")
+        self.assertEqual(payload["trae_pending_count"], 0)
+        self.assertEqual(payload["trae_running_count"], 1)
+
+    def test_payload_never_exposes_private_task_keys(self):
+        payload = _watch_trae_status(trae_status())
+        encoded = json.dumps(payload, ensure_ascii=False)
+
+        self.assertNotIn("private-session", encoded)
+        self.assertNotIn("private-task", encoded)
 
     def test_unicode_truncation_produces_valid_utf8_json_and_valid_ble_frames(self):
         payload = _watch_trae_status(trae_status(detail="状态🚀" * 300))
