@@ -1,10 +1,14 @@
 import re
+import subprocess
+import sys
+import tempfile
 import unittest
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
 ASSET = ROOT / "main/assets/images/icon_assistant.c"
+GENERATOR = ROOT / "scripts/generate_assistant_icon.py"
 
 
 def load_pixels():
@@ -42,13 +46,37 @@ def bounds(pixels, threshold):
     )
 
 
-def bright_run_in_column(pixels, x, threshold=180):
-    ys = [
-        y
-        for y in range(200)
-        if brightness(pixels[y * 200 + x]) >= threshold
-    ]
-    return min(ys), max(ys) + 1
+def components(pixels, threshold):
+    remaining = {
+        (index % 200, index // 200)
+        for index, pixel in enumerate(pixels)
+        if brightness(pixel) > threshold
+    }
+    result = []
+    while remaining:
+        seed = remaining.pop()
+        stack = [seed]
+        points = [seed]
+        while stack:
+            x, y = stack.pop()
+            for neighbor in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
+                if neighbor in remaining:
+                    remaining.remove(neighbor)
+                    stack.append(neighbor)
+                    points.append(neighbor)
+        if len(points) > 3:
+            result.append(
+                (
+                    len(points),
+                    (
+                        min(x for x, _ in points),
+                        min(y for _, y in points),
+                        max(x for x, _ in points) + 1,
+                        max(y for _, y in points) + 1,
+                    ),
+                )
+            )
+    return sorted(result, reverse=True)
 
 
 class AssistantIconAssetTests(unittest.TestCase):
@@ -67,70 +95,54 @@ class AssistantIconAssetTests(unittest.TestCase):
         self.assertEqual(len(self.raw), 80000)
 
     def test_matches_launcher_family_visual_footprint(self):
-        # RGB565 quantizes the first visible blue step to brightness 8, so a
-        # threshold of 7 includes the complete low-light contour footprint.
-        halo = bounds(self.pixels, 7)
+        # Threshold 24 tracks the wide glow that remains visible after RGB565
+        # quantization, while threshold 128 isolates the solid twin stars.
+        halo = bounds(self.pixels, 24)
         halo_long_axis = max(halo[2] - halo[0], halo[3] - halo[1])
-        self.assertGreaterEqual(halo_long_axis, 190)
+        self.assertGreaterEqual(halo_long_axis, 185)
         self.assertLessEqual(halo_long_axis, 200)
 
-        visible = bounds(self.pixels, 40)
-        visible_long_axis = max(
-            visible[2] - visible[0], visible[3] - visible[1]
-        )
-        self.assertGreaterEqual(visible_long_axis, 168)
-        self.assertLessEqual(visible_long_axis, 175)
-
-        strong = bounds(self.pixels, 80)
+        strong = bounds(self.pixels, 128)
         strong_long_axis = max(strong[2] - strong[0], strong[3] - strong[1])
-        self.assertGreaterEqual(strong_long_axis, 145)
-        self.assertLessEqual(strong_long_axis, 165)
+        self.assertGreaterEqual(strong_long_axis, 165)
+        self.assertLessEqual(strong_long_axis, 170)
 
-    def test_has_approved_five_bar_aurora_waveform(self):
-        expected_runs = {
-            37: (77, 123),
-            69: (56, 144),
-            100: (32, 168),
-            131: (56, 144),
-            163: (77, 123),
-        }
-        for x, expected in expected_runs.items():
-            actual = bright_run_in_column(self.pixels, x)
-            self.assertLessEqual(abs(actual[0] - expected[0]), 3)
-            self.assertLessEqual(abs(actual[1] - expected[1]), 3)
+    def test_has_approved_blue_violet_and_mint_twin_stars(self):
+        solid_components = components(self.pixels, 128)
+        self.assertEqual(len(solid_components), 2)
+        self.assertEqual(solid_components[0][1], (23, 36, 147, 160))
+        self.assertEqual(solid_components[1][1], (116, 109, 190, 183))
 
-        bar_middles = [self.pixel(x, 100) for x in (37, 69, 100, 131, 163)]
-        for pixel in bar_middles:
-            self.assertGreater(pixel[1], pixel[0])
-            self.assertGreater(pixel[2], pixel[0])
-            self.assertLess(max(pixel), 245)
-        for channel in range(3):
-            values = [pixel[channel] for pixel in bar_middles]
-            self.assertLessEqual(max(values) - min(values), 10)
+        main = self.pixel(85, 98)
+        self.assertGreater(main[2] - main[1], 100)
+        self.assertGreater(main[1] - main[0], 20)
 
-        top = self.pixel(100, 45)
-        bottom = self.pixel(100, 155)
-        self.assertGreater(top[1] - bottom[1], 35)
-        self.assertGreater(bottom[0] - top[0], 12)
+        small = self.pixel(153, 139)
+        self.assertGreater(small[1] - small[0], 100)
+        self.assertGreater(small[2] - small[0], 100)
 
-        edge_halo = [
-            self.pixel(20, 100),
-            self.pixel(180, 100),
-            self.pixel(100, 25),
-            self.pixel(100, 175),
-        ]
-        for pixel in edge_halo:
-            self.assertGreaterEqual(brightness(pixel), 14)
-            self.assertGreater(pixel[2], pixel[0])
+    def test_keeps_visible_wide_glow_and_crisp_main_edge(self):
+        glow = self.pixel(14, 98)
+        self.assertGreaterEqual(brightness(glow), 28)
+        self.assertGreater(glow[2], glow[0])
 
-        glow_left = self.pixel(50, 70)
-        glow_right = self.pixel(150, 70)
-        for pixel in (glow_left, glow_right):
-            self.assertGreaterEqual(brightness(pixel), 28)
-            self.assertGreater(pixel[2], pixel[0])
+        outside = brightness(self.pixel(22, 98))
+        edge = brightness(self.pixel(23, 98))
+        self.assertGreaterEqual(edge - outside, 90)
 
-        for point in ((5, 100), (194, 100), (100, 5), (100, 194)):
-            self.assertLessEqual(brightness(self.pixel(*point)), 20)
+    def test_checked_in_asset_matches_generator(self):
+        with tempfile.TemporaryDirectory() as directory:
+            generated = Path(directory) / "icon_assistant.c"
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(GENERATOR),
+                    "--output-c",
+                    str(generated),
+                ],
+                check=True,
+            )
+            self.assertEqual(generated.read_bytes(), ASSET.read_bytes())
 
 
 if __name__ == "__main__":
