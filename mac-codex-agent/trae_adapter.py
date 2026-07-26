@@ -322,6 +322,7 @@ class TraeStateCollector:
         for task in tasks:
             if task.session_id == session_id and task.task_id == task_id:
                 matched = True
+                metadata_is_newer = now > task.updated_at
                 enriched.append(
                     TraeTask(
                         session_id=task.session_id,
@@ -334,11 +335,11 @@ class TraeStateCollector:
                         detail=_clean_text(metadata.get("task_detail"), 72)
                         or task.detail,
                         state=(
-                            "completed"
-                            if metadata.get("state") == "completed"
+                            metadata.get("state", task.state)
+                            if metadata_is_newer
                             else task.state
                         ),
-                        updated_at=task.updated_at,
+                        updated_at=now if metadata_is_newer else task.updated_at,
                         model=task.model
                         or _clean_text(metadata.get("selected_model"), 64),
                         effort=task.effort

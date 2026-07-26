@@ -476,8 +476,14 @@ class TraeStateCollectorTests(unittest.TestCase):
                     },
                     name="project-a.json",
                 )
-                os.utime(metadata_b, ns=(100, 100))
-                os.utime(metadata_a, ns=(200, 200))
+                os.utime(
+                    metadata_b,
+                    ns=(10_000_000_000, 10_000_000_000),
+                )
+                os.utime(
+                    metadata_a,
+                    ns=(20_000_000_000, 20_000_000_000),
+                )
                 collector = self.collector(online=True)
                 collector._tracker = FakeTracker(
                     tasks=(
@@ -547,6 +553,94 @@ class TraeStateCollectorTests(unittest.TestCase):
 
         self.assertEqual(state["trae_model"], "New Workspace Model")
         self.assertEqual(state["trae_effort"], "high")
+
+    def _assert_same_task_metadata_merge(
+        self,
+        task_state,
+        task_updated_at,
+        metadata_state,
+        metadata_updated_at,
+        expected_state,
+        expected_updated_at,
+    ):
+        task = TraeTask(
+            "session-a",
+            "task-a",
+            "Original Project",
+            "Original title",
+            "Original detail",
+            task_state,
+            task_updated_at,
+            model="Task Model",
+            effort="high",
+        )
+        metadata = TraeStateCollector._normalize_metadata(
+            {
+                "session_id": "session-a",
+                "task_id": "task-a",
+                "project_path": "/work/Metadata Project",
+                "task_title": "Metadata title",
+                "task_detail": "Metadata detail",
+                "selected_model": "Metadata Model",
+                "selected_effort": "low",
+                "state": metadata_state,
+            }
+        )
+
+        merged = TraeStateCollector._enrich_tasks(
+            (task,),
+            metadata,
+            "Fallback Project",
+            metadata_updated_at,
+        )[0]
+
+        self.assertEqual(merged.state, expected_state)
+        self.assertEqual(merged.updated_at, expected_updated_at)
+        self.assertEqual(merged.project, "Metadata Project")
+        self.assertEqual(merged.title, "Metadata title")
+        self.assertEqual(merged.detail, "Metadata detail")
+        self.assertEqual(merged.model, "Task Model")
+        self.assertEqual(merged.effort, "high")
+
+    def test_stale_terminal_metadata_does_not_hide_newer_log_restart(self):
+        self._assert_same_task_metadata_merge(
+            task_state="running",
+            task_updated_at=200.0,
+            metadata_state="failed",
+            metadata_updated_at=100.0,
+            expected_state="running",
+            expected_updated_at=200.0,
+        )
+
+    def test_newer_terminal_metadata_retires_older_active_log_task(self):
+        self._assert_same_task_metadata_merge(
+            task_state="running",
+            task_updated_at=50.0,
+            metadata_state="cancelled",
+            metadata_updated_at=100.0,
+            expected_state="completed",
+            expected_updated_at=100.0,
+        )
+
+    def test_newer_active_metadata_revives_older_completed_log_task(self):
+        self._assert_same_task_metadata_merge(
+            task_state="completed",
+            task_updated_at=50.0,
+            metadata_state="running",
+            metadata_updated_at=100.0,
+            expected_state="running",
+            expected_updated_at=100.0,
+        )
+
+    def test_stale_active_metadata_does_not_revive_newer_completed_log_task(self):
+        self._assert_same_task_metadata_merge(
+            task_state="completed",
+            task_updated_at=200.0,
+            metadata_state="running",
+            metadata_updated_at=100.0,
+            expected_state="completed",
+            expected_updated_at=200.0,
+        )
 
 
 if __name__ == "__main__":
