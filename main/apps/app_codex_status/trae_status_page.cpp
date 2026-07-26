@@ -16,9 +16,6 @@ namespace {
 
 using namespace trae_status_ui;
 
-constexpr uint32_t kRobotIdleDurationMs = 2200;
-constexpr uint32_t kRobotActionDurationMs = 180;
-
 
 lv_obj_t* make_label(
     lv_obj_t* parent,
@@ -182,7 +179,7 @@ void TraeStatusPage::init(lv_obj_t* parent)
     lv_image_set_pivot(_brand_icon, 0, 0);
     lv_image_set_scale_x(_brand_icon, kBrandIconScaleX);
     lv_image_set_scale_y(_brand_icon, kBrandIconScaleY);
-    lv_obj_set_pos(_brand_icon, kBrandIconX, kBrandIconY);
+    lv_obj_set_pos(_brand_icon, kBrandIconX, kBrandIconRenderY);
     lv_obj_clear_flag(_brand_icon, LV_OBJ_FLAG_CLICKABLE);
 
     make_label(
@@ -393,27 +390,27 @@ void TraeStatusPage::render(
         return;
     }
 
-    lv_label_set_text(_bt_status, bluetooth_connected ? "BT LIVE" : "BT OFF");
+    const HealthState health = resolve_health_state(
+        bluetooth_connected,
+        stale,
+        snapshot.process_state
+    );
+    lv_label_set_text(_bt_status, bluetooth_health_text(health));
     lv_obj_set_style_text_color(
         _bt_status,
-        lv_color_hex(bluetooth_connected ? kRunning : kDimText),
+        lv_color_hex(health.bluetooth_live ? kRunning : kDimText),
         0
     );
     lv_obj_set_style_text_color(
         _health_dot,
-        lv_color_hex(bluetooth_connected ? kRunning : kDimText),
+        lv_color_hex(health.bluetooth_live ? kRunning : kDimText),
         0
     );
 
-    const char* process_text = "TRAE --";
+    const char* process_text = process_health_text(health.process);
     uint32_t process_color = kDimText;
-    if (bluetooth_connected && !stale) {
-        if (snapshot.process_state == TraeProcessState::Live) {
-            process_text = "TRAE LIVE";
-            process_color = kProcessLive;
-        } else if (snapshot.process_state == TraeProcessState::Off) {
-            process_text = "TRAE OFF";
-        }
+    if (health.process == ProcessHealth::Live) {
+        process_color = kProcessLive;
     }
     lv_label_set_text(_process_status, process_text);
     lv_obj_set_style_text_color(
@@ -450,20 +447,14 @@ void TraeStatusPage::render(
     );
     lv_label_set_text(_running_count, count_text);
 
-    const char* empty_text = nullptr;
-    if (!bluetooth_connected) {
-        empty_text = "等待连接";
-    } else if (stale) {
-        empty_text = "状态不可用";
-    } else if (snapshot.process_state == TraeProcessState::Off) {
-        empty_text = "TRAE 未运行";
-    } else if (snapshot.process_state == TraeProcessState::Unknown) {
-        empty_text = "状态不可用";
-    } else if (snapshot.pending_count == 0 && snapshot.running_count == 0) {
-        empty_text = "暂无进行中的任务";
-    } else if (!active_task) {
-        empty_text = "状态不可用";
-    }
+    const char* empty_text = empty_state_text(resolve_empty_state(
+        bluetooth_connected,
+        stale,
+        snapshot.process_state,
+        snapshot.pending_count,
+        snapshot.running_count,
+        active_task
+    ));
 
     if (empty_text != nullptr) {
         set_hidden(_cards[0], true);
@@ -488,8 +479,9 @@ void TraeStatusPage::render(
     lv_obj_set_pos(_card_title, 12, 49);
     lv_obj_set_style_text_align(_card_title, LV_TEXT_ALIGN_LEFT, 0);
 
-    set_hidden(_cards[1], visible_task_count < 2);
-    set_hidden(_cards[0], visible_task_count < 3);
+    const DeckLayers layers = resolve_deck_layers(visible_task_count);
+    set_hidden(_cards[1], !layers.back);
+    set_hidden(_cards[0], !layers.deep);
 
     const bool pending = task->state == TraeTaskState::Pending;
     lv_label_set_text(_card_state, pending ? "待确认" : "运行中");
@@ -533,15 +525,13 @@ void TraeStatusPage::render(
     lv_label_set_text(_card_title, display_or_dash(task->title.data()));
     lv_label_set_text(_card_detail, display_or_dash(task->detail.data()));
 
-    const bool task_changed =
-        task->id[0] != '\0' &&
-        std::strncmp(
-            _last_task_id.data(),
-            task->id.data(),
-            _last_task_id.size()
-        ) != 0;
+    const bool task_changed = should_trigger_task_action(
+        _active,
+        _last_task_id.data(),
+        task->id.data()
+    );
     _last_task_id = task->id;
-    if (task_changed && _active && _robot_timer != nullptr) {
+    if (task_changed && _robot_timer != nullptr) {
         set_robot_action(true);
         lv_timer_set_period(_robot_timer, kRobotActionDurationMs);
         lv_timer_reset(_robot_timer);
@@ -559,16 +549,15 @@ void TraeStatusPage::set_active(bool active)
         return;
     }
 
-    if (active) {
-        set_robot_action(false);
-        lv_timer_set_period(_robot_timer, kRobotIdleDurationMs);
+    const RobotActivation activation = resolve_robot_activation(active);
+    set_robot_action(activation.action);
+    lv_timer_set_period(_robot_timer, activation.period_ms);
+    if (activation.paused) {
+        lv_timer_pause(_robot_timer);
+        lv_timer_reset(_robot_timer);
+    } else {
         lv_timer_reset(_robot_timer);
         lv_timer_resume(_robot_timer);
-    } else {
-        lv_timer_pause(_robot_timer);
-        set_robot_action(false);
-        lv_timer_set_period(_robot_timer, kRobotIdleDurationMs);
-        lv_timer_reset(_robot_timer);
     }
 }
 
@@ -590,13 +579,11 @@ void TraeStatusPage::robot_timer_cb(lv_timer_t* timer)
         return;
     }
 
-    if (self->_robot_action) {
-        self->set_robot_action(false);
-        lv_timer_set_period(timer, kRobotIdleDurationMs);
-    } else {
-        self->set_robot_action(true);
-        lv_timer_set_period(timer, kRobotActionDurationMs);
-    }
+    const RobotTimerStep step = resolve_robot_timer_step(
+        self->_robot_action
+    );
+    self->set_robot_action(step.action);
+    lv_timer_set_period(timer, step.period_ms);
 }
 
 

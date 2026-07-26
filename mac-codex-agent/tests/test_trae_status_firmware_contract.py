@@ -51,6 +51,10 @@ class TraeStatusFirmwareContractTests(unittest.TestCase):
         source = (self.app_root / "trae_status_page.cpp").read_text(
             encoding="utf-8"
         )
+        layout = (self.app_root / "trae_status_ui_layout.h").read_text(
+            encoding="utf-8"
+        )
+        page_contract = header + source + layout
 
         for token in (
             "class TraeStatusPage",
@@ -69,7 +73,7 @@ class TraeStatusFirmwareContractTests(unittest.TestCase):
             "lv_obj_set_style_border_width",
             "LV_LABEL_LONG_MODE_DOTS",
         ):
-            self.assertIn(token, header + source)
+            self.assertIn(token, page_contract)
 
         for forbidden in (
             "make_signal_mark",
@@ -95,7 +99,7 @@ class TraeStatusFirmwareContractTests(unittest.TestCase):
             '"TRAE 未运行"',
             '"状态不可用"',
         ):
-            self.assertIn(text, source)
+            self.assertIn(text, source + layout)
 
         for token in (
             "kBrandIconX",
