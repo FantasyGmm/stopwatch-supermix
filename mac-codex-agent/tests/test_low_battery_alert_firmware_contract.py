@@ -6,6 +6,55 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class LowBatteryAlertFirmwareContractTests(unittest.TestCase):
+    def test_global_service_and_main_loop_contract(self):
+        service_header_path = (
+            ROOT / "main" / "runtime" / "power" / "global_low_battery_alert_service.h"
+        )
+        service_source_path = (
+            ROOT / "main" / "runtime" / "power" / "global_low_battery_alert_service.cpp"
+        )
+        self.assertTrue(service_header_path.exists(), "global alert service header is missing")
+        self.assertTrue(service_source_path.exists(), "global alert service source is missing")
+
+        service_header = service_header_path.read_text(encoding="utf-8")
+        service_source = service_source_path.read_text(encoding="utf-8")
+        service = service_header + service_source
+        for token in (
+            "LowBatteryAlertLogic _logic",
+            "LowBatteryAlertOverlay _overlay",
+            "GetHAL().batterySampleRevision()",
+            "GetHAL().isBatteryCharging(false)",
+            "GetHAL().isDisplayVisible()",
+            "GetHAL().isAudioPlaying()",
+            "RuntimeOwner::System",
+            "audio::play_melody",
+            "_logic.deferSound()",
+        ):
+            self.assertIn(token, service)
+        self.assertIn(
+            ".external_power = GetHAL().isBatteryCharging(false),", service_source
+        )
+        self.assertNotIn(
+            ".external_power = sample_due && GetHAL().isBatteryCharging(false),",
+            service_source,
+        )
+
+        main = (ROOT / "main" / "main.cpp").read_text(encoding="utf-8")
+        policy = main.index("GetGlobalLowBatteryAlertService().update()")
+        overlay = main.index("GetGlobalLowBatteryAlertService().updateOverlay()")
+        edge = main.index("GetGlobalEdgeControlService().update()")
+        audio = main.index("GetGlobalLowBatteryAlertService().applyPendingAudio()")
+        mooncake = main.index("GetMooncake().update()")
+        self.assertLess(policy, overlay)
+        self.assertLess(overlay, edge)
+        self.assertLess(edge, audio)
+        self.assertLess(audio, mooncake)
+
+        setup = (ROOT / "main" / "apps" / "app_setup" / "app_setup.cpp").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("GetGlobalLowBatteryAlertService", setup)
+
     def test_overlay_uses_circular_safe_layout_and_remains_presentation_only(self):
         layout = (ROOT / "main" / "apps" / "common" / "low_battery" / "low_battery_alert_layout.h").read_text(
             encoding="utf-8"
