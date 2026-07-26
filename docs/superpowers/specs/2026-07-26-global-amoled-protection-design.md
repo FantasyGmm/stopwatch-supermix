@@ -3,8 +3,8 @@
 ## Goal
 
 Protect the watch's CO5300 AMOLED panel from long-lived static content without
-stopping applications or background services. Every visible application except
-Codex follows one consistent inactivity policy:
+stopping applications or background services. Every visible application uses
+one consistent inactivity policy while running on battery:
 
 - after 15 seconds without user or approved application activity, temporarily
   cap display brightness at 20 percent;
@@ -12,8 +12,10 @@ Codex follows one consistent inactivity policy:
 - restore the user's previous brightness on wake without changing the saved
   brightness setting.
 
-Codex remains outside this automatic policy because it already owns a
-button-driven screen-off and wake flow. This change must not alter that flow.
+Codex is excluded from the automatic policy only while external power is
+connected. On battery, Codex follows the same inactivity policy as other
+applications. Its existing button-driven screen-off and wake flow remains
+available in both power states and is not altered by this policy.
 
 ## Product Decisions
 
@@ -43,6 +45,14 @@ application clears its reason defensively.
 
 An alarm that starts while the display is dimmed or off immediately restores the
 display and holds it awake until the alarm is dismissed.
+
+Codex has one power-aware application exception rather than a keep-awake reason.
+While external power is connected, automatic protection is disabled and Codex
+retains its existing always-visible behavior. When external power is removed,
+automatic protection is enabled with a fresh inactivity origin. Connecting
+external power while Codex is dimmed or off immediately restores the display
+and disables subsequent automatic transitions. A failed or unavailable power
+reading is treated conservatively as battery operation.
 
 ## Chosen Architecture
 
@@ -124,11 +134,27 @@ user activity.
 
 ### Application Integration
 
-Codex disables automatic protection on open and re-enables it on close. Its
-existing two-second left-button screen-off behavior, wake handling, Pending glow
-gating, and brightness restore value remain authoritative while Codex is open.
-The global service must not interpret a zero brightness created by Codex as its
-own `ScreenOff` state.
+Codex selects automatic protection from the current power source on open and
+refreshes that selection while it remains open. It uses
+`GetHAL().isBatteryCharging(false)`, whose non-strict mode reports external
+power insertion even when the battery is already full:
+
+- external power connected: disable automatic protection;
+- battery operation or a failed power read: enable automatic protection.
+
+Power is sampled once per second rather than on every UI update. The application
+calls the global service only when the derived policy changes, and the service
+keeps the operation idempotent. An external-to-battery transition re-enables
+protection and starts a fresh 15/60-second period. A battery-to-external
+transition disables protection and immediately restores the active display.
+Closing Codex always restores the default protected policy for the next
+application.
+
+Codex's existing two-second left-button manual screen-off behavior, wake
+handling, Pending glow gating, and brightness restore value remain authoritative
+in both power states. Manual screen-off therefore remains possible while
+external power is connected. The global service must not interpret a zero
+brightness created by Codex as its own `ScreenOff` state.
 
 Assistant publishes activity from actual conversation events and runtime
 presentation state. Listening/capture, the outstanding response interval, and
@@ -174,9 +200,11 @@ applications read touch/button state directly.
 
 ## Application Switching and Lifecycle
 
-Opening or returning to a normal protected application starts a fresh active
-period. Switching to Codex disables only the automatic policy; switching away
-re-enables it and restarts timing.
+Opening or returning to a protected application starts a fresh active period.
+Opening Codex chooses the automatic policy from the current power source.
+Switching away from Codex always re-enables the default policy and restarts
+timing. Power-source changes while Codex remains open apply immediately on the
+next bounded power check.
 
 Keep-awake reasons survive view replacement when their underlying operation is
 still active. They are cleared defensively when the owning runtime or model is
@@ -229,7 +257,9 @@ belongs in the pure logic tests, not in production debug commands.
 
 This change does not:
 
-- change Codex's own screen-off gesture or Pending animation;
+- change Codex's own manual screen-off gesture or Pending animation;
+- force Codex to remain lit after the user explicitly invokes manual
+  screen-off while connected to external power;
 - add an always-on display mode or pixel shifting;
 - enter ESP32 deep sleep or panel-controller sleep;
 - change saved brightness defaults;
@@ -260,7 +290,10 @@ Firmware contract and focused integration tests will prove:
 - wake touch uses LVGL wait-release/reset;
 - button wake suppression lasts until physical release;
 - temporary brightness writes do not persist or replace user brightness;
-- Codex disables the automatic policy without changing its current flow;
+- Codex disables the automatic policy only on external power and uses the
+  default policy on battery;
+- Codex reacts to live plug and unplug transitions with immediate restore or a
+  fresh inactivity period, and treats power-read failure as battery operation;
 - Assistant holds only for real conversation activity;
 - Stopwatch Running holds across Clock subpage changes, while Paused/Stopped do
   not;
@@ -283,7 +316,10 @@ Hardware validation will cover every retained application:
 - verify a running Stopwatch does not dim or turn off, including after leaving
   its subpage and returning to Launcher, and that pausing restarts timing;
 - verify an alarm wakes a dimmed/off display and remains visible while ringing;
-- verify Codex's existing manual screen-off and Pending behavior are unchanged;
+- verify Codex stays automatically awake on external power, follows the 15/60
+  second policy on battery, and responds correctly to live plug/unplug changes;
+- verify Codex's existing manual screen-off and Pending behavior are unchanged
+  in both power states;
 - verify restored brightness equals the user's pre-dim value and survives an
   application switch and reboot.
 
