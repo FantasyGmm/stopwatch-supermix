@@ -7,6 +7,112 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
 class DisplayProtectionFirmwareContractTests(unittest.TestCase):
+    def test_standard_runner_gates_all_display_protection_host_tests(self):
+        runner = (
+            ROOT / "scripts" / "run_unified_offline_validation.sh"
+        ).read_text(encoding="utf-8")
+
+        expected_titles = (
+            "Python contract and tooling tests",
+            "Assistant state machine host test",
+            "Assistant presentation and lifecycle event policy host tests",
+            "Assistant audio level host test",
+            "Assistant close controller host test",
+            "Assistant event mailbox host test",
+            "Assistant update notice host test",
+            "Assistant trace host test",
+            "Resource supervisor host test",
+            "Button feedback policy host test",
+            "Shared Wi-Fi policy host test",
+            "WiFi settings model host test",
+            "WiFi settings controller host test",
+            "USB debug command host test",
+            "Runtime diagnostics host test",
+            "Audio jitter buffer policy host test",
+            "Assistant output sync policy host test",
+            "Global edge control host test",
+            "Status message router host test",
+            "Trae status model host test",
+            "Trae task carousel host test",
+            "Codex status model compatibility host test",
+            "Status page swipe and Trae card tap host tests",
+            "Display protection configuration host test",
+            "AMOLED protection state machine host test",
+            "External power tracker host test",
+            "Display protection settings model host test",
+            "Button input wake gate host test",
+            "Assistant display activity host test",
+            "Codex status UI host tests",
+            "Trae status UI layout host test",
+            "Isolated unified candidate clean build and capacity gates",
+        )
+        stages = re.findall(r'echo "\[(\d+)/(\d+)\] ([^"]+)"', runner)
+        self.assertEqual(
+            stages,
+            [
+                (str(number), "32", title)
+                for number, title in enumerate(expected_titles, start=1)
+            ],
+        )
+
+        def stage_body(number):
+            marker = f'echo "[{number}/32] '
+            start = runner.index(marker)
+            end = runner.find('\necho "[', start + len(marker))
+            return runner[start:] if end < 0 else runner[start:end]
+
+        strict_compile = '"$CXX" -std=c++17 -Wall -Wextra -Werror -Imain'
+        compile_specs = {
+            "display_protection_config_test": (
+                24,
+                (
+                    "tests/display_protection_config_test.cpp",
+                    "main/runtime/display/display_protection_config.cpp",
+                ),
+            ),
+            "display_protection_logic_test": (
+                25,
+                (
+                    "tests/display_protection_logic_test.cpp",
+                    "main/runtime/display/display_protection_logic.cpp",
+                ),
+            ),
+            "display_protection_diagnostics_test": (
+                25,
+                (
+                    "tests/display_protection_diagnostics_test.cpp",
+                    "main/runtime/display/display_protection_diagnostics.cpp",
+                    "main/runtime/display/display_protection_logic.cpp",
+                    "main/runtime/display/display_protection_config.cpp",
+                ),
+            ),
+            "external_power_state_test": (
+                26,
+                ("tests/external_power_state_test.cpp",),
+            ),
+            "display_protection_settings_model_test": (
+                27,
+                (
+                    "tests/display_protection_settings_model_test.cpp",
+                    "main/runtime/display/display_protection_config.cpp",
+                ),
+            ),
+        }
+        for executable, (number, expected_sources) in compile_specs.items():
+            body = stage_body(number)
+            output = f'-o "$HOST_TEST_DIR/{executable}"'
+            output_index = body.index(output)
+            compile_index = body.rfind(strict_compile, 0, output_index)
+            self.assertGreaterEqual(compile_index, 0)
+            compile_command = body[compile_index : output_index + len(output)]
+            sources = re.findall(
+                r"^\s+((?:tests|main)/\S+\.cpp) \\$",
+                compile_command,
+                flags=re.MULTILINE,
+            )
+            self.assertEqual(sources, list(expected_sources))
+            self.assertIn(f'"$HOST_TEST_DIR/{executable}"', body[output_index:])
+
     def test_runtime_pmic_driver_accesses_share_one_io_lock(self):
         pmic_source = (ROOT / "main" / "hal" / "hal_pmic.cpp").read_text(
             encoding="utf-8"
