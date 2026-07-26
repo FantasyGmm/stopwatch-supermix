@@ -6,6 +6,13 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class LowBatteryAlertFirmwareContractTests(unittest.TestCase):
+    def test_unified_runner_includes_global_low_battery_stage(self):
+        runner = (ROOT / "scripts" / "run_unified_offline_validation.sh").read_text()
+        self.assertIn("[19/21] Global low-battery alert host test", runner)
+        self.assertIn("tests/low_battery_alert_logic_test.cpp", runner)
+        self.assertIn("main/runtime/power/low_battery_alert_logic.cpp", runner)
+        self.assertIn('"$HOST_TEST_DIR/low_battery_alert_logic_test"', runner)
+
     def test_global_service_and_main_loop_contract(self):
         service_header_path = (
             ROOT / "main" / "runtime" / "power" / "global_low_battery_alert_service.h"
