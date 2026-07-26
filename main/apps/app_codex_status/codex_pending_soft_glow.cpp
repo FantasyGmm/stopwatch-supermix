@@ -112,21 +112,19 @@ bool CodexPendingSoftGlow::active() const
 
 void CodexPendingSoftGlow::apply_phase(int32_t phase)
 {
-    _opacity = static_cast<lv_opa_t>(
-        codex_pending_glow::opacity_for_phase(phase)
-    );
+    _phase = codex_pending_glow::bounded_phase(phase);
     if (_heading != nullptr) {
         const lv_opa_t heading = interpolate_opa(
-            phase,
+            _phase,
             LV_OPA_70,
             LV_OPA_COVER
         );
         lv_obj_set_style_opa(_heading, heading, 0);
     }
-    invalidate_edges();
+    invalidate_ring_segments();
 }
 
-void CodexPendingSoftGlow::invalidate_edges()
+void CodexPendingSoftGlow::invalidate_ring_segments()
 {
     if (_overlay == nullptr) {
         return;
@@ -134,12 +132,12 @@ void CodexPendingSoftGlow::invalidate_edges()
 
     lv_area_t coords;
     lv_obj_get_coords(_overlay, &coords);
-    for (const auto& edge : codex_pending_glow::kInvalidationAreas) {
+    for (const auto& segment : codex_pending_glow::kInvalidationAreas) {
         lv_area_t area = {
-            static_cast<lv_coord_t>(coords.x1 + edge.x1),
-            static_cast<lv_coord_t>(coords.y1 + edge.y1),
-            static_cast<lv_coord_t>(coords.x1 + edge.x2),
-            static_cast<lv_coord_t>(coords.y1 + edge.y2),
+            static_cast<lv_coord_t>(coords.x1 + segment.x1),
+            static_cast<lv_coord_t>(coords.y1 + segment.y1),
+            static_cast<lv_coord_t>(coords.x1 + segment.x2),
+            static_cast<lv_coord_t>(coords.y1 + segment.y2),
         };
         lv_obj_invalidate_area(_overlay, &area);
     }
@@ -208,6 +206,13 @@ void CodexPendingSoftGlow::draw_event_cb(lv_event_t* event)
     lv_obj_get_coords(lv_event_get_target_obj(event), &coords);
     lv_layer_t* layer = lv_event_get_layer(event);
     for (const auto& ring : codex_pending_glow::kRings) {
-        draw_ring(layer, coords, ring, self->_opacity);
+        const lv_opa_t opacity = static_cast<lv_opa_t>(
+            codex_pending_glow::opacity_for_phase(
+                self->_phase,
+                ring.minimum_opacity,
+                ring.maximum_opacity
+            )
+        );
+        draw_ring(layer, coords, ring, opacity);
     }
 }

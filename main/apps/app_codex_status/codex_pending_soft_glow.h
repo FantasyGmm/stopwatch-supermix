@@ -18,11 +18,11 @@ public:
 private:
     lv_obj_t* _overlay = nullptr;
     lv_obj_t* _heading = nullptr;
-    lv_opa_t _opacity = LV_OPA_40;
+    int32_t _phase = 0;
     bool _active = false;
 
     void apply_phase(int32_t phase);
-    void invalidate_edges();
+    void invalidate_ring_segments();
     void start();
     void stop();
     static void animation_cb(void* target, int32_t phase);
