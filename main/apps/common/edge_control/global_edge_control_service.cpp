@@ -82,7 +82,7 @@ void GlobalEdgeControlService::applyPendingHardwareUpdate()
     }
 
     if (_restore_screen_off_after_apply) {
-        GetHAL().setBackLightBrightness(0, false);
+        GetHAL().setTemporaryBackLightBrightness(0);
         _restore_screen_off_after_apply = false;
     }
 }

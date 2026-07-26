@@ -35,6 +35,35 @@ class DisplayProtectionFirmwareContractTests(unittest.TestCase):
         ]
         self.assertNotIn("Settings settings", temporary_body)
 
+    def test_global_service_precedes_edge_controls_and_apps(self):
+        main = (ROOT / "main" / "main.cpp").read_text(encoding="utf-8")
+        service = (
+            ROOT
+            / "main"
+            / "runtime"
+            / "display"
+            / "global_display_protection_service.cpp"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("GetGlobalDisplayProtectionService().init()", main)
+        protection = main.index("GetGlobalDisplayProtectionService().update()")
+        edge = main.index("GetGlobalEdgeControlService().update()")
+        mooncake = main.index("GetMooncake().update()")
+        self.assertLess(protection, edge)
+        self.assertLess(edge, mooncake)
+        self.assertIn(
+            "GetGlobalDisplayProtectionService().applyPendingHardwareUpdate()", main
+        )
+
+        for token in (
+            "lv_indev_wait_release(indev)",
+            "lv_indev_reset(indev, nullptr)",
+            "GetHAL().suppressButtonInputUntilRelease()",
+            "GetHAL().setTemporaryBackLightBrightness",
+        ):
+            self.assertIn(token, service)
+        self.assertNotIn("setBackLightBrightness", service)
+
 
 if __name__ == "__main__":
     unittest.main()
