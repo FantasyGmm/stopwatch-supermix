@@ -6,6 +6,7 @@
 #include "hal.h"
 #include "utils/settings/settings.h"
 #include <apps/common/audio/audio.h>
+#include <runtime/resource_supervisor.h>
 #include <algorithm>
 #include <cstring>
 #include <freertos/FreeRTOS.h>
@@ -83,18 +84,28 @@ public:
         ensureTask();
 
         bool already_active = false;
+        bool playback_owned = false;
         {
             std::lock_guard<std::mutex> lock(_mutex);
             already_active = _active;
             _active        = true;
+            playback_owned = _playback_owned;
         }
 
-        if (_task_handle != nullptr) {
+        if (!playback_owned) {
+            const AcquireResult result =
+                GetResourceSupervisor().acquirePlayback(RuntimeOwner::Alarm);
+            if (result == AcquireResult::Granted || result == AcquireResult::AlreadyOwned) {
+                std::lock_guard<std::mutex> lock(_mutex);
+                _playback_owned = true;
+            }
+        }
+
+        if (_task_handle != nullptr && !already_active) {
             xTaskNotifyGive(_task_handle);
         }
 
         if (already_active) {
-            mclog::tagInfo(_tag, "alarm already active");
             return;
         }
 
@@ -106,15 +117,21 @@ public:
         ensureTask();
 
         bool was_active = false;
+        bool playback_owned = false;
         {
             std::lock_guard<std::mutex> lock(_mutex);
             was_active = _active;
             _active    = false;
+            playback_owned = _playback_owned;
+            _playback_owned = false;
         }
 
         GetHAL().stopVibrate();
-        std::vector<int16_t> empty_audio;
-        GetHAL().audioPlay(empty_audio, true);
+        if (playback_owned) {
+            std::vector<int16_t> empty_audio;
+            GetHAL().audioPlay(empty_audio, true);
+            GetResourceSupervisor().releasePlayback(RuntimeOwner::Alarm);
+        }
 
         if (_task_handle != nullptr) {
             xTaskNotifyGive(_task_handle);
@@ -151,6 +168,12 @@ private:
             {
                 std::lock_guard<std::mutex> lock(_mutex);
                 active = _active;
+                if (active) {
+                    if (_playback_owned) {
+                        audio::play_tone(_alarm_tone_frequency_hz, _alarm_tone_duration_sec);
+                    }
+                    GetHAL().vibrate(_alarm_vibrate_duration_ms, _alarm_vibrate_strength);
+                }
             }
 
             if (!active) {
@@ -158,9 +181,6 @@ private:
                 ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
                 continue;
             }
-
-            audio::play_tone(_alarm_tone_frequency_hz, _alarm_tone_duration_sec);
-            GetHAL().vibrate(_alarm_vibrate_duration_ms, _alarm_vibrate_strength);
 
             beep_index = (beep_index + 1) % _alarm_beep_count;
 
@@ -172,6 +192,7 @@ private:
     std::mutex _mutex;
     TaskHandle_t _task_handle = nullptr;
     bool _active              = false;
+    bool _playback_owned      = false;
 };
 
 AlarmController& get_alarm_controller()

@@ -114,6 +114,29 @@ void GlobalLowBatteryAlertService::applyPendingAudio()
     if (!_audio_start_pending) {
         return;
     }
+
+    _external_power = GetHAL().isBatteryCharging(false);
+    _charging_observed = true;
+    _last_charging_poll_ms = now_ms;
+    if (_external_power) {
+        const LowBatteryAlertActions actions = _logic.update({
+            .now_ms = now_ms,
+            .battery_sample_due = false,
+            .battery_sample_valid = true,
+            .battery_percent = 0,
+            .external_power = true,
+            .display_visible = GetHAL().isDisplayVisible(),
+            .playback_available = false,
+            .speaker_audible = GetHAL().getSpeakerVolume() > 0,
+        });
+        _show_pending = false;
+        if (actions.hide_text) {
+            _hide_pending = true;
+        }
+        _audio_start_pending = false;
+        return;
+    }
+
     _audio_start_pending = false;
 
     if (GetHAL().getSpeakerVolume() <= 0) {

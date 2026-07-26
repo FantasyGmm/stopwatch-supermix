@@ -25,6 +25,9 @@ int main()
     assert(resources.acquirePlayback(RuntimeOwner::Assistant) == AcquireResult::Granted);
     assert(resources.acquirePlayback(RuntimeOwner::Codex) == AcquireResult::Busy);
     assert(resources.releasePlayback(RuntimeOwner::Assistant) == ReleaseResult::Released);
+    assert(resources.acquirePlayback(RuntimeOwner::Alarm) == AcquireResult::Granted);
+    assert(resources.acquirePlayback(RuntimeOwner::System) == AcquireResult::Busy);
+    assert(resources.releasePlayback(RuntimeOwner::Alarm) == ReleaseResult::Released);
     assert(resources.acquirePlayback(RuntimeOwner::Codex) == AcquireResult::Granted);
 
     assert(resources.acquireWifiAp(RuntimeOwner::Badge) == AcquireResult::Busy);

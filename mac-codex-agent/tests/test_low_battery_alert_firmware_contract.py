@@ -57,7 +57,7 @@ class LowBatteryAlertFirmwareContractTests(unittest.TestCase):
         ):
             self.assertIn(token, service)
         self.assertEqual(
-            service_source.count("GetHAL().isBatteryCharging(false)"), 1
+            service_source.count("GetHAL().isBatteryCharging(false)"), 2
         )
         self.assertLess(
             service_source.index("if (charging_refresh_due)"),
@@ -105,6 +105,8 @@ class LowBatteryAlertFirmwareContractTests(unittest.TestCase):
             "moveForeground()",
         ):
             self.assertIn(token, overlay_source)
+        self.assertIn("_title->setTextColor(lv_color_white())", overlay_source)
+        self.assertIn("_message->setTextColor(lv_color_white())", overlay_source)
 
         objects = ("root", "banner", "title", "percent", "message")
         for index, name in enumerate(objects):
@@ -119,6 +121,75 @@ class LowBatteryAlertFirmwareContractTests(unittest.TestCase):
             self.assertIn(f"_{name}->removeFlag(LV_OBJ_FLAG_SCROLLABLE)", initialization)
 
         self.assertNotIn("GetHAL()", overlay_header + overlay_source)
+
+    def test_global_service_keeps_running_through_guide_and_alarm(self):
+        launcher = (ROOT / "main" / "apps" / "app_launcher" / "app_launcher.cpp").read_text(
+            encoding="utf-8"
+        )
+        guide_start = launcher.index("void AppLauncher::show_guide_page()")
+        guide_body = launcher[guide_start:]
+        self.assertNotIn("while (1)", guide_body)
+        self.assertNotIn("while (true)", guide_body)
+        self.assertIn("_guide_page", launcher)
+        self.assertIn("update_guide_page()", launcher)
+
+        clock = (ROOT / "main" / "apps" / "app_clock" / "app_clock.cpp").read_text(
+            encoding="utf-8"
+        )
+        trigger_start = clock.index("_alarm_clock->onTriggered()")
+        trigger_end = clock.index("void AppClock::onOpen()", trigger_start)
+        trigger_callback = clock[trigger_start:trigger_end]
+        self.assertNotIn("while (true)", trigger_callback)
+        self.assertNotIn("while (1)", trigger_callback)
+        self.assertIn("_alarm_trigger_view", clock)
+        self.assertIn("updateAlarmTrigger()", clock)
+
+    def test_alarm_owns_playback_and_audio_delivery_refreshes_external_power(self):
+        supervisor = (ROOT / "main" / "runtime" / "resource_supervisor.h").read_text(
+            encoding="utf-8"
+        )
+        alarm = (ROOT / "main" / "hal" / "hal_alarm.cpp").read_text(
+            encoding="utf-8"
+        )
+        service = (
+            ROOT / "main" / "runtime" / "power" / "global_low_battery_alert_service.cpp"
+        ).read_text(encoding="utf-8")
+
+        self.assertRegex(supervisor, r"enum class RuntimeOwner \{[^}]*Alarm")
+        self.assertIn("acquirePlayback(RuntimeOwner::Alarm)", alarm)
+        self.assertIn("releasePlayback(RuntimeOwner::Alarm)", alarm)
+        self.assertIn("_playback_owned", alarm)
+        self.assertIn("_task_handle != nullptr && !already_active", alarm)
+        self.assertNotIn("playback_acquired", alarm)
+        self.assertNotIn('"alarm already active"', alarm)
+        stop_start = alarm.index("void stop()")
+        stop_end = alarm.index("private:", stop_start)
+        stop_body = alarm[stop_start:stop_end]
+        owned_block = stop_body.index("if (playback_owned)")
+        self.assertGreater(stop_body.index("GetHAL().audioPlay"), owned_block)
+        self.assertGreater(
+            stop_body.index("releasePlayback(RuntimeOwner::Alarm)"),
+            owned_block,
+        )
+        task_start = alarm.index("void task()")
+        task_end = alarm.index("std::mutex _mutex", task_start)
+        task_body = alarm[task_start:task_end]
+        self.assertNotIn("bool playback_owned", task_body)
+        task_lock = task_body.index("std::lock_guard<std::mutex> lock(_mutex)")
+        owned_check = task_body.index("if (_playback_owned)")
+        tone_submit = task_body.index("audio::play_tone")
+        self.assertLess(task_lock, owned_check)
+        self.assertLess(owned_check, tone_submit)
+
+        apply_start = service.index("void GlobalLowBatteryAlertService::applyPendingAudio()")
+        apply_end = service.index("void GlobalLowBatteryAlertService::shutdown()", apply_start)
+        apply_audio = service[apply_start:apply_end]
+        power_refresh = apply_audio.index("GetHAL().isBatteryCharging(false)")
+        clear_pending = apply_audio.index("_audio_start_pending = false")
+        play_sound = apply_audio.index("audio::play_melody")
+        self.assertLess(power_refresh, clear_pending)
+        self.assertLess(power_refresh, play_sound)
+        self.assertIn("_logic.update", apply_audio[power_refresh:play_sound])
 
     def test_hal_exposes_low_battery_observations(self):
         header = (ROOT / "main" / "hal" / "hal.h").read_text(encoding="utf-8")

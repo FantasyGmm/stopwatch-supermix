@@ -27,24 +27,13 @@ void AppClock::onCreate()
     }
 
     _alarm_clock->onTriggered().connect([this](const model::AlarmClock::AlarmTriggeredEvent& event) {
-        std::unique_ptr<view::AlarmTriggerView> trigger_view;
         {
             LvglLockGuard lock;
-            trigger_view = std::make_unique<view::AlarmTriggerView>();
-            trigger_view->init(event.time);
+            _alarm_trigger_view = std::make_unique<view::AlarmTriggerView>();
+            _alarm_trigger_view->init(event.time);
         }
 
         GetHAL().startAlarm();
-        while (true) {
-            GetHAL().feedTheDog();
-            GetHAL().delay(100);
-            LvglLockGuard lock;
-            if (trigger_view->isConfirmed()) {
-                trigger_view.reset();
-                break;
-            }
-        }
-        GetHAL().stopAlarm();
     });
 }
 
@@ -66,6 +55,10 @@ ClockNavigation AppClock::readNavigation() const
 
 void AppClock::onRunning()
 {
+    if (updateAlarmTrigger()) {
+        return;
+    }
+
     GetHAL().updateButtonStates();
     ClockNavigation navigation = readNavigation();
     if (navigation == ClockNavigation::Home) {
@@ -79,6 +72,9 @@ void AppClock::onRunning()
 
     if (_alarm_ready && _alarm_clock) {
         _alarm_clock->update();
+        if (updateAlarmTrigger()) {
+            return;
+        }
     }
 
     clock_view::Selection selection = clock_view::Selection::None;
@@ -127,11 +123,13 @@ void AppClock::onSleeping()
     if (_alarm_ready && _alarm_clock) {
         _alarm_clock->update();
     }
+    updateAlarmTrigger();
 }
 
 void AppClock::onClose()
 {
     mclog::tagInfo(getAppInfo().name, "on close");
+    clearAlarmTrigger();
     _key_manager.reset();
     LvglLockGuard lock;
     destroyFeatureUi();
@@ -141,6 +139,41 @@ void AppClock::onDestroy()
 {
     mclog::tagInfo(getAppInfo().name, "on destroy");
     _alarm_clock.reset();
+}
+
+bool AppClock::updateAlarmTrigger()
+{
+    if (!_alarm_trigger_view) {
+        return false;
+    }
+
+    GetHAL().startAlarm();
+
+    bool confirmed = false;
+    {
+        LvglLockGuard lock;
+        confirmed = _alarm_trigger_view->isConfirmed();
+        if (confirmed) {
+            _alarm_trigger_view.reset();
+        }
+    }
+    if (confirmed) {
+        GetHAL().stopAlarm();
+    }
+    return !confirmed;
+}
+
+void AppClock::clearAlarmTrigger()
+{
+    bool was_active = false;
+    {
+        LvglLockGuard lock;
+        was_active = _alarm_trigger_view != nullptr;
+        _alarm_trigger_view.reset();
+    }
+    if (was_active) {
+        GetHAL().stopAlarm();
+    }
 }
 
 void AppClock::transitionTo(Feature feature)

@@ -8,7 +8,7 @@
 #include <array>
 #include <cstddef>
 
-enum class RuntimeOwner { None, Assistant, Codex, Badge, System, Settings };
+enum class RuntimeOwner { None, Assistant, Codex, Badge, System, Settings, Alarm };
 enum class AcquireResult { Granted, AlreadyOwned, Busy, Blocked };
 enum class ReleaseResult { Released, LastOwnerReleased, NotOwned };
 
@@ -42,7 +42,7 @@ public:
     ResourceSnapshot snapshot() const;
 
 private:
-    static constexpr std::size_t ownerCount = 6;
+    static constexpr std::size_t ownerCount = 7;
 
     static bool isValidOwner(RuntimeOwner owner);
     static std::size_t ownerIndex(RuntimeOwner owner);

@@ -52,6 +52,7 @@ bool LowBatteryAlertOverlay::init(lv_obj_t* parent)
     _title->removeFlag(LV_OBJ_FLAG_CLICKABLE);
     _title->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
     _title->setTextFont(&font_puhui_14_1);
+    _title->setTextColor(lv_color_white());
     _title->align(LV_ALIGN_TOP_LEFT, 22, 18);
     _title->setText("电量低");
 
@@ -67,6 +68,7 @@ bool LowBatteryAlertOverlay::init(lv_obj_t* parent)
     _message->removeFlag(LV_OBJ_FLAG_CLICKABLE);
     _message->removeFlag(LV_OBJ_FLAG_SCROLLABLE);
     _message->setTextFont(&font_puhui_14_1);
+    _message->setTextColor(lv_color_white());
     _message->align(LV_ALIGN_BOTTOM_MID, 0, -15);
     _message->setText("请及时充电");
 
