@@ -615,6 +615,78 @@ class VoiceSessionServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(route.calls, ["start", "write:320", "stop"])
         self.assertEqual(service.state, VoiceState.READY)
 
+    async def test_repeated_cancellation_cannot_cancel_cleanup(self):
+        drain_started = asyncio.Event()
+        release_drain = asyncio.Event()
+
+        async def blocked_sleep(seconds):
+            self.assertEqual(seconds, 0.150)
+            drain_started.set()
+            await release_drain.wait()
+
+        route = FakeRoute(fail_stop=True)
+        shortcut = FakeShortcut()
+        service = VoiceSessionService(
+            route, shortcut, TEST_KEY, sleep=blocked_sleep
+        )
+        await service.handle(begin_packet())
+        handler = asyncio.create_task(service.disconnect())
+        await drain_started.wait()
+
+        handler.cancel()
+        await asyncio.sleep(0)
+        handler.cancel()
+        await asyncio.sleep(0)
+        self.assertFalse(handler.done())
+        release_drain.set()
+
+        with self.assertRaises(asyncio.CancelledError):
+            await handler
+        self.assertEqual(shortcut.calls, ["start", "stop"])
+        self.assertEqual(route.calls, ["start", "stop"])
+        self.assertEqual(service.state, VoiceState.ERROR)
+
+    async def test_concurrent_error_dominates_end_cleanup_final_state(self):
+        drain_started = asyncio.Event()
+        release_drain = asyncio.Event()
+        drain_calls = []
+
+        async def blocked_sleep(seconds):
+            drain_calls.append(seconds)
+            drain_started.set()
+            await release_drain.wait()
+
+        route = FakeRoute()
+        shortcut = FakeShortcut()
+        service = VoiceSessionService(
+            route, shortcut, TEST_KEY, sleep=blocked_sleep
+        )
+        await service.handle(begin_packet())
+        await service.handle(audio_packet(1))
+        end_handler = asyncio.create_task(
+            service.handle(
+                end_packet(2, EndSummary(1, 1, 0, 0, 320, 20, 256))
+            )
+        )
+        await drain_started.wait()
+        error_handler = asyncio.create_task(
+            service.handle(
+                encrypted_packet(VOICE_ERROR, 2, ERROR_PAYLOAD.pack(4, 9))
+            )
+        )
+        await asyncio.sleep(0)
+        self.assertFalse(error_handler.done())
+
+        release_drain.set()
+        await end_handler
+        with self.assertRaisesRegex(RuntimeError, "voice error 4"):
+            await error_handler
+
+        self.assertEqual(drain_calls, [0.150])
+        self.assertEqual(shortcut.calls, ["start", "stop"])
+        self.assertEqual(route.calls, ["start", "write:320", "stop"])
+        self.assertEqual(service.state, VoiceState.ERROR)
+
     async def test_all_active_failure_cleanup_paths_drain_once(self):
         async def exercise(case):
             drain_calls = []
