@@ -68,7 +68,10 @@ DisplayProtectionConfig withDisplayProtectionDimChoice(DisplayProtectionConfig c
                                                        int choice)
 {
     config.dim_choice = clampedChoice(choice, kDimMs);
-    config.screen_off_choice = firstScreenOffChoiceAfter(kDimMs[config.dim_choice]);
+    config.screen_off_choice = clampedChoice(config.screen_off_choice, kOffMs);
+    if (kOffMs[config.screen_off_choice] <= kDimMs[config.dim_choice]) {
+        config.screen_off_choice = firstScreenOffChoiceAfter(kDimMs[config.dim_choice]);
+    }
     return config;
 }
 
@@ -76,7 +79,10 @@ DisplayProtectionConfig withDisplayProtectionScreenOffChoice(DisplayProtectionCo
                                                              int choice)
 {
     config.screen_off_choice = clampedChoice(choice, kOffMs);
-    config.dim_choice = lastDimChoiceBefore(kOffMs[config.screen_off_choice]);
+    config.dim_choice = clampedChoice(config.dim_choice, kDimMs);
+    if (kDimMs[config.dim_choice] >= kOffMs[config.screen_off_choice]) {
+        config.dim_choice = lastDimChoiceBefore(kOffMs[config.screen_off_choice]);
+    }
     return config;
 }
 
