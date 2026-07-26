@@ -7,9 +7,9 @@ Replace only the Assistant launcher icon with the user-selected H2 Aurora Wave d
 ## Approved design
 
 - Five centered vertical waveform bars with rounded ends.
-- Bar heights form a symmetric `42 / 80 / 124 / 80 / 42` silhouette at 200 x 200 output size.
-- The bars use a single diagonal aurora gradient from teal through cyan-blue to restrained violet; no bar is pure white.
-- A soft cyan-violet glow surrounds the waveform without a circle, ring, frame, or hard boundary.
+- The H2 reference uses a symmetric `42 / 80 / 124 / 80 / 42` silhouette. The watch asset scales the five bars uniformly by about 10% to `46 / 88 / 136 / 88 / 46`, following the user's on-device size correction.
+- Each bar independently uses the H2 diagonal gradient from teal `#4AE7D5`, through cyan-blue `#42B6F0` at 46%, to restrained violet `#8064F0`; no bar is pure white.
+- The glow follows the H2 reference's centered 86 px radial field: cyan `#38DCE9` at 31% opacity, violet `#7356ED` at 16% opacity at 58%, then transparent black. It has no visible circle, ring, frame, or hard boundary.
 - The design remains legible at 72 x 72 and 45 x 45 pixels.
 
 ## Family constraints
@@ -33,5 +33,5 @@ Replace only the Assistant launcher icon with the user-selected H2 Aurora Wave d
 - Update the focused asset contract first and observe it fail against the current star asset.
 - Generate the H2 asset, run the focused contract, and inspect decoded 200 px, 72 px, and 45 px previews beside the launcher family.
 - Build the unified firmware; do not run unrelated runtime test suites unless the focused checks or build expose a broader issue.
-- Use the existing full-flash-backup-gated flash workflow, validate boot to the launcher, and restore the Mac Codex Agent.
+- For this asset-only change, flash the verified build directly without a new full-flash backup, then validate boot to the launcher and confirm the Mac Codex Agent remains running.
 - Physical on-watch appearance remains a separate visual acceptance check after flashing.

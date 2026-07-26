@@ -68,43 +68,41 @@ class AssistantIconAssetTests(unittest.TestCase):
 
     def test_matches_launcher_family_visual_footprint(self):
         strong = bounds(self.pixels, 40)
-        faint = bounds(self.pixels, 12)
         strong_long_axis = max(strong[2] - strong[0], strong[3] - strong[1])
-        faint_long_axis = max(faint[2] - faint[0], faint[3] - faint[1])
-        self.assertGreaterEqual(strong_long_axis, 155)
-        self.assertLessEqual(strong_long_axis, 170)
-        self.assertGreaterEqual(faint_long_axis, 180)
-        self.assertLessEqual(faint_long_axis, 190)
-        self.assertGreaterEqual(faint[0], 5)
-        self.assertGreaterEqual(faint[1], 5)
-        self.assertLessEqual(faint[2], 195)
-        self.assertLessEqual(faint[3], 195)
+        self.assertGreaterEqual(strong_long_axis, 145)
+        self.assertLessEqual(strong_long_axis, 160)
 
     def test_has_approved_five_bar_aurora_waveform(self):
         expected_runs = {
-            43: (79, 121),
-            72: (60, 140),
-            100: (38, 162),
-            128: (60, 140),
-            157: (79, 121),
+            37: (77, 123),
+            69: (56, 144),
+            100: (32, 168),
+            131: (56, 144),
+            163: (77, 123),
         }
         for x, expected in expected_runs.items():
             actual = bright_run_in_column(self.pixels, x)
             self.assertLessEqual(abs(actual[0] - expected[0]), 3)
             self.assertLessEqual(abs(actual[1] - expected[1]), 3)
 
-        left = self.pixel(43, 100)
-        center = self.pixel(100, 100)
-        right = self.pixel(157, 100)
-        self.assertGreater(left[1], left[0])
-        self.assertGreater(left[2], left[0])
-        self.assertGreater(center[2], center[0])
-        self.assertGreater(right[2], right[0])
-        self.assertGreater(right[0] - left[0], 25)
-        self.assertGreater(left[1] - right[1], 30)
-        self.assertLess(max(left), 245)
-        self.assertLess(max(center), 245)
-        self.assertLess(max(right), 245)
+        bar_middles = [self.pixel(x, 100) for x in (37, 69, 100, 131, 163)]
+        for pixel in bar_middles:
+            self.assertGreater(pixel[1], pixel[0])
+            self.assertGreater(pixel[2], pixel[0])
+            self.assertLess(max(pixel), 245)
+        for channel in range(3):
+            values = [pixel[channel] for pixel in bar_middles]
+            self.assertLessEqual(max(values) - min(values), 10)
+
+        top = self.pixel(100, 45)
+        bottom = self.pixel(100, 155)
+        self.assertGreater(top[1] - bottom[1], 35)
+        self.assertGreater(bottom[0] - top[0], 12)
+
+        glow_left = self.pixel(50, 70)
+        glow_right = self.pixel(150, 70)
+        for channel in range(3):
+            self.assertLessEqual(abs(glow_left[channel] - glow_right[channel]), 8)
 
         for point in ((5, 100), (194, 100), (100, 5), (100, 194)):
             self.assertLessEqual(brightness(self.pixel(*point)), 12)

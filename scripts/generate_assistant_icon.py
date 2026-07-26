@@ -2,78 +2,91 @@
 import argparse
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw
 
 
 WORK_SIZE = 800
 OUTPUT_SIZE = 200
 SCALE = WORK_SIZE // OUTPUT_SIZE
 BARS = (
-    (34, 79, 52, 121),
-    (63, 60, 81, 140),
-    (91, 38, 109, 162),
-    (119, 60, 137, 140),
-    (148, 79, 166, 121),
+    (27, 77, 20, 46),
+    (59, 56, 20, 88),
+    (90, 32, 20, 136),
+    (121, 56, 20, 88),
+    (153, 77, 20, 46),
 )
-BODY_COLORS = (
-    (74, 231, 213, 255),
-    (66, 182, 240, 255),
-    (128, 100, 240, 255),
+BODY_STOPS = (
+    (0.0, (74, 231, 213, 255)),
+    (0.46, (66, 182, 240, 255)),
+    (1.0, (128, 100, 240, 255)),
 )
-GLOW_COLORS = (
-    (37, 217, 219, 255),
-    (54, 138, 246, 255),
-    (112, 72, 238, 255),
+GLOW_STOPS = (
+    (0.0, (56, 220, 233, 79)),
+    (0.58, (115, 86, 237, 41)),
+    (1.0, (0, 0, 0, 0)),
 )
+GLOW_RADIUS = 86
 
 
-def horizontal_gradient(size, colors):
-    image = Image.new("RGBA", (size, size))
-    draw = ImageDraw.Draw(image)
-    stops = len(colors) - 1
-    for x in range(size):
-        position = x / (size - 1)
-        segment = min(int(position * stops), stops - 1)
-        local = position * stops - segment
-        start, end = colors[segment], colors[segment + 1]
-        color = tuple(
-            round(start[i] + (end[i] - start[i]) * local) for i in range(4)
+def color_at(stops, position):
+    for index in range(len(stops) - 1):
+        start_position, start = stops[index]
+        end_position, end = stops[index + 1]
+        if position <= end_position:
+            local = (position - start_position) / (end_position - start_position)
+            return tuple(
+                round(start[channel] + (end[channel] - start[channel]) * local)
+                for channel in range(4)
+            )
+    return stops[-1][1]
+
+
+def radial_glow():
+    glow = Image.new("RGBA", (WORK_SIZE, WORK_SIZE), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(glow)
+    center = WORK_SIZE // 2
+    radius = GLOW_RADIUS * SCALE
+    for current_radius in range(radius, -1, -1):
+        color = color_at(GLOW_STOPS, current_radius / radius)
+        draw.ellipse(
+            (
+                center - current_radius,
+                center - current_radius,
+                center + current_radius,
+                center + current_radius,
+            ),
+            fill=color,
         )
-        draw.line((x, 0, x, size), fill=color)
+    return glow
+
+
+def diagonal_gradient(width, height):
+    pixels = []
+    for y in range(height):
+        vertical = y / max(height - 1, 1)
+        for x in range(width):
+            horizontal = x / max(width - 1, 1)
+            pixels.append(color_at(BODY_STOPS, (horizontal + vertical) / 2))
+    image = Image.new("RGBA", (width, height))
+    image.putdata(pixels)
     return image
 
 
-def waveform_mask():
-    mask = Image.new("L", (WORK_SIZE, WORK_SIZE), 0)
-    draw = ImageDraw.Draw(mask)
-    for left, top, right, bottom in BARS:
-        draw.rounded_rectangle(
-            (
-                left * SCALE,
-                top * SCALE,
-                right * SCALE,
-                bottom * SCALE,
-            ),
-            radius=9 * SCALE,
+def add_waveform(canvas):
+    canvas.alpha_composite(radial_glow())
+
+    for left, top, width, height in BARS:
+        pixel_width = width * SCALE
+        pixel_height = height * SCALE
+        mask = Image.new("L", (pixel_width, pixel_height), 0)
+        ImageDraw.Draw(mask).rounded_rectangle(
+            (0, 0, pixel_width - 1, pixel_height - 1),
+            radius=10 * SCALE,
             fill=255,
         )
-    return mask
-
-
-def add_waveform(canvas):
-    mask = waveform_mask()
-
-    glow_alpha = mask.filter(ImageFilter.GaussianBlur(68)).point(
-        lambda value: value * 180 // 255
-    )
-    glow = horizontal_gradient(WORK_SIZE, GLOW_COLORS)
-    glow.putalpha(glow_alpha)
-    canvas.alpha_composite(glow)
-    canvas.alpha_composite(glow)
-
-    fill = horizontal_gradient(WORK_SIZE, BODY_COLORS)
-    fill.putalpha(mask)
-    canvas.alpha_composite(fill)
+        fill = diagonal_gradient(pixel_width, pixel_height)
+        fill.putalpha(mask)
+        canvas.alpha_composite(fill, (left * SCALE, top * SCALE))
 
 
 def render_icon():

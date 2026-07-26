@@ -4,7 +4,7 @@
 
 **Goal:** Replace the Assistant launcher asset with the approved H2 five-bar aurora waveform without changing launcher or Assistant behavior.
 
-**Architecture:** Keep the existing deterministic Pillow-to-RGB565 asset pipeline. Change its renderer from three stars to five rounded waveform bars, strengthen the focused test around geometry and color, regenerate the existing C asset, then build and flash through the established backup gate.
+**Architecture:** Keep the existing deterministic Pillow-to-RGB565 asset pipeline. Render the selected H2 SVG semantics faithfully: one centered radial glow plus an independent diagonal gradient inside every rounded waveform bar. Scale only the five-bar subject by about 10% for the user's on-device correction, regenerate the existing C asset, then build and flash directly because this is an asset-only change.
 
 **Tech Stack:** Python 3, Pillow, `unittest`, LVGL RGB565, ESP-IDF 5.5.4, esptool-based repository scripts.
 
@@ -87,7 +87,7 @@ COLORS = (
 )
 ```
 
-Create a single rounded-rectangle mask for all bars, composite a diagonal teal-to-cyan-to-violet gradient through it, and derive a blurred cyan-violet glow from the same mask. Do not draw any white highlight, ring, or container.
+Scale the reference bar geometry uniformly around the canvas center, composite the reference diagonal teal-to-cyan-to-violet gradient independently inside every bar, and draw the reference centered radial cyan-violet glow. Do not derive the glow from the waveform mask, and do not draw any white highlight, ring, or container.
 
 - [ ] **Step 4: Generate the C asset and preview**
 
@@ -141,9 +141,9 @@ Expected: exit 0 and a complete unified firmware artifact set.
 
 Stage only the focused test, generator, generated asset, and this plan; commit with `feat: use aurora waveform for Assistant icon`.
 
-- [ ] **Step 4: Execute the backup-gated flash workflow**
+- [ ] **Step 4: Flash the asset-only firmware directly**
 
-Detect the usable `/dev/cu.usbmodem*` port, confirm or create a checksum-valid full 16 MiB backup, then run the repository flash script against the just-built candidate.
+Detect the usable `/dev/cu.usbmodem*` port and run the repository flash script against the just-built candidate. Do not create a new full-flash backup for this deterministic icon-only asset change.
 
 Expected: all programmed regions verify successfully.
 
