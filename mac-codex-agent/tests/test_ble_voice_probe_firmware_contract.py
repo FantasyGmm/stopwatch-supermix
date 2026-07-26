@@ -494,26 +494,24 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
     def test_offline_validation_and_probe_docs_cover_pcm_and_checkout_evidence(self):
         runner = (ROOT / "scripts/run_unified_offline_validation.sh").read_text()
         docs = (ROOT / "docs/ble-voice-link-probe.md").read_text()
-        self.assertIn("[16/25] BLE voice probe crypto host test", runner)
+        self.assertIn('stage "BLE voice probe crypto host test"', runner)
         self.assertIn("tests/voice_probe_crypto_test.cpp", runner)
-        self.assertIn("[17/25] Production voice crypto host test", runner)
+        self.assertIn('stage "Production voice crypto host test"', runner)
         self.assertIn("tests/voice_input_crypto_test.cpp", runner)
-        self.assertIn("[18/25] Production voice protocol host test", runner)
+        self.assertIn('stage "Production voice protocol host test"', runner)
         self.assertIn("tests/voice_input_protocol_test.cpp", runner)
-        self.assertIn("[19/25] Production voice session host test", runner)
+        self.assertIn('stage "Production voice session host test"', runner)
         self.assertIn("tests/voice_input_session_test.cpp", runner)
         self.assertIn("tests/voice_input_controller_test.cpp", runner)
         self.assertIn("main/apps/app_codex_status/voice_input_controller.cpp", runner)
-        self.assertIn(
-            "[22/25] BLE voice probe PCM buffer and capture pipeline host tests",
-            runner,
-        )
+        self.assertIn('stage "BLE voice probe PCM buffer host test"', runner)
+        self.assertIn('stage "Production voice capture pipeline host test"', runner)
         self.assertIn("tests/ble_voice_probe_pcm_buffer_test.cpp", runner)
         self.assertIn("tests/voice_capture_pipeline_test.cpp", runner)
         self.assertIn(
-            "[20/25] BLE voice probe failure transition host test", runner
+            'stage "BLE voice probe failure transition host test"', runner
         )
-        self.assertIn("[25/25] Whitespace error check", runner)
+        self.assertIn('stage "Whitespace error check"', runner)
         self.assertLess(
             runner.index("tests/voice_probe_crypto_test.cpp"),
             runner.index("./scripts/build_unified_candidate.sh --clean"),

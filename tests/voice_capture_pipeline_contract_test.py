@@ -42,7 +42,7 @@ class VoiceCapturePipelineContractTests(unittest.TestCase):
         runner = (ROOT / "scripts/run_unified_offline_validation.sh").read_text()
         self.assertTrue(HOST_TEST.exists(), "missing executable pipeline host test")
         self.assertIn("tests/voice_capture_pipeline_test.cpp", runner)
-        self.assertIn('"$HOST_TEST_DIR/voice_capture_pipeline_test"', runner)
+        self.assertIn("run_host_test voice_capture_pipeline_test", runner)
 
     def test_pipeline_exclusively_owns_capture_resources_and_conversion(self):
         header, source = self.pipeline()

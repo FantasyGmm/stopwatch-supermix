@@ -1,9 +1,17 @@
 # BLE Voice Link Probe
 
-`mac-codex-agent/ble_voice_probe.py` is a standalone diagnostic for measuring
+`mac-codex-agent/ble_voice_probe.py` is a standalone diagnostic-only tool for measuring
 the StopWatch-to-Mac BLE voice data path. It does not invoke Typeless, send the
 `Fn` key, or change any production right-button behavior. It is not the voice
 input feature itself.
+
+Production voice input is integrated into the existing Agent, uses the normal
+`StopWatch-Codex` identity, authenticated AES-128-CCM protocol version 3, and
+the shared external/Keychain device key documented in
+[`mac-codex-agent/README.md`](../mac-codex-agent/README.md). The standalone
+probe keeps version 1 for transport diagnosis only. Fully quit the Agent before
+running it; disabling the connection toggle is not sufficient because both
+processes would compete for the same BLE peripheral.
 
 ## Security Boundary
 
@@ -19,6 +27,11 @@ characteristic remains encrypted.
 Modes 3 and 4 use a fixed diagnostic key solely to isolate crypto performance
 from pairing, enrollment, and key storage. It is not a production key and must
 never be used by the installed Agent or production voice path.
+
+Production rejects version 2 and uses application-layer AES-128-CCM version 3
+for READY, UNAVAILABLE, PTT_BEGIN, AUDIO, PTT_END, and VOICE_ERROR. Probe
+results do not prove that production key provisioning, Typeless control,
+default-input restoration, or disconnect cleanup works.
 
 Three physical runs already showed that macOS CoreBluetooth could discover and
 connect to the custom service, but the encrypted characteristic handshake
@@ -238,7 +251,10 @@ Agent again before running any subsequent standalone probe; leaving it running
 will create two processes competing for the same watch BLE service. Keep
 reports, WAV files, and logs under the evidence directory for diagnosis.
 
-An offline build or a successful firmware flash only proves that the image was
-built or written. It does not prove BLE transport, microphone ownership,
-reconnect behavior, or audio quality on hardware; those require the physical
-probe and recovery checks above.
+An offline validation or clean build proves source, host-test, dependency,
+capacity, and firmware compilation gates only. A successful flash proves only
+that the selected image was written. Neither is BLE or physical acceptance:
+production pairing, MTU 256 delivery, authenticated 186-byte AUDIO values,
+microphone ownership, intelligible speech, paired Fn taps, reconnect cleanup,
+previous-input restoration, and Assistant recovery require tests on the watch
+and Mac. Keep those evidence categories separate in every report.

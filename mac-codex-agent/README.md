@@ -68,6 +68,111 @@ Logs are written to:
 After Quit, nothing automatically restarts the agent. Open the application
 manually when synchronization is needed again.
 
+## Watch Voice Input
+
+Watch voice input is part of the same menu-bar application. Building or
+rebuilding the app does not start the application, create a login item, or
+enable login startup. Open the existing **StopWatch Codex Agent** app manually,
+then use its **Voice Input** row:
+
+- `Voice Input: Driver Required`: choose **Set Up Watch Voice Input...**. The
+  pinned BlackHole package asks for one administrator authorization. The menu
+  reports `Voice Input: Restart Required` if macOS has installed the receipt
+  but Core Audio cannot see the device yet; restart the Mac once.
+- `Voice Input: Accessibility Required`: use the menu action to open
+  Accessibility settings and allow **StopWatch Codex Agent** to send the Fn
+  shortcut.
+- `Voice Input: Typeless Not Running`: start Typeless and confirm Typeless is
+  configured to start and stop dictation with Fn.
+- `Voice Input: Ready`: open Codex on the watch and wait for the normal BLE
+  connection before speaking.
+- `Voice Input: Error`: release the right button, inspect **Open Log**, and use
+  **Reconnect Now** after correcting the reported cause.
+
+The right-button behavior is push-to-talk. A 90 ms chord guard reserves the
+button for A+B Home handling: hold the right button beyond that guard to start
+Typeless and recording, keep holding while speaking, and release it to stop.
+A short tap is ignored. A+B is always reserved for Home, and a wake press is
+consumed until the button is fully released, so waking the screen cannot start
+dictation.
+
+The Agent restores the previous default input on button release, BLE
+disconnect, Home, Agent quit, and all failure paths. Voice setup or transport
+failure is isolated from the rest of the app: Codex status and time
+synchronization continue even when voice input is unavailable.
+
+## Voice Key And Security
+
+Production voice uses one random 16-byte key shared by this Mac Agent and this
+watch. Provision it before the production firmware build:
+
+```bash
+PYTHON="$PWD/mac-codex-agent/.venv/bin/python"
+"$PYTHON" scripts/provision_voice_key.py provision
+./scripts/build_unified_candidate.sh --clean
+```
+
+The default external key file is:
+
+```text
+~/Library/Application Support/StopWatch Codex Agent/device-key.hex
+```
+
+It contains exactly 32 lowercase hexadecimal characters and must have mode
+`0600`. `STOPWATCH_VOICE_KEY_FILE` overrides this path for an intentionally
+isolated build or test. The provision command imports the same key into macOS
+Keychain under:
+
+```text
+service: `com.stopwatch.codex-agent.voice`
+account: `StopWatch-Codex`
+```
+
+The firmware build generates its ignored key header inside the selected build
+directory. The key is excluded from Git, the app bundle, command-line
+arguments, logs, status snapshots, validation reports, and diagnostic probe
+keys. A missing, malformed, or non-`0600` file fails the firmware build.
+
+Reinstalling the app does not copy or rotate the key. After reinstalling macOS
+or deleting the Keychain item, rerun the provision command with the same key
+file. Key rotation requires replacing the external key with a new mode-`0600`
+value, rerunning provisioning, rebuilding the firmware, and reflashing the
+watch; the old Agent/watch pair cannot communicate by voice after only one side
+is changed. The app bundle itself does not need rebuilding for a key rotation.
+
+The production boundary is application-layer AES-128-CCM protocol version 3.
+The clear packet header is authenticated, audio is encrypted with an 8-byte
+tag, and authentication failure is fail-closed before decoding. Production
+version 2 is rejected to prevent an unencrypted downgrade. This protects BLE
+traffic but does not claim resistance to physical flash extraction; watch
+flash encryption is a separate feature and is not enabled or validated here.
+
+## Voice Troubleshooting
+
+- **Driver Required**: choose **Set Up Watch Voice Input...** and approve the
+  one macOS administrator prompt.
+- **Restart Required**: restart the Mac, then open the Agent manually. The
+  Agent never restarts the Mac or starts itself.
+- **Accessibility Required**: grant Accessibility to **StopWatch Codex Agent**,
+  not to a separately selected Python executable, then refresh or reconnect.
+- **Typeless Not Running**: open Typeless, set its shortcut to Fn, and leave it
+  running before holding the watch button.
+- **Voice Error**: release the button first. Open the Agent log and check audio
+  routing, key mismatch, authentication, queue, and shortcut errors. The prior
+  default input should already have been restored.
+- **Pairing, MTU, or reconnect failure**: fully quit the standalone probe,
+  close and reopen the watch Codex app so the normal `StopWatch-Codex` identity
+  advertises again, then choose **Reconnect Now**. Accept a macOS pairing or
+  Bluetooth permission prompt if shown. Production AUDIO is one authenticated
+  186-byte characteristic value and requires the validated MTU 256 path.
+- **No menu icon after login**: this is expected because there is no
+  autostart. Open `~/Applications/StopWatch Codex Agent.app` manually.
+
+The standalone version-1 BLE probe is diagnostic-only, uses a different
+session contract, and must run only after fully quitting the Agent. See the
+[BLE voice diagnostic guide](../docs/ble-voice-link-probe.md). Offline tests and
+a clean firmware build do not replace BLE and physical acceptance on the watch.
+
 ## Task Alerts
 
 The agent watches local Codex rollout events. `task_started` makes a conversation
@@ -124,6 +229,22 @@ Quit the agent from its menu first, then remove the installed bundle:
 rm -f "$HOME/Library/LaunchAgents/com.stopwatch.codex-agent.plist"
 rm -rf "$HOME/Applications/StopWatch Codex Agent.app"
 ```
+
+The pinned `BlackHole2ch-0.7.1.pkg` (SHA-256
+`57b540f27a3e29c37e310e01bee0fdfab76733087e47f997ef9dccf851400dcf`)
+was inspected without installing it. Its package metadata declares receipt
+`audio.existential.BlackHole2ch`, installs
+`/Library/Audio/Plug-Ins/HAL/BlackHole2ch.driver`, and requests a restart. It
+does not contain an uninstaller. To remove only that verified 2-channel driver:
+
+```bash
+sudo rm -rf /Library/Audio/Plug-Ins/HAL/BlackHole2ch.driver
+sudo pkgutil --forget audio.existential.BlackHole2ch
+```
+
+Restart the Mac afterward so Core Audio unloads the driver. These manual steps
+are based on the pinned package payload and receipt; they are not presented as
+an official BlackHole uninstaller.
 
 ## Test
 

@@ -314,6 +314,7 @@ void testStopDuringReadProcessesSuccessfulFinalBlock()
     assert(backend.encode_calls == 1);
     assert(pipeline.captureBlock(adpcm, captured_samples, error) ==
            VoiceCaptureResult::Stopped);
+    assert(backend.read_calls == 1);
     pipeline.close();
 }
 
