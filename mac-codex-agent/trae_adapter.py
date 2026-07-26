@@ -6,7 +6,9 @@ import dataclasses
 import datetime
 import hashlib
 import json
+import mmap
 import pathlib
+import re
 import sqlite3
 import time
 import unicodedata
@@ -20,6 +22,16 @@ _TRAE_BUNDLE_ID = "cn.trae.app"
 _CURRENT_AGENT_KEY = "trae.currentAgent"
 _ACTIVE_METADATA_STATES = {"pending", "running"}
 _TERMINAL_METADATA_STATES = {"completed", "cancelled", "failed"}
+_SESSION_MODEL_MAP_KEY = "lukeren_ai-chat:sessionRelation:modelMap"
+_GLOBAL_MODEL_MAP_KEY = "lukeren_ai-chat:sessionRelation:globalModelMap"
+_MODEL_LIST_MAP_KEY = "lukeren_AI.agent.model.model_list_map"
+_SESSION_STORAGE_KEY = "memento/icube-ai-agent-storage"
+_TITLE_MARKER = b"generate_session_title_and_icon_cloud:"
+_TITLE_RE = re.compile(
+    r'generate_session_title_and_icon_cloud:\s*session_id:\s*"(?P<session>[^"]+)"'
+    r',\s*title:\s*"(?P<title>(?:\\.|[^"\\])*)"'
+)
+_MODEL_PREFIX_RE = re.compile(r"^\d+_-_")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -88,6 +100,8 @@ class TraeStateCollector:
         self._process_is_running = process_is_running
         self._now = now
         self._tracker = TraeTaskTracker(paths.cursor, paths.ledger)
+        self._session_titles: Dict[str, str] = {}
+        self._title_retry_after: Dict[str, float] = {}
 
     def get_state(self) -> Dict[str, object]:
         process_result = self._process_is_running()
@@ -109,7 +123,10 @@ class TraeStateCollector:
 
         now = self._now()
         snapshot = self._tracker.refresh(self._log_paths(), now)
-        metadata_observations = self._current_agent_metadata()
+        metadata_observations = (
+            self._current_agent_metadata()
+            + self._real_session_metadata(snapshot.tasks, now)
+        )
         fallback_project = self._workspace_project()
         latest_metadata_model = max(
             (
@@ -245,6 +262,10 @@ class TraeStateCollector:
 
     @staticmethod
     def _read_current_agent_row(path: pathlib.Path) -> object:
+        return TraeStateCollector._read_json_row(path, _CURRENT_AGENT_KEY)
+
+    @staticmethod
+    def _read_json_row(path: pathlib.Path, key: str) -> object:
         connection = None
         try:
             uri = "file:{}?mode=ro".format(
@@ -253,7 +274,7 @@ class TraeStateCollector:
             connection = sqlite3.connect(uri, uri=True)
             row = connection.execute(
                 "SELECT value FROM ItemTable WHERE key = ? LIMIT 1",
-                (_CURRENT_AGENT_KEY,),
+                (key,),
             ).fetchone()
             if row is None:
                 return None
@@ -266,6 +287,201 @@ class TraeStateCollector:
         finally:
             if connection is not None:
                 connection.close()
+
+    def _real_session_metadata(
+        self,
+        tasks: Iterable[TraeTask],
+        now: float,
+    ) -> Tuple[Tuple[int, Dict[str, object]], ...]:
+        active = tuple(
+            task for task in tasks if task.state in _ACTIVE_METADATA_STATES
+        )
+        if not active or not self._paths.workspace_storage.is_dir():
+            return ()
+
+        titles = self._titles_for_sessions(
+            {task.session_id for task in active}, now
+        )
+        model_catalog = self._model_catalog()
+        observations = []
+        try:
+            state_paths = sorted(
+                self._paths.workspace_storage.rglob("state.vscdb"), key=str
+            )
+        except OSError:
+            return ()
+
+        for state_path in state_paths:
+            model_map = self._read_json_row(state_path, _SESSION_MODEL_MAP_KEY)
+            if not isinstance(model_map, Mapping):
+                model_map = {}
+            session_storage = self._read_json_row(
+                state_path, _SESSION_STORAGE_KEY
+            )
+            workspace_sessions = set(model_map)
+            if isinstance(session_storage, Mapping):
+                raw_sessions = session_storage.get("list")
+                if isinstance(raw_sessions, list):
+                    workspace_sessions.update(
+                        item.get("sessionId")
+                        for item in raw_sessions
+                        if isinstance(item, Mapping)
+                        and isinstance(item.get("sessionId"), str)
+                    )
+            global_model = self._read_json_row(
+                state_path, _GLOBAL_MODEL_MAP_KEY
+            )
+            workspace_path = state_path.with_name("workspace.json")
+            project_path = ""
+            try:
+                workspace = json.loads(
+                    workspace_path.read_text(encoding="utf-8")
+                )
+                if isinstance(workspace, Mapping):
+                    project_path = _clean_text(workspace.get("folder"), 512)
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                pass
+            try:
+                observed_at_ns = max(
+                    state_path.stat().st_mtime_ns,
+                    workspace_path.stat().st_mtime_ns
+                    if workspace_path.is_file()
+                    else 0,
+                )
+            except OSError:
+                observed_at_ns = 0
+
+            for task in active:
+                if task.session_id not in workspace_sessions:
+                    continue
+                raw_selection = model_map.get(task.session_id)
+                if not isinstance(raw_selection, Mapping):
+                    raw_selection = global_model
+                model_name = self._selected_model_name(raw_selection)
+                display_model, effort = model_catalog.get(
+                    model_name, (model_name, "")
+                )
+                observations.append(
+                    (
+                        observed_at_ns,
+                        self._normalize_metadata(
+                            {
+                                "session_id": task.session_id,
+                                "task_id": task.task_id,
+                                "selected_model": display_model,
+                                "selected_effort": effort,
+                                "project_path": project_path,
+                                "task_title": titles.get(task.session_id, ""),
+                                "state": task.state,
+                            }
+                        ),
+                    )
+                )
+        return tuple(item for item in observations if item[1])
+
+    @staticmethod
+    def _selected_model_name(value: object) -> str:
+        if not isinstance(value, Mapping):
+            return ""
+        raw = value.get("solo_coder")
+        if not isinstance(raw, str):
+            raw = next(
+                (item for _, item in sorted(value.items()) if isinstance(item, str)),
+                "",
+            )
+        return _clean_text(_MODEL_PREFIX_RE.sub("", raw), 64)
+
+    def _model_catalog(self) -> Dict[str, Tuple[str, str]]:
+        path = (
+            self._paths.workspace_storage.parent
+            / "globalStorage"
+            / "state.vscdb"
+        )
+        value = self._read_json_row(path, _MODEL_LIST_MAP_KEY)
+        if not isinstance(value, Mapping):
+            return {}
+        catalog = {}
+        groups = list(value.items())
+        groups.sort(key=lambda item: (item[0] != "solo_agent", item[0]))
+        for _, records in groups:
+            if not isinstance(records, list):
+                continue
+            for record in records:
+                if not isinstance(record, Mapping):
+                    continue
+                name = _clean_text(record.get("name"), 64)
+                if not name or name in catalog:
+                    continue
+                catalog[name] = (
+                    _clean_text(record.get("display_name"), 64) or name,
+                    _clean_text(record.get("default_reasoning_effort"), 32),
+                )
+        return catalog
+
+    def _titles_for_sessions(
+        self, session_ids: Iterable[str], now: float
+    ) -> Dict[str, str]:
+        requested = {item for item in session_ids if item}
+        missing = {
+            item
+            for item in requested
+            if item not in self._session_titles
+            and now >= self._title_retry_after.get(item, 0.0)
+        }
+        if missing:
+            self._scan_session_titles(missing)
+            for session_id in missing:
+                if session_id not in self._session_titles:
+                    self._title_retry_after[session_id] = now + 30.0
+        return {
+            session_id: self._session_titles[session_id]
+            for session_id in requested
+            if session_id in self._session_titles
+        }
+
+    def _scan_session_titles(self, session_ids: Iterable[str]) -> None:
+        pending = set(session_ids)
+        for path in self._log_paths():
+            if not pending or (
+                "ai-agent" not in path.name and path.name != "agent.log"
+            ):
+                continue
+            try:
+                with path.open("rb") as stream:
+                    if path.stat().st_size == 0:
+                        continue
+                    with mmap.mmap(stream.fileno(), 0, access=mmap.ACCESS_READ) as data:
+                        offset = 0
+                        while pending:
+                            marker = data.find(_TITLE_MARKER, offset)
+                            if marker < 0:
+                                break
+                            line_start = data.rfind(b"\n", 0, marker) + 1
+                            line_end = data.find(b"\n", marker)
+                            if line_end < 0:
+                                line_end = len(data)
+                            offset = line_end + 1
+                            if line_end - line_start > 4096:
+                                continue
+                            line = data[line_start:line_end].decode(
+                                "utf-8", errors="replace"
+                            )
+                            match = _TITLE_RE.search(line)
+                            if match is None or match.group("session") not in pending:
+                                continue
+                            try:
+                                title = json.loads(
+                                    '"{}"'.format(match.group("title"))
+                                )
+                            except (ValueError, TypeError, json.JSONDecodeError):
+                                title = match.group("title")
+                            cleaned = _clean_text(title, 48)
+                            if cleaned:
+                                session_id = match.group("session")
+                                self._session_titles[session_id] = cleaned
+                                pending.remove(session_id)
+            except (OSError, ValueError):
+                continue
 
     @staticmethod
     def _normalize_metadata(value: object) -> Dict[str, object]:

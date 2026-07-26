@@ -15,7 +15,8 @@ _IDENTIFIER = r"[A-Za-z0-9_.:-]{1,128}"
 _SESSION_RE = re.compile(r"\bsession_id=(?P<value>{})\b".format(_IDENTIFIER))
 _TASK_RE = re.compile(r"\btask_id=(?P<value>{})\b".format(_IDENTIFIER))
 _TIMESTAMP_RE = re.compile(
-    r"^(?P<value>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:[.,]\d{1,6})?)"
+    r"^(?P<value>\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}"
+    r"(?:[.,]\d{1,6})?(?:Z|[+-]\d{2}:\d{2})?)"
 )
 _MODEL_RE = re.compile(
     r'model_info:\s*CustomModel\s*\{[^}\r\n]{0,512}?'
@@ -23,6 +24,11 @@ _MODEL_RE = re.compile(
     r'[^}\r\n]{0,512}?reasoning_effort:\s*'
     r'(?:(?:Some\("(?P<effort>[^"\r\n]{1,32})"\))|None)'
     r"[^}\r\n]{0,512}?\}"
+)
+_TASK_STATUS_RE = re.compile(
+    r"ai_agent::domain::task::cloud_service:\s+TASK:\s+"
+    r"[^\r\n]{0,1024}?\bstatus=(?P<status>Created|Completed)\b",
+    re.IGNORECASE,
 )
 
 
@@ -77,12 +83,9 @@ def parse_trae_log_event(line: str) -> Optional[TraeLogEvent]:
     timestamp_match = _TIMESTAMP_RE.search(line)
     if timestamp_match is not None:
         timestamp = timestamp_match.group("value").replace(",", ".")
-        timestamp_format = "%Y-%m-%d %H:%M:%S.%f" if "." in timestamp else (
-            "%Y-%m-%d %H:%M:%S"
-        )
         try:
-            occurred_at = datetime.datetime.strptime(
-                timestamp, timestamp_format
+            occurred_at = datetime.datetime.fromisoformat(
+                timestamp.replace("Z", "+00:00")
             ).timestamp()
         except (OverflowError, ValueError):
             occurred_at = None
@@ -96,11 +99,14 @@ def parse_trae_log_event(line: str) -> Optional[TraeLogEvent]:
             occurred_at=occurred_at,
         )
 
+    task_status_match = _TASK_STATUS_RE.search(line)
     kind = None
-    if "execute_task:start" in line:
-        kind = "started"
-    elif "[append_resume_listener] started" in line:
-        kind = "progress"
+    if task_status_match is not None:
+        kind = (
+            "started"
+            if task_status_match.group("status").lower() == "created"
+            else "completed"
+        )
     elif "progress_notice" in line:
         kind = "progress"
     elif "ToolCall arrived name=AskUserQuestion" in line:
@@ -142,6 +148,9 @@ def apply_trae_log_event(
         None,
     )
     existing = current[matching_index] if matching_index is not None else None
+
+    if event.kind == "progress" and existing is None:
+        return tuple(current)
 
     if event.kind == "completed" and existing is not None and existing.state == "pending":
         return tuple(current)
@@ -199,6 +208,7 @@ def select_transport_tasks(
 class TraeTaskTracker:
     _METADATA_TAIL_BYTES = 256 * 1024
     _MAX_LEDGER_TASKS = 32
+    _LEDGER_VERSION = 4
 
     def __init__(self, cursor_path: pathlib.Path, ledger_path: pathlib.Path):
         self._cursor_path = pathlib.Path(cursor_path)
@@ -210,7 +220,11 @@ class TraeTaskTracker:
             self._effort,
             self._model_updated_at,
             self._revision,
+            migrate_ledger,
         ) = self._load_ledger()
+        if migrate_ledger:
+            self._revision += 1
+            self._save_ledger()
 
     def refresh(
         self,
@@ -505,11 +519,18 @@ class TraeTaskTracker:
         Optional[str],
         float,
         int,
+        bool,
     ]:
         try:
             value = json.loads(self._ledger_path.read_text(encoding="utf-8"))
+            migrate_ledger = value.get("version") != self._LEDGER_VERSION
             tasks = []
-            for item in value.get("tasks", ()):
+            raw_tasks = (
+                value.get("tasks", ())
+                if not migrate_ledger
+                else ()
+            )
+            for item in raw_tasks:
                 state = item.get("state")
                 if state not in {"pending", "running", "completed"}:
                     continue
@@ -542,6 +563,7 @@ class TraeTaskTracker:
                 effort if isinstance(effort, str) else None,
                 float(value.get("model_updated_at", 0.0)),
                 int(value.get("revision", 0)),
+                migrate_ledger,
             )
         except (
             OSError,
@@ -550,7 +572,7 @@ class TraeTaskTracker:
             KeyError,
             json.JSONDecodeError,
         ):
-            return (), None, None, 0.0, 0
+            return (), None, None, 0.0, 0, False
 
     def _retain_ledger_tasks(
         self, tasks: Iterable[TraeTask]
@@ -585,7 +607,7 @@ class TraeTaskTracker:
         self._atomic_json_write(
             self._ledger_path,
             {
-                "version": 2,
+                "version": self._LEDGER_VERSION,
                 "model": self._model,
                 "effort": self._effort,
                 "model_updated_at": self._model_updated_at,

@@ -132,6 +132,32 @@ class TraeStatusFirmwareContractTests(unittest.TestCase):
         ):
             self.assertIn(token, layout)
 
+    def test_trae_page_matches_approved_c_visual_contract(self):
+        header = (self.app_root / "trae_status_page.h").read_text(encoding="utf-8")
+        source = (self.app_root / "trae_status_page.cpp").read_text(
+            encoding="utf-8"
+        )
+        layout = (self.app_root / "trae_status_ui_layout.h").read_text(
+            encoding="utf-8"
+        )
+        page_contract = header + source + layout
+
+        for token in (
+            "lv_font_montserrat_10",
+            "kBluetoothDotX",
+            "kProcessDotX",
+            "kCardRadius",
+            "kBackCardScale",
+            "kDeepCardScale",
+            "kDeckHintY",
+            '"PENDING"',
+            '"RUNNING"',
+            '"点击最上层卡片切换 · Pending 始终优先"',
+        ):
+            self.assertIn(token, page_contract)
+
+        self.assertNotIn("_health_dot", page_contract)
+
     def test_status_messages_route_to_independent_models_and_freshness(self):
         header = (self.app_root / "app_codex_status.h").read_text(encoding="utf-8")
         source = (self.app_root / "app_codex_status.cpp").read_text(

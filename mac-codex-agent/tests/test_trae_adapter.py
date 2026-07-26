@@ -29,9 +29,11 @@ class FakeTracker:
 def create_state_db(path, key, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(path)
-    connection.execute("CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value BLOB)")
     connection.execute(
-        "INSERT INTO ItemTable VALUES (?, ?)",
+        "CREATE TABLE IF NOT EXISTS ItemTable (key TEXT PRIMARY KEY, value BLOB)"
+    )
+    connection.execute(
+        "INSERT OR REPLACE INTO ItemTable VALUES (?, ?)",
         (key, json.dumps(value)),
     )
     connection.commit()
@@ -132,6 +134,172 @@ class TraeStateCollectorTests(unittest.TestCase):
         self.assertEqual(state["trae_effort"], "medium")
         self.assertEqual(state["trae_tasks"][0]["project"], "StopWatch")
         self.assertEqual(state["trae_tasks"][0]["title"], "Build status page")
+
+    def test_real_session_state_enriches_project_title_model_and_effort(self):
+        workspace = self.workspace_storage / "workspace-real"
+        workspace.mkdir(parents=True)
+        (workspace / "workspace.json").write_text(
+            json.dumps({"folder": "file:///work/CloudTest"}),
+            encoding="utf-8",
+        )
+        create_state_db(
+            workspace / "state.vscdb",
+            "lukeren_ai-chat:sessionRelation:modelMap",
+            {
+                "session-a": {
+                    "solo_coder": "1_-_openrouter-3o",
+                }
+            },
+        )
+        create_state_db(
+            self.workspace_storage.parent / "globalStorage" / "state.vscdb",
+            "lukeren_AI.agent.model.model_list_map",
+            {
+                "solo_agent": [
+                    {
+                        "name": "openrouter-3o",
+                        "display_name": "OpenRouter 3o",
+                        "default_reasoning_effort": "xhigh",
+                    }
+                ]
+            },
+        )
+        self.write_log(
+            "2026-07-26T21:00:00+08:00 "
+            "generate_session_title_and_icon: "
+            "ai_agent::domain::chat::service: "
+            'generate_session_title_and_icon_cloud: session_id: "session-a", '
+            'title: "Fix status collector", icon: "terminal"'
+        )
+        collector = self.collector(online=True)
+        collector._tracker = FakeTracker(
+            tasks=(
+                TraeTask(
+                    "session-a",
+                    "task-a",
+                    "--",
+                    "Trae task",
+                    "",
+                    "running",
+                    10.0,
+                ),
+            )
+        )
+
+        state = collector.get_state()
+
+        self.assertEqual(state["trae_model"], "OpenRouter 3o")
+        self.assertEqual(state["trae_effort"], "xhigh")
+        self.assertEqual(state["trae_tasks"][0]["project"], "CloudTest")
+        self.assertEqual(
+            state["trae_tasks"][0]["title"], "Fix status collector"
+        )
+        self.assertEqual(state["trae_tasks"][0]["model"], "OpenRouter 3o")
+        self.assertEqual(state["trae_tasks"][0]["effort"], "xhigh")
+
+    def test_real_session_state_does_not_use_newest_unrelated_workspace(self):
+        for name, session, model in (
+            ("ProjectA", "session-a", "model-a"),
+            ("Unrelated", "session-b", "model-b"),
+        ):
+            workspace = self.workspace_storage / name
+            workspace.mkdir(parents=True)
+            (workspace / "workspace.json").write_text(
+                json.dumps({"folder": "file:///work/{}".format(name)}),
+                encoding="utf-8",
+            )
+            create_state_db(
+                workspace / "state.vscdb",
+                "lukeren_ai-chat:sessionRelation:modelMap",
+                {session: {"solo_coder": "1_-_{}".format(model)}},
+            )
+        collector = self.collector(online=True)
+        collector._tracker = FakeTracker(
+            tasks=(
+                TraeTask(
+                    "session-a",
+                    "task-a",
+                    "--",
+                    "Trae task",
+                    "",
+                    "running",
+                    10.0,
+                ),
+            )
+        )
+
+        state = collector.get_state()
+
+        self.assertEqual(state["trae_tasks"][0]["project"], "ProjectA")
+        self.assertEqual(state["trae_tasks"][0]["model"], "model-a")
+
+    def test_memento_correlates_workspace_and_uses_its_global_model(self):
+        correct = self.workspace_storage / "a-correct"
+        correct.mkdir(parents=True)
+        (correct / "workspace.json").write_text(
+            json.dumps({"folder": "file:///work/CorrectProject"}),
+            encoding="utf-8",
+        )
+        create_state_db(
+            correct / "state.vscdb",
+            "memento/icube-ai-agent-storage",
+            {
+                "list": [
+                    {
+                        "isCurrent": True,
+                        "sessionId": "session-a",
+                        "messages": [],
+                    }
+                ],
+                "currentSessionId": "session-a",
+            },
+        )
+        create_state_db(
+            correct / "state.vscdb",
+            "lukeren_ai-chat:sessionRelation:modelMap",
+            {},
+        )
+        create_state_db(
+            correct / "state.vscdb",
+            "lukeren_ai-chat:sessionRelation:globalModelMap",
+            {"solo_coder": "1_-_model-a"},
+        )
+
+        unrelated = self.workspace_storage / "z-unrelated"
+        unrelated.mkdir(parents=True)
+        (unrelated / "workspace.json").write_text(
+            json.dumps({"folder": "file:///work/WrongProject"}),
+            encoding="utf-8",
+        )
+        create_state_db(
+            unrelated / "state.vscdb",
+            "lukeren_ai-chat:sessionRelation:modelMap",
+            {"session-b": {"solo_coder": "1_-_model-b"}},
+        )
+        self.write_log(
+            "generate_session_title_and_icon_cloud: "
+            'session_id: "session-a", title: "Correct title", icon: "terminal"'
+        )
+        collector = self.collector(online=True)
+        collector._tracker = FakeTracker(
+            tasks=(
+                TraeTask(
+                    "session-a",
+                    "task-a",
+                    "--",
+                    "Trae task",
+                    "",
+                    "running",
+                    10.0,
+                ),
+            )
+        )
+
+        task = collector.get_state()["trae_tasks"][0]
+
+        self.assertEqual(task["project"], "CorrectProject")
+        self.assertEqual(task["title"], "Correct title")
+        self.assertEqual(task["model"], "model-a")
 
     def test_none_effort_becomes_double_dash(self):
         self.write_sandbox(

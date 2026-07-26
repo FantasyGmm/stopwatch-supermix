@@ -1,4 +1,5 @@
 import dataclasses
+import datetime
 import json
 import pathlib
 import sys
@@ -33,16 +34,90 @@ def task(task_id, state, updated_at):
     )
 
 
+def started_line(session_id, task_id, timestamp=""):
+    prefix = "{} ".format(timestamp) if timestamp else ""
+    return (
+        prefix
+        + "ai_agent::domain::task::cloud_service: TASK: "
+        + "task_id={},session_id={},status=Created".format(task_id, session_id)
+    )
+
+
 class TraeTaskTests(unittest.TestCase):
+    def test_listener_start_is_not_a_task_lifecycle_event(self):
+        line = (
+            "2026-07-26T21:45:43.989576+08:00 "
+            "[append_resume_listener] started "
+            "session_id=session-a task_id=task-a"
+        )
+
+        self.assertIsNone(parse_trae_log_event(line))
+
+    def test_explicit_task_status_maps_created_and_completed(self):
+        created = parse_trae_log_event(
+            "2026-07-26T21:45:43.989576+08:00 "
+            "ai_agent::domain::task::cloud_service: TASK: "
+            "task_id=task-a,session_id=session-a,status=Created"
+        )
+        completed = parse_trae_log_event(
+            "2026-07-26T21:45:52.564290+08:00 "
+            "ai_agent::domain::task::cloud_service: TASK: "
+            "task_id=task-a,session_id=session-a,status=Completed"
+        )
+
+        self.assertIsNotNone(created)
+        self.assertEqual(created.kind, "started")
+        self.assertIsNotNone(completed)
+        self.assertEqual(completed.kind, "completed")
+
+    def test_progress_does_not_synthesize_an_unknown_task(self):
+        progress = parse_trae_log_event(
+            "progress_notice session_id=session-a task_id=task-a"
+        )
+
+        updated = apply_trae_log_event((), progress, now=2.0)
+
+        self.assertEqual(updated, ())
+
+    def test_execute_task_span_path_is_not_a_task_start(self):
+        line = (
+            "2026-07-26T20:48:20.989000+08:00 INFO "
+            "dispatch:execute_task:start:process_task:run_execution_task "
+            "first token flushed session_id=session-a task_id=task-a"
+        )
+
+        self.assertIsNone(parse_trae_log_event(line))
+
+    def test_iso_timestamp_with_timezone_is_preserved(self):
+        line = (
+            started_line(
+                "session-a",
+                "task-a",
+                "2026-07-26T20:48:20.989000+08:00",
+            )
+        )
+
+        event = parse_trae_log_event(line)
+
+        self.assertIsNotNone(event)
+        self.assertEqual(event.kind, "started")
+        self.assertEqual(
+            event.occurred_at,
+            datetime.datetime.fromisoformat(
+                "2026-07-26T20:48:20.989000+08:00"
+            ).timestamp(),
+        )
+
     def test_parser_maps_start_progress_pending_and_exit(self):
-        events = [
-            parse_trae_log_event(line)
+        events = tuple(
+            event
             for line in FIXTURE.read_text(encoding="utf-8").splitlines()
-        ]
+            if (event := parse_trae_log_event(line)) is not None
+        )
 
         self.assertEqual(
             [event.kind for event in events],
-            ["model", "started", "progress", "progress", "pending", "completed"],
+            ["model", "started", "progress", "pending", "completed"],
         )
         self.assertEqual(events[0].model, "Model A")
         self.assertEqual(events[0].effort, "high")
@@ -62,9 +137,7 @@ class TraeTaskTests(unittest.TestCase):
 
     def test_new_execution_after_pending_returns_the_task_to_running(self):
         pending = task("a", "pending", 1.0)
-        start_event = parse_trae_log_event(
-            "execute_task:start session_id=session-a task_id=a"
-        )
+        start_event = parse_trae_log_event(started_line("session-a", "a"))
 
         updated = apply_trae_log_event((pending,), start_event, now=2.0)
 
@@ -87,8 +160,8 @@ class TraeTaskTests(unittest.TestCase):
 
     def test_parser_result_never_contains_raw_line(self):
         line = (
-            "execute_task:start session_id=session-a task_id=task-a "
-            "prompt=do-not-retain-this"
+            started_line("session-a", "task-a")
+            + " prompt=do-not-retain-this"
         )
 
         event = parse_trae_log_event(line)
@@ -141,9 +214,77 @@ class TraeTaskTrackerTests(unittest.TestCase):
                 if complete or index < len(lines) - 1:
                     stream.write(b"\n")
 
+    def test_version_two_ledger_drops_unreliable_active_tasks(self):
+        self.ledger.write_text(
+            json.dumps(
+                {
+                    "version": 2,
+                    "model": "Doubao",
+                    "effort": "high",
+                    "model_updated_at": 123.0,
+                    "revision": 35,
+                    "tasks": [
+                        {
+                            "session_id": "stale-session",
+                            "task_id": "stale-task",
+                            "project": "--",
+                            "title": "Trae task",
+                            "detail": "",
+                            "state": "running",
+                            "updated_at": 122.0,
+                            "model": "Doubao",
+                            "effort": "high",
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        snapshot = self.tracker().refresh((), now=124.0)
+
+        self.assertEqual(snapshot.tasks, ())
+        self.assertEqual(snapshot.model, "Doubao")
+        self.assertEqual(snapshot.effort, "high")
+        migrated = json.loads(self.ledger.read_text(encoding="utf-8"))
+        self.assertEqual(migrated["version"], 4)
+        self.assertEqual(migrated["tasks"], [])
+
+    def test_version_three_ledger_drops_listener_derived_active_tasks(self):
+        self.ledger.write_text(
+            json.dumps(
+                {
+                    "version": 3,
+                    "revision": 653,
+                    "tasks": [
+                        {
+                            "session_id": "stale-session",
+                            "task_id": "stale-task",
+                            "project": "--",
+                            "title": "Trae task",
+                            "detail": "",
+                            "state": "running",
+                            "updated_at": 123.0,
+                            "model": "",
+                            "effort": "",
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        snapshot = self.tracker().refresh((), now=124.0)
+
+        self.assertEqual(snapshot.tasks, ())
+        migrated = json.loads(self.ledger.read_text(encoding="utf-8"))
+        self.assertEqual(migrated["version"], 4)
+        self.assertEqual(migrated["tasks"], [])
+
+
     def test_first_observation_baselines_at_eof_without_replaying_history(self):
         self.append(
-            "execute_task:start session_id=session-old task_id=task-old",
+            started_line("session-old", "task-old"),
             "ToolCall arrived name=AskUserQuestion "
             "session_id=session-old task_id=task-old",
         )
@@ -173,7 +314,9 @@ class TraeTaskTrackerTests(unittest.TestCase):
         self.log.write_bytes(
             old.encode("utf-8")
             + (b"x" * (257 * 1024))
-            + b"\nexecute_task:start session_id=session-old task_id=task-old\n"
+            + ("\n" + started_line("session-old", "task-old") + "\n").encode(
+                "utf-8"
+            )
             + newest.encode("utf-8")
         )
 
@@ -188,7 +331,7 @@ class TraeTaskTrackerTests(unittest.TestCase):
         tracker = self.tracker()
         baseline = tracker.refresh((self.log,), now=10.0)
         self.append(
-            "execute_task:start session_id=session-a task_id=task-a",
+            started_line("session-a", "task-a"),
         )
 
         updated = tracker.refresh((self.log,), now=11.0)
@@ -208,7 +351,7 @@ class TraeTaskTrackerTests(unittest.TestCase):
         self.log.touch()
         self.tracker().refresh((self.log,), now=10.0)
         self.append(
-            "execute_task:start session_id=session-a task_id=task-a",
+            started_line("session-a", "task-a"),
         )
         first = self.tracker().refresh((self.log,), now=11.0)
         self.append(
@@ -237,7 +380,9 @@ class TraeTaskTrackerTests(unittest.TestCase):
             encoding="utf-8",
         )
         tracker = self.tracker()
-        self.append("execute_task:start session_id=session-a task_id=task-a")
+        self.append(
+            started_line("session-a", "task-a")
+        )
 
         snapshot = tracker.refresh((self.log,), now=11.0)
 
@@ -250,11 +395,13 @@ class TraeTaskTrackerTests(unittest.TestCase):
         self.log.touch()
         tracker = self.tracker()
         tracker.refresh((self.log,), now=10.0)
-        self.append("execute_task:start session_id=session-a task_id=task-a")
+        self.append(
+            started_line("session-a", "task-a")
+        )
         tracker.refresh((self.log,), now=11.0)
         replacement = self.root / "replacement.log"
         replacement.write_text(
-            "execute_task:start session_id=session-b task_id=task-b\n",
+            started_line("session-b", "task-b") + "\n",
             encoding="utf-8",
         )
         replacement.replace(self.log)
@@ -264,18 +411,15 @@ class TraeTaskTrackerTests(unittest.TestCase):
         self.assertEqual([item.task_id for item in rebaselined.tasks], ["task-a"])
         self.append("progress_notice session_id=session-b task_id=task-b")
         refreshed = tracker.refresh((self.log,), now=13.0)
-        self.assertEqual(
-            {item.task_id for item in refreshed.tasks},
-            {"task-a", "task-b"},
-        )
+        self.assertEqual({item.task_id for item in refreshed.tasks}, {"task-a"})
 
     def test_ledger_contains_normalized_metadata_not_raw_prompt_or_log(self):
         self.log.touch()
         tracker = self.tracker()
         tracker.refresh((self.log,), now=10.0)
         self.append(
-            "execute_task:start session_id=session-a task_id=task-a "
-            "prompt=private-user-text tool_args=private-tool-data"
+            started_line("session-a", "task-a")
+            + " prompt=private-user-text tool_args=private-tool-data"
         )
 
         tracker.refresh((self.log,), now=11.0)
@@ -298,13 +442,9 @@ class TraeTaskTrackerTests(unittest.TestCase):
         tracker = self.tracker()
         tracker.refresh((log_a, log_b), now=1.0)
         with log_a.open("a", encoding="utf-8") as stream:
-            stream.write(
-                "execute_task:start session_id=session-a task_id=task-a\n"
-            )
+            stream.write(started_line("session-a", "task-a") + "\n")
         with log_b.open("a", encoding="utf-8") as stream:
-            stream.write(
-                "execute_task:start session_id=session-b task_id=task-b\n"
-            )
+            stream.write(started_line("session-b", "task-b") + "\n")
 
         snapshot = tracker.refresh((log_a, log_b), now=2.0)
 
@@ -319,8 +459,7 @@ class TraeTaskTrackerTests(unittest.TestCase):
         tracker.refresh((self.log,), now=1.0)
         self.append(
             *(
-                "execute_task:start session_id=session-active "
-                "task_id=active-{}".format(index)
+                started_line("session-active", "active-{}".format(index))
                 for index in range(3)
             )
         )
@@ -328,8 +467,7 @@ class TraeTaskTrackerTests(unittest.TestCase):
 
         for index in range(40):
             self.append(
-                "execute_task:start session_id=session-history "
-                "task_id=history-{}".format(index),
+                started_line("session-history", "history-{}".format(index)),
                 "[append_resume_listener] exiting session_id=session-history "
                 "task_id=history-{}".format(index),
             )
@@ -370,16 +508,16 @@ class TraeTaskTrackerTests(unittest.TestCase):
                 "2026-07-24 10:00:04 model_info: CustomModel { "
                 'display_model_name: Some("New Model"), '
                 'reasoning_effort: Some("high") }\n'
-                "2026-07-24 10:00:05 execute_task:start "
-                "session_id=session-a task_id=task-a\n"
+                + started_line("session-a", "task-a", "2026-07-24 10:00:05")
+                + "\n"
             )
         with log_z.open("a", encoding="utf-8") as stream:
             stream.write(
                 "2026-07-24 10:00:01 model_info: CustomModel { "
                 'display_model_name: Some("Old Model"), '
                 'reasoning_effort: Some("low") }\n'
-                "2026-07-24 10:00:02 execute_task:start "
-                "session_id=session-z task_id=task-z\n"
+                + started_line("session-z", "task-z", "2026-07-24 10:00:02")
+                + "\n"
             )
 
         snapshot = tracker.refresh((log_a, log_z), now=2.0)
@@ -401,13 +539,13 @@ class TraeTaskTrackerTests(unittest.TestCase):
         tracker.refresh((log_a, log_z), now=1.0)
         with log_a.open("a", encoding="utf-8") as stream:
             stream.write(
-                "2026-07-24 10:00:02 execute_task:start "
-                "session_id=session-z task_id=z-new\n"
+                started_line("session-z", "z-new", "2026-07-24 10:00:02")
+                + "\n"
             )
         with log_z.open("a", encoding="utf-8") as stream:
             stream.write(
-                "2026-07-24 10:00:01 execute_task:start "
-                "session_id=session-a task_id=a-old\n"
+                started_line("session-a", "a-old", "2026-07-24 10:00:01")
+                + "\n"
             )
 
         snapshot = tracker.refresh((log_a, log_z), now=2.0)
@@ -421,8 +559,7 @@ class TraeTaskTrackerTests(unittest.TestCase):
         tracker = self.tracker()
         tracker.refresh((self.log,), now=1.0)
         self.append(
-            "2026-07-24 10:00:01 execute_task:start "
-            "session_id=session-a task_id=task-a",
+            started_line("session-a", "task-a", "2026-07-24 10:00:01"),
             "2026-07-24 10:00:02 model_info: CustomModel { "
             'display_model_name: Some("Future Model"), '
             'reasoning_effort: Some("high") }',

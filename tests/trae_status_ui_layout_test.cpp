@@ -11,14 +11,26 @@ int main()
     assert(kBrandIconX == 168 && kBrandIconY == 22);
     assert(kBrandX == 218 && kBrandY == 32);
     assert(kHealthX == 118 && kHealthY == 67 && kHealthWidth == 230);
+    assert(kHealthLabelY == 68);
+    assert(kHealthDotY == 72 && kHealthDotSize == 6);
+    assert(kBluetoothDotX == 156 && kBluetoothTextX == 167);
+    assert(kProcessDotX == 234 && kProcessTextX == 245);
     assert(kRobotX == 96 && kRobotY == 105);
     assert(kRobotWidth == 77 && kRobotHeight == 86);
     assert(kTelemetryX == 214);
     assert(kDividerX == 82 && kDividerY == 223 && kDividerWidth == 302);
     assert(kSummaryY == 240);
+    assert(kPendingSummaryX == 175 && kPendingCountX == 222);
+    assert(kRunningSummaryX == 244 && kRunningCountX == 291);
     assert(kDeckX == 108 && kDeckY == 268);
     assert(kDeckWidth == 250 && kDeckHeight == 120);
     assert(kCardWidth == 250 && kCardHeight == 98);
+    assert(kCardRadius == 15);
+    assert(kBackCardScale == 241 && kDeepCardScale == 225);
+    assert(kCardTextX == 17 && kCardIndexX == 137);
+    assert(kCardStateY == 14 && kCardProjectY == 35);
+    assert(kCardTitleY == 59 && kCardDetailY == 78);
+    assert(kDeckHintY == 390);
     assert(kDeckY + kDeckHeight < kPageIndicatorY);
     assert(kPageIndicatorY == 416 && kBatteryY == 438);
 

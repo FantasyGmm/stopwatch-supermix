@@ -28,8 +28,9 @@ private:
 
     lv_obj_t* _root = nullptr;
     lv_obj_t* _brand_icon = nullptr;
+    lv_obj_t* _bt_dot = nullptr;
     lv_obj_t* _bt_status = nullptr;
-    lv_obj_t* _health_dot = nullptr;
+    lv_obj_t* _process_dot = nullptr;
     lv_obj_t* _process_status = nullptr;
     lv_obj_t* _robot = nullptr;
     lv_obj_t* _model = nullptr;
@@ -42,6 +43,7 @@ private:
     lv_obj_t* _card_project = nullptr;
     lv_obj_t* _card_title = nullptr;
     lv_obj_t* _card_detail = nullptr;
+    lv_obj_t* _deck_hint = nullptr;
     lv_timer_t* _robot_timer = nullptr;
     std::array<char, 33> _last_task_id{};
     bool _active = false;
