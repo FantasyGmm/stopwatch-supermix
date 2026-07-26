@@ -224,6 +224,11 @@ int Hal::getBackLightBrightness(bool loadFromSettings)
     return _bl_brightness;
 }
 
+bool Hal::isDisplayVisible()
+{
+    return _bl_brightness > 0;
+}
+
 /* -------------------------------------------------------------------------- */
 /*                                  Touchpad                                  */
 /* -------------------------------------------------------------------------- */

@@ -159,11 +159,13 @@ public:
 
     /* ---------------------------------- Power --------------------------------- */
     uint8_t getBatteryLevel();
+    uint32_t batterySampleRevision();
     bool isBatteryCharging(bool strict = false);
 
     /* --------------------------------- Display -------------------------------- */
     void setBackLightBrightness(int brightness, bool saveToSettings = false);
     int getBackLightBrightness(bool loadFromSettings = false);
+    bool isDisplayVisible();
 
     // M5GFX
     LGFX_Device& getDisplay();
@@ -193,6 +195,7 @@ public:
     StopWatchAudioBackend& getAudioBackend();
     void audioRecord(std::vector<int16_t>& data, uint16_t durationMs, float gain = 30.0f);
     void audioPlay(std::vector<int16_t>& data, bool async = true);
+    bool isAudioPlaying();
 
     struct AudioSpectrumFrame {
         static constexpr std::size_t bandCount = 20;
