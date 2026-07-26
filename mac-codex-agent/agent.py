@@ -4,6 +4,7 @@
 import asyncio
 import datetime
 import json
+import threading
 import time
 from typing import Any, Callable, Optional
 
@@ -120,6 +121,10 @@ class BleStatusTransport:
         self._voice_failure = None
         self._voice_notify_started = False
         self._voice_disabled = False
+        self._voice_ingress_lock = threading.Lock()
+        self._voice_ingress_pending = 0
+        self._voice_ingress_overflow = False
+        self._voice_ingress_enabled = False
 
     @property
     def connected(self) -> bool:
@@ -168,16 +173,39 @@ class BleStatusTransport:
         self._voice_failure = loop.create_future()
         self._voice_consumer = asyncio.create_task(self._consume_voice(handler))
         self._voice_consumer.add_done_callback(self._voice_consumer_done)
+        with self._voice_ingress_lock:
+            self._voice_ingress_pending = 0
+            self._voice_ingress_overflow = False
+            self._voice_ingress_enabled = True
 
         def on_notification(_sender, data) -> None:
             payload = bytes(data)
+            callback = None
+            payload_admitted = False
+            with self._voice_ingress_lock:
+                if (
+                    not self._voice_ingress_enabled
+                    or self._voice_ingress_overflow
+                ):
+                    return
+                if self._voice_ingress_pending >= VOICE_NOTIFICATION_QUEUE_SIZE:
+                    self._voice_ingress_overflow = True
+                    callback = self._signal_voice_overflow
+                else:
+                    self._voice_ingress_pending += 1
+                    callback = self._deliver_voice_payload
+                    payload_admitted = True
             try:
-                loop.call_soon_threadsafe(self._enqueue_voice, payload)
+                if payload_admitted:
+                    loop.call_soon_threadsafe(callback, payload)
+                else:
+                    loop.call_soon_threadsafe(callback)
             except RuntimeError:
-                pass
+                if payload_admitted:
+                    self._release_voice_ingress()
 
-        await self._client.start_notify(VOICE_TX_UUID, on_notification)
         self._voice_notify_started = True
+        await self._client.start_notify(VOICE_TX_UUID, on_notification)
         await self._client.write_gatt_char(
             VOICE_CONTROL_UUID, ready_payload, response=True
         )
@@ -185,6 +213,8 @@ class BleStatusTransport:
     async def disable_voice(self, unavailable_payload: Optional[bytes]) -> None:
         if self._voice_disabled:
             return
+        with self._voice_ingress_lock:
+            self._voice_ingress_enabled = False
         failure = None
         stop_failed = False
         try:
@@ -234,6 +264,31 @@ class BleStatusTransport:
             failure.set_result(RuntimeError("voice notification queue overflow"))
             if self._voice_consumer is not None:
                 self._voice_consumer.cancel()
+
+    def _deliver_voice_payload(self, payload: bytes) -> None:
+        try:
+            with self._voice_ingress_lock:
+                enabled = self._voice_ingress_enabled
+            if enabled:
+                self._enqueue_voice(payload)
+        finally:
+            self._release_voice_ingress()
+
+    def _release_voice_ingress(self) -> None:
+        with self._voice_ingress_lock:
+            if self._voice_ingress_pending:
+                self._voice_ingress_pending -= 1
+
+    def _signal_voice_overflow(self) -> None:
+        with self._voice_ingress_lock:
+            enabled = self._voice_ingress_enabled
+        if not enabled:
+            return
+        failure = self._voice_failure
+        if failure is not None and not failure.done():
+            failure.set_result(RuntimeError("voice notification queue overflow"))
+        if self._voice_consumer is not None:
+            self._voice_consumer.cancel()
 
     async def _consume_voice(self, handler) -> None:
         while True:

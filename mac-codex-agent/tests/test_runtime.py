@@ -2,6 +2,7 @@ import asyncio
 import json
 import pathlib
 import sys
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -10,18 +11,23 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from app_state import ConnectionState, MemoryPreferences
 from protocol import EVENT_MESSAGE, STATUS_MESSAGE
-from runtime import AgentCommand, AgentController, AgentRuntime
+from runtime import AgentCommand, AgentController, AgentRuntime, _create_voice_session
+from voice_audio import VoiceAudioDeviceNotFound, VoiceAudioError
 from voice_input_crypto import VoiceKeyError
 from voice_input_protocol import (
     ACCESSIBILITY_REQUIRED,
+    BEGIN_BODY,
     DRIVER_REQUIRED,
+    IMA_ADPCM,
+    PTT_BEGIN,
     READY,
     RESTART_REQUIRED,
     TYPELESS_NOT_RUNNING,
     UNAVAILABLE,
     decode_control,
+    pack_notification,
 )
-from voice_session import VoiceState
+from voice_session import VoiceSessionService, VoiceState
 
 
 class FakeCollector:
@@ -57,6 +63,7 @@ class FakeTransport:
         voice_enable_error=None,
         voice_failure_error=None,
         block_voice_disable=False,
+        block_voice_enable=False,
         voice_notification=None,
     ):
         self.connect_result = connect_result
@@ -70,10 +77,13 @@ class FakeTransport:
         self.voice_enable_error = voice_enable_error
         self.voice_failure_error = voice_failure_error
         self.block_voice_disable = block_voice_disable
+        self.block_voice_enable = block_voice_enable
         self.voice_notification = voice_notification
         self.connect_started = asyncio.Event()
         self.connected_event = asyncio.Event()
         self.disconnected_event = asyncio.Event()
+        self.voice_enable_started = asyncio.Event()
+        self.voice_notification_handled = asyncio.Event()
         self._connect_release = asyncio.Event()
         self._connected = False
         self.disconnect_count = 0
@@ -120,6 +130,7 @@ class FakeTransport:
             self._connected = False
 
     async def enable_voice(self, ready_payload, handler):
+        self.voice_enable_started.set()
         self._voice_disabled = False
         self.voice_payloads.append(("ready", ready_payload, handler))
         if self.events is not None:
@@ -131,6 +142,9 @@ class FakeTransport:
             self.voice_failure.set_result(self.voice_failure_error)
         if self.voice_notification is not None:
             await handler(self.voice_notification)
+            self.voice_notification_handled.set()
+        if self.block_voice_enable:
+            await asyncio.Event().wait()
         if self.disconnect_after_voice:
             self._connected = False
 
@@ -205,6 +219,43 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.keychain_patch.start()
         self.addCleanup(self.keychain_patch.stop)
 
+    async def test_production_assembly_classifies_absent_blackhole_as_restart_required(self):
+        class Bridge:
+            def find_device_uid(self, _name):
+                raise VoiceAudioDeviceNotFound("BlackHole 2ch is not visible")
+
+        with patch("runtime.VoiceAudioBridge", return_value=Bridge()), patch(
+            "runtime._blackhole_receipt_present", return_value=True
+        ):
+            service = _create_voice_session(bytes(range(16)))
+            state = await service.prepare()
+
+        self.assertIs(state, VoiceState.RESTART_REQUIRED)
+
+    async def test_production_assembly_maps_core_audio_query_error_to_voice_error(self):
+        class Bridge:
+            def find_device_uid(self, _name):
+                raise VoiceAudioError("Core Audio device query failed")
+
+        factory = FakeTransportFactory([{"disconnect_after_messages": 2}])
+        with patch("runtime.VoiceAudioBridge", return_value=Bridge()), patch(
+            "runtime._blackhole_receipt_present", return_value=True
+        ):
+            runtime = AgentRuntime(
+                collector=FakeCollector(),
+                transport_factory=factory,
+                voice_key_loader=lambda: bytes(range(16)),
+                status_interval=0.01,
+            )
+            result = await runtime._run_session()
+
+        self.assertEqual(result, "disconnected")
+        self.assertIs(runtime.snapshot().voice_state, VoiceState.ERROR)
+        self.assertEqual(
+            runtime.snapshot().voice_detail,
+            "Core Audio device query failed",
+        )
+
     async def test_runtime_disconnect_cleans_voice_before_ble_disconnect(self):
         events = []
         key = bytes(range(16))
@@ -273,6 +324,28 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             runtime.snapshot().voice_detail,
             "voice key stored in Keychain is malformed",
         )
+
+    async def test_voice_key_material_is_redacted_from_snapshot_and_logs(self):
+        key_text = bytes(range(16)).hex()
+
+        def malformed_key():
+            raise VoiceKeyError("malformed voice key {}".format(key_text))
+
+        factory = FakeTransportFactory([{"disconnect_after_messages": 2}])
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            transport_factory=factory,
+            voice_key_loader=malformed_key,
+            status_interval=0.01,
+        )
+
+        with self.assertLogs("runtime", level="INFO") as logs:
+            result = await runtime._run_session()
+
+        self.assertEqual(result, "disconnected")
+        self.assertNotIn(key_text, runtime.snapshot().voice_detail)
+        self.assertIn("[redacted]", runtime.snapshot().voice_detail)
+        self.assertNotIn(key_text, "\n".join(logs.output))
 
     async def test_non_ready_states_send_exact_authenticated_unavailable(self):
         cases = (
@@ -357,6 +430,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 {
                     "events": events,
                     "voice_enable_error": ConnectionError("READY write failed"),
+                    "disconnect_after_messages": 2,
                 }
             ]
         )
@@ -378,21 +452,240 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             voice_nonce_factory=lambda: b"12345678",
         )
 
-        with self.assertRaisesRegex(ConnectionError, "READY write failed"):
-            await runtime._run_session()
+        result = await runtime._run_session()
 
+        self.assertEqual(result, "disconnected")
+        self.assertEqual(
+            [item[0] for item in factory.instances[0].messages],
+            [EVENT_MESSAGE, STATUS_MESSAGE],
+        )
+        self.assertIs(runtime.snapshot().voice_state, VoiceState.ERROR)
+        self.assertEqual(runtime.snapshot().voice_detail, "READY write failed")
         self.assertEqual(
             events[-3:],
             ["voice.disable", "voice.disconnect", "ble.disconnect"],
         )
 
-    async def test_voice_consumer_failure_ends_session_and_cleans_up(self):
+    async def test_cancellation_while_ready_write_is_blocked_stops_active_recording(self):
+        key = bytes(range(16))
+        begin = pack_notification(
+            key,
+            PTT_BEGIN,
+            7,
+            0,
+            100,
+            BEGIN_BODY.pack(IMA_ADPCM, 16000, 320),
+            b"12345678",
+        )
+        factory = FakeTransportFactory(
+            [{"block_voice_enable": True, "voice_notification": begin}]
+        )
+
+        class Resource:
+            def __init__(self):
+                self.calls = []
+
+            def start(self):
+                self.calls.append("start")
+
+            def stop(self):
+                self.calls.append("stop")
+
+            def write(self, samples):
+                return len(samples)
+
+        route = Resource()
+        shortcut = Resource()
+        service = VoiceSessionService(
+            route,
+            shortcut,
+            key,
+            readiness_checker=lambda: VoiceState.READY,
+            sleep=lambda _delay: asyncio.sleep(0),
+        )
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            transport_factory=factory,
+            voice_key_loader=lambda: key,
+            voice_session_factory=lambda _key: service,
+            voice_nonce_factory=lambda: b"abcdefgh",
+            disconnect_timeout=0.1,
+        )
+
+        session = asyncio.create_task(runtime._run_session())
+        await factory.wait_for_instances(1)
+        transport = factory.instances[0]
+        await asyncio.wait_for(transport.voice_notification_handled.wait(), 1)
+        self.assertEqual(route.calls, ["start"])
+        self.assertEqual(shortcut.calls, ["start"])
+
+        session.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await session
+
+        self.assertEqual(shortcut.calls, ["start", "stop"])
+        self.assertEqual(route.calls, ["start", "stop"])
+        self.assertEqual(transport.disconnect_count, 1)
+
+    async def test_cancellation_during_key_load_still_disconnects_ble(self):
+        loader_started = threading.Event()
+        loader_release = threading.Event()
+
+        def blocked_loader():
+            loader_started.set()
+            loader_release.wait()
+            return bytes(range(16))
+
+        factory = FakeTransportFactory([{}])
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            transport_factory=factory,
+            voice_key_loader=blocked_loader,
+            disconnect_timeout=0.1,
+        )
+        session = asyncio.create_task(runtime._run_session())
+        await factory.wait_for_instances(1)
+        await asyncio.wait_for(asyncio.to_thread(loader_started.wait), 1)
+
+        session.cancel()
+        await asyncio.wait_for(factory.instances[0].disconnected_event.wait(), 1)
+        loader_release.set()
+        with self.assertRaises(asyncio.CancelledError):
+            await session
+
+        self.assertEqual(factory.instances[0].disconnect_count, 1)
+
+    async def test_cancellation_during_prepare_cleans_owned_service(self):
+        prepare_started = asyncio.Event()
+        disconnect_calls = 0
+
+        class VoiceSession:
+            async def prepare(self):
+                prepare_started.set()
+                await asyncio.Event().wait()
+
+            async def disconnect(self):
+                nonlocal disconnect_calls
+                disconnect_calls += 1
+
+        factory = FakeTransportFactory([{}])
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            transport_factory=factory,
+            voice_key_loader=lambda: bytes(range(16)),
+            voice_session_factory=lambda _key: VoiceSession(),
+            disconnect_timeout=0.1,
+        )
+        session = asyncio.create_task(runtime._run_session())
+        await asyncio.wait_for(prepare_started.wait(), 1)
+
+        session.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await session
+
+        self.assertEqual(disconnect_calls, 1)
+        self.assertEqual(factory.instances[0].disconnect_count, 1)
+
+    async def test_cancellation_during_subscription_cleans_owned_service(self):
+        disconnect_calls = 0
+
+        class VoiceSession:
+            state = VoiceState.READY
+
+            async def prepare(self):
+                return self.state
+
+            async def disconnect(self):
+                nonlocal disconnect_calls
+                disconnect_calls += 1
+
+        factory = FakeTransportFactory([{"block_voice_enable": True}])
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            transport_factory=factory,
+            voice_key_loader=lambda: bytes(range(16)),
+            voice_session_factory=lambda _key: VoiceSession(),
+            voice_nonce_factory=lambda: b"12345678",
+            disconnect_timeout=0.1,
+        )
+        session = asyncio.create_task(runtime._run_session())
+        await factory.wait_for_instances(1)
+        await asyncio.wait_for(
+            factory.instances[0].voice_enable_started.wait(), 1
+        )
+
+        session.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await session
+
+        self.assertEqual(disconnect_calls, 1)
+        self.assertEqual(factory.instances[0].disconnect_count, 1)
+
+    async def test_cancellation_during_active_recording_stops_both_resources(self):
+        key = bytes(range(16))
+        begin = pack_notification(
+            key,
+            PTT_BEGIN,
+            9,
+            0,
+            100,
+            BEGIN_BODY.pack(IMA_ADPCM, 16000, 320),
+            b"abcdefgh",
+        )
+
+        class Resource:
+            def __init__(self):
+                self.calls = []
+
+            def start(self):
+                self.calls.append("start")
+
+            def stop(self):
+                self.calls.append("stop")
+
+            def write(self, samples):
+                return len(samples)
+
+        route = Resource()
+        shortcut = Resource()
+        service = VoiceSessionService(
+            route,
+            shortcut,
+            key,
+            readiness_checker=lambda: VoiceState.READY,
+            sleep=lambda _delay: asyncio.sleep(0),
+        )
+        factory = FakeTransportFactory([{"voice_notification": begin}])
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            transport_factory=factory,
+            voice_key_loader=lambda: key,
+            voice_session_factory=lambda _key: service,
+            voice_nonce_factory=lambda: b"12345678",
+            status_interval=30,
+            disconnect_timeout=0.1,
+        )
+        session = asyncio.create_task(runtime._run_session())
+        await factory.wait_for_instances(1)
+        await asyncio.wait_for(
+            factory.instances[0].voice_notification_handled.wait(), 1
+        )
+
+        session.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await session
+
+        self.assertEqual(shortcut.calls, ["start", "stop"])
+        self.assertEqual(route.calls, ["start", "stop"])
+
+    async def test_voice_consumer_failure_isolated_from_status_session(self):
         events = []
         factory = FakeTransportFactory(
             [
                 {
                     "events": events,
                     "voice_failure_error": RuntimeError("voice notification queue overflow"),
+                    "disconnect_after_messages": 2,
                 }
             ]
         )
@@ -415,9 +708,18 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             status_interval=0.01,
         )
 
-        with self.assertRaisesRegex(RuntimeError, "queue overflow"):
-            await runtime._run_session()
+        result = await runtime._run_session()
 
+        self.assertEqual(result, "disconnected")
+        self.assertEqual(
+            [item[0] for item in factory.instances[0].messages],
+            [EVENT_MESSAGE, STATUS_MESSAGE],
+        )
+        self.assertIs(runtime.snapshot().voice_state, VoiceState.ERROR)
+        self.assertEqual(
+            runtime.snapshot().voice_detail,
+            "voice notification queue overflow",
+        )
         self.assertEqual(
             events[-3:],
             ["voice.disable", "voice.disconnect", "ble.disconnect"],
@@ -458,6 +760,66 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result, "disconnected")
         self.assertEqual(events[-1], "ble.disconnect")
+        self.assertEqual(events.count("voice.disable"), 1)
+        self.assertEqual(events.count("voice.disconnect"), 1)
+        self.assertEqual(events.count("ble.disconnect"), 1)
+
+    async def test_repeated_cancellation_uses_one_shutdown_budget(self):
+        events = []
+        factory = FakeTransportFactory(
+            [
+                {
+                    "events": events,
+                    "block_voice_disable": True,
+                    "block_disconnect": True,
+                }
+            ]
+        )
+
+        class VoiceSession:
+            state = VoiceState.READY
+
+            async def prepare(self):
+                return self.state
+
+            async def disconnect(self):
+                events.append("voice.disconnect")
+                await asyncio.Event().wait()
+
+        shutdown_budget = 0.09
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            transport_factory=factory,
+            voice_key_loader=lambda: bytes(range(16)),
+            voice_session_factory=lambda _key: VoiceSession(),
+            voice_nonce_factory=lambda: b"12345678",
+            status_interval=30,
+            disconnect_timeout=shutdown_budget,
+        )
+        session = asyncio.create_task(runtime._run_session())
+        await factory.wait_for_instances(1)
+        transport = factory.instances[0]
+        for _ in range(100):
+            if transport.voice_payloads:
+                break
+            await asyncio.sleep(0.01)
+        else:
+            self.fail("voice did not become ready")
+
+        started = asyncio.get_running_loop().time()
+        session.cancel()
+        for _ in range(100):
+            if "voice.disable" in events:
+                break
+            await asyncio.sleep(0.001)
+        session.cancel()
+        await asyncio.sleep(0)
+        session.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await session
+        elapsed = asyncio.get_running_loop().time() - started
+
+        self.assertLess(elapsed, shutdown_budget + 0.09)
         self.assertEqual(events.count("voice.disable"), 1)
         self.assertEqual(events.count("voice.disconnect"), 1)
         self.assertEqual(events.count("ble.disconnect"), 1)

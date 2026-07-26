@@ -10,6 +10,7 @@ LIBRARY_NAME = "libstopwatch_voice_audio.dylib"
 UID_BUFFER_SIZE = 1024
 INT16_MIN = -32768
 INT16_MAX = 32767
+NATIVE_DEVICE_NOT_FOUND = -2
 
 VoiceAudioFailure = Tuple[str, Exception]
 
@@ -30,6 +31,10 @@ class VoiceAudioError(RuntimeError):
             )
             message = "{}: {}".format(message, details)
         super().__init__(message)
+
+
+class VoiceAudioDeviceNotFound(VoiceAudioError):
+    """The requested Core Audio device is not currently visible."""
 
 
 def _error_failures(
@@ -118,6 +123,10 @@ class VoiceAudioBridge:
             status = function(output, len(output))
         else:
             status = function(argument.encode("utf-8"), output, len(output))
+        if operation == "find device" and status == NATIVE_DEVICE_NOT_FOUND:
+            raise VoiceAudioDeviceNotFound(
+                "{} failed with status {}".format(operation, status)
+            )
         self._check_status(operation, status)
         try:
             uid = output.value.decode("utf-8")

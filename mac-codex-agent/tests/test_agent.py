@@ -2,6 +2,7 @@ import asyncio
 import json
 import pathlib
 import sys
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -208,6 +209,41 @@ class CodexStatusAgentTests(unittest.TestCase):
 
 
 class BleStatusTransportVoiceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_cancelled_subscription_is_still_owned_for_notify_cleanup(self):
+        class Client:
+            is_connected = True
+
+            def __init__(self):
+                self.start_entered = asyncio.Event()
+                self.stop_calls = 0
+
+            async def start_notify(self, _uuid, _callback):
+                self.start_entered.set()
+                await asyncio.Event().wait()
+
+            async def write_gatt_char(self, _uuid, _payload, response):
+                self.response = response
+
+            async def stop_notify(self, uuid):
+                self.stop_calls += 1
+                self.stopped_uuid = uuid
+
+        client = Client()
+        transport = BleStatusTransport()
+        transport._client = client
+        enabling = asyncio.create_task(
+            transport.enable_voice(b"ready", lambda _payload: asyncio.sleep(0))
+        )
+        await asyncio.wait_for(client.start_entered.wait(), 1)
+
+        enabling.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await enabling
+        await transport.disable_voice(None)
+
+        self.assertEqual(client.stop_calls, 1)
+        self.assertEqual(client.stopped_uuid, VOICE_TX_UUID)
+
     async def test_enable_voice_subscribes_before_announcing_ready(self):
         class Client:
             is_connected = True
@@ -306,6 +342,7 @@ class BleStatusTransportVoiceTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(consumed.wait(), 1)
 
         self.assertEqual(handled, [b"voice-packet"])
+        self.assertEqual(transport._voice_ingress_pending, 0)
         await transport.disable_voice(b"unavailable")
 
     async def test_notification_queue_overflow_fails_closed(self):
@@ -342,6 +379,59 @@ class BleStatusTransportVoiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(error, RuntimeError)
         self.assertEqual(str(error), "voice notification queue overflow")
         self.assertTrue(transport._voice_consumer.done())
+        await transport.disable_voice(b"unavailable")
+
+    async def test_foreign_thread_storm_bounds_work_scheduled_on_blocked_loop(self):
+        class Client:
+            is_connected = True
+
+            async def start_notify(self, _uuid, callback):
+                self.callback = callback
+
+            async def write_gatt_char(self, _uuid, _payload, response):
+                self.response = response
+
+            async def stop_notify(self, _uuid):
+                pass
+
+        client = Client()
+        transport = BleStatusTransport()
+        transport._client = client
+
+        async def blocked_handler(_payload):
+            await asyncio.Event().wait()
+
+        await transport.enable_voice(b"ready", blocked_handler)
+        failure = transport.voice_failure
+        loop = asyncio.get_running_loop()
+        real_call_soon_threadsafe = loop.call_soon_threadsafe
+        scheduled = []
+
+        def count_schedule(callback, *args):
+            scheduled.append(callback)
+            return real_call_soon_threadsafe(callback, *args)
+
+        def storm():
+            for index in range(1000):
+                client.callback(None, index.to_bytes(2, "little"))
+
+        with patch.object(loop, "call_soon_threadsafe", side_effect=count_schedule):
+            thread = threading.Thread(target=storm)
+            thread.start()
+            thread.join()
+            self.assertLessEqual(
+                len(scheduled), VOICE_NOTIFICATION_QUEUE_SIZE + 1
+            )
+            self.assertEqual(
+                [callback.__name__ for callback in scheduled].count(
+                    "_signal_voice_overflow"
+                ),
+                1,
+            )
+
+        error = await asyncio.wait_for(failure, 1)
+        self.assertEqual(str(error), "voice notification queue overflow")
+        self.assertEqual(transport._voice_ingress_pending, 0)
         await transport.disable_voice(b"unavailable")
 
     async def test_timed_out_unavailable_write_can_retry_notify_cleanup(self):

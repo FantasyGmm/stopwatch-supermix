@@ -11,6 +11,7 @@ import voice_audio
 from voice_audio import (
     DefaultInputLease,
     VoiceAudioBridge,
+    VoiceAudioDeviceNotFound,
     VoiceAudioError,
     VoiceAudioRoute,
 )
@@ -237,6 +238,24 @@ class VoiceAudioRouteTests(unittest.TestCase):
 
 
 class VoiceAudioBridgeTests(unittest.TestCase):
+    def test_find_device_exposes_native_not_found_as_typed_result(self):
+        library = FakeLibrary()
+        library.swva_find_device_uid.result = -2
+        bridge = VoiceAudioBridge(library=library)
+
+        with self.assertRaises(VoiceAudioDeviceNotFound):
+            bridge.find_device_uid("BlackHole 2ch")
+
+    def test_find_device_preserves_unexpected_core_audio_error(self):
+        library = FakeLibrary()
+        library.swva_find_device_uid.result = 1234
+        bridge = VoiceAudioBridge(library=library)
+
+        with self.assertRaisesRegex(VoiceAudioError, "status 1234") as caught:
+            bridge.find_device_uid("BlackHole 2ch")
+
+        self.assertNotIsInstance(caught.exception, VoiceAudioDeviceNotFound)
+
     def test_configures_all_ctypes_function_signatures(self):
         library = FakeLibrary()
 
