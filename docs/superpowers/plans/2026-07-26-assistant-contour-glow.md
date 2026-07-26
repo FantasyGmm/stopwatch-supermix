@@ -33,9 +33,11 @@ edge_halo = [
     self.pixel(100, 175),
 ]
 for pixel in edge_halo:
-    self.assertGreaterEqual(brightness(pixel), 18)
+    self.assertGreaterEqual(brightness(pixel), 14)
     self.assertGreater(pixel[2], pixel[0])
 ```
+
+Allow the strong-light footprint to grow from 160 px to at most 165 px because the new contour halo intentionally extends beyond the opaque subject. The 14-level edge threshold remains safely above the previous radial asset's value of 0 while accommodating RGB565 quantization of the violet bottom halo.
 
 Keep the existing checks that pixels at `(5, 100)`, `(194, 100)`, `(100, 5)`, and `(100, 194)` have brightness at most 12.
 

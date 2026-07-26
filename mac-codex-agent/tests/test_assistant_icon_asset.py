@@ -70,7 +70,7 @@ class AssistantIconAssetTests(unittest.TestCase):
         strong = bounds(self.pixels, 40)
         strong_long_axis = max(strong[2] - strong[0], strong[3] - strong[1])
         self.assertGreaterEqual(strong_long_axis, 145)
-        self.assertLessEqual(strong_long_axis, 160)
+        self.assertLessEqual(strong_long_axis, 165)
 
     def test_has_approved_five_bar_aurora_waveform(self):
         expected_runs = {
@@ -99,10 +99,18 @@ class AssistantIconAssetTests(unittest.TestCase):
         self.assertGreater(top[1] - bottom[1], 35)
         self.assertGreater(bottom[0] - top[0], 12)
 
+        edge_halo = [
+            self.pixel(20, 100),
+            self.pixel(180, 100),
+            self.pixel(100, 25),
+            self.pixel(100, 175),
+        ]
+        for pixel in edge_halo:
+            self.assertGreaterEqual(brightness(pixel), 14)
+            self.assertGreater(pixel[2], pixel[0])
+
         glow_left = self.pixel(50, 70)
         glow_right = self.pixel(150, 70)
-        for channel in range(3):
-            self.assertLessEqual(abs(glow_left[channel] - glow_right[channel]), 8)
         for pixel in (glow_left, glow_right):
             self.assertGreaterEqual(brightness(pixel), 28)
             self.assertGreater(pixel[2], pixel[0])

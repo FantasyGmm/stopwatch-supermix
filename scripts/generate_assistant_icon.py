@@ -2,7 +2,7 @@
 import argparse
 from pathlib import Path
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFilter
 
 
 WORK_SIZE = 800
@@ -20,12 +20,11 @@ BODY_STOPS = (
     (0.46, (66, 182, 240, 255)),
     (1.0, (128, 100, 240, 255)),
 )
-GLOW_STOPS = (
-    (0.0, (56, 220, 233, 140)),
-    (0.58, (115, 86, 237, 77)),
-    (1.0, (0, 0, 0, 0)),
-)
-GLOW_RADIUS = 86
+INNER_GLOW_RADIUS = 7
+INNER_GLOW_ALPHA = 190
+OUTER_GLOW_RADIUS = 18
+OUTER_GLOW_ALPHA = 90
+GLOW_PAD = OUTER_GLOW_RADIUS * 3
 
 
 def color_at(stops, position):
@@ -41,25 +40,6 @@ def color_at(stops, position):
     return stops[-1][1]
 
 
-def radial_glow():
-    glow = Image.new("RGBA", (WORK_SIZE, WORK_SIZE), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(glow)
-    center = WORK_SIZE // 2
-    radius = GLOW_RADIUS * SCALE
-    for current_radius in range(radius, -1, -1):
-        color = color_at(GLOW_STOPS, current_radius / radius)
-        draw.ellipse(
-            (
-                center - current_radius,
-                center - current_radius,
-                center + current_radius,
-                center + current_radius,
-            ),
-            fill=color,
-        )
-    return glow
-
-
 def diagonal_gradient(width, height):
     pixels = []
     for y in range(height):
@@ -72,8 +52,75 @@ def diagonal_gradient(width, height):
     return image
 
 
+def padded_bar_mask(width, height, pad):
+    mask = Image.new("L", (width + pad * 2, height + pad * 2), 0)
+    ImageDraw.Draw(mask).rounded_rectangle(
+        (pad, pad, pad + width - 1, pad + height - 1),
+        radius=10 * SCALE,
+        fill=255,
+    )
+    return mask
+
+
+def padded_bar_gradient(width, height, pad):
+    gradient = diagonal_gradient(width, height)
+    field = Image.new("RGBA", (width + pad * 2, height + pad * 2))
+    field.paste(gradient, (pad, pad))
+
+    field.paste(gradient.crop((0, 0, 1, height)).resize((pad, height)), (0, pad))
+    field.paste(
+        gradient.crop((width - 1, 0, width, height)).resize((pad, height)),
+        (pad + width, pad),
+    )
+    field.paste(gradient.crop((0, 0, width, 1)).resize((width, pad)), (pad, 0))
+    field.paste(
+        gradient.crop((0, height - 1, width, height)).resize((width, pad)),
+        (pad, pad + height),
+    )
+
+    corners = (
+        ((0, 0), (0, 0)),
+        ((width - 1, 0), (pad + width, 0)),
+        ((0, height - 1), (0, pad + height)),
+        ((width - 1, height - 1), (pad + width, pad + height)),
+    )
+    for source, destination in corners:
+        field.paste(Image.new("RGBA", (pad, pad), gradient.getpixel(source)), destination)
+    return field
+
+
+def add_glow_layer(canvas, prepared_bars, radius, alpha):
+    for left, top, field, mask, pad in prepared_bars:
+        blurred = mask.filter(ImageFilter.GaussianBlur(radius * SCALE)).point(
+            lambda value: value * alpha // 255
+        )
+        glow = field.copy()
+        glow.putalpha(blurred)
+        canvas.alpha_composite(glow, (left * SCALE - pad, top * SCALE - pad))
+
+
 def add_waveform(canvas):
-    canvas.alpha_composite(radial_glow())
+    pad = GLOW_PAD * SCALE
+    prepared_bars = []
+    for left, top, width, height in BARS:
+        pixel_width = width * SCALE
+        pixel_height = height * SCALE
+        prepared_bars.append(
+            (
+                left,
+                top,
+                padded_bar_gradient(pixel_width, pixel_height, pad),
+                padded_bar_mask(pixel_width, pixel_height, pad),
+                pad,
+            )
+        )
+
+    add_glow_layer(
+        canvas, prepared_bars, OUTER_GLOW_RADIUS, OUTER_GLOW_ALPHA
+    )
+    add_glow_layer(
+        canvas, prepared_bars, INNER_GLOW_RADIUS, INNER_GLOW_ALPHA
+    )
 
     for left, top, width, height in BARS:
         pixel_width = width * SCALE
