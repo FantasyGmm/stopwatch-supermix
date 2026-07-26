@@ -33,6 +33,29 @@ int main()
     assert(carousel.update(6000));
     assert(carousel.current()->title == "Pending A");
 
+    CodexAlertCarousel manual_carousel;
+    assert(manual_carousel.apply(mixed, 0));
+    assert(manual_carousel.step(-1, 1000));
+    assert(manual_carousel.current()->title == "Pending C");
+    assert(manual_carousel.heading() == "TASK 2/2");
+    assert(!manual_carousel.update(3999));
+    assert(manual_carousel.update(4000));
+    assert(manual_carousel.current()->title == "Pending A");
+    assert(manual_carousel.step(1, 4500));
+    assert(manual_carousel.current()->title == "Pending C");
+
+    CodexStatusSnapshot single;
+    single.alerts_valid = true;
+    single.alert_revision = 9;
+    single.pending_count = 1;
+    single.alerts = {
+        {"StopWatch", "Only", "", CodexTaskState::Pending},
+    };
+    CodexAlertCarousel single_carousel;
+    assert(single_carousel.apply(single, 0));
+    assert(!single_carousel.step(1, 1000));
+    assert(single_carousel.current()->title == "Only");
+
     CodexStatusSnapshot running;
     running.alerts_valid = true;
     running.alert_revision = 2;
