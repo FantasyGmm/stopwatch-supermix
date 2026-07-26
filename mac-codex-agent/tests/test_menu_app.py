@@ -295,6 +295,51 @@ class MenuBarApplicationTests(unittest.TestCase):
         )
         self.assertEqual(callbacks, [])
 
+    def test_shutdown_rechecks_installer_after_worker_finishes_during_join(self):
+        class Installer:
+            def __init__(self):
+                self.close_calls = []
+
+            def close(self, timeout):
+                self.close_calls.append(timeout)
+                return len(self.close_calls) > 1
+
+        class Worker:
+            def __init__(self):
+                self.alive = True
+                self.join_calls = []
+
+            def is_alive(self):
+                return self.alive
+
+            def join(self, timeout):
+                self.join_calls.append(timeout)
+                self.alive = False
+
+        NSApplication.sharedApplication()
+        delegate = MenuBarApplication.alloc().initWithController_(
+            FakeController(VoiceState.DRIVER_REQUIRED)
+        )
+        delegate.applicationDidFinishLaunching_(None)
+        installer = Installer()
+        worker = Worker()
+        delegate.voice_installer = installer
+        delegate._voice_install_thread = worker
+
+        with self.assertLogs("menu_app", level="INFO") as logs:
+            delegate._shutdown()
+
+        self.assertEqual(len(installer.close_calls), 2)
+        self.assertEqual(installer.close_calls[1], 0.0)
+        self.assertEqual(len(worker.join_calls), 1)
+        self.assertIsNone(delegate._voice_install_thread)
+        self.assertFalse(
+            any(
+                "installer did not stop" in message
+                for message in logs.output
+            )
+        )
+
     def test_install_completion_after_shutdown_does_not_refresh_runtime_or_menu(self):
         NSApplication.sharedApplication()
         controller = FakeController(VoiceState.DRIVER_REQUIRED)
@@ -307,6 +352,45 @@ class MenuBarApplicationTests(unittest.TestCase):
         self.assertEqual(controller.voice_refresh_count, 0)
         self.assertFalse(delegate.setup_voice_item.isEnabled())
         self.assertFalse(delegate.accessibility_item.isEnabled())
+
+    def test_voice_completion_post_precedes_shutdown_ownership(self):
+        NSApplication.sharedApplication()
+        delegate = MenuBarApplication.alloc().initWithController_(
+            FakeController(VoiceState.DRIVER_REQUIRED)
+        )
+        delegate.applicationDidFinishLaunching_(None)
+        post_started = threading.Event()
+        release_post = threading.Event()
+        callbacks = []
+
+        def call_after(*args):
+            post_started.set()
+            release_post.wait(1)
+            callbacks.append(args)
+
+        delegate.call_after = call_after
+        post_worker = threading.Thread(
+            target=lambda: delegate._schedule_voice_setup_completion(
+                DriverState.READY,
+                "",
+                7,
+            )
+        )
+        shutdown_worker = threading.Thread(target=delegate._shutdown)
+
+        post_worker.start()
+        self.assertTrue(post_started.wait(1))
+        shutdown_worker.start()
+        time.sleep(0.05)
+        self.assertFalse(delegate._stopping)
+        release_post.set()
+        post_worker.join(1)
+        shutdown_worker.join(1)
+
+        self.assertFalse(post_worker.is_alive())
+        self.assertFalse(shutdown_worker.is_alive())
+        self.assertTrue(delegate._stopping)
+        self.assertEqual(len(callbacks), 1)
 
     def test_setup_runs_off_appkit_and_disables_action_until_completion(self):
         class Installer:

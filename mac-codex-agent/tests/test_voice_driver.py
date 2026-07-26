@@ -376,6 +376,75 @@ class VoiceDriverTests(unittest.TestCase):
         )
         self.assertEqual(len(install_errors), 1)
 
+    def test_unreaped_cancel_retains_operation_until_worker_wait_succeeds(self):
+        package = self.directory / "BlackHole2ch-0.7.1.pkg"
+        package.write_bytes(b"known package")
+        process_started = threading.Event()
+        kill_sent = threading.Event()
+        process_released = threading.Event()
+        owner_threads = []
+        group_signals = []
+        install_errors = []
+        self.addCleanup(process_released.set)
+
+        class Process:
+            pid = 2468
+
+            def wait(self, timeout=None):
+                owner_threads.append(("wait", threading.get_ident()))
+                if not process_released.is_set():
+                    time.sleep(min(timeout or 0.0, 0.02))
+                    raise subprocess.TimeoutExpired("osascript", timeout)
+                return -signal.SIGKILL
+
+        def process_factory(_command, **_kwargs):
+            process_started.set()
+            return Process()
+
+        def signal_process_group(_pid, signum):
+            owner_threads.append(("signal", threading.get_ident()))
+            group_signals.append(signum)
+            if signum == signal.SIGKILL:
+                kill_sent.set()
+
+        installer = BlackHoleInstaller(
+            expected_sha256=hashlib.sha256(b"known package").hexdigest(),
+            process_factory=process_factory,
+            signal_process_group=signal_process_group,
+            receipt_checker=lambda: True,
+            device_checker=lambda: True,
+        )
+        worker = threading.Thread(
+            target=lambda: self._capture_error(
+                install_errors, lambda: installer.install(package)
+            ),
+            daemon=True,
+        )
+        worker.start()
+        self.assertTrue(process_started.wait(1))
+
+        self.assertFalse(installer.cancel(timeout=0.05))
+        self.assertTrue(kill_sent.wait(1))
+        with self.assertRaisesRegex(
+            DriverInstallError,
+            "Driver setup is already running",
+        ):
+            installer.install(package)
+        self.assertFalse(installer.close(timeout=0.35))
+        self.assertTrue(worker.is_alive())
+        self.assertEqual(group_signals, [signal.SIGTERM, signal.SIGKILL])
+        self.assertTrue(
+            all(thread_id == worker.ident for _, thread_id in owner_threads)
+        )
+
+        process_released.set()
+        worker.join(1)
+
+        self.assertFalse(worker.is_alive())
+        self.assertTrue(installer.close(timeout=0.05))
+        self.assertEqual(len(install_errors), 1)
+        self.assertIsInstance(install_errors[0], DriverInstallCancelled)
+
     def test_close_stays_bounded_while_process_factory_is_blocked(self):
         package = self.directory / "BlackHole2ch-0.7.1.pkg"
         package.write_bytes(b"known package")

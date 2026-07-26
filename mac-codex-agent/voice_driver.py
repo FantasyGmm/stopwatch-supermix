@@ -202,7 +202,8 @@ class BlackHoleInstaller:
     def _complete_operation(self, operation: _InstallOperation) -> None:
         with self._lock:
             if self._operation is operation:
-                operation.process = None
+                if operation.process is not None:
+                    return
                 operation.completed.set()
                 self._operation = None
                 return
@@ -246,15 +247,17 @@ class BlackHoleInstaller:
             raise DriverInstallError(start_error) from error
 
         with self._lock:
+            owned = self._operation is operation
+            if owned:
+                operation.process = process
             current = (
-                self._operation is operation
+                owned
                 and not self._closed
                 and not operation.cancel_requested.is_set()
             )
-            if current:
-                operation.process = process
         if not current:
             self._terminate_and_reap(process, 0.5)
+            self._clear_process(operation, process)
             raise DriverInstallCancelled("Driver setup was cancelled")
         return process
 
@@ -270,9 +273,8 @@ class BlackHoleInstaller:
                 if self._wait_until(process, self._monotonic()):
                     self._clear_process(operation, process)
                     raise DriverInstallCancelled("Driver setup was cancelled")
-                reaped = self._terminate_and_reap(process, 0.5)
-                if reaped:
-                    self._clear_process(operation, process)
+                self._terminate_and_reap(process, 0.5)
+                self._clear_process(operation, process)
                 raise DriverInstallCancelled("Driver setup was cancelled")
 
             wait_deadline = self._monotonic() + 0.02
@@ -284,15 +286,13 @@ class BlackHoleInstaller:
                 )
             except subprocess.TimeoutExpired:
                 if deadline is not None and self._monotonic() >= deadline:
-                    reaped = self._terminate_and_reap(process, 0.5)
-                    if reaped:
-                        self._clear_process(operation, process)
+                    self._terminate_and_reap(process, 0.5)
+                    self._clear_process(operation, process)
                     raise
                 continue
             except Exception:
-                reaped = self._terminate_and_reap(process, 0.5)
-                if reaped:
-                    self._clear_process(operation, process)
+                self._terminate_and_reap(process, 0.5)
+                self._clear_process(operation, process)
                 raise
             self._clear_process(operation, process)
             self._raise_if_cancelled(operation)
@@ -328,7 +328,11 @@ class BlackHoleInstaller:
         if self._wait_until(process, min(deadline, self._monotonic() + 0.25)):
             return True
         self._send_group_signal(process, signal.SIGKILL)
-        return self._wait_until(process, deadline)
+        if self._wait_until(process, deadline):
+            return True
+        while not self._wait_until(process, self._monotonic() + 0.1):
+            pass
+        return True
 
     def _wait_until(self, process, deadline: float) -> bool:
         timeout = max(0.0, deadline - self._monotonic())

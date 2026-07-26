@@ -115,6 +115,7 @@ class MenuBarApplication(NSObject):
         self.call_after = AppHelper.callAfter
         self._voice_install_thread = None
         self._voice_setup_token = None
+        self._lifecycle_lock = threading.Lock()
         self._stopping = False
         self._installing_voice = False
         self._last_alert_revision = None
@@ -356,39 +357,41 @@ class MenuBarApplication(NSObject):
         try:
             state = self.voice_installer.install(self.voice_package_path)
         except DriverInstallCancelled as error:
-            if not self._stopping:
-                self.call_after(
-                    self._finish_voice_setup,
-                    DriverState.ERROR,
-                    str(error),
-                    setup_token,
-                )
+            self._schedule_voice_setup_completion(
+                DriverState.ERROR,
+                str(error),
+                setup_token,
+            )
         except DriverInstallError as error:
             LOGGER.error("BlackHole installation failed: %s", error)
-            if not self._stopping:
-                self.call_after(
-                    self._finish_voice_setup,
-                    DriverState.ERROR,
-                    str(error),
-                    setup_token,
-                )
+            self._schedule_voice_setup_completion(
+                DriverState.ERROR,
+                str(error),
+                setup_token,
+            )
         except Exception:
             LOGGER.exception("BlackHole installation failed")
-            if not self._stopping:
-                self.call_after(
-                    self._finish_voice_setup,
-                    DriverState.ERROR,
-                    "Driver setup failed",
-                    setup_token,
-                )
+            self._schedule_voice_setup_completion(
+                DriverState.ERROR,
+                "Driver setup failed",
+                setup_token,
+            )
         else:
-            if not self._stopping:
-                self.call_after(
-                    self._finish_voice_setup,
-                    state,
-                    "",
-                    setup_token,
-                )
+            self._schedule_voice_setup_completion(state, "", setup_token)
+
+    def _schedule_voice_setup_completion(
+        self, state, detail="", setup_token=None
+    ) -> bool:
+        with self._lifecycle_lock:
+            if self._stopping:
+                return False
+            self.call_after(
+                self._finish_voice_setup,
+                state,
+                detail,
+                setup_token,
+            )
+            return True
 
     def _finish_voice_setup(self, state, detail="", setup_token=None):
         self._installing_voice = False
@@ -422,9 +425,10 @@ class MenuBarApplication(NSObject):
         self._shutdown()
 
     def _shutdown(self):
-        if self._stopping:
-            return
-        self._stopping = True
+        with self._lifecycle_lock:
+            if self._stopping:
+                return
+            self._stopping = True
         if self.timer is not None:
             self.timer.invalidate()
             self.timer = None
@@ -444,10 +448,17 @@ class MenuBarApplication(NSObject):
                 LOGGER.exception("Could not cancel BlackHole installation")
         if worker is not None and worker.is_alive():
             worker.join(max(0.0, deadline - time.monotonic()))
-        if (worker is not None and worker.is_alive()) or not reaped:
-            LOGGER.error("BlackHole installer did not stop within one second")
-        else:
+        if close_installer is not None:
+            try:
+                reaped = close_installer(timeout=0.0)
+            except Exception:
+                reaped = False
+                LOGGER.exception("Could not confirm BlackHole installer shutdown")
+        worker_alive = worker is not None and worker.is_alive()
+        if not worker_alive:
             self._voice_install_thread = None
+        if worker_alive or not reaped:
+            LOGGER.error("BlackHole installer did not stop within one second")
         stopped = self.controller.stop(timeout=5.0)
         if stopped:
             LOGGER.info("StopWatch Codex Agent stopped")
