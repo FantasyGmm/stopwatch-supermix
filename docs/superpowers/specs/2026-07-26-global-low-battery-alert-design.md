@@ -57,7 +57,7 @@ the PMIC sampling cadence.
 
 - monotonic time;
 - battery percentage;
-- whether HAL has completed at least one valid PMIC battery sample;
+- the latest successful PMIC battery-sample revision;
 - whether external power is present;
 - whether the physical display output is visible;
 - whether the notification text is currently visible.
@@ -77,11 +77,12 @@ The state machine has these logical phases:
 - `LowAlerted`: the episode has delivered or queued all required effects and
   cannot alert again until rearmed.
 
-HAL exposes a thread-safe read-only `hasBatterySample()` query. The PMIC task
-sets it only after a successful battery ADC read has updated the filtered level.
-Samples observed before that flag is set do not count toward low confirmation.
-If the device genuinely starts below 30 percent, it alerts after the second real
-sample.
+HAL exposes a thread-safe read-only `batterySampleRevision()` counter. The PMIC
+task increments it only after a successful battery ADC read has updated the
+filtered level. The service counts a low observation only when the revision
+changes, so one ADC sample cannot satisfy both confirmation slots. Revision zero
+is invalid. If the device genuinely starts below 30 percent, it alerts after the
+second real sample.
 
 External power uses `GetHAL().isBatteryCharging(false)`. The non-strict form is
 intentional: a plugged-in, fully charged device is externally powered even when
