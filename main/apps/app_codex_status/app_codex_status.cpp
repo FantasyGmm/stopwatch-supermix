@@ -236,7 +236,7 @@ void AppCodexStatus::onOpen()
     _screen_off = false;
     _screen_off_wake_armed = true;
     GetHAL().updateButtonStates();
-    _voice_button_gate.reset(GetHAL().btnB.isPressed());
+    _voice_button_dispatcher.reset(GetHAL().btnB.isPressed());
     _production_voice_ready = false;
     _production_voice_link_usable = false;
     _production_voice_mtu = 23;
@@ -298,29 +298,16 @@ void AppCodexStatus::onRunning()
         key_event = _key_manager->update(false);
     }
 
-    const VoiceButtonAction voice_button_action = _voice_button_gate.update(
+    const VoiceButtonDispatchDecision voice_decision = _voice_button_dispatcher.dispatch(
         left_pressed,
         right_pressed,
         woke_screen,
         key_event == input::KeyEvent::GoHome,
-        now);
-    if (voice_button_action == VoiceButtonAction::CancelHome) {
-        if (_voice_input) {
-            _voice_input->cancel_for_home(now);
-        }
+        now,
+        _voice_input.get());
+    if (voice_decision == VoiceButtonDispatchDecision::Close) {
         close();
         return;
-    }
-    if (voice_button_action == VoiceButtonAction::CancelVoice) {
-        if (_voice_input) {
-            _voice_input->cancel_for_home(now);
-        }
-    }
-    if (_voice_input &&
-        (voice_button_action == VoiceButtonAction::Press ||
-         voice_button_action == VoiceButtonAction::Release)) {
-        _voice_input->handle_button(
-            voice_button_action == VoiceButtonAction::Press, now);
     }
 
     {

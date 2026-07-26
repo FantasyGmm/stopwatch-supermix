@@ -92,7 +92,34 @@ private:
     uint32_t _pending_since_ms = 0;
 };
 
-class VoiceInputController {
+class VoiceButtonSink {
+public:
+    virtual ~VoiceButtonSink() = default;
+    virtual void handle_button(bool pressed, uint32_t now_ms) = 0;
+    virtual void cancel_for_home(uint32_t now_ms) = 0;
+};
+
+enum class VoiceButtonDispatchDecision : uint8_t {
+    Continue,
+    Close,
+};
+
+class VoiceButtonDispatcher {
+public:
+    void reset(bool right_pressed);
+    VoiceButtonDispatchDecision dispatch(
+        bool left_pressed,
+        bool right_pressed,
+        bool woke_screen,
+        bool go_home,
+        uint32_t now_ms,
+        VoiceButtonSink* sink);
+
+private:
+    VoiceButtonEdgeGate _gate;
+};
+
+class VoiceInputController : public VoiceButtonSink {
 public:
 #ifndef STOPWATCH_HOST_TEST
     VoiceInputController();
@@ -107,8 +134,8 @@ public:
     void shutdown();
     void set_ready(bool ready, uint16_t negotiated_mtu);
     void handle_connection_epoch(uint32_t connection_epoch);
-    void handle_button(bool pressed, uint32_t now_ms);
-    void cancel_for_home(uint32_t now_ms);
+    void handle_button(bool pressed, uint32_t now_ms) override;
+    void cancel_for_home(uint32_t now_ms) override;
     void handle_disconnect();
     void poll(uint32_t now_ms);
     bool take_notification(voice_input::Notification& output);

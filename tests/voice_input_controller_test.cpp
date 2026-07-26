@@ -7,6 +7,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <mutex>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -140,6 +141,42 @@ public:
     std::vector<uint32_t> values = {0, 7, 0x04030201, 0x08070605};
     size_t index = 0;
 };
+
+class FakeVoiceButtonSink final : public VoiceButtonSink {
+public:
+    void handle_button(bool pressed, uint32_t now_ms) override
+    {
+        events.push_back(pressed ? "press" : "release");
+        times.push_back(now_ms);
+    }
+
+    void cancel_for_home(uint32_t now_ms) override
+    {
+        events.push_back("cancel");
+        times.push_back(now_ms);
+    }
+
+    std::vector<const char*> events;
+    std::vector<uint32_t> times;
+};
+
+VoiceButtonDispatchDecision dispatch(
+    VoiceButtonDispatcher& dispatcher,
+    FakeVoiceButtonSink& sink,
+    bool left_pressed,
+    bool right_pressed,
+    bool woke_screen,
+    bool go_home,
+    uint32_t now_ms)
+{
+    return dispatcher.dispatch(
+        left_pressed,
+        right_pressed,
+        woke_screen,
+        go_home,
+        now_ms,
+        &sink);
+}
 
 voice_input::VoiceNotification decode(
     const voice_input::Notification& wire,
@@ -683,6 +720,109 @@ void test_b_held_on_entry_requires_release_and_new_press()
            VoiceButtonAction::Press);
 }
 
+void test_dispatcher_suppresses_wake_b_until_release()
+{
+    FakeVoiceButtonSink sink;
+    VoiceButtonDispatcher dispatcher;
+    dispatcher.reset(false);
+    constexpr uint32_t guard = VoiceButtonEdgeGate::kChordGuardMs;
+
+    assert(dispatch(dispatcher, sink, false, true, true, false, 10) ==
+           VoiceButtonDispatchDecision::Continue);
+    assert(dispatch(dispatcher, sink, false, true, false, false, 10 + guard) ==
+           VoiceButtonDispatchDecision::Continue);
+    assert(dispatch(dispatcher, sink, false, false, false, false, 11 + guard) ==
+           VoiceButtonDispatchDecision::Continue);
+    assert(sink.events.empty());
+}
+
+void test_dispatcher_reserves_all_home_chord_orders_without_press()
+{
+    const auto verify_home = [](bool start_left, bool start_right, bool add_left, bool add_right) {
+        FakeVoiceButtonSink sink;
+        VoiceButtonDispatcher dispatcher;
+        dispatcher.reset(false);
+        assert(dispatch(dispatcher, sink, start_left, start_right, false, false, 20) ==
+               VoiceButtonDispatchDecision::Continue);
+        assert(dispatch(dispatcher, sink, add_left, add_right, false, true, 21) ==
+               VoiceButtonDispatchDecision::Close);
+        assert(sink.events.size() == 1);
+        assert(std::string(sink.events[0]) == "cancel");
+    };
+
+    verify_home(true, true, true, true);
+    verify_home(false, true, true, true);
+    verify_home(true, false, true, true);
+}
+
+void test_dispatcher_normal_hold_presses_and_releases_once()
+{
+    FakeVoiceButtonSink sink;
+    VoiceButtonDispatcher dispatcher;
+    dispatcher.reset(false);
+    constexpr uint32_t guard = VoiceButtonEdgeGate::kChordGuardMs;
+
+    assert(dispatch(dispatcher, sink, false, true, false, false, 100) ==
+           VoiceButtonDispatchDecision::Continue);
+    assert(dispatch(dispatcher, sink, false, true, false, false, 100 + guard) ==
+           VoiceButtonDispatchDecision::Continue);
+    assert(dispatch(dispatcher, sink, false, true, false, false, 101 + guard) ==
+           VoiceButtonDispatchDecision::Continue);
+    assert(dispatch(dispatcher, sink, false, false, false, false, 102 + guard) ==
+           VoiceButtonDispatchDecision::Continue);
+    assert(sink.events.size() == 2);
+    assert(std::string(sink.events[0]) == "press");
+    assert(std::string(sink.events[1]) == "release");
+}
+
+void test_dispatcher_late_a_cancels_before_close()
+{
+    FakeVoiceButtonSink sink;
+    VoiceButtonDispatcher dispatcher;
+    dispatcher.reset(false);
+    constexpr uint32_t guard = VoiceButtonEdgeGate::kChordGuardMs;
+
+    dispatch(dispatcher, sink, false, true, false, false, 200);
+    dispatch(dispatcher, sink, false, true, false, false, 200 + guard);
+    assert(dispatch(dispatcher, sink, true, true, false, false, 201 + guard) ==
+           VoiceButtonDispatchDecision::Continue);
+    assert(dispatch(dispatcher, sink, true, true, false, true, 202 + guard) ==
+           VoiceButtonDispatchDecision::Close);
+    assert(sink.events.size() == 3);
+    assert(std::string(sink.events[0]) == "press");
+    assert(std::string(sink.events[1]) == "cancel");
+    assert(std::string(sink.events[2]) == "cancel");
+}
+
+void test_dispatcher_entry_held_and_short_tap_do_not_start()
+{
+    FakeVoiceButtonSink sink;
+    VoiceButtonDispatcher dispatcher;
+    constexpr uint32_t guard = VoiceButtonEdgeGate::kChordGuardMs;
+    dispatcher.reset(true);
+    dispatch(dispatcher, sink, false, true, false, false, 300 + guard);
+    dispatch(dispatcher, sink, false, false, false, false, 301 + guard);
+    dispatch(dispatcher, sink, false, true, false, false, 400);
+    dispatch(dispatcher, sink, false, false, false, false, 400 + guard - 1);
+    assert(sink.events.empty());
+}
+
+void test_dispatcher_guard_handles_uint32_wraparound()
+{
+    FakeVoiceButtonSink sink;
+    VoiceButtonDispatcher dispatcher;
+    dispatcher.reset(false);
+    constexpr uint32_t start = UINT32_MAX - 44;
+
+    dispatch(dispatcher, sink, false, true, false, false, start);
+    dispatch(dispatcher, sink, false, true, false, false, 44);
+    assert(sink.events.empty());
+    dispatch(dispatcher, sink, false, true, false, false, 45);
+    assert(sink.events.size() == 1);
+    assert(std::string(sink.events[0]) == "press");
+    assert(sink.times[0] == 45);
+}
+
 void test_cancel_waits_for_inflight_producer_cleanup()
 {
     FakeBackend backend;
@@ -753,5 +893,11 @@ int main()
     test_late_a_cancels_active_voice_before_home();
     test_wake_consumed_b_is_suppressed_through_release();
     test_b_held_on_entry_requires_release_and_new_press();
+    test_dispatcher_suppresses_wake_b_until_release();
+    test_dispatcher_reserves_all_home_chord_orders_without_press();
+    test_dispatcher_normal_hold_presses_and_releases_once();
+    test_dispatcher_late_a_cancels_before_close();
+    test_dispatcher_entry_held_and_short_tap_do_not_start();
+    test_dispatcher_guard_handles_uint32_wraparound();
     test_cancel_waits_for_inflight_producer_cleanup();
 }

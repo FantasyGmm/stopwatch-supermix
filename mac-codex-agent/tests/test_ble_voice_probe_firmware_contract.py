@@ -91,10 +91,9 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         source = (ROOT / "main/apps/app_codex_status/app_codex_status.cpp").read_text()
         self.assertIn("VoiceInputController", header)
         self.assertIn("std::atomic<VoiceInputUiState>", header)
-        self.assertIn("handle_button", source)
+        self.assertIn("VoiceButtonDispatcher", header)
         self.assertIn("btnA.isPressed()", source)
         self.assertIn("btnB.isPressed()", source)
-        self.assertIn("cancel_for_home", source)
         controller_header = (
             ROOT / "main/apps/app_codex_status/voice_input_controller.h"
         ).read_text()
@@ -106,7 +105,7 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         self.assertIn("updateButtonStates", opened)
         self.assertLess(
             opened.index("updateButtonStates"),
-            opened.index("_voice_button_gate.reset"),
+            opened.index("_voice_button_dispatcher.reset"),
         )
         running = source.split("void AppCodexStatus::onRunning()", 1)[1].split(
             "void AppCodexStatus::onClose()", 1
@@ -117,13 +116,34 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         )
         self.assertLess(
             running.index("update_screen_off_control"),
-            running.index("handle_button"),
+            running.index("btnA.isPressed()"),
+        )
+        self.assertLess(
+            running.index("btnA.isPressed()"), running.index("btnB.isPressed()")
+        )
+        self.assertLess(
+            running.index("btnB.isPressed()"),
+            running.index("_key_manager->update(false)"),
         )
         self.assertIn("_key_manager->update(false)", running)
-        self.assertIn("VoiceButtonAction::CancelVoice", running)
+        self.assertLess(
+            running.index("_key_manager->update(false)"),
+            running.index("_voice_button_dispatcher.dispatch"),
+        )
+        self.assertEqual(running.count("updateButtonStates"), 1)
+        self.assertEqual(running.count("_voice_button_dispatcher.dispatch"), 1)
+        self.assertNotIn("VoiceButtonAction::", running)
+        self.assertNotIn("->handle_button", running)
+        self.assertNotIn("->cancel_for_home", running)
         self.assertIn("_edge_controls->update()", running)
         self.assertIn("_voice_status.store", running)
-        self.assertLess(running.index("cancel_for_home"), running.index("close();"))
+        self.assertLess(
+            running.index("_voice_button_dispatcher.dispatch"),
+            running.index("close();"),
+        )
+        self.assertLess(
+            running.index("close();"), running.index("_edge_controls->update()")
+        )
         priority = (
             ROOT / "main/apps/app_codex_status/codex_status_priority.h"
         ).read_text()

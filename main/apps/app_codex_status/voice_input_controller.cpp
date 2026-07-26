@@ -186,6 +186,48 @@ VoiceButtonAction VoiceButtonEdgeGate::update(
     return VoiceButtonAction::None;
 }
 
+void VoiceButtonDispatcher::reset(bool right_pressed)
+{
+    _gate.reset(right_pressed);
+}
+
+VoiceButtonDispatchDecision VoiceButtonDispatcher::dispatch(
+    bool left_pressed,
+    bool right_pressed,
+    bool woke_screen,
+    bool go_home,
+    uint32_t now_ms,
+    VoiceButtonSink* sink)
+{
+    const VoiceButtonAction action = _gate.update(
+        left_pressed, right_pressed, woke_screen, go_home, now_ms);
+    switch (action) {
+    case VoiceButtonAction::Press:
+        if (sink) {
+            sink->handle_button(true, now_ms);
+        }
+        break;
+    case VoiceButtonAction::Release:
+        if (sink) {
+            sink->handle_button(false, now_ms);
+        }
+        break;
+    case VoiceButtonAction::CancelVoice:
+        if (sink) {
+            sink->cancel_for_home(now_ms);
+        }
+        break;
+    case VoiceButtonAction::CancelHome:
+        if (sink) {
+            sink->cancel_for_home(now_ms);
+        }
+        return VoiceButtonDispatchDecision::Close;
+    case VoiceButtonAction::None:
+        break;
+    }
+    return VoiceButtonDispatchDecision::Continue;
+}
+
 #if !defined(STOPWATCH_HOST_TEST)
 VoiceInputController::VoiceInputController()
     : _capture_pipeline(std::make_unique<VoiceCapturePipeline>()),

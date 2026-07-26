@@ -73,7 +73,7 @@ private:
     bool _ws_connected           = false;
     bool _screen_off             = false;
     bool _screen_off_wake_armed  = true;
-    VoiceButtonEdgeGate _voice_button_gate;
+    VoiceButtonDispatcher _voice_button_dispatcher;
     bool _production_voice_ready = false;
     bool _production_voice_link_usable = false;
     uint16_t _production_voice_mtu = 23;
