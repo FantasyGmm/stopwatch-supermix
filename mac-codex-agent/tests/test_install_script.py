@@ -532,6 +532,22 @@ class InstallScriptTests(unittest.TestCase):
         script = self.read_script()
 
         self.assertIn(
+            'STAGING_EXECUTABLE="$STAGING_APP/Contents/MacOS/'
+            'StopWatchCodexAgent"',
+            script,
+        )
+        self.assertIn(
+            'cp "$PYTHON_APP_EXECUTABLE" "$STAGING_EXECUTABLE"', script
+        )
+        self.assertIn("install_name_tool", script)
+        self.assertIn("'@executable_path/../../../../Python3'", script)
+        self.assertIn(
+            "'@executable_path/../Frameworks/Python3.framework/Versions/'"
+            '"$PYTHON_VERSION"\'/Python3\'',
+            script,
+        )
+        self.assertNotIn("write_launcher()", script)
+        self.assertIn(
             'STAGING_PYTHON_HOME="$STAGING_PYTHON_FRAMEWORK/Versions/'
             '$PYTHON_VERSION"',
             script,
@@ -561,15 +577,9 @@ class InstallScriptTests(unittest.TestCase):
         self.assertIn('find "$STAGING_APP" -name \'*.pth\'', script)
         self.assertIn("validate_no_external_symlinks", script)
         self.assertIn("env -i", script)
-        self.assertIn("export PYTHONNOUSERSITE=1", script)
+        self.assertIn("PYTHONNOUSERSITE=1", script)
         self.assertIn("<key>PYTHONNOUSERSITE</key>", script)
-        self.assertIn(
-            'cd "\\$CONTENTS_DIR/Resources/app"\n'
-            'if [[ \\$# -gt 0 ]]; then\n'
-            '    export STOPWATCH_CODEX_APP=0\n'
-            '    exec "\\$PYTHON_EXECUTABLE" "\\$@"',
-            script,
-        )
+        self.assertIn('STOPWATCH_CODEX_APP=0', script)
         self.assertIn(
             'resolved = pathlib.Path(entry or os.getcwd()).resolve()', script
         )

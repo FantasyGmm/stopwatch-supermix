@@ -214,11 +214,18 @@ validate_info_plist_paths() {
 smoke_test_packaged_runtime() {
     local app_path="$1"
     local executable="$app_path/Contents/MacOS/StopWatchCodexAgent"
-    env -i \
-        HOME="$HOME" \
-        PATH="/usr/bin:/bin" \
-        TMPDIR="${TMPDIR:-/tmp}" \
-        "$executable" -B -c '
+    (
+        cd "$app_path/Contents/Resources/app"
+        env -i \
+            HOME="$HOME" \
+            PATH="/usr/bin:/bin" \
+            TMPDIR="${TMPDIR:-/tmp}" \
+            PYTHONHOME="$app_path/Contents/Frameworks/Python3.framework/Versions/$PYTHON_VERSION" \
+            PYTHONPATH="$app_path/Contents/Resources/app:$app_path/Contents/Resources/site-packages" \
+            PYTHONNOUSERSITE=1 \
+            PYTHONDONTWRITEBYTECODE=1 \
+            STOPWATCH_CODEX_APP=0 \
+            "$executable" -B -c '
 import os
 import pathlib
 import sys
@@ -258,6 +265,7 @@ if app_root not in pathlib.Path(certifi.where()).resolve().parents:
 if AESCCM is None:
     raise SystemExit("AESCCM unavailable")
 '
+    )
 }
 
 validate_app_contents() {
@@ -265,6 +273,7 @@ validate_app_contents() {
     local resources="$app_path/Contents/Resources"
     local required_path=""
     for required_path in \
+        "$app_path/Contents/MacOS/StopWatchCodexAgent" \
         "$resources/Drivers/$DRIVER_PACKAGE_NAME" \
         "$resources/native/libstopwatch_voice_audio.dylib" \
         "$resources/app/voice_driver.py" \
@@ -285,6 +294,11 @@ validate_app_contents() {
             return 1
         fi
     done
+    if ! file -b "$app_path/Contents/MacOS/StopWatchCodexAgent" |
+        grep -q 'Mach-O'; then
+        echo "Packaged launcher is not a Mach-O executable" >&2
+        return 1
+    fi
     verify_driver_package "$resources/Drivers/$DRIVER_PACKAGE_NAME" || return
     if find "$app_path" -name '*.pth' -print -quit | grep -q .; then
         echo "Unexpected .pth file in app bundle" >&2
@@ -434,29 +448,6 @@ handle_signal() {
     exit "$exit_code"
 }
 
-write_launcher() {
-    local executable="$1"
-    cat > "$executable" <<EOF
-#!/bin/bash
-set -euo pipefail
-CONTENTS_DIR="\$(cd "\$(dirname "\$0")/.." && pwd)"
-PYTHON_VERSION="$PYTHON_VERSION"
-export PYTHONHOME="\$CONTENTS_DIR/Frameworks/Python3.framework/Versions/\$PYTHON_VERSION"
-export PYTHONPATH="\$CONTENTS_DIR/Resources/app:\$CONTENTS_DIR/Resources/site-packages"
-export PYTHONNOUSERSITE=1
-export PYTHONDONTWRITEBYTECODE=1
-export STOPWATCH_CODEX_APP=1
-PYTHON_EXECUTABLE="\$PYTHONHOME/Resources/Python.app/Contents/MacOS/Python"
-cd "\$CONTENTS_DIR/Resources/app"
-if [[ \$# -gt 0 ]]; then
-    export STOPWATCH_CODEX_APP=0
-    exec "\$PYTHON_EXECUTABLE" "\$@"
-fi
-exec "\$PYTHON_EXECUTABLE" "\$CONTENTS_DIR/Resources/app/menu_app.py"
-EOF
-    chmod 755 "$executable"
-}
-
 write_info_plist() {
     local plist="$1"
     cat > "$plist" <<EOF
@@ -492,6 +483,8 @@ write_info_plist() {
         <string>$APP_DIR/Contents/Resources/app:$APP_DIR/Contents/Resources/site-packages</string>
         <key>PYTHONNOUSERSITE</key>
         <string>1</string>
+        <key>PYTHONDONTWRITEBYTECODE</key>
+        <string>1</string>
         <key>STOPWATCH_CODEX_APP</key>
         <string>1</string>
     </dict>
@@ -526,6 +519,12 @@ build_staged_app() {
     ditto "$PYTHON_FRAMEWORK_DIR/" "$STAGING_PYTHON_FRAMEWORK/"
     rm -rf "$STAGING_PYTHON_HOME/lib/python$PYTHON_VERSION/site-packages"
     ditto "$SITE_PACKAGES/" "$STAGING_SITE_PACKAGES/"
+    cp "$PYTHON_APP_EXECUTABLE" "$STAGING_EXECUTABLE"
+    install_name_tool \
+        -change '@executable_path/../../../../Python3' \
+        '@executable_path/../Frameworks/Python3.framework/Versions/'"$PYTHON_VERSION"'/Python3' \
+        "$STAGING_EXECUTABLE"
+    chmod 755 "$STAGING_EXECUTABLE"
 
     find "$STAGING_APP" -name '*.pth' -delete
     find "$STAGING_APP" -type d -name '__pycache__' -prune -exec rm -rf {} +
@@ -550,7 +549,6 @@ build_staged_app() {
         cp "$ROOT_DIR/$module" "$STAGING_CODE/$module"
     done
 
-    write_launcher "$STAGING_EXECUTABLE"
     write_info_plist "$STAGING_APP/Contents/Info.plist"
     codesign --force --deep --sign - "$STAGING_APP"
     codesign --verify --deep --strict --verbose=2 "$STAGING_APP"
@@ -595,6 +593,7 @@ main() {
             'import os, sys; print(os.path.realpath(sys.executable))'
     )"
     PYTHON_FRAMEWORK_ROOT="$(cd "$(dirname "$PYTHON_EXECUTABLE")/.." && pwd)"
+    PYTHON_APP_EXECUTABLE="$PYTHON_FRAMEWORK_ROOT/Resources/Python.app/Contents/MacOS/Python"
     PYTHON_FRAMEWORK_DIR="$(cd "$PYTHON_FRAMEWORK_ROOT/../.." && pwd)"
     PYTHON_VERSION="$(
         "$BUILD_VENV/bin/python" -c \
