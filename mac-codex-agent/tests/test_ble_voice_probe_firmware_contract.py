@@ -111,13 +111,15 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         controller = (
             ROOT / "main/apps/app_codex_status/ble_voice_probe_controller.cpp"
         ).read_text()
+        pipeline_header = (
+            ROOT / "main/apps/app_codex_status/voice_capture_pipeline.h"
+        ).read_text()
         shutdown = controller.split("void BleVoiceProbeController::shutdown()", 1)[1].split(
             "void BleVoiceProbeController::producer_entry", 1
         )[0]
         self.assertIn("kProducerStopTimeout", shutdown)
-        self.assertIn(
-            "kCaptureReadTimeout = pdMS_TO_TICKS(100)", controller
-        )
+        self.assertIn("kCaptureReadTimeoutMs = 100", pipeline_header)
+        self.assertIn("_capture_pipeline.requestStop()", shutdown)
         self.assertIn(
             "kProducerStopTimeout = pdMS_TO_TICKS(500)", controller
         )
@@ -174,17 +176,16 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
 
     def test_microphone_capture_buffer_does_not_consume_worker_stack(self):
         header = (
-            ROOT / "main/apps/app_codex_status/ble_voice_probe_controller.h"
+            ROOT / "main/apps/app_codex_status/voice_capture_pipeline.h"
         ).read_text()
-        controller = (
-            ROOT / "main/apps/app_codex_status/ble_voice_probe_controller.cpp"
+        pipeline = (
+            ROOT / "main/apps/app_codex_status/voice_capture_pipeline.cpp"
         ).read_text()
-        capture = controller.split(
-            "bool BleVoiceProbeController::capture_microphone_samples", 1
-        )[1].split("bool BleVoiceProbeController::prepare_microphone_packet", 1)[0]
-        self.assertIn("kProducerTaskStackDepth = 8 * 1024", controller)
+        capture = pipeline.split(
+            "VoiceCapturePipeline::captureBlock", 1
+        )[1].split("void VoiceCapturePipeline::requestStop", 1)[0]
         self.assertIn("_capture_input", header)
-        self.assertNotIn("std::array<int16_t, kCaptureSamplesPerBlock> captured", capture)
+        self.assertNotIn("std::array<int16_t, kCaptureInputSamples> captured", capture)
 
     def test_forced_audio_cleanup_never_takes_worker_state_mutex(self):
         controller = (
@@ -346,8 +347,8 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
             "bool BleVoiceProbeController::prepare_synthetic_packet_locked", 1
         )[0]
         packet_failure = producer.split(
-            "if (!prepare_microphone_packet(error)) {", 1
-        )[1].split("continue;", 1)[0]
+            "if (!prepare_microphone_packet(", 1
+        )[1].split("} else if (capture_result", 1)[0]
         self.assertNotIn("StateLock", packet_failure)
         self.assertEqual(
             packet_failure.count("transition_microphone_failure(error)"), 1
@@ -370,30 +371,35 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         self.assertIn("prepare_crypto_failure_summary_locked(now_ms)", synthetic)
 
     def test_microphone_producer_drains_complete_pcm_before_more_reads(self):
-        controller = (
-            ROOT / "main/apps/app_codex_status/ble_voice_probe_controller.cpp"
+        pipeline = (
+            ROOT / "main/apps/app_codex_status/voice_capture_pipeline.cpp"
         ).read_text()
-        loop = controller.split("void BleVoiceProbeController::producer_loop", 1)[1].split(
-            "bool BleVoiceProbeController::queue_start_ack_locked", 1
+        capture = pipeline.split("VoiceCapturePipeline::captureBlock", 1)[1].split(
+            "void VoiceCapturePipeline::requestStop", 1
         )[0]
-        self.assertIn("_microphone_pcm.has_complete_block()", loop)
-        self.assertIn("prepare_microphone_packet", loop)
+        helper = pipeline.split("VoiceCapturePipeline::encodePendingBlock", 1)[1]
+        self.assertIn("encodePendingBlock", capture)
+        self.assertIn("_microphone_pcm.take_complete_block", helper)
+        self.assertIn("GetStopWatchAudioBackend().read", capture)
         self.assertLess(
-            loop.index("_microphone_pcm.has_complete_block()"),
-            loop.index("capture_microphone = true"),
+            capture.index("encodePendingBlock"),
+            capture.index("GetStopWatchAudioBackend().read"),
         )
 
     def test_microphone_resources_are_acquired_and_released(self):
+        pipeline = (
+            ROOT / "main/apps/app_codex_status/voice_capture_pipeline.cpp"
+        ).read_text()
         controller = (
             ROOT / "main/apps/app_codex_status/ble_voice_probe_controller.cpp"
         ).read_text()
-        self.assertIn("acquireCapture(RuntimeOwner::Codex)", controller)
-        self.assertIn("releaseCapture(RuntimeOwner::Codex)", controller)
-        self.assertIn("openRecorder(44100, 16, 1)", controller)
-        self.assertIn("closeRecorder()", controller)
-        self.assertIn("esp_ae_rate_cvt_open", controller)
-        self.assertIn("esp_ae_rate_cvt_close", controller)
-        self.assertIn("encode_ima_adpcm_block", controller)
+        self.assertIn("acquireCapture(RuntimeOwner::Codex)", pipeline)
+        self.assertIn("releaseCapture(RuntimeOwner::Codex)", pipeline)
+        self.assertIn("openRecorder(44100, 16, 1)", pipeline)
+        self.assertIn("closeRecorder()", pipeline)
+        self.assertIn("esp_ae_rate_cvt_open", pipeline)
+        self.assertIn("esp_ae_rate_cvt_close", pipeline)
+        self.assertIn("encode_ima_adpcm_block", pipeline)
         self.assertIn("record_captured_samples", controller)
 
     def test_offline_validation_and_probe_docs_cover_pcm_and_checkout_evidence(self):
