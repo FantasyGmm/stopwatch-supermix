@@ -131,6 +131,43 @@ int main()
         decrypted.size(),
         decrypted_size));
 
+    Key wrong_key = kTestKey;
+    wrong_key[0] ^= 1;
+    CcmContext wrong_key_context(wrong_key);
+    assert(!wrong_key_context.decrypt(
+        Domain::Audio,
+        kTestNonce,
+        1,
+        aad.data(),
+        aad.size(),
+        encrypted.data(),
+        encrypted.size(),
+        decrypted.data(),
+        decrypted.size(),
+        decrypted_size));
+    assert(!context.decrypt(
+        Domain::PttBegin,
+        kTestNonce,
+        1,
+        aad.data(),
+        aad.size(),
+        encrypted.data(),
+        encrypted.size(),
+        decrypted.data(),
+        decrypted.size(),
+        decrypted_size));
+    assert(!context.decrypt(
+        Domain::Audio,
+        kTestNonce,
+        2,
+        aad.data(),
+        aad.size(),
+        encrypted.data(),
+        encrypted.size(),
+        decrypted.data(),
+        decrypted.size(),
+        decrypted_size));
+
     std::vector<std::thread> workers;
     for (int worker = 0; worker < 8; ++worker) {
         workers.emplace_back([&context, &aad, &plaintext]() {

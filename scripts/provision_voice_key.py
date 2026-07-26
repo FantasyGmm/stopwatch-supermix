@@ -11,7 +11,6 @@ import secrets
 import stat
 import subprocess
 import sys
-import tempfile
 from collections.abc import Callable
 
 
@@ -21,6 +20,7 @@ KEY_FILE_ENV = "STOPWATCH_VOICE_KEY_FILE"
 SECURITY_COMMAND_ENV = "STOPWATCH_SECURITY_COMMAND"
 KEY_PATTERN = re.compile(r"[0-9a-f]{32}\n")
 KEYCHAIN_TIMEOUT_SECONDS = 10.0
+MAX_KEY_FILE_BYTES = 33
 
 
 class ProvisioningError(RuntimeError):
@@ -34,26 +34,87 @@ def default_key_path(home: pathlib.Path | None = None) -> pathlib.Path:
     return base / "Library/Application Support/StopWatch Codex Agent/device-key.hex"
 
 
-def _validate_regular_private_file(path: pathlib.Path) -> os.stat_result:
+def _descriptor_flags(base: int) -> int:
+    flags = base
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    return flags
+
+
+def _open_trusted_parent(path: pathlib.Path, *, create: bool = False) -> int:
+    if create:
+        try:
+            path.mkdir(mode=0o700, parents=True, exist_ok=True)
+        except OSError:
+            raise ProvisioningError("voice key parent cannot be created") from None
     try:
         metadata = path.lstat()
     except FileNotFoundError:
-        raise ProvisioningError("voice key file is missing") from None
-    if not stat.S_ISREG(metadata.st_mode) or path.is_symlink():
+        raise ProvisioningError("voice key parent is missing") from None
+    if not stat.S_ISDIR(metadata.st_mode) or path.is_symlink():
+        raise ProvisioningError("voice key parent is not a trusted directory")
+    if hasattr(os, "geteuid") and metadata.st_uid != os.geteuid():
+        raise ProvisioningError("voice key parent owner is invalid")
+    if stat.S_IMODE(metadata.st_mode) & 0o022:
+        raise ProvisioningError("voice key parent permissions are unsafe")
+    flags = _descriptor_flags(os.O_RDONLY)
+    if hasattr(os, "O_DIRECTORY"):
+        flags |= os.O_DIRECTORY
+    try:
+        descriptor = os.open(path, flags)
+    except OSError:
+        raise ProvisioningError("voice key parent cannot be opened safely") from None
+    opened = os.fstat(descriptor)
+    if (
+        not stat.S_ISDIR(opened.st_mode)
+        or opened.st_dev != metadata.st_dev
+        or opened.st_ino != metadata.st_ino
+    ):
+        os.close(descriptor)
+        raise ProvisioningError("voice key parent changed during validation")
+    return descriptor
+
+
+def _validate_private_key_descriptor(descriptor: int) -> None:
+    metadata = os.fstat(descriptor)
+    if not stat.S_ISREG(metadata.st_mode):
         raise ProvisioningError("voice key path is not a regular file")
     if stat.S_IMODE(metadata.st_mode) != 0o600:
         raise ProvisioningError("voice key file permissions must be 0600")
     if hasattr(os, "geteuid") and metadata.st_uid != os.geteuid():
         raise ProvisioningError("voice key file owner is invalid")
-    return metadata
 
 
 def read_key_file(path: pathlib.Path) -> str:
-    _validate_regular_private_file(path)
+    path = path.expanduser()
     try:
-        raw = path.read_bytes()
-    except OSError:
-        raise ProvisioningError("voice key file cannot be read") from None
+        parent_descriptor = _open_trusted_parent(path.parent)
+    except ProvisioningError as error:
+        if "missing" in str(error):
+            raise ProvisioningError("voice key file is missing") from None
+        raise
+    try:
+        try:
+            descriptor = os.open(
+                path.name,
+                _descriptor_flags(os.O_RDONLY),
+                dir_fd=parent_descriptor,
+            )
+        except FileNotFoundError:
+            raise ProvisioningError("voice key file is missing") from None
+        except OSError:
+            raise ProvisioningError("voice key path is not a regular file") from None
+        try:
+            _validate_private_key_descriptor(descriptor)
+            raw = os.read(descriptor, MAX_KEY_FILE_BYTES + 1)
+        except OSError:
+            raise ProvisioningError("voice key file cannot be read") from None
+        finally:
+            os.close(descriptor)
+    finally:
+        os.close(parent_descriptor)
     try:
         encoded = raw.decode("ascii")
     except UnicodeDecodeError:
@@ -71,32 +132,34 @@ def ensure_key_file(path: pathlib.Path) -> str:
         if "missing" not in str(error):
             raise
 
-    path.parent.mkdir(parents=True, exist_ok=True)
     encoded = secrets.token_hex(16)
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
+    parent_descriptor = _open_trusted_parent(path.parent, create=True)
+    flags = _descriptor_flags(os.O_WRONLY | os.O_CREAT | os.O_EXCL)
     try:
-        descriptor = os.open(path, flags, 0o600)
-    except FileExistsError:
-        return read_key_file(path)
-    try:
-        os.fchmod(descriptor, 0o600)
-        with os.fdopen(descriptor, "wb") as stream:
-            stream.write((encoded + "\n").encode("ascii"))
-            stream.flush()
-            os.fsync(stream.fileno())
-    except Exception:
         try:
-            os.close(descriptor)
-        except OSError:
-            pass
+            descriptor = os.open(path.name, flags, 0o600, dir_fd=parent_descriptor)
+        except FileExistsError:
+            return read_key_file(path)
         try:
-            path.unlink()
-        except OSError:
-            pass
-        raise
-    return read_key_file(path)
+            os.fchmod(descriptor, 0o600)
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write((encoded + "\n").encode("ascii"))
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.fsync(parent_descriptor)
+        except Exception:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+            try:
+                os.unlink(path.name, dir_fd=parent_descriptor)
+            except OSError:
+                pass
+            raise
+        return encoded
+    finally:
+        os.close(parent_descriptor)
 
 
 def import_keychain(
@@ -152,29 +215,52 @@ def _header_contents(encoded_key: str) -> str:
 def generate_firmware_header(key_path: pathlib.Path, output: pathlib.Path) -> None:
     encoded_key = read_key_file(key_path.expanduser())
     output = output.expanduser()
-    output.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{output.name}.", dir=output.parent
-    )
-    temporary = pathlib.Path(temporary_name)
+    parent_descriptor = _open_trusted_parent(output.parent, create=True)
+    temporary_name = f".{output.name}.{secrets.token_hex(8)}"
+    descriptor = -1
     try:
+        try:
+            existing = os.stat(
+                output.name, dir_fd=parent_descriptor, follow_symlinks=False
+            )
+        except FileNotFoundError:
+            existing = None
+        except OSError:
+            raise ProvisioningError("firmware header output path is unsafe") from None
+        if existing is not None and not stat.S_ISREG(existing.st_mode):
+            raise ProvisioningError("firmware header output path is unsafe")
+        descriptor = os.open(
+            temporary_name,
+            _descriptor_flags(os.O_WRONLY | os.O_CREAT | os.O_EXCL),
+            0o600,
+            dir_fd=parent_descriptor,
+        )
         os.fchmod(descriptor, 0o600)
         with os.fdopen(descriptor, "w", encoding="ascii", newline="\n") as stream:
             stream.write(_header_contents(encoded_key))
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temporary, output)
-        output.chmod(0o600)
+        descriptor = -1
+        os.replace(
+            temporary_name,
+            output.name,
+            src_dir_fd=parent_descriptor,
+            dst_dir_fd=parent_descriptor,
+        )
+        os.fsync(parent_descriptor)
     except Exception:
+        if descriptor >= 0:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
         try:
-            os.close(descriptor)
-        except OSError:
-            pass
-        try:
-            temporary.unlink()
+            os.unlink(temporary_name, dir_fd=parent_descriptor)
         except OSError:
             pass
         raise
+    finally:
+        os.close(parent_descriptor)
 
 
 def _parser() -> argparse.ArgumentParser:
