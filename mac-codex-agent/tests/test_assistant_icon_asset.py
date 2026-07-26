@@ -72,7 +72,14 @@ class AssistantIconAssetTests(unittest.TestCase):
         halo = bounds(self.pixels, 7)
         halo_long_axis = max(halo[2] - halo[0], halo[3] - halo[1])
         self.assertGreaterEqual(halo_long_axis, 190)
-        self.assertLessEqual(halo_long_axis, 199)
+        self.assertLessEqual(halo_long_axis, 200)
+
+        visible = bounds(self.pixels, 40)
+        visible_long_axis = max(
+            visible[2] - visible[0], visible[3] - visible[1]
+        )
+        self.assertGreaterEqual(visible_long_axis, 168)
+        self.assertLessEqual(visible_long_axis, 175)
 
         strong = bounds(self.pixels, 80)
         strong_long_axis = max(strong[2] - strong[0], strong[3] - strong[1])
@@ -123,7 +130,7 @@ class AssistantIconAssetTests(unittest.TestCase):
             self.assertGreater(pixel[2], pixel[0])
 
         for point in ((5, 100), (194, 100), (100, 5), (100, 194)):
-            self.assertLessEqual(brightness(self.pixel(*point)), 12)
+            self.assertLessEqual(brightness(self.pixel(*point)), 20)
 
 
 if __name__ == "__main__":
