@@ -4,6 +4,7 @@ import shlex
 import subprocess
 import tempfile
 import textwrap
+import time
 import unittest
 
 
@@ -283,6 +284,136 @@ class InstallScriptTests(unittest.TestCase):
             self.assertEqual((app / "prior.txt").read_text(encoding="utf-8"), "prior")
             self.assertFalse((app / "new.txt").exists())
             self.assertFalse(backup.exists())
+
+    def test_signal_after_moving_prior_app_restores_it_before_cleanup(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            app = root / "StopWatch Codex Agent.app"
+            staging = root / "staging.app"
+            backup = root / "backup"
+            app.mkdir()
+            staging.mkdir()
+            (app / "prior.txt").write_text("prior", encoding="utf-8")
+            (staging / "new.txt").write_text("new", encoding="utf-8")
+
+            result = self.run_installer_function(
+                f"""
+                validate_staged_app() {{ return 0; }}
+                validate_published_app() {{ return 0; }}
+                mv() {{
+                    command mv "$@"
+                    if [[ "$1" == {shlex.quote(str(app))} ]] &&
+                        [[ "$2" == {shlex.quote(str(backup / app.name))} ]]; then
+                        kill -TERM $$
+                    fi
+                }}
+                BACKUP_ROOT={shlex.quote(str(backup))}
+                trap cleanup EXIT
+                trap 'handle_signal 143' TERM
+                publish_validated_app \
+                    {shlex.quote(str(staging))} \
+                    {shlex.quote(str(app))} \
+                    {shlex.quote(str(backup))}
+                """
+            )
+
+            self.assertEqual(result.returncode, 143, result.stderr)
+            self.assertEqual((app / "prior.txt").read_text(encoding="utf-8"), "prior")
+            self.assertFalse((app / "new.txt").exists())
+            self.assertFalse(backup.exists())
+
+    def test_concurrent_publish_transactions_serialize_and_failed_one_rolls_back(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            app = root / "StopWatch Codex Agent.app"
+            first_staging = root / "first-staging.app"
+            second_staging = root / "second-staging.app"
+            first_backup = root / "first-backup"
+            second_backup = root / "second-backup"
+            first_validating = root / "first-validating"
+            second_validating = root / "second-validating"
+            release_first = root / "release-first"
+            publish_lock = root / "publish.lock"
+            app.mkdir()
+            first_staging.mkdir()
+            second_staging.mkdir()
+            (app / "version.txt").write_text("original", encoding="utf-8")
+            (first_staging / "version.txt").write_text("first", encoding="utf-8")
+            (second_staging / "version.txt").write_text("second", encoding="utf-8")
+
+            first_command = textwrap.dedent(
+                f"""
+                export STOPWATCH_INSTALLER_SOURCE_ONLY=1
+                source {shlex.quote(str(INSTALL_SCRIPT))}
+                PUBLISH_LOCK={shlex.quote(str(publish_lock))}
+                BACKUP_ROOT={shlex.quote(str(first_backup))}
+                validate_staged_app() {{ return 0; }}
+                validate_published_app() {{
+                    [[ "$(cat "$1/version.txt")" == first ]] || return 75
+                    touch {shlex.quote(str(first_validating))}
+                    while [[ ! -e {shlex.quote(str(release_first))} ]]; do
+                        sleep 0.02
+                    done
+                    [[ "$(cat "$1/version.txt")" == first ]]
+                }}
+                trap cleanup EXIT
+                publish_validated_app \
+                    {shlex.quote(str(first_staging))} \
+                    {shlex.quote(str(app))} \
+                    {shlex.quote(str(first_backup))}
+                """
+            )
+            second_command = textwrap.dedent(
+                f"""
+                export STOPWATCH_INSTALLER_SOURCE_ONLY=1
+                source {shlex.quote(str(INSTALL_SCRIPT))}
+                PUBLISH_LOCK={shlex.quote(str(publish_lock))}
+                BACKUP_ROOT={shlex.quote(str(second_backup))}
+                validate_staged_app() {{ return 0; }}
+                validate_published_app() {{
+                    touch {shlex.quote(str(second_validating))}
+                    return 76
+                }}
+                trap cleanup EXIT
+                if publish_validated_app \
+                    {shlex.quote(str(second_staging))} \
+                    {shlex.quote(str(app))} \
+                    {shlex.quote(str(second_backup))}; then
+                    exit 99
+                fi
+                """
+            )
+
+            first = subprocess.Popen(
+                ["/bin/bash", "-c", first_command],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            deadline = time.monotonic() + 5
+            while not first_validating.exists() and time.monotonic() < deadline:
+                time.sleep(0.02)
+            self.assertTrue(first_validating.exists(), "first publisher did not pause")
+
+            second = subprocess.Popen(
+                ["/bin/bash", "-c", second_command],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            time.sleep(0.3)
+            was_serialized = second.poll() is None and not second_validating.exists()
+            release_first.touch()
+            first_output = first.communicate(timeout=10)
+            second_output = second.communicate(timeout=10)
+
+            self.assertTrue(was_serialized, second_output)
+            self.assertEqual(first.returncode, 0, first_output)
+            self.assertEqual(second.returncode, 0, second_output)
+            self.assertEqual((app / "version.txt").read_text(encoding="utf-8"), "first")
+            self.assertEqual(list(app.rglob("*.app")), [])
+            self.assertFalse(first_backup.exists())
+            self.assertFalse(second_backup.exists())
 
     def test_key_scan_allows_public_ca_bundle_but_rejects_private_key_marker(self):
         with tempfile.TemporaryDirectory() as temporary:

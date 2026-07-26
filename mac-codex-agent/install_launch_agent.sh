@@ -6,6 +6,7 @@ LABEL="com.stopwatch.codex-agent"
 LOG_DIR="$HOME/Library/Logs"
 APP_PARENT="$HOME/Applications"
 APP_DIR="$APP_PARENT/StopWatch Codex Agent.app"
+PUBLISH_LOCK="$APP_PARENT/.stopwatch-agent-publish.lock"
 NATIVE_BUILD_DIR="$ROOT_DIR/.native"
 NATIVE_LIBRARY="$NATIVE_BUILD_DIR/libstopwatch_voice_audio.dylib"
 DRIVER_CACHE="$ROOT_DIR/.driver-cache"
@@ -23,6 +24,7 @@ PUBLISH_APP_DIR=""
 PUBLISH_BACKUP_APP=""
 PUBLISH_HAD_PRIOR=0
 PUBLISH_ROLLBACK_REQUIRED=0
+PUBLISH_LOCK_OWNED=0
 
 # Task 10 intentionally owns external device-key provisioning because
 # Task 10 creates the protocol/header provisioning script. Packaging never
@@ -313,17 +315,47 @@ validate_published_app() {
     codesign --verify --deep --strict --verbose=2 "$app_path" || return
 }
 
+acquire_publish_lock() {
+    mkdir -p "$(dirname "$PUBLISH_LOCK")"
+    exec 8>"$PUBLISH_LOCK"
+    if ! lockf -s -t 300 8; then
+        exec 8>&-
+        echo "Timed out waiting for app publish lock" >&2
+        return 1
+    fi
+    PUBLISH_LOCK_OWNED=1
+}
+
+release_publish_lock() {
+    if [[ "${PUBLISH_LOCK_OWNED:-0}" != "1" ]]; then
+        return
+    fi
+    exec 8>&-
+    PUBLISH_LOCK_OWNED=0
+}
+
 rollback_publish() {
     if [[ "${PUBLISH_ROLLBACK_REQUIRED:-0}" != "1" ]]; then
         return
     fi
 
-    rm -rf "$PUBLISH_APP_DIR"
     if [[ "$PUBLISH_HAD_PRIOR" == "1" ]]; then
+        if [[ -e "$PUBLISH_BACKUP_APP" ]]; then
+            rm -rf "$PUBLISH_APP_DIR"
+        elif [[ -e "$PUBLISH_APP_DIR" ]]; then
+            PUBLISH_ROLLBACK_REQUIRED=0
+            PUBLISH_HAD_PRIOR=0
+            return
+        else
+            echo "Prior app is missing from both publish and backup paths" >&2
+            return 1
+        fi
         if ! mv "$PUBLISH_BACKUP_APP" "$PUBLISH_APP_DIR"; then
             echo "Could not restore prior app from $PUBLISH_BACKUP_APP" >&2
             return 1
         fi
+    else
+        rm -rf "$PUBLISH_APP_DIR"
     fi
     PUBLISH_ROLLBACK_REQUIRED=0
     PUBLISH_HAD_PRIOR=0
@@ -337,6 +369,7 @@ publish_validated_app() {
 
     STAGING_APP="$staging_app"
     validate_staged_app "$STAGING_APP" || return
+    acquire_publish_lock || return
     mkdir -p "$backup_root"
 
     PUBLISH_APP_DIR="$app_dir"
@@ -345,28 +378,40 @@ publish_validated_app() {
     PUBLISH_ROLLBACK_REQUIRED=0
 
     if [[ -e "$app_dir" ]]; then
-        if ! mv "$app_dir" "$backup_app"; then
-            return 1
-        fi
         PUBLISH_HAD_PRIOR=1
         PUBLISH_ROLLBACK_REQUIRED=1
+        if ! mv "$app_dir" "$backup_app"; then
+            PUBLISH_HAD_PRIOR=0
+            PUBLISH_ROLLBACK_REQUIRED=0
+            release_publish_lock
+            return 1
+        fi
     fi
     if ! mv "$staging_app" "$app_dir"; then
-        rollback_publish
+        if ! rollback_publish; then
+            release_publish_lock
+            return 1
+        fi
         rm -rf "$backup_root"
+        release_publish_lock
         return 1
     fi
     PUBLISH_ROLLBACK_REQUIRED=1
 
     if ! validate_published_app "$app_dir"; then
-        rollback_publish
+        if ! rollback_publish; then
+            release_publish_lock
+            return 1
+        fi
         rm -rf "$backup_root"
+        release_publish_lock
         return 1
     fi
 
     PUBLISH_ROLLBACK_REQUIRED=0
     PUBLISH_HAD_PRIOR=0
     rm -rf "$backup_root"
+    release_publish_lock
 }
 
 cleanup() {
@@ -381,6 +426,7 @@ cleanup() {
         [[ "${PUBLISH_ROLLBACK_REQUIRED:-0}" != "1" ]]; then
         rm -rf "$BACKUP_ROOT"
     fi
+    release_publish_lock
 }
 
 handle_signal() {
