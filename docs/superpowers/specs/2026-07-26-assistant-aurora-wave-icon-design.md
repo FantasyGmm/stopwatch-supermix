@@ -9,7 +9,7 @@ Replace only the Assistant launcher icon with the user-selected H2 Aurora Wave d
 - Five centered vertical waveform bars with rounded ends.
 - The H2 reference uses a symmetric `42 / 80 / 124 / 80 / 42` silhouette. The watch asset scales the five bars uniformly by about 10% to `46 / 88 / 136 / 88 / 46`, following the user's on-device size correction.
 - Each bar independently uses the H2 diagonal gradient from teal `#4AE7D5`, through cyan-blue `#42B6F0` at 46%, to restrained violet `#8064F0`; no bar is pure white.
-- The glow follows the five waveform silhouettes instead of using a centered radial field. The approved A treatment removes the center circle entirely and composites two gradient-colored layers behind the bars: an approximately 7 px brighter inner halo that hugs every rounded edge, plus an approximately 18 px lower-opacity outer halo that falls off smoothly.
+- The glow follows the five waveform silhouettes instead of using a centered radial field. The approved contour treatment removes the center circle entirely and composites two gradient-colored layers behind the bars: a 7 px inner halo at alpha 190 that hugs every rounded edge, plus a 26 px outer halo at alpha 110 that falls off smoothly. The outer layer is deliberately wider and stronger than the prior 18 px / alpha 90 treatment so its low-brightness footprint matches the larger launcher-family glows.
 - The design remains legible at 72 x 72 and 45 x 45 pixels.
 
 ## Family constraints
@@ -31,8 +31,8 @@ Replace only the Assistant launcher icon with the user-selected H2 Aurora Wave d
 
 ## Verification and release scope
 
-- Update the focused asset contract first and observe it fail against the current star asset.
-- Generate the H2 asset, run the focused contract, and inspect decoded 200 px, 72 px, and 45 px previews beside the launcher family.
+- Update the focused asset contract first and observe it fail against the current 18 px / alpha 90 contour glow.
+- Generate the refined H2 asset, run the focused contract, and inspect decoded 200 px, 72 px, and 45 px previews beside the launcher family. At the low-brightness threshold, the Assistant footprint should expand from about 174 px toward 190 px without changing the five bright bar silhouettes.
 - Build the unified firmware; do not run unrelated runtime test suites unless the focused checks or build expose a broader issue.
 - For this asset-only change, flash the verified build directly without a new full-flash backup, then validate boot to the launcher and confirm the Mac Codex Agent remains running.
 - Physical on-watch appearance remains a separate visual acceptance check after flashing.
