@@ -266,6 +266,7 @@ void AppCodexStatus::onOpen()
     _trae_snapshot = {};
     _trae_carousel.reset();
     _page_swipe.cancel();
+    _trae_card_tap.cancel();
     _current_page = 0;
     _last_page_touch_state = LV_INDEV_STATE_REL;
     _server_host     = Settings("codex_status").GetString("host", kDefaultServerHost);
@@ -330,9 +331,10 @@ void AppCodexStatus::onRunning()
             render_trae_status();
         }
     }
-    const bool ble_connected = _ble_transport && _ble_transport->connected();
+    bool ble_connected = _ble_transport && _ble_transport->connected();
     if (_ble_transport) {
         _ble_transport->poll(now);
+        ble_connected = _ble_transport && _ble_transport->connected();
         CodexBleMessage message;
         while (_ble_transport->take_message(message)) {
             handle_status_json(
@@ -347,11 +349,15 @@ void AppCodexStatus::onRunning()
             _ble_was_connected = true;
             set_status("BLE WAIT", kTextDim);
             set_host_text(_ble_name.c_str());
+            LvglLockGuard lock;
+            render_trae_status();
         } else if (!ble_connected && _ble_was_connected) {
             _ble_was_connected = false;
             _ble_wait_started_ms = now;
             set_status("BLE PAIR", kTextDim);
             set_host_text(_ble_name.c_str());
+            LvglLockGuard lock;
+            render_trae_status();
         }
 
         if (ble_connected && _last_status_payload_ms != 0 &&
@@ -552,6 +558,9 @@ void AppCodexStatus::create_view()
     _trae_status_page = std::make_unique<TraeStatusPage>();
     _trae_status_page->init(_trae_page_root);
     render_trae_status();
+    if (_trae_status_page != nullptr) {
+        _trae_status_page->set_active(_current_page == 1 && !_screen_off);
+    }
 
     _page_dot_codex = make_page_dot(_panel, 223);
     _page_dot_trae = make_page_dot(_panel, 237);
@@ -569,6 +578,7 @@ void AppCodexStatus::destroy_view()
 {
     lv_anim_delete(this, page_animation_cb);
     _page_swipe.cancel();
+    _trae_card_tap.cancel();
     _last_page_touch_state = LV_INDEV_STATE_REL;
 
     if (_pending_glow) {
@@ -880,10 +890,14 @@ void AppCodexStatus::render_trae_status()
     if (_trae_status_page == nullptr) {
         return;
     }
+    const bool bluetooth_connected =
+        _ble_transport && _ble_transport->connected();
     _trae_status_page->render(
         _trae_snapshot,
         _trae_carousel.current(),
-        _trae_stale
+        _trae_stale,
+        bluetooth_connected,
+        _trae_carousel.task_count()
     );
 }
 
@@ -893,6 +907,7 @@ void AppCodexStatus::update_page_swipe(uint32_t now_ms)
     if (_screen_off ||
         controls.ownsTouch() || controls.lastReleaseConsumed()) {
         _page_swipe.cancel();
+        _trae_card_tap.cancel();
         _last_page_touch_state = LV_INDEV_STATE_REL;
         return;
     }
@@ -900,6 +915,7 @@ void AppCodexStatus::update_page_swipe(uint32_t now_ms)
     lv_indev_t* indev = GetHAL().lvTouchpad;
     if (indev == nullptr) {
         _page_swipe.cancel();
+        _trae_card_tap.cancel();
         _last_page_touch_state = LV_INDEV_STATE_REL;
         return;
     }
@@ -910,8 +926,19 @@ void AppCodexStatus::update_page_swipe(uint32_t now_ms)
     if (state == LV_INDEV_STATE_PR) {
         if (_last_page_touch_state == LV_INDEV_STATE_REL) {
             _page_swipe.press(point.x, point.y, now_ms);
+            const bool deck_candidate =
+                _current_page == 1 &&
+                _trae_status_page != nullptr &&
+                _trae_status_page->contains_deck_point(point.x, point.y);
+            _trae_card_tap.press(
+                point.x,
+                point.y,
+                now_ms,
+                deck_candidate
+            );
         } else {
             _page_swipe.move(point.x, point.y);
+            _trae_card_tap.move(point.x, point.y);
         }
     } else if (_last_page_touch_state == LV_INDEV_STATE_PR) {
         const StatusPageSwipeResult result =
@@ -920,6 +947,9 @@ void AppCodexStatus::update_page_swipe(uint32_t now_ms)
             set_page(0, true);
         } else if (result == StatusPageSwipeResult::Trae) {
             set_page(1, true);
+        } else if (_trae_card_tap.release(now_ms) &&
+                   _trae_carousel.manual_next(now_ms)) {
+            render_trae_status();
         }
     }
     _last_page_touch_state = state;
@@ -933,8 +963,14 @@ void AppCodexStatus::set_page(int page, bool animate)
     page = std::clamp(page, 0, kPageCount - 1);
     const int target_x = -page * kPageWidth;
     const int current_x = lv_obj_get_x(_page_strip);
+    _page_swipe.cancel();
+    _trae_card_tap.cancel();
+    _last_page_touch_state = LV_INDEV_STATE_REL;
     _current_page = page;
     update_page_indicator();
+    if (_trae_status_page != nullptr) {
+        _trae_status_page->set_active(_current_page == 1 && !_screen_off);
+    }
 
     lv_anim_delete(this, page_animation_cb);
     if (!animate || current_x == target_x) {
@@ -1038,8 +1074,12 @@ void AppCodexStatus::enter_screen_off()
     {
         LvglLockGuard lock;
         _page_swipe.cancel();
+        _trae_card_tap.cancel();
         _last_page_touch_state = LV_INDEV_STATE_REL;
         sync_pending_glow();
+        if (_trae_status_page != nullptr) {
+            _trae_status_page->set_active(_current_page == 1 && !_screen_off);
+        }
     }
     _screen_off_wake_armed = false;
     _screen_off_left_press_started_ms = 0;
@@ -1053,8 +1093,12 @@ void AppCodexStatus::wake_screen()
     {
         LvglLockGuard lock;
         _page_swipe.cancel();
+        _trae_card_tap.cancel();
         _last_page_touch_state = LV_INDEV_STATE_REL;
         sync_pending_glow();
+        if (_trae_status_page != nullptr) {
+            _trae_status_page->set_active(_current_page == 1 && !_screen_off);
+        }
     }
     _screen_off_wake_armed = true;
     _screen_off_left_press_started_ms = 0;

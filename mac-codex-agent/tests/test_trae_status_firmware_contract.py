@@ -16,6 +16,9 @@ class TraeStatusFirmwareContractTests(unittest.TestCase):
         source = (self.app_root / "app_codex_status.cpp").read_text(
             encoding="utf-8"
         )
+        layout = (self.app_root / "codex_status_ui_layout.h").read_text(
+            encoding="utf-8"
+        )
 
         for token in (
             "lv_obj_t* _page_strip",
@@ -42,9 +45,27 @@ class TraeStatusFirmwareContractTests(unittest.TestCase):
         ):
             self.assertIn(token, source)
 
+        self.assertIn("constexpr int kPageIndicatorY = 416;", layout)
+        self.assertIn("constexpr int kBatteryY = 438;", layout)
+
         battery_create = source.index("_battery_label = lv_label_create(_panel)")
         strip_create = source.index("_page_strip = lv_obj_create(_panel)")
         self.assertGreater(battery_create, strip_create)
+
+    def test_app_integrates_trae_deck_touch_health_and_lifecycle(self):
+        header = (self.app_root / "app_codex_status.h").read_text(encoding="utf-8")
+        source = (self.app_root / "app_codex_status.cpp").read_text(
+            encoding="utf-8"
+        )
+
+        for token in (
+            "TraeCardTapLogic _trae_card_tap",
+            "_trae_carousel.manual_next(now_ms)",
+            "_trae_status_page->contains_deck_point",
+            "_trae_status_page->set_active(_current_page == 1 && !_screen_off)",
+            "_ble_transport && _ble_transport->connected()",
+        ):
+            self.assertIn(token, header + source)
 
     def test_trae_page_keeps_model_and_effort_without_quota_widgets(self):
         header = (self.app_root / "trae_status_page.h").read_text(encoding="utf-8")

@@ -15,6 +15,7 @@
 #include "codex_pending_soft_glow.h"
 #include "status_message_router.h"
 #include "status_page_swipe_logic.h"
+#include "trae_card_tap_logic.h"
 #include "trae_status_model.h"
 #include "trae_task_carousel.h"
 #include "trae_status_page.h"
@@ -86,6 +87,7 @@ private:
     TraeStatusSnapshot _trae_snapshot;
     TraeTaskCarousel _trae_carousel;
     StatusPageSwipeLogic _page_swipe;
+    TraeCardTapLogic _trae_card_tap;
 
     void create_view();
     void destroy_view();
