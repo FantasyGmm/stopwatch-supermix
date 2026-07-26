@@ -103,6 +103,9 @@ class AssistantIconAssetTests(unittest.TestCase):
         glow_right = self.pixel(150, 70)
         for channel in range(3):
             self.assertLessEqual(abs(glow_left[channel] - glow_right[channel]), 8)
+        for pixel in (glow_left, glow_right):
+            self.assertGreaterEqual(brightness(pixel), 28)
+            self.assertGreater(pixel[2], pixel[0])
 
         for point in ((5, 100), (194, 100), (100, 5), (100, 194)):
             self.assertLessEqual(brightness(self.pixel(*point)), 12)
