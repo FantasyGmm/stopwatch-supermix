@@ -58,6 +58,17 @@ int main()
 
     {
         LowBatteryAlertLogic policy;
+        policy.update(sample(0, 28, true, false, true, false));
+        auto entered = policy.update(sample(1000, 28, true, false, true, false));
+        assert(entered.show_text && !entered.play_sound);
+        auto charging = policy.update({1500, false, true, 0, true, true, false, true});
+        assert(charging.hide_text);
+        assert(!charging.show_text && !charging.play_sound);
+        assert(policy.phase() == LowBatteryAlertPhase::Armed);
+    }
+
+    {
+        LowBatteryAlertLogic policy;
         policy.update(sample(0, 29, true, false, false));
         auto off = policy.update(sample(1000, 29, true, false, false));
         assert(off.play_sound && !off.show_text);

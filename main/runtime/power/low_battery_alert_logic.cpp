@@ -4,10 +4,10 @@ LowBatteryAlertActions LowBatteryAlertLogic::update(const LowBatteryAlertInput& 
 {
     LowBatteryAlertActions actions;
 
-    if (input.battery_sample_due) {
-        if (input.external_power) {
-            rearm(actions);
-        } else if (input.battery_sample_valid) {
+    if (input.external_power) {
+        rearm(actions);
+    } else if (input.battery_sample_due) {
+        if (input.battery_sample_valid) {
             if (input.battery_percent >= rearmThreshold) {
                 rearm(actions);
             } else if (input.battery_percent < lowThreshold && !_episode_active) {
