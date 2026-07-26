@@ -66,6 +66,37 @@ bool CodexAlertCarousel::update(uint32_t now_ms)
 }
 
 
+bool CodexAlertCarousel::step(int direction, uint32_t now_ms)
+{
+    if (direction == 0 || _alerts.empty()) {
+        return false;
+    }
+
+    const CodexTaskState selected_state = display_state();
+    const size_t available = static_cast<size_t>(std::count_if(
+        _alerts.begin(),
+        _alerts.end(),
+        [selected_state](const CodexTaskAlert& alert) {
+            return alert.state == selected_state;
+        }
+    ));
+    if (available < 2) {
+        return false;
+    }
+
+    do {
+        if (direction < 0) {
+            _index = (_index + _alerts.size() - 1) % _alerts.size();
+        } else {
+            _index = (_index + 1) % _alerts.size();
+        }
+    } while (_alerts[_index].state != selected_state);
+
+    _last_rotation_ms = now_ms;
+    return true;
+}
+
+
 void CodexAlertCarousel::reset()
 {
     _revision = -1;

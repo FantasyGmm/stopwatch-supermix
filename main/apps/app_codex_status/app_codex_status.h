@@ -72,6 +72,7 @@ private:
     bool _screen_off_wake_armed  = true;
     bool _external_power_connected = false;
     bool _power_policy_known = false;
+    bool _suppress_task_navigation = false;
     CodexAlertCarousel _alert_carousel;
 
     void create_view();

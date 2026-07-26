@@ -258,6 +258,7 @@ void AppCodexStatus::onOpen()
     _external_power_connected = false;
     _power_policy_known = false;
     refresh_display_protection_policy(now, true);
+    _suppress_task_navigation = false;
     _ws_connected    = false;
     _wifi_lease.reset();
     _wifi_started    = false;
@@ -306,6 +307,15 @@ void AppCodexStatus::onRunning()
     }
 
     const bool woke_screen = update_screen_off_control(now);
+    if (_screen_off) {
+        key_event = input::KeyEvent::None;
+    }
+    if (_suppress_task_navigation) {
+        key_event = input::KeyEvent::None;
+        if (GetHAL().btnA.isReleased() && GetHAL().btnB.isReleased()) {
+            _suppress_task_navigation = false;
+        }
+    }
     if (!woke_screen && key_event == input::KeyEvent::GoHome) {
         close();
         return;
@@ -313,7 +323,15 @@ void AppCodexStatus::onRunning()
 
     {
         LvglLockGuard lock;
-        if (_alert_carousel.update(now)) {
+        bool alert_changed = false;
+        if (key_event == input::KeyEvent::GoPrevious) {
+            alert_changed = _alert_carousel.step(-1, now);
+        } else if (key_event == input::KeyEvent::GoNext) {
+            alert_changed = _alert_carousel.step(1, now);
+        } else {
+            alert_changed = _alert_carousel.update(now);
+        }
+        if (alert_changed) {
             render_alert();
         }
     }
@@ -950,6 +968,7 @@ void AppCodexStatus::wake_screen()
     _screen_off_wake_armed = true;
     _screen_off_left_press_started_ms = 0;
     refresh_display_protection_policy(GetHAL().millis(), true);
+    _suppress_task_navigation = true;
 }
 
 void AppCodexStatus::refresh_display_protection_policy(uint32_t now_ms, bool force)
