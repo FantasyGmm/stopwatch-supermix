@@ -60,16 +60,6 @@ public:
         _config = withDisplayProtectionScreenOffChoice(_config, position - 1);
     }
 
-    void setDimChoice(int choice)
-    {
-        setDimSliderPosition(choice + 1);
-    }
-
-    void setScreenOffChoice(int choice)
-    {
-        setScreenOffSliderPosition(choice + 1);
-    }
-
     void setProtectWhileCharging(bool enabled)
     {
         _config.protect_while_charging = enabled;

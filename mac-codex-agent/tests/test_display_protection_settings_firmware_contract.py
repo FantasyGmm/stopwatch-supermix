@@ -54,30 +54,49 @@ class DisplayProtectionSettingsFirmwareContractTests(unittest.TestCase):
     def test_page_uses_approved_single_page_geometry(self):
         self.assertIn("setSize(466, 466)", self.worker)
         self.assertIn("removeFlag(LV_OBJ_FLAG_SCROLLABLE)", self.worker)
-        self.assertIn('createChargingRow(24, "Charging Protection")', self.worker)
-        self.assertIn("setSize(374, 60)", self.worker)
+        self.assertIn('createChargingSection("Charging Protection")', self.worker)
+        self.assertIn("setSize(320, 88)", self.worker)
+        self.assertIn("align(LV_ALIGN_TOP_MID, 0, 46)", self.worker)
         self.assertIn("&lv_font_montserrat_22", self.worker)
         self.assertIn("setSize(80, 44)", self.worker)
+        self.assertIn(
+            "_charging_label->align(LV_ALIGN_TOP_MID, 0, 0)", self.worker
+        )
+        self.assertIn(
+            "_charging_switch->align(LV_ALIGN_TOP_MID, 0, 35)", self.worker
+        )
 
-        self.assertIn("align(LV_ALIGN_TOP_MID, 0, 110)", self.worker)
-        self.assertIn("align(LV_ALIGN_TOP_MID, 0, 150)", self.worker)
-        self.assertIn("align(LV_ALIGN_TOP_MID, 0, 205)", self.worker)
-        self.assertIn("align(LV_ALIGN_TOP_MID, 0, 245)", self.worker)
+        self.assertIn("align(LV_ALIGN_TOP_MID, 0, 144)", self.worker)
+        self.assertIn("align(LV_ALIGN_TOP_MID, 0, 180)", self.worker)
+        self.assertIn("align(LV_ALIGN_TOP_MID, 0, 222)", self.worker)
+        self.assertIn("align(LV_ALIGN_TOP_MID, 0, 258)", self.worker)
         self.assertGreaterEqual(
             self.worker.count("setTextFont(&lv_font_montserrat_20)"), 2
         )
 
-        self.assertIn("_ok_button->align(LV_ALIGN_CENTER, 0, 175)", self.worker)
-        self.assertIn("_ok_button->setSize(374, 130)", self.worker)
-        self.assertIn("_ok_button->setRadius(77)", self.worker)
+        self.assertIn("_ok_button->align(LV_ALIGN_TOP_MID, 0, 335)", self.worker)
+        self.assertIn("_ok_button->setSize(334, 86)", self.worker)
+        self.assertIn("_ok_button->setRadius(43)", self.worker)
         self.assertIn('_ok_button->label().setText("OK")', self.worker)
 
     def test_discrete_linked_sliders_use_labels_and_approved_style(self):
         self.assertEqual(2, self.worker.count("std::make_unique<Slider>"))
-        self.assertIn("_dim_slider->setRange(0, 5, false)", self.worker)
-        self.assertIn("_screen_off_slider->setRange(0, 4, false)", self.worker)
-        self.assertIn("displayProtectionDimLabel", self.worker)
-        self.assertIn("displayProtectionScreenOffLabel", self.worker)
+        self.assertIn(
+            "_dim_slider->setRange("
+            "0, DisplayProtectionSettingsModel::DimSliderMax, false)",
+            self.worker,
+        )
+        self.assertIn(
+            "_screen_off_slider->setRange("
+            "0, DisplayProtectionSettingsModel::ScreenOffSliderMax, false)",
+            self.worker,
+        )
+        self.assertIn("_model.setDimSliderPosition", self.worker)
+        self.assertIn("_model.setScreenOffSliderPosition", self.worker)
+        self.assertIn("_model.dimSliderPosition()", self.worker)
+        self.assertIn("_model.screenOffSliderPosition()", self.worker)
+        self.assertIn("_model.dimLabel()", self.worker)
+        self.assertIn("_model.screenOffLabel()", self.worker)
         self.assertEqual(2, self.worker.count("applySliderStyle(*"))
         self.assertGreaterEqual(self.worker.count("lv_color_hex(0x343434)"), 2)
         self.assertGreaterEqual(self.worker.count("lv_color_hex(0x4AD78C)"), 3)
@@ -89,8 +108,8 @@ class DisplayProtectionSettingsFirmwareContractTests(unittest.TestCase):
     def test_edits_only_mutate_the_draft_model(self):
         view = self.worker.split("DisplayProtectionWorker::DisplayProtectionWorker", 1)[0]
         self.assertIn("_model.setProtectWhileCharging", view)
-        self.assertIn("_model.setDimChoice", view)
-        self.assertIn("_model.setScreenOffChoice", view)
+        self.assertIn("_model.setDimSliderPosition", view)
+        self.assertIn("_model.setScreenOffSliderPosition", view)
         self.assertNotIn("GetGlobalDisplayProtectionService", view)
         self.assertNotIn("applyConfig", view)
 
