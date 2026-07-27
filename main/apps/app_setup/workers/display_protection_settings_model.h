@@ -4,6 +4,9 @@
 
 class DisplayProtectionSettingsModel {
 public:
+    static constexpr int DimSliderMax = DisplayProtectionDimChoiceCount;
+    static constexpr int ScreenOffSliderMax = DisplayProtectionScreenOffChoiceCount;
+
     explicit DisplayProtectionSettingsModel(DisplayProtectionConfig config)
         : _config(sanitizeDisplayProtectionConfig(config))
     {
@@ -14,14 +17,47 @@ public:
         return _config;
     }
 
-    void setDimChoice(int choice)
+    int dimSliderPosition() const
     {
-        _config = withDisplayProtectionDimChoice(_config, choice);
+        return _config.dim_enabled ? _config.dim_choice + 1 : 0;
     }
 
-    void setScreenOffChoice(int choice)
+    int screenOffSliderPosition() const
     {
-        _config = withDisplayProtectionScreenOffChoice(_config, choice);
+        return _config.screen_off_enabled ? _config.screen_off_choice + 1 : 0;
+    }
+
+    std::string_view dimLabel() const
+    {
+        return _config.dim_enabled ? displayProtectionDimLabel(_config.dim_choice)
+                                   : std::string_view{"Off"};
+    }
+
+    std::string_view screenOffLabel() const
+    {
+        return _config.screen_off_enabled
+                   ? displayProtectionScreenOffLabel(_config.screen_off_choice)
+                   : std::string_view{"Off"};
+    }
+
+    void setDimSliderPosition(int position)
+    {
+        if (position <= 0) {
+            _config.dim_enabled = false;
+            return;
+        }
+        _config.dim_enabled = true;
+        _config = withDisplayProtectionDimChoice(_config, position - 1);
+    }
+
+    void setScreenOffSliderPosition(int position)
+    {
+        if (position <= 0) {
+            _config.screen_off_enabled = false;
+            return;
+        }
+        _config.screen_off_enabled = true;
+        _config = withDisplayProtectionScreenOffChoice(_config, position - 1);
     }
 
     void setProtectWhileCharging(bool enabled)
