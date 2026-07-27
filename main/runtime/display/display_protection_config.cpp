@@ -58,7 +58,8 @@ DisplayProtectionConfig sanitizeDisplayProtectionConfig(DisplayProtectionConfig 
     config.dim_choice = clampedChoice(config.dim_choice, kDimMs);
     config.screen_off_choice = clampedChoice(config.screen_off_choice, kOffMs);
     const auto dim_ms = kDimMs[config.dim_choice];
-    if (kOffMs[config.screen_off_choice] <= dim_ms) {
+    if (config.dim_enabled && config.screen_off_enabled &&
+        kOffMs[config.screen_off_choice] <= dim_ms) {
         config.screen_off_choice = firstScreenOffChoiceAfter(dim_ms);
     }
     return config;
@@ -69,7 +70,8 @@ DisplayProtectionConfig withDisplayProtectionDimChoice(DisplayProtectionConfig c
 {
     config.dim_choice = clampedChoice(choice, kDimMs);
     config.screen_off_choice = clampedChoice(config.screen_off_choice, kOffMs);
-    if (kOffMs[config.screen_off_choice] <= kDimMs[config.dim_choice]) {
+    if (config.dim_enabled && config.screen_off_enabled &&
+        kOffMs[config.screen_off_choice] <= kDimMs[config.dim_choice]) {
         config.screen_off_choice = firstScreenOffChoiceAfter(kDimMs[config.dim_choice]);
     }
     return config;
@@ -80,7 +82,8 @@ DisplayProtectionConfig withDisplayProtectionScreenOffChoice(DisplayProtectionCo
 {
     config.screen_off_choice = clampedChoice(choice, kOffMs);
     config.dim_choice = clampedChoice(config.dim_choice, kDimMs);
-    if (kDimMs[config.dim_choice] >= kOffMs[config.screen_off_choice]) {
+    if (config.dim_enabled && config.screen_off_enabled &&
+        kDimMs[config.dim_choice] >= kOffMs[config.screen_off_choice]) {
         config.dim_choice = lastDimChoiceBefore(kOffMs[config.screen_off_choice]);
     }
     return config;

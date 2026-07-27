@@ -7,6 +7,8 @@ struct DisplayProtectionConfig {
     uint8_t dim_choice = 1;
     uint8_t screen_off_choice = 1;
     bool protect_while_charging = false;
+    bool dim_enabled = true;
+    bool screen_off_enabled = true;
 };
 
 constexpr uint8_t DisplayProtectionDimChoiceCount = 6;

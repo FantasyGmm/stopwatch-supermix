@@ -10,6 +10,8 @@ int main()
     assert(defaults.dim_choice == 1);
     assert(defaults.screen_off_choice == 1);
     assert(!defaults.protect_while_charging);
+    assert(defaults.dim_enabled);
+    assert(defaults.screen_off_enabled);
     assert(displayProtectionDimMs(defaults) == 15000U);
     assert(displayProtectionScreenOffMs(defaults) == 60000U);
     assert(displayProtectionDimLabel(5) == "5m");
@@ -45,6 +47,32 @@ int main()
     assert(repaired.dim_choice == 5);
     assert(repaired.screen_off_choice == 4);
     assert(repaired.protect_while_charging);
+
+    auto dim_disabled = defaults;
+    dim_disabled.dim_enabled = false;
+    dim_disabled.dim_choice = 5;
+    dim_disabled.screen_off_choice = 0;
+    const auto preserved_direct_off = sanitizeDisplayProtectionConfig(dim_disabled);
+    assert(!preserved_direct_off.dim_enabled);
+    assert(preserved_direct_off.screen_off_enabled);
+    assert(preserved_direct_off.dim_choice == 5);
+    assert(preserved_direct_off.screen_off_choice == 0);
+
+    auto off_disabled = defaults;
+    off_disabled.screen_off_enabled = false;
+    off_disabled.dim_choice = 5;
+    off_disabled.screen_off_choice = 0;
+    const auto preserved_dim_only = sanitizeDisplayProtectionConfig(off_disabled);
+    assert(preserved_dim_only.dim_enabled);
+    assert(!preserved_dim_only.screen_off_enabled);
+    assert(preserved_dim_only.dim_choice == 5);
+    assert(preserved_dim_only.screen_off_choice == 0);
+
+    auto both_enabled_invalid = defaults;
+    both_enabled_invalid.dim_choice = 5;
+    both_enabled_invalid.screen_off_choice = 0;
+    const auto repaired_enabled = sanitizeDisplayProtectionConfig(both_enabled_invalid);
+    assert(repaired_enabled.screen_off_choice == 4);
 
     auto linked = withDisplayProtectionDimChoice(defaults, 4);
     assert(linked.dim_choice == 4);
