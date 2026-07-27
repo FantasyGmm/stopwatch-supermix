@@ -26,6 +26,13 @@ struct DisplayProtectionDecision {
     bool consume_input = false;
 };
 
+struct DisplayProtectionPolicy {
+    bool dim_enabled = true;
+    bool screen_off_enabled = true;
+    uint32_t dim_after_ms = 15000U;
+    uint32_t screen_off_after_ms = 60000U;
+};
+
 struct DisplayProtectionTimingSnapshot {
     uint32_t inactivity_ms = 0;
     uint32_t dim_after_ms = 15000;
@@ -43,6 +50,7 @@ public:
     DisplayProtectionDecision update(uint32_t now_ms);
     DisplayProtectionDecision userActivity(uint32_t now_ms);
     DisplayProtectionDecision setAutomaticEnabled(bool enabled, uint32_t now_ms);
+    DisplayProtectionDecision setPolicy(DisplayProtectionPolicy policy, uint32_t now_ms);
     DisplayProtectionDecision setTimeouts(uint32_t dim_after_ms,
                                           uint32_t screen_off_after_ms,
                                           uint32_t now_ms);
@@ -61,8 +69,7 @@ private:
 
     DisplayProtectionState _state = DisplayProtectionState::Active;
     uint32_t _inactivity_origin_ms = 0;
-    uint32_t _dim_after_ms = DimAfterMs;
-    uint32_t _screen_off_after_ms = ScreenOffAfterMs;
+    DisplayProtectionPolicy _policy{};
     uint8_t _reason_mask = 0;
     bool _automatic_enabled = true;
 };

@@ -18,12 +18,14 @@ DisplayProtectionDecision DisplayProtectionLogic::update(uint32_t now_ms)
     }
 
     const uint32_t elapsed_ms = now_ms - _inactivity_origin_ms;
-    if (elapsed_ms >= _screen_off_after_ms &&
+    if (_policy.screen_off_enabled &&
+        elapsed_ms >= _policy.screen_off_after_ms &&
         _state != DisplayProtectionState::ScreenOff) {
         _state = DisplayProtectionState::ScreenOff;
         return {DisplayProtectionAction::ScreenOff, false};
     }
-    if (elapsed_ms >= _dim_after_ms && _state == DisplayProtectionState::Active) {
+    if (_policy.dim_enabled && elapsed_ms >= _policy.dim_after_ms &&
+        _state == DisplayProtectionState::Active) {
         _state = DisplayProtectionState::Dimmed;
         return {DisplayProtectionAction::Dim, false};
     }
@@ -57,26 +59,32 @@ DisplayProtectionDecision DisplayProtectionLogic::setAutomaticEnabled(bool enabl
     return {};
 }
 
-DisplayProtectionDecision DisplayProtectionLogic::setTimeouts(uint32_t dim_after_ms,
-                                                               uint32_t screen_off_after_ms,
-                                                               uint32_t now_ms)
+DisplayProtectionDecision DisplayProtectionLogic::setPolicy(DisplayProtectionPolicy policy,
+                                                             uint32_t now_ms)
 {
-    if (screen_off_after_ms <= dim_after_ms) {
-        if (dim_after_ms == std::numeric_limits<uint32_t>::max()) {
-            dim_after_ms -= 1U;
-            screen_off_after_ms = std::numeric_limits<uint32_t>::max();
+    if (policy.dim_enabled && policy.screen_off_enabled &&
+        policy.screen_off_after_ms <= policy.dim_after_ms) {
+        if (policy.dim_after_ms == std::numeric_limits<uint32_t>::max()) {
+            policy.dim_after_ms -= 1U;
+            policy.screen_off_after_ms = std::numeric_limits<uint32_t>::max();
         } else {
-            screen_off_after_ms = dim_after_ms + 1U;
+            policy.screen_off_after_ms = policy.dim_after_ms + 1U;
         }
     }
 
-    _dim_after_ms = dim_after_ms;
-    _screen_off_after_ms = screen_off_after_ms;
+    _policy = policy;
     _inactivity_origin_ms = now_ms;
     if (_state != DisplayProtectionState::Active) {
         return restore(now_ms, false);
     }
     return {};
+}
+
+DisplayProtectionDecision DisplayProtectionLogic::setTimeouts(uint32_t dim_after_ms,
+                                                               uint32_t screen_off_after_ms,
+                                                               uint32_t now_ms)
+{
+    return setPolicy({true, true, dim_after_ms, screen_off_after_ms}, now_ms);
 }
 
 DisplayProtectionDecision DisplayProtectionLogic::screenOffNow(uint32_t now_ms)
@@ -113,12 +121,16 @@ DisplayProtectionDecision DisplayProtectionLogic::setKeepAwake(
 DisplayProtectionTimingSnapshot DisplayProtectionLogic::timingSnapshot(uint32_t now_ms) const
 {
     const uint32_t inactivity_ms = now_ms - _inactivity_origin_ms;
-    return {inactivity_ms,
-            _dim_after_ms,
-            _screen_off_after_ms,
-            inactivity_ms >= _dim_after_ms ? 0U : _dim_after_ms - inactivity_ms,
-            inactivity_ms >= _screen_off_after_ms ? 0U
-                                                  : _screen_off_after_ms - inactivity_ms};
+    const uint32_t dim_remaining =
+        !_policy.dim_enabled || inactivity_ms >= _policy.dim_after_ms
+            ? 0U
+            : _policy.dim_after_ms - inactivity_ms;
+    const uint32_t screen_off_remaining =
+        !_policy.screen_off_enabled || inactivity_ms >= _policy.screen_off_after_ms
+            ? 0U
+            : _policy.screen_off_after_ms - inactivity_ms;
+    return {inactivity_ms, _policy.dim_after_ms, _policy.screen_off_after_ms,
+            dim_remaining, screen_off_remaining};
 }
 
 DisplayProtectionState DisplayProtectionLogic::state() const

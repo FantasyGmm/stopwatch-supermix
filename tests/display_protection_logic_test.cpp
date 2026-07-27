@@ -137,5 +137,35 @@ int main()
     const auto disabled_manual_off = logic.screenOffNow(2U);
     assert(disabled_manual_off.action == DisplayProtectionAction::ScreenOff);
     assert(logic.state() == DisplayProtectionState::ScreenOff);
+
+    logic.reset(0);
+    logic.setPolicy({false, true, 15000U, 60000U}, 0);
+    assert(logic.update(59999U).action == DisplayProtectionAction::None);
+    assert(logic.state() == DisplayProtectionState::Active);
+    assert(logic.update(60000U).action == DisplayProtectionAction::ScreenOff);
+
+    logic.reset(0);
+    logic.setPolicy({true, false, 15000U, 60000U}, 0);
+    assert(logic.update(15000U).action == DisplayProtectionAction::Dim);
+    assert(logic.update(600000U).action == DisplayProtectionAction::None);
+    assert(logic.state() == DisplayProtectionState::Dimmed);
+
+    logic.reset(0);
+    logic.setPolicy({false, false, 15000U, 60000U}, 0);
+    assert(logic.update(UINT32_MAX).action == DisplayProtectionAction::None);
+    assert(logic.state() == DisplayProtectionState::Active);
+    const auto disabled_timing = logic.timingSnapshot(70000U);
+    assert(disabled_timing.dim_remaining_ms == 0U);
+    assert(disabled_timing.screen_off_remaining_ms == 0U);
+
+    const auto disabled_policy_manual_off = logic.screenOffNow(70001U);
+    assert(disabled_policy_manual_off.action == DisplayProtectionAction::ScreenOff);
+    assert(logic.userActivity(70002U).consume_input);
+
+    logic.reset(0);
+    logic.setPolicy({true, true, 60000U, 30000U}, 0);
+    const auto repaired_policy = logic.timingSnapshot(0);
+    assert(repaired_policy.dim_after_ms == 60000U);
+    assert(repaired_policy.screen_off_after_ms == 60001U);
     return 0;
 }
