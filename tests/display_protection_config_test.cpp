@@ -85,6 +85,14 @@ int main()
     assert(dim_preserving_off.dim_choice == 2);
     assert(dim_preserving_off.screen_off_choice == 3);
 
+    auto off_disabled_for_dim_setter = defaults;
+    off_disabled_for_dim_setter.screen_off_enabled = false;
+    off_disabled_for_dim_setter.screen_off_choice = 0;
+    const auto dim_changed_with_off_disabled = withDisplayProtectionDimChoice(
+        off_disabled_for_dim_setter, 5);
+    assert(dim_changed_with_off_disabled.dim_choice == 5);
+    assert(dim_changed_with_off_disabled.screen_off_choice == 0);
+
     linked = withDisplayProtectionScreenOffChoice(defaults, 0);
     assert(linked.screen_off_choice == 0);
     assert(linked.dim_choice == 1);
@@ -93,5 +101,13 @@ int main()
         DisplayProtectionConfig{0, 1, false}, 3);
     assert(off_preserving_dim.screen_off_choice == 3);
     assert(off_preserving_dim.dim_choice == 0);
+
+    auto dim_disabled_for_off_setter = defaults;
+    dim_disabled_for_off_setter.dim_enabled = false;
+    dim_disabled_for_off_setter.dim_choice = 5;
+    const auto off_changed_with_dim_disabled =
+        withDisplayProtectionScreenOffChoice(dim_disabled_for_off_setter, 0);
+    assert(off_changed_with_dim_disabled.screen_off_choice == 0);
+    assert(off_changed_with_dim_disabled.dim_choice == 5);
     return 0;
 }
