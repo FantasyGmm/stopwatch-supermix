@@ -18,10 +18,13 @@ int main()
     assert(model.config().screen_off_enabled);
 
     DisplayProtectionSettingsModel inverse(defaultDisplayProtectionConfig());
+    inverse.setDimSliderPosition(6);
+    assert(inverse.config().dim_choice == 5);
+    assert(inverse.config().screen_off_choice == 4);
     inverse.setDimSliderPosition(0);
     inverse.setScreenOffSliderPosition(1);
     assert(!inverse.config().dim_enabled);
-    assert(inverse.config().dim_choice == 1);
+    assert(inverse.config().dim_choice == 5);
     assert(inverse.config().screen_off_enabled);
     assert(inverse.config().screen_off_choice == 0);
 
