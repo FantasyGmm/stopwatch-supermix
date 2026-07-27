@@ -15,7 +15,7 @@ DisplayProtectionDiagnostics make_diagnostics(
         .user_brightness = 73,
         .automatic_enabled = true,
         .external_power = {ExternalPowerState::ExternalPower, 9, true},
-        .config = {2, 4, true},
+        .config = {2, 4, true, false, true},
         .timing = timing,
         .reason_mask = static_cast<uint8_t>(
             static_cast<uint8_t>(DisplayKeepAwakeReason::AssistantInteraction) |
@@ -30,11 +30,11 @@ int main()
 {
     DisplayProtectionLogic logic;
     logic.reset(UINT32_MAX - 5000U);
-    logic.setTimeouts(10000U, 30000U, UINT32_MAX - 5000U);
+    logic.setPolicy({false, true, 10000U, 30000U}, UINT32_MAX - 5000U);
 
     const auto wrapped_timing = logic.timingSnapshot(1999U);
     assert(wrapped_timing.inactivity_ms == 7000U);
-    assert(wrapped_timing.dim_remaining_ms == 3000U);
+    assert(wrapped_timing.dim_remaining_ms == 0U);
     assert(wrapped_timing.screen_off_remaining_ms == 23000U);
 
     char line[512]{};
@@ -45,9 +45,10 @@ int main()
     assert(std::strcmp(
                line,
                "DISPLAY PROTECTION state=dimmed effective=20 user=73 "
-               "automatic=1 power=external power_valid=1 dim_choice=2 "
-               "off_choice=4 dim_ms=10000 off_ms=30000 idle_ms=7000 "
-               "dim_remaining_ms=3000 off_remaining_ms=23000 "
+               "automatic=1 power=external power_valid=1 dim_enabled=0 "
+               "off_enabled=1 dim_choice=2 off_choice=4 dim_ms=10000 "
+               "off_ms=30000 idle_ms=7000 dim_remaining_ms=0 "
+               "off_remaining_ms=23000 "
                "charging_guard=1 reasons=0x05 last_wake=power_inserted") ==
            0);
     assert(std::strchr(line, '\n') == nullptr);

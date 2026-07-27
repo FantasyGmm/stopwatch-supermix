@@ -364,9 +364,14 @@ class DisplayProtectionFirmwareContractTests(unittest.TestCase):
             'GetInt("dim_idx"',
             'GetInt("off_idx"',
             'GetBool("chg_guard"',
+            'GetBool("dim_on", defaults.dim_enabled)',
+            'GetBool("off_on", defaults.screen_off_enabled)',
             'SetInt("dim_idx"',
             'SetInt("off_idx"',
             'SetBool("chg_guard"',
+            'SetBool("dim_on", sanitized.dim_enabled)',
+            'SetBool("off_on", sanitized.screen_off_enabled)',
+            "DisplayProtectionPolicy{",
             "getExternalPowerSnapshot()",
             "screenOffNow()",
             "applyConfig(const DisplayProtectionConfig& config, bool persist)",
@@ -376,14 +381,20 @@ class DisplayProtectionFirmwareContractTests(unittest.TestCase):
         nvs_keys = re.findall(
             r'(?:GetInt|GetBool|SetInt|SetBool)\("([^"]+)"', service_source
         )
-        self.assertEqual({"dim_idx", "off_idx", "chg_guard"}, set(nvs_keys))
+        self.assertEqual(
+            {"dim_idx", "off_idx", "chg_guard", "dim_on", "off_on"},
+            set(nvs_keys),
+        )
         for key in nvs_keys:
             self.assertLessEqual(len(key), 15)
 
         self.assertIn(
-            "_config.protect_while_charging || "
-            "_external_power.state != ExternalPowerState::ExternalPower",
+            "_config.dim_enabled || _config.screen_off_enabled", service
+        )
+        self.assertRegex(
             service,
+            r"_config\.protect_while_charging \|\|\s*"
+            r"_external_power\.state != ExternalPowerState::ExternalPower",
         )
         self.assertIn(
             "_logic.automaticEnabled() && _logic.reasonMask() == 0", service

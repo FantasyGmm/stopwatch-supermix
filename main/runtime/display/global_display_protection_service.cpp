@@ -42,6 +42,10 @@ bool GlobalDisplayProtectionService::init()
             screen_off_choice, 0, DisplayProtectionScreenOffChoiceCount - 1));
         loaded.protect_while_charging =
             settings.GetBool("chg_guard", defaults.protect_while_charging);
+        loaded.dim_enabled =
+            settings.GetBool("dim_on", defaults.dim_enabled);
+        loaded.screen_off_enabled =
+            settings.GetBool("off_on", defaults.screen_off_enabled);
         _config = sanitizeDisplayProtectionConfig(loaded);
     }
 
@@ -49,9 +53,14 @@ bool GlobalDisplayProtectionService::init()
     _brightness_revision = GetHAL().backLightBrightnessRevision();
     _logic.reset(now_ms);
     _brightness_arbiter.reset(_restore_brightness, _logic.state());
-    acceptDecision(_logic.setTimeouts(displayProtectionDimMs(_config),
-                                      displayProtectionScreenOffMs(_config),
-                                      now_ms));
+    acceptDecision(_logic.setPolicy(
+        DisplayProtectionPolicy{
+            _config.dim_enabled,
+            _config.screen_off_enabled,
+            displayProtectionDimMs(_config),
+            displayProtectionScreenOffMs(_config),
+        },
+        now_ms));
     _external_power = GetHAL().getExternalPowerSnapshot();
     _power_health_log_policy.reset(_external_power.latest_sample_valid, now_ms);
     recalculateAutomaticProtection(now_ms);
@@ -213,19 +222,25 @@ void GlobalDisplayProtectionService::applyConfig(
         settings.SetInt("dim_idx", sanitized.dim_choice);
         settings.SetInt("off_idx", sanitized.screen_off_choice);
         settings.SetBool("chg_guard", sanitized.protect_while_charging);
+        settings.SetBool("dim_on", sanitized.dim_enabled);
+        settings.SetBool("off_on", sanitized.screen_off_enabled);
         mclog::tagInfo(tag,
                        "configuration committed dim_choice={} off_choice={} "
-                       "charging_guard={}",
+                       "charging_guard={} dim_enabled={} off_enabled={}",
                        static_cast<unsigned>(sanitized.dim_choice),
                        static_cast<unsigned>(sanitized.screen_off_choice),
-                       static_cast<unsigned>(sanitized.protect_while_charging));
+                       static_cast<unsigned>(sanitized.protect_while_charging),
+                       static_cast<unsigned>(sanitized.dim_enabled),
+                       static_cast<unsigned>(sanitized.screen_off_enabled));
     } else {
         mclog::tagInfo(tag,
                        "configuration applied dim_choice={} off_choice={} "
-                       "charging_guard={}",
+                       "charging_guard={} dim_enabled={} off_enabled={}",
                        static_cast<unsigned>(sanitized.dim_choice),
                        static_cast<unsigned>(sanitized.screen_off_choice),
-                       static_cast<unsigned>(sanitized.protect_while_charging));
+                       static_cast<unsigned>(sanitized.protect_while_charging),
+                       static_cast<unsigned>(sanitized.dim_enabled),
+                       static_cast<unsigned>(sanitized.screen_off_enabled));
     }
 
     _config = sanitized;
@@ -236,9 +251,14 @@ void GlobalDisplayProtectionService::applyConfig(
     const uint32_t now_ms = GetHAL().millis();
     syncUserBrightness();
     _last_wake_reason = DisplayWakeReason::ConfigurationChanged;
-    acceptDecision(_logic.setTimeouts(displayProtectionDimMs(_config),
-                                      displayProtectionScreenOffMs(_config),
-                                      now_ms));
+    acceptDecision(_logic.setPolicy(
+        DisplayProtectionPolicy{
+            _config.dim_enabled,
+            _config.screen_off_enabled,
+            displayProtectionDimMs(_config),
+            displayProtectionScreenOffMs(_config),
+        },
+        now_ms));
     _pending_brightness = _restore_brightness;
     recalculateAutomaticProtection(now_ms);
 }
@@ -353,7 +373,9 @@ void GlobalDisplayProtectionService::syncUserBrightness()
 
 bool GlobalDisplayProtectionService::automaticProtectionEnabledForPolicy() const
 {
-    return _config.protect_while_charging || _external_power.state != ExternalPowerState::ExternalPower;
+    return (_config.dim_enabled || _config.screen_off_enabled) &&
+           (_config.protect_while_charging ||
+            _external_power.state != ExternalPowerState::ExternalPower);
 }
 
 void GlobalDisplayProtectionService::recalculateAutomaticProtection(

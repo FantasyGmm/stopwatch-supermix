@@ -70,6 +70,8 @@ class DebugCommandFirmwareContractTests(unittest.TestCase):
             "automatic=%u",
             "power=%s",
             "power_valid=%u",
+            "dim_enabled=%u",
+            "off_enabled=%u",
             "dim_choice=%u",
             "off_choice=%u",
             'dim_ms=%" PRIu32',

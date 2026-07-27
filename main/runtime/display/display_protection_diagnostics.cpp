@@ -64,7 +64,8 @@ size_t FormatDisplayProtectionDiagnostics(
     const int written = std::snprintf(
         output, output_size,
         "DISPLAY PROTECTION state=%s effective=%d user=%d automatic=%u "
-        "power=%s power_valid=%u dim_choice=%u off_choice=%u "
+        "power=%s power_valid=%u dim_enabled=%u off_enabled=%u "
+        "dim_choice=%u off_choice=%u "
         "dim_ms=%" PRIu32 " off_ms=%" PRIu32 " idle_ms=%" PRIu32 " "
         "dim_remaining_ms=%" PRIu32 " off_remaining_ms=%" PRIu32 " "
         "charging_guard=%u reasons=0x%02x last_wake=%s",
@@ -74,6 +75,8 @@ size_t FormatDisplayProtectionDiagnostics(
         ExternalPowerStateName(diagnostics.external_power.state),
         static_cast<unsigned>(
             diagnostics.external_power.latest_sample_valid),
+        static_cast<unsigned>(diagnostics.config.dim_enabled),
+        static_cast<unsigned>(diagnostics.config.screen_off_enabled),
         static_cast<unsigned>(diagnostics.config.dim_choice),
         static_cast<unsigned>(diagnostics.config.screen_off_choice),
         diagnostics.timing.dim_after_ms,
