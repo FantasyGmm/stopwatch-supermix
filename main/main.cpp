@@ -9,6 +9,7 @@
 #include <apps/apps.h>
 #include <apps/common/edge_control/global_edge_control_service.h>
 #include <hal/hal.h>
+#include <runtime/power/global_low_battery_alert_service.h>
 #include <runtime/service_runtime.h>
 #include <runtime/runtime_supervisor.h>
 #include <runtime/display/global_display_protection_service.h>
@@ -48,6 +49,9 @@ extern "C" void app_main(void)
         if (!GetGlobalDisplayProtectionService().init()) {
             mclog::tagError("Main", "global display protection unavailable");
         }
+        if (!GetGlobalLowBatteryAlertService().init()) {
+            mclog::tagError("Main", "global low-battery alert overlay unavailable");
+        }
         if (!GetGlobalEdgeControlService().init()) {
             mclog::tagError("Main", "global edge controls unavailable");
         }
@@ -71,11 +75,14 @@ extern "C" void app_main(void)
         GetDebugCommandService().update();
 #endif
         GetRuntimeSupervisor().update(GetHAL().millis());
+        GetGlobalLowBatteryAlertService().update();
         {
             LvglLockGuard lock;
+            GetGlobalLowBatteryAlertService().updateOverlay();
             GetGlobalDisplayProtectionService().update();
             GetGlobalEdgeControlService().update();
         }
+        GetGlobalLowBatteryAlertService().applyPendingAudio();
         GetGlobalDisplayProtectionService().applyPendingHardwareUpdate();
         GetGlobalEdgeControlService().applyPendingHardwareUpdate();
         GetMooncake().update();

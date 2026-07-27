@@ -58,14 +58,16 @@ constexpr uint16_t _bat_filter_weight_old = 7;
 constexpr uint16_t _bat_filter_weight_new = 1;
 constexpr uint16_t _bat_filter_weight_sum = _bat_filter_weight_old + _bat_filter_weight_new;
 
-uint8_t _bat_level        = 0;
-uint16_t _bat_filtered_mv = 0;
+uint8_t _bat_level             = 0;
+uint32_t _bat_sample_revision  = 0;
+uint16_t _bat_filtered_mv      = 0;
 std::mutex _bat_level_mutex;
 
 void update_bat_level(uint8_t level)
 {
     std::lock_guard<std::mutex> lock(_bat_level_mutex);
     _bat_level = level;
+    _bat_sample_revision++;
 }
 
 void update_bat_level_from_mv(uint16_t millivolts)
@@ -163,6 +165,18 @@ uint8_t Hal::getBatteryLevel()
 {
     std::lock_guard<std::mutex> lock(_bat_level_mutex);
     return _bat_level;
+}
+
+BatterySampleSnapshot Hal::batterySampleSnapshot()
+{
+    std::lock_guard<std::mutex> lock(_bat_level_mutex);
+    return {_bat_level, _bat_sample_revision};
+}
+
+uint32_t Hal::batterySampleRevision()
+{
+    std::lock_guard<std::mutex> lock(_bat_level_mutex);
+    return _bat_sample_revision;
 }
 
 bool Hal::isBatteryCharging(bool strict)

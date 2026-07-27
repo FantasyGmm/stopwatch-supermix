@@ -36,6 +36,15 @@ void AppLauncher::onLauncherOpen()
     mclog::tagInfo(getAppInfo().name, "on open");
 
     show_guide_page();
+    if (_guide_page) {
+        return;
+    }
+
+    finish_launcher_open();
+}
+
+void AppLauncher::finish_launcher_open()
+{
 
     {
         LvglLockGuard lock;
@@ -61,6 +70,10 @@ void AppLauncher::onLauncherOpen()
 
 void AppLauncher::onLauncherRunning()
 {
+    if (update_guide_page()) {
+        return;
+    }
+
     LvglLockGuard lock;
 
     uint32_t now = GetHAL().millis();
@@ -98,6 +111,8 @@ void AppLauncher::onLauncherClose()
     _status_bar_create_tick    = 0;
     _last_charge_check_tick    = 0;
     _was_battery_charging      = false;
+    _guide_key_manager.reset();
+    _guide_page.reset();
     _view.reset();
     view::destroy_status_bar();
 }
@@ -170,25 +185,32 @@ void AppLauncher::show_guide_page()
         return;
     }
 
-    GetHAL().lvglLock();
-    auto guide_page = std::make_unique<view::GuidePage>();
-    GetHAL().lvglUnlock();
+    {
+        LvglLockGuard lock;
+        _guide_page = std::make_unique<view::GuidePage>();
+    }
 
     _should_play_boot_sfx = false;
     GetHAL().playBootSfx();
+    _guide_key_manager = std::make_unique<input::KeyManager>();
+}
 
-    input::KeyManager key_manager;
-
-    while (1) {
-        GetHAL().feedTheDog();
-        GetHAL().delay(50);
-
-        key_manager.update();
-        if (key_manager.getEvent() == input::KeyEvent::GoHome) {
-            break;
-        }
+bool AppLauncher::update_guide_page()
+{
+    if (!_guide_page || !_guide_key_manager) {
+        return false;
     }
 
-    LvglLockGuard lock;
-    guide_page.reset();
+    _guide_key_manager->update();
+    if (_guide_key_manager->getEvent() != input::KeyEvent::GoHome) {
+        return true;
+    }
+
+    {
+        LvglLockGuard lock;
+        _guide_page.reset();
+    }
+    _guide_key_manager.reset();
+    finish_launcher_open();
+    return false;
 }

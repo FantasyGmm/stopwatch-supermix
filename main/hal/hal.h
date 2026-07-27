@@ -52,6 +52,11 @@ struct AlarmStorageSnapshot {
     std::array<AlarmStorageEntry, maxAlarmCount> alarms = {};
 };
 
+struct BatterySampleSnapshot {
+    uint8_t level = 0;
+    uint32_t revision = 0;
+};
+
 /**
  * @brief
  *
@@ -167,6 +172,8 @@ public:
     };
 
     uint8_t getBatteryLevel();
+    BatterySampleSnapshot batterySampleSnapshot();
+    uint32_t batterySampleRevision();
     bool isBatteryCharging(bool strict = false);
     void setPowerLedMode(PowerLedMode mode, bool saveToSettings = false);
     PowerLedMode getPowerLedMode(bool loadFromSettings = false);
@@ -180,6 +187,7 @@ public:
     int getBackLightBrightness(bool loadFromSettings = false);
     int getUserBackLightBrightness() const;
     uint32_t backLightBrightnessRevision() const;
+    bool isDisplayVisible();
 
     // M5GFX
     LGFX_Device& getDisplay();
@@ -209,6 +217,7 @@ public:
     StopWatchAudioBackend& getAudioBackend();
     void audioRecord(std::vector<int16_t>& data, uint16_t durationMs, float gain = 30.0f);
     void audioPlay(std::vector<int16_t>& data, bool async = true);
+    bool isAudioPlaying();
 
     struct AudioSpectrumFrame {
         static constexpr std::size_t bandCount = 20;

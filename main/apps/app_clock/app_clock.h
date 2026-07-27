@@ -43,8 +43,11 @@ private:
     std::unique_ptr<view::AlarmAddView> _alarm_add_view;
     std::unique_ptr<view::WatchFaceManager> _watch_face_manager;
     std::unique_ptr<view::StopwatchView> _stopwatch_view;
+    std::unique_ptr<view::AlarmTriggerView> _alarm_trigger_view;
 
     ClockNavigation readNavigation() const;
+    bool updateAlarmTrigger();
+    void clearAlarmTrigger();
     void transitionTo(Feature feature);
     void destroyFeatureUi();
     void updateAlarmFeature();

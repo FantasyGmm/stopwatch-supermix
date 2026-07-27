@@ -33,6 +33,8 @@ public:
 
 private:
     std::unique_ptr<view::LauncherView> _view;
+    std::unique_ptr<view::GuidePage> _guide_page;
+    std::unique_ptr<input::KeyManager> _guide_key_manager;
     bool _is_first_open              = true;
     bool _pending_status_bar_create  = false;
     uint32_t _status_bar_create_tick = 0;
@@ -42,4 +44,6 @@ private:
 
     void create_launcher_view();
     void show_guide_page();
+    bool update_guide_page();
+    void finish_launcher_open();
 };

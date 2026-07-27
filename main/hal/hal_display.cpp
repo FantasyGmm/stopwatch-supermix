@@ -245,6 +245,11 @@ uint32_t Hal::backLightBrightnessRevision() const
     return _bl_brightness_revision;
 }
 
+bool Hal::isDisplayVisible()
+{
+    return _bl_brightness > 0;
+}
+
 /* -------------------------------------------------------------------------- */
 /*                                  Touchpad                                  */
 /* -------------------------------------------------------------------------- */
