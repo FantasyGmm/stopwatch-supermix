@@ -172,6 +172,19 @@ class InstallScriptTests(unittest.TestCase):
             'codesign --verify --deep --strict --verbose=2 "$STAGING_APP"',
             script,
         )
+        self.assertIn(
+            'CODE_REQUIREMENT=\'=designated => identifier "com.stopwatch.codex-agent"\'',
+            script,
+        )
+        self.assertIn(
+            'codesign --force --deep --sign - "$STAGING_APP"',
+            script,
+        )
+        self.assertIn(
+            'codesign --force --sign - --requirements \\\n'
+            '        "$CODE_REQUIREMENT" "$STAGING_APP"',
+            script,
+        )
 
     def test_installer_builds_and_validates_a_clean_staging_app_before_publish(self):
         script = self.read_script()

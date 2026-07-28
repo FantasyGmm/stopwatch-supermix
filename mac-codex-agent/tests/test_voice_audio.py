@@ -238,6 +238,13 @@ class VoiceAudioRouteTests(unittest.TestCase):
 
 
 class VoiceAudioBridgeTests(unittest.TestCase):
+    def test_write_reports_accepted_16khz_input_frames(self):
+        library = FakeLibrary()
+        library.swva_write_mono_16k.result = 960
+        bridge = VoiceAudioBridge(library=library)
+
+        self.assertEqual(bridge.write([0] * 320), 320)
+
     def test_find_device_exposes_native_not_found_as_typed_result(self):
         library = FakeLibrary()
         library.swva_find_device_uid.result = -2

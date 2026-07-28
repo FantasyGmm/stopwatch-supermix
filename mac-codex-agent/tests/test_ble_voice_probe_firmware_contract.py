@@ -30,7 +30,7 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         status_characteristics = source.split(
             "const ble_gatt_chr_def kStatusCharacteristics[]", 1
         )[1].split("const ble_gatt_chr_def kVoiceCharacteristics[]", 1)[0]
-        self.assertIn("BLE_GATT_CHR_F_WRITE_ENC", status_characteristics)
+        self.assertNotIn("BLE_GATT_CHR_F_WRITE_ENC", status_characteristics)
         voice_characteristics = source.split(
             "const ble_gatt_chr_def kVoiceCharacteristics[]", 1
         )[1].split("const ble_gatt_svc_def kServices[]", 1)[0]
@@ -49,7 +49,7 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
             "void host_task", 1
         )[0]
         self.assertNotIn("kVoiceProbeIdentityXor", source)
-        self.assertIn("ble_hs_util_ensure_addr(0)", identity_setup)
+        self.assertIn("ble_hs_util_ensure_addr(1)", identity_setup)
         self.assertIn("ble_hs_id_infer_auto(0", identity_setup)
         voice_tx_definition = source.split("&kVoiceTxUuid.u", 1)[1].split("},", 1)[0]
         self.assertIn("voice_tx_access", voice_tx_definition)
@@ -170,12 +170,33 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         self.assertIn("event->passkey.params.action", source)
         self.assertIn("event->passkey.conn_handle", source)
 
-    def test_probe_security_uses_volatile_non_bonded_keys(self):
+    def test_production_transport_does_not_require_system_pairing(self):
         source = (ROOT / "main/apps/app_codex_status/codex_ble_transport.cpp").read_text()
         unified_defaults = (ROOT / "sdkconfig.unified.defaults").read_text()
+        status_characteristics = source.split(
+            "const ble_gatt_chr_def kStatusCharacteristics[]", 1
+        )[1].split("const ble_gatt_chr_def kVoiceCharacteristics[]", 1)[0]
+        connect_case = source.split("case BLE_GAP_EVENT_CONNECT:", 1)[1].split(
+            "case BLE_GAP_EVENT_DISCONNECT:", 1
+        )[0]
+
+        self.assertNotIn("BLE_GATT_CHR_F_WRITE_ENC", status_characteristics)
+        self.assertNotIn("ble_gap_security_initiate", connect_case)
         self.assertIn("ble_hs_cfg.sm_bonding = 0", source)
+        self.assertIn("ble_hs_cfg.sm_our_key_dist = 0", source)
+        self.assertIn("ble_hs_cfg.sm_their_key_dist = 0", source)
         self.assertIn("CONFIG_BT_NIMBLE_NVS_PERSIST=n", unified_defaults)
-        self.assertNotIn("ble_store_ram_", source)
+
+    def test_transport_uses_persisted_random_identity_to_avoid_stale_pairing_cache(self):
+        source = (ROOT / "main/apps/app_codex_status/codex_ble_transport.cpp").read_text()
+
+        self.assertIn('#include <hal/utils/settings/settings.h>', source)
+        self.assertIn('Settings settings("codex_ble", true)', source)
+        self.assertIn('settings.GetBlob("identity"', source)
+        self.assertIn("ble_hs_id_gen_rnd(0, &generated)", source)
+        self.assertIn('settings.SetBlob("identity"', source)
+        self.assertIn("ble_hs_id_set_rnd(address.data())", source)
+        self.assertIn("ble_hs_util_ensure_addr(1)", source)
 
     def test_controller_is_bounded_and_not_attached_to_a_button(self):
         controller = (

@@ -26,6 +26,7 @@ MAX_WATCH_ALERTS = 8
 MAX_PROJECT_LENGTH = 32
 MAX_TITLE_LENGTH = 48
 VOICE_NOTIFICATION_QUEUE_SIZE = 32
+GATT_OPERATION_TIMEOUT_SECONDS = 5.0
 
 
 @dataclasses.dataclass
@@ -246,16 +247,25 @@ class BleStatusTransport:
 
         self._voice_notify_started = True
         try:
-            await self._client.start_notify(VOICE_TX_UUID, on_notification)
-            await self._client.write_gatt_char(
-                VOICE_CONTROL_UUID, ready_payload, response=True
+            await asyncio.wait_for(
+                self._client.start_notify(VOICE_TX_UUID, on_notification),
+                timeout=GATT_OPERATION_TIMEOUT_SECONDS,
+            )
+            await asyncio.wait_for(
+                self._client.write_gatt_char(
+                    VOICE_CONTROL_UUID, ready_payload, response=True
+                ),
+                timeout=GATT_OPERATION_TIMEOUT_SECONDS,
             )
         except BaseException:
             consumer = self._retire_voice_generation(generation)
             try:
                 if self.connected and self._voice_notify_started:
                     try:
-                        await self._client.stop_notify(VOICE_TX_UUID)
+                        await asyncio.wait_for(
+                            self._client.stop_notify(VOICE_TX_UUID),
+                            timeout=GATT_OPERATION_TIMEOUT_SECONDS,
+                        )
                     except Exception:
                         pass
                     else:
@@ -279,14 +289,20 @@ class BleStatusTransport:
         try:
             if self.connected and unavailable_payload is not None:
                 try:
-                    await self._client.write_gatt_char(
-                        VOICE_CONTROL_UUID, unavailable_payload, response=True
+                    await asyncio.wait_for(
+                        self._client.write_gatt_char(
+                            VOICE_CONTROL_UUID, unavailable_payload, response=True
+                        ),
+                        timeout=GATT_OPERATION_TIMEOUT_SECONDS,
                     )
                 except Exception as error:
                     failure = error
             if self.connected and self._voice_notify_started:
                 try:
-                    await self._client.stop_notify(VOICE_TX_UUID)
+                    await asyncio.wait_for(
+                        self._client.stop_notify(VOICE_TX_UUID),
+                        timeout=GATT_OPERATION_TIMEOUT_SECONDS,
+                    )
                 except Exception as error:
                     stop_failed = True
                     if failure is None:
@@ -399,8 +415,11 @@ class BleStatusTransport:
             max_write_size=SAFE_WRITE_SIZE,
         )
         for index, frame in enumerate(frames):
-            await self._client.write_gatt_char(
-                STATUS_RX_UUID, frame, response=True
+            await asyncio.wait_for(
+                self._client.write_gatt_char(
+                    STATUS_RX_UUID, frame, response=True
+                ),
+                timeout=GATT_OPERATION_TIMEOUT_SECONDS,
             )
             if (
                 (index + 1) % FRAME_BURST_SIZE == 0

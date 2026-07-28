@@ -24,6 +24,7 @@ MIN_AUDIO_MTU = 189
 MAX_BLE_MTU = 527
 DRAIN_SECONDS = 0.150
 RECENT_NONCE_LIMIT = 8
+CAPTURE_STARTUP_TOLERANCE_MS = 500
 SILENCE = (0,) * BLOCK_SAMPLES
 
 
@@ -283,8 +284,11 @@ class VoiceSessionService:
             return False
         expected_samples = summary.elapsed_ms * 16
         sample_delta = abs(summary.captured_samples - expected_samples)
-        # The probe gate allows 1% clock error plus one final 320-sample block.
-        return sample_delta * 100 <= expected_samples + 32000
+        clock_tolerance = expected_samples // 100
+        startup_tolerance = CAPTURE_STARTUP_TOLERANCE_MS * 16
+        return sample_delta <= (
+            clock_tolerance + BLOCK_SAMPLES + startup_tolerance
+        )
 
     def _require_current_session(self, packet) -> None:
         if self.state != VoiceState.RECORDING or packet.session != self._session:

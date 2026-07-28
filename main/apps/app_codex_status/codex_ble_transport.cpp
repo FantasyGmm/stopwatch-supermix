@@ -6,6 +6,7 @@
 #include <host/ble_hs.h>
 #include <host/ble_hs_id.h>
 #include <host/util/util.h>
+#include <hal/utils/settings/settings.h>
 #include <nimble/nimble_port.h>
 #include <nimble/nimble_port_freertos.h>
 #include <os/os_mbuf.h>
@@ -14,6 +15,7 @@
 #include <store/config/ble_store_config.h>
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 
 extern "C" void ble_store_config_init(void);
@@ -70,6 +72,34 @@ const ble_uuid128_t kVoiceTxUuid = BLE_UUID128_INIT(
     0x50, 0x4f, 0x74, 0x54, 0x04, 0x00, 0x23, 0x7a
 );
 uint16_t g_voice_tx_value_handle = 0;
+
+bool configure_identity_address()
+{
+    Settings settings("codex_ble", true);
+    std::array<uint8_t, 6> address = {};
+    size_t length = address.size();
+    if (settings.GetBlob("identity", address.data(), &length) != ESP_OK ||
+        length != address.size()) {
+        ble_addr_t generated = {};
+        const int generate_result = ble_hs_id_gen_rnd(0, &generated);
+        if (generate_result != 0) {
+            ESP_LOGE(kTag, "failed to generate BLE identity: %d", generate_result);
+            return false;
+        }
+        std::copy(std::begin(generated.val), std::end(generated.val), address.begin());
+        if (settings.SetBlob("identity", address.data(), address.size()) != ESP_OK) {
+            ESP_LOGE(kTag, "failed to persist BLE identity");
+            return false;
+        }
+    }
+
+    const int set_result = ble_hs_id_set_rnd(address.data());
+    if (set_result != 0) {
+        ESP_LOGE(kTag, "failed to set BLE identity: %d", set_result);
+        return false;
+    }
+    return true;
+}
 
 int gatt_access(
     uint16_t,
@@ -141,7 +171,7 @@ const ble_gatt_chr_def kStatusCharacteristics[] = {
         gatt_access,
         nullptr,
         nullptr,
-        BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP | BLE_GATT_CHR_F_WRITE_ENC,
+        BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP,
         0,
         nullptr,
         nullptr,
@@ -298,7 +328,8 @@ void on_reset(int reason)
 
 void on_sync()
 {
-    if (ble_hs_util_ensure_addr(0) != 0 ||
+    if (!configure_identity_address() ||
+        ble_hs_util_ensure_addr(1) != 0 ||
         ble_hs_id_infer_auto(0, &g_own_address_type) != 0) {
         ESP_LOGE(kTag, "failed to select BLE identity address");
         return;

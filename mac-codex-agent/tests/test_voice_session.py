@@ -523,7 +523,7 @@ class VoiceSessionServiceTests(unittest.IsolatedAsyncioTestCase):
             "encode": dataclasses.replace(valid, encode_failures=1),
             "captured": dataclasses.replace(valid, captured_samples=319),
             "elapsed zero": dataclasses.replace(valid, elapsed_ms=0),
-            "elapsed implausible": dataclasses.replace(valid, elapsed_ms=41),
+            "elapsed implausible": dataclasses.replace(valid, elapsed_ms=1000),
             "mtu too small": dataclasses.replace(valid, negotiated_mtu=188),
             "mtu too large": dataclasses.replace(valid, negotiated_mtu=528),
         }
@@ -555,6 +555,21 @@ class VoiceSessionServiceTests(unittest.IsolatedAsyncioTestCase):
 
         await service.handle(
             end_packet(2, EndSummary(1, 1, 0, 0, 320, 40, 256))
+        )
+
+        self.assertEqual(service.state, VoiceState.READY)
+
+    async def test_end_allows_bounded_capture_startup_latency(self):
+        service, _route, _shortcut = self.make_service()
+        await service.handle(begin_packet())
+        for sequence in range(1, 282):
+            await service.handle(audio_packet(sequence))
+
+        await service.handle(
+            end_packet(
+                282,
+                EndSummary(281, 281, 0, 0, 89920, 5861, 256),
+            )
         )
 
         self.assertEqual(service.state, VoiceState.READY)

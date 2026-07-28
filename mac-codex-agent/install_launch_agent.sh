@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LABEL="com.stopwatch.codex-agent"
+CODE_REQUIREMENT='=designated => identifier "com.stopwatch.codex-agent"'
 LOG_DIR="$HOME/Library/Logs"
 APP_PARENT="$HOME/Applications"
 APP_DIR="$APP_PARENT/StopWatch Codex Agent.app"
@@ -551,6 +552,8 @@ build_staged_app() {
 
     write_info_plist "$STAGING_APP/Contents/Info.plist"
     codesign --force --deep --sign - "$STAGING_APP"
+    codesign --force --sign - --requirements \
+        "$CODE_REQUIREMENT" "$STAGING_APP"
     codesign --verify --deep --strict --verbose=2 "$STAGING_APP"
 }
 

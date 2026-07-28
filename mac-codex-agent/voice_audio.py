@@ -11,6 +11,7 @@ UID_BUFFER_SIZE = 1024
 INT16_MIN = -32768
 INT16_MAX = 32767
 NATIVE_DEVICE_NOT_FOUND = -2
+OUTPUT_FRAMES_PER_INPUT_SAMPLE = 3
 
 VoiceAudioFailure = Tuple[str, Exception]
 
@@ -166,9 +167,10 @@ class VoiceAudioBridge:
                     )
                 )
         pcm = (ctypes.c_int16 * len(validated_samples))(*validated_samples)
-        return int(
+        output_frames = int(
             self._library.swva_write_mono_16k(pcm, len(validated_samples))
         )
+        return output_frames // OUTPUT_FRAMES_PER_INPUT_SAMPLE
 
     def dropped_frames(self) -> int:
         return int(self._library.swva_dropped_frames())

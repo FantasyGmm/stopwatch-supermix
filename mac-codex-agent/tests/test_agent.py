@@ -213,6 +213,28 @@ class CodexStatusAgentTests(unittest.TestCase):
 
 
 class BleStatusTransportVoiceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_status_write_times_out_when_corebluetooth_never_completes(self):
+        class Client:
+            is_connected = True
+
+            async def write_gatt_char(self, _uuid, _frame, response):
+                self.response = response
+                await asyncio.Future()
+
+        client = Client()
+        transport = BleStatusTransport()
+        transport._client = client
+        started = asyncio.get_running_loop().time()
+
+        with patch("agent.GATT_OPERATION_TIMEOUT_SECONDS", 0.01):
+            with self.assertRaises(asyncio.TimeoutError):
+                await asyncio.wait_for(
+                    transport.send_json("status", STATUS_MESSAGE), timeout=0.15
+                )
+
+        self.assertLess(asyncio.get_running_loop().time() - started, 0.1)
+        self.assertTrue(client.response)
+
     async def test_start_notify_failure_is_clean_before_direct_retry(self):
         class Client:
             is_connected = True

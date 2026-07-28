@@ -21,8 +21,7 @@ with the original probe. Mode 3 encrypts only the 164-byte ADPCM microphone
 block with AES-128-CCM and an 8-byte tag; its 172-byte payload authenticates the
 existing 14-byte notification header and produces a 186-byte characteristic
 value. Mode 4 encrypts the deterministic synthetic source with the same
-diagnostic key, nonce derivation, AAD, and 8-byte tag. The normal status
-characteristic remains encrypted.
+diagnostic key, nonce derivation, AAD, and 8-byte tag.
 
 Modes 3 and 4 use a fixed diagnostic key solely to isolate crypto performance
 from pairing, enrollment, and key storage. It is not a production key and must
@@ -33,13 +32,12 @@ for READY, UNAVAILABLE, PTT_BEGIN, AUDIO, PTT_END, and VOICE_ERROR. Probe
 results do not prove that production key provisioning, Typeless control,
 default-input restoration, or disconnect cleanup works.
 
-Three physical runs already showed that macOS CoreBluetooth could discover and
-connect to the custom service, but the encrypted characteristic handshake
-timed out with NimBLE status 13. The same result occurred with a fresh
-peripheral identity, access-triggered pairing, and volatile non-bonded keys, so
-this unencrypted probe must not be treated as production security acceptance.
-Production voice input still requires a pairing path that completes on macOS,
-or application-layer authentication and encryption.
+Three physical runs showed that macOS CoreBluetooth could discover and connect
+to the custom service, but the encrypted characteristic handshake timed out
+with NimBLE status 13. Production therefore does not require interactive BLE
+system pairing. Status and voice characteristics remain available over the BLE
+link, while production voice control and audio are authenticated and encrypted
+end to end by application-layer AES-128-CCM version 3.
 
 ## Preconditions
 
