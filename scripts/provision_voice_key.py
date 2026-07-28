@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
+import hmac
 import os
 import pathlib
 import re
@@ -18,8 +20,10 @@ KEYCHAIN_SERVICE = "com.stopwatch.codex-agent.voice"
 KEYCHAIN_ACCOUNT = "StopWatch-Codex"
 KEY_FILE_ENV = "STOPWATCH_VOICE_KEY_FILE"
 SECURITY_COMMAND_ENV = "STOPWATCH_SECURITY_COMMAND"
+DEFAULT_SECURITY_COMMAND = "/usr/bin/security"
 KEY_PATTERN = re.compile(r"[0-9a-f]{32}\n")
 KEYCHAIN_TIMEOUT_SECONDS = 10.0
+KEYCHAIN_ITEM_NOT_FOUND_EXIT = 44
 MAX_KEY_FILE_BYTES = 33
 
 
@@ -218,10 +222,32 @@ def ensure_key_file(path: pathlib.Path) -> str:
 def import_keychain(
     encoded_key: str,
     runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+    writer: Callable[[str], None] | None = None,
 ) -> None:
     if re.fullmatch(r"[0-9a-f]{32}", encoded_key) is None:
         raise ProvisioningError("voice key is malformed")
-    security_command = os.environ.get(SECURITY_COMMAND_ENV, "security")
+    security_command = os.environ.get(SECURITY_COMMAND_ENV, DEFAULT_SECURITY_COMMAND)
+    delete_command = [
+        security_command,
+        "delete-generic-password",
+        "-s",
+        KEYCHAIN_SERVICE,
+        "-a",
+        KEYCHAIN_ACCOUNT,
+    ]
+    try:
+        deleted = runner(
+            delete_command,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=KEYCHAIN_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        raise ProvisioningError("old voice key could not be removed from Keychain") from None
+    if deleted.returncode not in (0, KEYCHAIN_ITEM_NOT_FOUND_EXIT):
+        raise ProvisioningError("old voice key could not be removed from Keychain")
+
     command = [
         security_command,
         "add-generic-password",
@@ -231,11 +257,14 @@ def import_keychain(
         "-a",
         KEYCHAIN_ACCOUNT,
         "-w",
+        "",
+        # The Agent reads through /usr/bin/security, so provisioning must not
+        # leave a per-process authorization prompt behind after a restart.
+        "-A",
     ]
     try:
         result = runner(
             command,
-            input=encoded_key + "\n",
             capture_output=True,
             text=True,
             check=False,
@@ -245,6 +274,121 @@ def import_keychain(
         raise ProvisioningError("voice key could not be imported into Keychain") from None
     if result.returncode != 0:
         raise ProvisioningError("voice key could not be imported into Keychain")
+    try:
+        (writer or _write_keychain_item_data)(encoded_key)
+    except ProvisioningError:
+        raise
+    except Exception:
+        raise ProvisioningError("voice key could not be written into Keychain") from None
+
+    read_command = [
+        security_command,
+        "find-generic-password",
+        "-s",
+        KEYCHAIN_SERVICE,
+        "-a",
+        KEYCHAIN_ACCOUNT,
+        "-w",
+    ]
+    try:
+        verified = runner(
+            read_command,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=KEYCHAIN_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        raise ProvisioningError("voice key could not be verified in Keychain") from None
+    if verified.returncode != 0 or not hmac.compare_digest(
+        verified.stdout.rstrip("\n"), encoded_key
+    ):
+        raise ProvisioningError("voice key could not be verified in Keychain")
+
+
+def _keychain_framework_functions():
+    try:
+        security = ctypes.CDLL(
+            "/System/Library/Frameworks/Security.framework/Security"
+        )
+        core_foundation = ctypes.CDLL(
+            "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation"
+        )
+    except OSError:
+        raise ProvisioningError("macOS Keychain framework is unavailable") from None
+
+    finder = security.SecKeychainFindGenericPassword
+    finder.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_uint32,
+        ctypes.c_char_p,
+        ctypes.c_uint32,
+        ctypes.c_char_p,
+        ctypes.POINTER(ctypes.c_uint32),
+        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(ctypes.c_void_p),
+    ]
+    finder.restype = ctypes.c_int32
+    modifier = security.SecKeychainItemModifyAttributesAndData
+    modifier.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_uint32,
+        ctypes.c_void_p,
+    ]
+    modifier.restype = ctypes.c_int32
+    releaser = core_foundation.CFRelease
+    releaser.argtypes = [ctypes.c_void_p]
+    releaser.restype = None
+    return finder, modifier, releaser
+
+
+def _write_keychain_item_data(
+    encoded_key: str,
+    *,
+    finder=None,
+    modifier=None,
+    releaser=None,
+) -> None:
+    if re.fullmatch(r"[0-9a-f]{32}", encoded_key) is None:
+        raise ProvisioningError("voice key is malformed")
+    if finder is None or modifier is None or releaser is None:
+        framework_finder, framework_modifier, framework_releaser = (
+            _keychain_framework_functions()
+        )
+        finder = finder or framework_finder
+        modifier = modifier or framework_modifier
+        releaser = releaser or framework_releaser
+
+    service = KEYCHAIN_SERVICE.encode("utf-8")
+    account = KEYCHAIN_ACCOUNT.encode("utf-8")
+    item_reference = ctypes.c_void_p()
+    status = finder(
+        None,
+        len(service),
+        service,
+        len(account),
+        account,
+        None,
+        None,
+        ctypes.byref(item_reference),
+    )
+    if status != 0 or not item_reference.value:
+        raise ProvisioningError("voice key Keychain item could not be found")
+
+    encoded_bytes = encoded_key.encode("ascii")
+    data = ctypes.create_string_buffer(encoded_bytes)
+    try:
+        status = modifier(
+            item_reference,
+            None,
+            len(encoded_bytes),
+            ctypes.cast(data, ctypes.c_void_p),
+        )
+        if status != 0:
+            raise ProvisioningError("voice key could not be written into Keychain")
+    finally:
+        releaser(item_reference)
 
 
 def _header_contents(encoded_key: str) -> str:

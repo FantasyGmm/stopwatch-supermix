@@ -1,3 +1,4 @@
+import ctypes
 import importlib.util
 import os
 import pathlib
@@ -341,22 +342,43 @@ module.ensure_key_file(key_path)
             with self.assertRaisesRegex(module.ProvisioningError, "output"):
                 module.generate_firmware_header(key_path, output)
 
-    def test_keychain_import_uses_stdin_and_never_exposes_secret(self):
+    def test_keychain_import_uses_framework_writer_and_never_exposes_secret(self):
         module = load_module()
         secret = "00112233445566778899aabbccddeeff"
         calls = []
+        writes = []
 
         def runner(command, **kwargs):
             calls.append((command, kwargs))
-            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+            stdout = secret + "\n" if "find-generic-password" in command else ""
+            return_code = 44 if "delete-generic-password" in command else 0
+            return subprocess.CompletedProcess(
+                command, return_code, stdout=stdout, stderr=""
+            )
 
-        module.import_keychain(secret, runner=runner)
-        command, kwargs = calls[0]
-        self.assertNotIn(secret, command)
-        self.assertEqual(command[-1], "-w")
-        self.assertEqual(kwargs["input"], secret + "\n")
-        self.assertFalse(kwargs["check"])
-        self.assertNotIn(secret, repr(command))
+        module.import_keychain(secret, runner=runner, writer=writes.append)
+        self.assertEqual(writes, [secret])
+        self.assertEqual(len(calls), 3)
+        delete_command, delete_kwargs = calls[0]
+        add_command, add_kwargs = calls[1]
+        read_command, read_kwargs = calls[2]
+        self.assertIn("delete-generic-password", delete_command)
+        self.assertIn("add-generic-password", add_command)
+        self.assertIn("find-generic-password", read_command)
+        self.assertEqual(add_command[0], "/usr/bin/security")
+        self.assertEqual(read_command[0], "/usr/bin/security")
+        self.assertIn("-A", add_command)
+        self.assertNotIn("-T", add_command)
+        self.assertIn("-w", add_command)
+        self.assertEqual(add_command[add_command.index("-w") + 1], "")
+        self.assertNotIn(secret, add_command)
+        self.assertNotIn(secret, read_command)
+        self.assertFalse(delete_kwargs["check"])
+        self.assertNotIn("input", add_kwargs)
+        self.assertFalse(add_kwargs["check"])
+        self.assertFalse(read_kwargs["check"])
+        self.assertNotIn(secret, repr(add_command))
+        self.assertNotIn(secret, repr(read_command))
 
         def failed_runner(command, **kwargs):
             return subprocess.CompletedProcess(
@@ -364,8 +386,64 @@ module.ensure_key_file(key_path)
             )
 
         with self.assertRaises(module.ProvisioningError) as failed:
-            module.import_keychain(secret, runner=failed_runner)
+            module.import_keychain(secret, runner=failed_runner, writer=writes.append)
         self.assertNotIn(secret, str(failed.exception))
+
+    def test_keychain_import_rejects_unexpected_delete_failure(self):
+        module = load_module()
+        secret = "00112233445566778899aabbccddeeff"
+
+        def runner(command, **kwargs):
+            return subprocess.CompletedProcess(command, 1, stdout="", stderr=secret)
+
+        with self.assertRaises(module.ProvisioningError) as error:
+            module.import_keychain(secret, runner=runner)
+        self.assertNotIn(secret, str(error.exception))
+
+    def test_keychain_import_sanitizes_framework_writer_failures(self):
+        module = load_module()
+        secret = "00112233445566778899aabbccddeeff"
+
+        def runner(command, **kwargs):
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+        def rejected(password):
+            raise RuntimeError(password)
+
+        with self.assertRaises(module.ProvisioningError) as error:
+            module.import_keychain(secret, runner=runner, writer=rejected)
+        self.assertNotIn(secret, str(error.exception))
+
+    def test_framework_writer_modifies_existing_keychain_item_and_releases_it(self):
+        module = load_module()
+        secret = "00112233445566778899aabbccddeeff"
+        calls = []
+
+        def finder(*args):
+            calls.append(("find", args[2][: args[1]], args[4][: args[3]]))
+            args[-1]._obj.value = 1234
+            return 0
+
+        def modifier(item, attributes, length, data):
+            calls.append(("modify", item.value, ctypes.string_at(data, length)))
+            return 0
+
+        def releaser(item):
+            calls.append(("release", item.value))
+
+        module._write_keychain_item_data(
+            secret, finder=finder, modifier=modifier, releaser=releaser
+        )
+        self.assertEqual(
+            calls[0],
+            (
+                "find",
+                module.KEYCHAIN_SERVICE.encode(),
+                module.KEYCHAIN_ACCOUNT.encode(),
+            ),
+        )
+        self.assertEqual(calls[1], ("modify", 1234, secret.encode()))
+        self.assertEqual(calls[2], ("release", 1234))
 
     def test_generates_restricted_header_and_fails_closed(self):
         module = load_module()
@@ -387,43 +465,27 @@ module.ensure_key_file(key_path)
             with self.assertRaisesRegex(module.ProvisioningError, "missing"):
                 module.generate_firmware_header(key_path, output)
 
-    def test_cli_honors_override_and_fake_security_without_secret_argv(self):
+    def test_cli_provision_coordinates_keychain_and_header(self):
+        module = load_module()
         with tempfile.TemporaryDirectory() as temporary:
             root = pathlib.Path(temporary)
             key_path = root / "keys/device-key.hex"
             header = root / "build/generated/voice_input_device_key.h"
-            argv_capture = root / "argv.txt"
-            stdin_capture = root / "stdin.txt"
-            fake_security = root / "security"
-            fake_security.write_text(
-                "#!/bin/sh\n"
-                "printf '%s\\n' \"$@\" > \"$ARGV_CAPTURE\"\n"
-                "cat > \"$STDIN_CAPTURE\"\n"
-            )
-            fake_security.chmod(0o755)
-            environment = os.environ.copy()
-            environment.update(
-                {
-                    "HOME": str(root),
-                    "STOPWATCH_VOICE_KEY_FILE": str(key_path),
-                    "STOPWATCH_SECURITY_COMMAND": str(fake_security),
-                    "ARGV_CAPTURE": str(argv_capture),
-                    "STDIN_CAPTURE": str(stdin_capture),
-                }
-            )
-            result = subprocess.run(
-                [sys.executable, str(SCRIPT), "provision", "--firmware-header", str(header)],
-                env=environment,
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            self.assertEqual(result.returncode, 0, result.stderr)
-            secret = key_path.read_text().strip()
-            self.assertNotIn(secret, argv_capture.read_text())
-            self.assertEqual(stdin_capture.read_text(), secret + "\n")
-            self.assertNotIn(secret, result.stdout + result.stderr)
-            self.assertTrue(header.is_file())
+            secret = "00112233445566778899aabbccddeeff"
+            with (
+                mock.patch.dict(os.environ, {module.KEY_FILE_ENV: str(key_path)}),
+                mock.patch.object(module, "ensure_key_file", return_value=secret) as ensure,
+                mock.patch.object(module, "import_keychain") as imported,
+                mock.patch.object(module, "generate_firmware_header") as generated,
+            ):
+                result = module.main(
+                    ["provision", "--firmware-header", str(header)]
+                )
+
+            self.assertEqual(result, 0)
+            ensure.assert_called_once_with(key_path)
+            imported.assert_called_once_with(secret)
+            generated.assert_called_once_with(key_path, header)
 
 
 if __name__ == "__main__":
