@@ -240,6 +240,8 @@ class CodexStateCollector:
                 if payload.get("type") != "token_count":
                     continue
                 limits = payload.get("rate_limits") or {}
+                if limits.get("limit_name"):
+                    continue
                 primary = limits.get("primary") or {}
                 secondary = limits.get("secondary") or {}
                 quota = _quota_from_windows(
