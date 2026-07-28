@@ -1,6 +1,7 @@
 #include "display_protection_logic.h"
 
 #include <algorithm>
+#include <limits>
 
 void DisplayProtectionLogic::reset(uint32_t now_ms)
 {
@@ -17,12 +18,14 @@ DisplayProtectionDecision DisplayProtectionLogic::update(uint32_t now_ms)
     }
 
     const uint32_t elapsed_ms = now_ms - _inactivity_origin_ms;
-    if (elapsed_ms >= ScreenOffAfterMs &&
+    if (_policy.screen_off_enabled &&
+        elapsed_ms >= _policy.screen_off_after_ms &&
         _state != DisplayProtectionState::ScreenOff) {
         _state = DisplayProtectionState::ScreenOff;
         return {DisplayProtectionAction::ScreenOff, false};
     }
-    if (elapsed_ms >= DimAfterMs && _state == DisplayProtectionState::Active) {
+    if (_policy.dim_enabled && elapsed_ms >= _policy.dim_after_ms &&
+        _state == DisplayProtectionState::Active) {
         _state = DisplayProtectionState::Dimmed;
         return {DisplayProtectionAction::Dim, false};
     }
@@ -56,11 +59,47 @@ DisplayProtectionDecision DisplayProtectionLogic::setAutomaticEnabled(bool enabl
     return {};
 }
 
+DisplayProtectionDecision DisplayProtectionLogic::setPolicy(DisplayProtectionPolicy policy,
+                                                             uint32_t now_ms)
+{
+    if (policy.dim_enabled && policy.screen_off_enabled &&
+        policy.screen_off_after_ms <= policy.dim_after_ms) {
+        if (policy.dim_after_ms == std::numeric_limits<uint32_t>::max()) {
+            policy.dim_after_ms -= 1U;
+            policy.screen_off_after_ms = std::numeric_limits<uint32_t>::max();
+        } else {
+            policy.screen_off_after_ms = policy.dim_after_ms + 1U;
+        }
+    }
+
+    _policy = policy;
+    _inactivity_origin_ms = now_ms;
+    if (_state != DisplayProtectionState::Active) {
+        return restore(now_ms, false);
+    }
+    return {};
+}
+
+DisplayProtectionDecision DisplayProtectionLogic::setTimeouts(uint32_t dim_after_ms,
+                                                               uint32_t screen_off_after_ms,
+                                                               uint32_t now_ms)
+{
+    return setPolicy({true, true, dim_after_ms, screen_off_after_ms}, now_ms);
+}
+
+DisplayProtectionDecision DisplayProtectionLogic::screenOffNow(uint32_t now_ms)
+{
+    _inactivity_origin_ms = now_ms;
+    _state = DisplayProtectionState::ScreenOff;
+    return {DisplayProtectionAction::ScreenOff, false};
+}
+
 DisplayProtectionDecision DisplayProtectionLogic::setKeepAwake(
     DisplayKeepAwakeReason reason, bool active, uint32_t now_ms)
 {
     const uint8_t bit = static_cast<uint8_t>(reason);
     const uint8_t old_mask = _reason_mask;
+    const bool was_active = (old_mask & bit) != 0;
     if (active) {
         _reason_mask |= bit;
     } else {
@@ -70,13 +109,28 @@ DisplayProtectionDecision DisplayProtectionLogic::setKeepAwake(
     if (_reason_mask == old_mask) {
         return {};
     }
-    if (active && old_mask == 0 && _state != DisplayProtectionState::Active) {
+    if (active && !was_active && _state != DisplayProtectionState::Active) {
         return restore(now_ms, false);
     }
     if (!active && _reason_mask == 0) {
         _inactivity_origin_ms = now_ms;
     }
     return {};
+}
+
+DisplayProtectionTimingSnapshot DisplayProtectionLogic::timingSnapshot(uint32_t now_ms) const
+{
+    const uint32_t inactivity_ms = now_ms - _inactivity_origin_ms;
+    const uint32_t dim_remaining =
+        !_policy.dim_enabled || inactivity_ms >= _policy.dim_after_ms
+            ? 0U
+            : _policy.dim_after_ms - inactivity_ms;
+    const uint32_t screen_off_remaining =
+        !_policy.screen_off_enabled || inactivity_ms >= _policy.screen_off_after_ms
+            ? 0U
+            : _policy.screen_off_after_ms - inactivity_ms;
+    return {inactivity_ms, _policy.dim_after_ms, _policy.screen_off_after_ms,
+            dim_remaining, screen_off_remaining};
 }
 
 DisplayProtectionState DisplayProtectionLogic::state() const

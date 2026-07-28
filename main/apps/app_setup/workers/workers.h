@@ -66,6 +66,18 @@ private:
     bool _save_requested    = false;
 };
 
+class DisplayProtectionWorker : public WorkerBase {
+public:
+    DisplayProtectionWorker();
+    ~DisplayProtectionWorker();
+    void update() override;
+
+private:
+    class DisplayProtectionConfigView;
+
+    std::unique_ptr<DisplayProtectionConfigView> _view;
+};
+
 /**
  * @brief
  *

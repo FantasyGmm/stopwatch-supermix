@@ -19,4 +19,5 @@ int main()
     tap.press(200, 300, 4000, true);
     tap.cancel();
     assert(!tap.release(4100));
+
 }

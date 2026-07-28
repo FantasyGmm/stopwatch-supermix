@@ -8,6 +8,7 @@
 #include <assets/assets.h>
 #include <functional>
 #include <hal/hal.h>
+#include <runtime/display/global_display_protection_service.h>
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -683,21 +684,26 @@ void LauncherView::handle_state_normal()
 
     lv_indev_t* indev = GetHAL().lvTouchpad;
     if (indev != nullptr) {
-        const lv_indev_state_t state = lv_indev_get_state(indev);
-        if (controls.ownsTouch()) {
-            _last_swipe_touch_state = state;
-        } else if (state != _last_swipe_touch_state) {
-            lv_point_t point;
-            lv_indev_get_point(indev, &point);
+        if (GetGlobalDisplayProtectionService().touchInputSuppressed()) {
+            _last_swipe_touch_state = LV_INDEV_STATE_REL;
+            stop_hold_scroll(HOLD_SCROLL_TOUCH);
+        } else {
+            const lv_indev_state_t state = lv_indev_get_state(indev);
+            if (controls.ownsTouch()) {
+                _last_swipe_touch_state = state;
+            } else if (state != _last_swipe_touch_state) {
+                lv_point_t point;
+                lv_indev_get_point(indev, &point);
 
-            if (state == LV_INDEV_STATE_PR) {
-                _swipe_start_point    = point;
-                _swipe_start_scroll_x = _panel->getScrollX();
-                _swipe_start_ms       = GetHAL().millis();
-            } else if (!controls.lastReleaseConsumed()) {
-                handle_horizontal_swipe_release(point);
+                if (state == LV_INDEV_STATE_PR) {
+                    _swipe_start_point    = point;
+                    _swipe_start_scroll_x = _panel->getScrollX();
+                    _swipe_start_ms       = GetHAL().millis();
+                } else if (!controls.lastReleaseConsumed()) {
+                    handle_horizontal_swipe_release(point);
+                }
+                _last_swipe_touch_state = state;
             }
-            _last_swipe_touch_state = state;
         }
     }
 

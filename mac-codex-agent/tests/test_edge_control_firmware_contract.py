@@ -72,12 +72,30 @@ class EdgeControlFirmwareContractTests(unittest.TestCase):
             "lv_layer_top()",
             "lv_indev_wait_release(indev)",
             "lv_indev_reset(indev, nullptr)",
-            "GetHAL().setBackLightBrightness(update.value, update.persist)",
+            "GetGlobalDisplayProtectionService().applyUserBrightness(",
             "GetHAL().setSpeakerVolume(update.value, update.persist)",
             "_brightness_revision++",
             "_volume_revision++",
         ):
             self.assertIn(token, source)
+        self.assertNotIn("GetHAL().setBackLightBrightness", source)
+
+    def test_display_protection_settings_uses_typed_checked_selector(self):
+        source = (
+            ROOT
+            / "main"
+            / "apps"
+            / "app_setup"
+            / "workers"
+            / "display_protection.cpp"
+        ).read_text(encoding="utf-8")
+        self.assertIn("const lv_style_selector_t checked_indicator", source)
+        self.assertIn(
+            "static_cast<lv_style_selector_t>(LV_PART_INDICATOR) |\n"
+            "            static_cast<lv_style_selector_t>(LV_STATE_CHECKED)",
+            source,
+        )
+        self.assertNotIn("LV_PART_INDICATOR | LV_STATE_CHECKED)", source)
 
     def test_global_service_updates_before_mooncake_apps(self):
         main = (ROOT / "main" / "main.cpp").read_text(encoding="utf-8")

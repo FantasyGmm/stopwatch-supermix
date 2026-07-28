@@ -31,7 +31,7 @@ class CodexTaskNavigationFirmwareContractTests(unittest.TestCase):
         self.assertLess(previous_step, next_event)
         self.assertLess(next_event, next_step)
 
-    def test_screen_wake_release_is_suppressed_before_task_navigation(self):
+    def test_manual_screen_off_release_is_suppressed_before_task_navigation(self):
         header = (
             ROOT / "main/apps/app_codex_status/app_codex_status.h"
         ).read_text()
@@ -45,18 +45,79 @@ class CodexTaskNavigationFirmwareContractTests(unittest.TestCase):
         navigation = app.index("key_event == input::KeyEvent::GoPrevious")
         self.assertLess(suppression, navigation)
 
-    def test_screen_off_release_cannot_navigate_the_carousel(self):
+        sync_start = app.index(
+            "void AppCodexStatus::sync_display_protection_presentation()"
+        )
+        sync_end = app.index(
+            "void AppCodexStatus::update_screen_off_control", sync_start
+        )
+        sync = app[sync_start:sync_end]
+        self.assertIn(
+            "const bool woke_screen = _screen_off && !screen_off;", sync
+        )
+        wake = sync.index("if (woke_screen)")
+        wake_suppression = sync.index("_suppress_task_navigation = true;", wake)
+        self.assertLess(wake, wake_suppression)
+
+    def test_manual_screen_off_is_latched_until_both_buttons_are_released(self):
         app = (
             ROOT / "main/apps/app_codex_status/app_codex_status.cpp"
         ).read_text()
 
-        on_running = app.index("void AppCodexStatus::onRunning()")
-        screen_off_guard = app.index("if (_screen_off) {", on_running)
-        navigation = app.index("key_event == input::KeyEvent::GoPrevious", on_running)
+        control_start = app.index("AppCodexStatus::update_screen_off_control")
+        control_end = app.index("void AppCodexStatus::set_percent", control_start)
+        control = app[control_start:control_end]
+
+        self.assertEqual(1, control.count("screenOffNow()"))
         self.assertIn(
-            "key_event = input::KeyEvent::None;",
-            app[screen_off_guard:navigation],
+            "if (!left_pressed && !right_pressed)", control
         )
+        self.assertIn("if (_suppress_task_navigation)", control)
+        request = control.index("screenOffNow()")
+        suppress = control.index("_suppress_task_navigation = true;", request)
+        self.assertLess(request, suppress)
+
+        on_running = app.index("void AppCodexStatus::onRunning()")
+        navigation = app.index("key_event == input::KeyEvent::GoPrevious", on_running)
+        release = app.index(
+            "GetHAL().btnA.isReleased() && GetHAL().btnB.isReleased()",
+            on_running,
+        )
+        self.assertLess(release, navigation)
+
+    def test_touch_wake_waits_for_physical_release_before_page_gestures(self):
+        header = (
+            ROOT / "main/apps/app_codex_status/app_codex_status.h"
+        ).read_text()
+        app = (
+            ROOT / "main/apps/app_codex_status/app_codex_status.cpp"
+        ).read_text()
+
+        self.assertNotIn("StatusPageTouchWakeGate", header + app)
+
+        sync_start = app.index(
+            "void AppCodexStatus::sync_display_protection_presentation()"
+        )
+        sync_end = app.index(
+            "void AppCodexStatus::update_screen_off_control", sync_start
+        )
+        sync = app[sync_start:sync_end]
+        self.assertNotIn("DisplayWakeReason::Touch", sync)
+
+        update_start = app.index("void AppCodexStatus::update_page_swipe")
+        update_end = app.index("void AppCodexStatus::set_page", update_start)
+        update = app[update_start:update_end]
+        gate = update.index(
+            "GetGlobalDisplayProtectionService().touchInputSuppressed()"
+        )
+        swipe = update.index("_page_swipe.press(")
+        trae_tap = update.index("_trae_card_tap.press(")
+        self.assertLess(gate, swipe)
+        self.assertLess(gate, trae_tap)
+        gated_path = update[gate:swipe]
+        self.assertIn("_page_swipe.cancel()", gated_path)
+        self.assertIn("_trae_card_tap.cancel()", gated_path)
+        self.assertIn("_last_page_touch_state = LV_INDEV_STATE_REL", gated_path)
 
 
 if __name__ == "__main__":

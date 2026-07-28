@@ -283,6 +283,36 @@ Hal::TouchPoint Hal::getTouchPoint()
     return point;
 }
 
+bool Hal::filterTouchInputForLvgl(bool pressed)
+{
+    return _touch_input_gate.filterForLvgl(pressed);
+}
+
+void Hal::armTouchWakeInput()
+{
+    _touch_input_gate.armForScreenOff();
+}
+
+void Hal::releaseTouchWakeInputAfterNextSample()
+{
+    _touch_input_gate.releaseAfterNextSample();
+}
+
+void Hal::prepareTouchInputForActiveDisplay()
+{
+    _touch_input_gate.prepareForActiveDisplay();
+}
+
+bool Hal::consumeTouchWakeRequest()
+{
+    return _touch_input_gate.consumeWakeRequest();
+}
+
+bool Hal::touchInputSuppressed() const
+{
+    return _touch_input_gate.suppressedThisFrame();
+}
+
 /* -------------------------------------------------------------------------- */
 /*                                    Lvgl                                    */
 /* -------------------------------------------------------------------------- */
@@ -361,7 +391,8 @@ static void lvgl_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
     M5GFX &gfx = *(M5GFX *)lv_indev_get_driver_data(indev);
 
     auto tp = GetHAL().getTouchPoint();
-    if (tp.num == 0) {
+    const bool pressed = GetHAL().filterTouchInputForLvgl(tp.num > 0);
+    if (!pressed) {
         data->state = LV_INDEV_STATE_REL;
     } else {
         data->state   = LV_INDEV_STATE_PR;

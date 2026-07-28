@@ -1,6 +1,7 @@
 #include "global_edge_control_service.h"
 
 #include <hal/hal.h>
+#include <runtime/display/global_display_protection_service.h>
 #include <runtime/runtime_supervisor.h>
 
 namespace {
@@ -38,7 +39,19 @@ void GlobalEdgeControlService::update()
         return;
     }
 
-    if (GetHAL().getBackLightBrightness() <= 0) {
+    if (GetGlobalDisplayProtectionService().touchInputSuppressed()) {
+        _logic.reset();
+        _apply_queue.reset();
+        _overlay.hide();
+        _last_touch_state = LV_INDEV_STATE_REL;
+        _owns_touch = false;
+        _last_release_consumed = false;
+        return;
+    }
+
+    if (GetGlobalDisplayProtectionService().state() ==
+            DisplayProtectionState::ScreenOff ||
+        GetHAL().getBackLightBrightness() <= 0) {
         suspendForScreenOff(indev);
         return;
     }
@@ -71,7 +84,8 @@ void GlobalEdgeControlService::applyPendingHardwareUpdate()
 {
     const EdgeControlHardwareUpdate update = _apply_queue.take();
     if (update.side == EdgeControlSide::Brightness) {
-        GetHAL().setBackLightBrightness(update.value, update.persist);
+        GetGlobalDisplayProtectionService().applyUserBrightness(
+            update.value, update.persist);
         _brightness_revision++;
     } else if (update.side == EdgeControlSide::Volume) {
         GetHAL().setSpeakerVolume(update.value, update.persist);
@@ -79,11 +93,6 @@ void GlobalEdgeControlService::applyPendingHardwareUpdate()
         if (update.persist) {
             GetRuntimeSupervisor().requestAssistantVolumeSync(update.value);
         }
-    }
-
-    if (_restore_screen_off_after_apply) {
-        GetHAL().setTemporaryBackLightBrightness(0);
-        _restore_screen_off_after_apply = false;
     }
 }
 
@@ -97,7 +106,6 @@ void GlobalEdgeControlService::shutdown()
     _enabled = false;
     _owns_touch = false;
     _last_release_consumed = false;
-    _restore_screen_off_after_apply = false;
 }
 
 void GlobalEdgeControlService::setEnabled(bool enabled)
@@ -114,7 +122,11 @@ void GlobalEdgeControlService::setEnabled(bool enabled)
     _enabled = enabled;
 
     lv_indev_t* indev = GetHAL().lvTouchpad;
-    _last_touch_state = indev == nullptr ? LV_INDEV_STATE_REL : lv_indev_get_state(indev);
+    auto& protection = GetGlobalDisplayProtectionService();
+    _last_touch_state =
+        indev == nullptr || protection.touchInputSuppressed()
+        ? LV_INDEV_STATE_REL
+        : lv_indev_get_state(indev);
 }
 
 bool GlobalEdgeControlService::ownsTouch() const
@@ -167,7 +179,6 @@ void GlobalEdgeControlService::suspendForScreenOff(lv_indev_t* indev)
     const bool was_active = _logic.active();
     if (was_active) {
         apply(_logic.release(GetHAL().millis()), indev);
-        _restore_screen_off_after_apply = true;
     }
 
     _logic.reset();

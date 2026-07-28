@@ -5,7 +5,9 @@
  */
 #pragma once
 #include "button_input_gate.h"
+#include "external_power_state.h"
 #include "power_led_blink_config.h"
+#include "touch_input_gate.h"
 #include "utils/button/Button_Class.hpp"
 #include <apps/common/common.h>
 #include <memory>
@@ -174,6 +176,7 @@ public:
     uint8_t getBatteryLevel();
     BatterySampleSnapshot batterySampleSnapshot();
     uint32_t batterySampleRevision();
+    ExternalPowerSnapshot getExternalPowerSnapshot();
     bool isBatteryCharging(bool strict = false);
     void setPowerLedMode(PowerLedMode mode, bool saveToSettings = false);
     PowerLedMode getPowerLedMode(bool loadFromSettings = false);
@@ -209,6 +212,12 @@ public:
         int y   = -1;
     };
     TouchPoint getTouchPoint();
+    bool filterTouchInputForLvgl(bool pressed);
+    void armTouchWakeInput();
+    void releaseTouchWakeInputAfterNextSample();
+    void prepareTouchInputForActiveDisplay();
+    bool consumeTouchWakeRequest();
+    bool touchInputSuppressed() const;
 
     /* ---------------------------------- Audio --------------------------------- */
     void setSpeakerVolume(int volume, bool saveToSettings = false);
@@ -303,6 +312,7 @@ private:
     int _user_bl_brightness = 80;
     uint32_t _bl_brightness_revision = 0;
     ButtonInputGate _button_input_gate;
+    TouchInputGate _touch_input_gate;
     int _spk_volume    = 80;
     PowerLedMode _power_led_mode = PowerLedMode::Off;
     int _power_led_blink_interval_seconds = PowerLedBlinkIntervalDefaultSeconds;

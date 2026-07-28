@@ -762,19 +762,20 @@ Extend the Python contract to require the runner names and compiles:
 
 Run the contract and expect failure before changing the script.
 
-- [ ] **Step 2: Expand the runner from 23 to 26 stages**
+- [ ] **Step 2: Expand the runner from 29 to 32 stages**
 
-Keep stages 1–18 unchanged, then use:
+Keep stages 1–23 unchanged, then use:
 
 ```text
-[19/26] Display protection configuration host test
-[20/26] AMOLED protection state machine host test
-[21/26] External power tracker host test
-[22/26] Display protection settings model host test
-[23/26] Button input wake gate host test
-[24/26] Assistant display activity host test
-[25/26] Codex status UI host tests
-[26/26] Isolated unified candidate clean build and capacity gates
+[24/32] Display protection configuration host test
+[25/32] AMOLED protection state machine host test
+[26/32] External power tracker host test
+[27/32] Display protection settings model host test
+[28/32] Button input wake gate host test
+[29/32] Assistant display activity host test
+[30/32] Codex status UI host tests
+[31/32] Trae status UI layout host test
+[32/32] Isolated unified candidate clean build and capacity gates
 ```
 
 Compile each new test with `-std=c++17 -Wall -Wextra -Werror -Imain` and only its required source files.
@@ -824,7 +825,7 @@ Expected: all pass.
 ./scripts/run_unified_offline_validation.sh
 ```
 
-Expected: all 26 stages pass, the firmware links, and capacity gates report true. Do not share this worktree's `build-unified` with another task.
+Expected: all 32 stages pass, the firmware links, and capacity gates report true. Do not share this worktree's `build-unified` with another task.
 
 - [ ] **Step 4: Review for policy leaks and storage mistakes**
 

@@ -52,28 +52,23 @@ void log_assistant_status()
              static_cast<unsigned>(snapshot.task_count));
 }
 
-const char* display_protection_state_name(DisplayProtectionState state)
-{
-    switch (state) {
-        case DisplayProtectionState::Active:
-            return "active";
-        case DisplayProtectionState::Dimmed:
-            return "dimmed";
-        case DisplayProtectionState::ScreenOff:
-            return "off";
-    }
-    return "active";
-}
-
 void log_display_protection_status()
 {
     const auto snapshot = GetGlobalDisplayProtectionService().snapshot();
-    ESP_LOGI(tag,
-             "DISPLAY PROTECTION state=%s brightness=%d restore=%d automatic=%u reasons=0x%02x",
-             display_protection_state_name(snapshot.state),
-             snapshot.effective_brightness, snapshot.restore_brightness,
-             static_cast<unsigned>(snapshot.automatic_enabled),
-             static_cast<unsigned>(snapshot.reason_mask));
+    const DisplayProtectionDiagnostics diagnostics{
+        .state = snapshot.state,
+        .effective_brightness = snapshot.effective_brightness,
+        .user_brightness = snapshot.restore_brightness,
+        .automatic_enabled = snapshot.automatic_enabled,
+        .external_power = snapshot.external_power,
+        .config = snapshot.config,
+        .timing = snapshot.timing,
+        .reason_mask = snapshot.reason_mask,
+        .last_wake_reason = snapshot.last_wake_reason,
+    };
+    std::array<char, 384> line{};
+    FormatDisplayProtectionDiagnostics(diagnostics, line.data(), line.size());
+    ESP_LOGI(tag, "%s", line.data());
 }
 } // namespace
 
