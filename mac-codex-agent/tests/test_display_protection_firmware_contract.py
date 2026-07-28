@@ -260,8 +260,6 @@ class DisplayProtectionFirmwareContractTests(unittest.TestCase):
         )
 
         for token in (
-            "lv_indev_wait_release(indev)",
-            "lv_indev_reset(indev, nullptr)",
             "GetHAL().suppressButtonInputUntilRelease()",
             "GetHAL().setTemporaryBackLightBrightness",
             "GlobalDisplayProtectionService::applyUserBrightness",
@@ -269,6 +267,8 @@ class DisplayProtectionFirmwareContractTests(unittest.TestCase):
             "active && GetHAL().getBackLightBrightness() <= 0",
         ):
             self.assertIn(token, service)
+        self.assertNotIn("lv_indev_wait_release(indev)", service)
+        self.assertNotIn("lv_indev_reset(indev, nullptr)", service)
         edge_service = (
             ROOT
             / "main"
@@ -327,8 +327,43 @@ class DisplayProtectionFirmwareContractTests(unittest.TestCase):
             / "display"
             / "global_display_protection_service.cpp"
         ).read_text(encoding="utf-8")
-        self.assertIn("_touch_input_gate.beginFrame", service)
-        self.assertIn("_touch_input_gate.suppressUntilRelease()", service)
+        self.assertIn("GetHAL().consumeTouchWakeRequest()", service)
+        self.assertNotIn("_touch_input_gate.beginFrame", service)
+        self.assertIn("GetHAL().releaseTouchWakeInputAfterNextSample()", service)
+        self.assertIn("GetHAL().prepareTouchInputForActiveDisplay()", service)
+        self.assertNotIn("GetHAL().disarmTouchWakeInput()", service)
+        apply_pending = service.split(
+            "void GlobalDisplayProtectionService::applyPendingHardwareUpdate()", 1
+        )[1].split("void GlobalDisplayProtectionService::shutdown()", 1)[0]
+        self.assertLess(
+            apply_pending.index("setTemporaryBackLightBrightness"),
+            apply_pending.index(
+                "completeTouchGateReleaseAfterHardwareUpdate"
+            ),
+        )
+        apply_user = service.split(
+            "void GlobalDisplayProtectionService::applyUserBrightness", 1
+        )[1].split(
+            "bool GlobalDisplayProtectionService::touchInputSuppressed", 1
+        )[0]
+        self.assertLess(
+            apply_user.index("setTemporaryBackLightBrightness"),
+            apply_user.index(
+                "completeTouchGateReleaseAfterHardwareUpdate"
+            ),
+        )
+
+        hal_display = (ROOT / "main/hal/hal_display.cpp").read_text(
+            encoding="utf-8"
+        )
+        read_cb = hal_display.split("static void lvgl_read_cb", 1)[1].split(
+            "void Hal::lvgl_init", 1
+        )[0]
+        self.assertIn("filterTouchInputForLvgl", read_cb)
+        self.assertLess(
+            read_cb.index("filterTouchInputForLvgl"),
+            read_cb.index("data->state"),
+        )
 
         codex_header = (
             ROOT / "main" / "apps" / "app_codex_status" / "app_codex_status.h"

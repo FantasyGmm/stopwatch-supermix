@@ -4,7 +4,6 @@
 #include "display_brightness_arbiter.h"
 #include "display_protection_diagnostics.h"
 #include "display_protection_logic.h"
-#include "touch_input_gate.h"
 
 #include <hal/button_input_gate.h>
 #include <hal/external_power_state.h>
@@ -41,8 +40,8 @@ public:
 private:
     void acceptDecision(const DisplayProtectionDecision& decision,
                         bool restore_display = true);
-    void suppressWakeInput(lv_indev_t* indev, bool button_pressed,
-                           bool touch_pressed);
+    void suppressWakeButton(bool button_pressed);
+    void completeTouchGateReleaseAfterHardwareUpdate();
     void syncUserBrightness();
     bool automaticProtectionEnabledForPolicy() const;
     void recalculateAutomaticProtection(uint32_t now_ms);
@@ -55,9 +54,9 @@ private:
     int _restore_brightness = 80;
     DisplayBrightnessArbiter _brightness_arbiter;
     int _pending_brightness = -1;
+    bool _touch_gate_release_pending = false;
     uint32_t _brightness_revision = 0;
     ExternalPowerHealthLogPolicy _power_health_log_policy;
-    TouchInputGate _touch_input_gate;
     lv_indev_state_t _last_touch_state = LV_INDEV_STATE_REL;
     ButtonPhysicalState _last_buttons{};
     bool _initialized = false;

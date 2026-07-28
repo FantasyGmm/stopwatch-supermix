@@ -65,8 +65,7 @@ bool GlobalDisplayProtectionService::init()
     _power_health_log_policy.reset(_external_power.latest_sample_valid, now_ms);
     recalculateAutomaticProtection(now_ms);
     _last_touch_state = lv_indev_get_state(indev);
-    _touch_input_gate.reset();
-    _touch_input_gate.beginFrame(_last_touch_state == LV_INDEV_STATE_PR);
+    GetHAL().prepareTouchInputForActiveDisplay();
     _last_buttons = GetHAL().readButtonPhysicalState();
     _last_wake_reason = DisplayWakeReason::Initialization;
     _initialized = true;
@@ -138,17 +137,17 @@ void GlobalDisplayProtectionService::update()
 
     const ButtonPhysicalState buttons = GetHAL().readButtonPhysicalState();
     const lv_indev_state_t touch_state = lv_indev_get_state(indev);
-    _touch_input_gate.beginFrame(touch_state == LV_INDEV_STATE_PR);
+    const bool touch_wake_requested = GetHAL().consumeTouchWakeRequest();
     const bool button_pressed =
         (buttons.a_pressed && !_last_buttons.a_pressed) ||
         (buttons.b_pressed && !_last_buttons.b_pressed);
     const bool touch_pressed =
         touch_state == LV_INDEV_STATE_PR && _last_touch_state == LV_INDEV_STATE_REL;
 
-    if (button_pressed || touch_pressed) {
+    if (button_pressed || touch_wake_requested || touch_pressed) {
         const DisplayProtectionDecision activity = _logic.userActivity(now_ms);
-        if (display_was_off || activity.consume_input) {
-            suppressWakeInput(indev, button_pressed, touch_pressed);
+        if ((display_was_off || activity.consume_input) && button_pressed) {
+            suppressWakeButton(true);
         }
         _last_wake_reason = button_pressed ? DisplayWakeReason::Button
                                            : DisplayWakeReason::Touch;
@@ -167,6 +166,7 @@ void GlobalDisplayProtectionService::applyPendingHardwareUpdate()
     }
     GetHAL().setTemporaryBackLightBrightness(_pending_brightness);
     _pending_brightness = -1;
+    completeTouchGateReleaseAfterHardwareUpdate();
 }
 
 void GlobalDisplayProtectionService::shutdown()
@@ -178,9 +178,10 @@ void GlobalDisplayProtectionService::shutdown()
     _restore_brightness = 80;
     _brightness_arbiter.reset(80, DisplayProtectionState::Active);
     _pending_brightness = -1;
+    _touch_gate_release_pending = false;
     _brightness_revision = 0;
     _power_health_log_policy = {};
-    _touch_input_gate.reset();
+    GetHAL().prepareTouchInputForActiveDisplay();
     _last_touch_state = LV_INDEV_STATE_REL;
     _last_buttons = {};
     _initialized = false;
@@ -285,11 +286,12 @@ void GlobalDisplayProtectionService::applyUserBrightness(int brightness,
     GetHAL().setTemporaryBackLightBrightness(
         _brightness_arbiter.effectiveBrightness());
     _pending_brightness = -1;
+    completeTouchGateReleaseAfterHardwareUpdate();
 }
 
 bool GlobalDisplayProtectionService::touchInputSuppressed() const
 {
-    return _initialized && _touch_input_gate.suppressedThisFrame();
+    return _initialized && GetHAL().touchInputSuppressed();
 }
 
 DisplayProtectionState GlobalDisplayProtectionService::state() const
@@ -325,12 +327,15 @@ void GlobalDisplayProtectionService::acceptDecision(
             if (restore_display) {
                 _pending_brightness =
                     _brightness_arbiter.effectiveBrightness();
+                _touch_gate_release_pending = true;
             }
             break;
         case DisplayProtectionAction::Dim:
             _pending_brightness = _brightness_arbiter.effectiveBrightness();
             break;
         case DisplayProtectionAction::ScreenOff:
+            GetHAL().armTouchWakeInput();
+            _touch_gate_release_pending = false;
             _pending_brightness = _brightness_arbiter.effectiveBrightness();
             break;
         case DisplayProtectionAction::None:
@@ -343,17 +348,20 @@ void GlobalDisplayProtectionService::acceptDecision(
                    static_cast<unsigned>(_logic.reasonMask()));
 }
 
-void GlobalDisplayProtectionService::suppressWakeInput(
-    lv_indev_t* indev, bool button_pressed, bool touch_pressed)
+void GlobalDisplayProtectionService::suppressWakeButton(bool button_pressed)
 {
     if (button_pressed) {
         GetHAL().suppressButtonInputUntilRelease();
     }
-    if (touch_pressed) {
-        _touch_input_gate.suppressUntilRelease();
-        lv_indev_wait_release(indev);
-        lv_indev_reset(indev, nullptr);
+}
+
+void GlobalDisplayProtectionService::completeTouchGateReleaseAfterHardwareUpdate()
+{
+    if (!_touch_gate_release_pending) {
+        return;
     }
+    GetHAL().releaseTouchWakeInputAfterNextSample();
+    _touch_gate_release_pending = false;
 }
 
 void GlobalDisplayProtectionService::syncUserBrightness()

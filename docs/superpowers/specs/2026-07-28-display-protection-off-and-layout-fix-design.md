@@ -15,7 +15,7 @@ Use the approved two-line charging layout:
 1. Center `Charging Protection` on the first line inside the round display's safe area.
 2. Center the charging switch on a separate second line.
 3. Move the two label/slider groups downward and reduce unused vertical gaps.
-4. Reduce and reposition the OK button so its complete shape remains inside the lower round-screen safe area.
+4. Use the same bottom-centered `374 x 130`, radius-77 OK button as the existing Settings child pages. This user-approved consistency requirement supersedes the earlier reduced one-off button geometry; physical watch acceptance confirms the standard control is usable on the round display.
 5. Preserve the existing typography, black background, dark tracks, green indicators, centered white knobs, switch styling, and green OK button.
 6. Keep the page fixed and non-scrollable.
 
@@ -105,7 +105,7 @@ Automated coverage must include:
 7. persistent dim with screen-off disabled;
 8. no automatic transition when both stages are disabled;
 9. unchanged manual screen-off and wake behavior;
-10. the approved two-line charging geometry and round-screen-safe OK button;
+10. the approved two-line charging geometry and standard Settings child-page OK button;
 11. draft-only edits and single OK persistence;
 12. diagnostics containing both enable states;
 13. the full unified offline-validation gate and clean firmware build.

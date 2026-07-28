@@ -6,6 +6,8 @@
 
 **Architecture:** Preserve the existing timeout-choice indices and add explicit per-stage enable booleans. The settings model maps UI position zero to disabled and later positions to the existing time choices, while the runtime state machine evaluates enabled stages independently. The global service owns compatibility defaults, persistence, power policy, and diagnostics; the LVGL view remains a draft-only client that applies once through OK.
 
+**Accepted implementation amendment:** After physical review, the user required the OK control to match existing Settings child pages rather than use the reduced one-off geometry in Task 5. The final accepted control is bottom-centered, `374 x 130`, radius 77; this amendment supersedes the older `334 x 86` snippets below.
+
 **Tech Stack:** C++17, ESP-IDF 5.5.4, LVGL, StopWatch Settings/NVS wrapper, Python `unittest` source contracts, host-compiled assertion tests, esptool backup/flash scripts.
 
 ---
