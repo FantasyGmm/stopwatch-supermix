@@ -2,9 +2,10 @@
 
 ## Status
 
-Approved interaction direction for the disposable browser prototype. This
-refines the existing N, O, and P lower-screen explorations; it does not yet
-change firmware, BLE transport, the Mac agent, or the established upper-screen
+Approved interaction direction for the disposable browser prototype. Variant
+Q is the new primary candidate; N, O, and P remain available as density and
+priority references. This refinement does not yet change firmware, BLE
+transport, the Mac agent, or the established upper-screen
 TRAE layout.
 
 ## Problem
@@ -33,6 +34,50 @@ The revised principle is:
 - A state or project with no tasks is skipped rather than shown as an empty
   carousel page. With no active tasks, show a centered `暂无活跃任务` state.
 
+## Variant Q: Fixed Summary with Task Carousel
+
+Q is the recommended balanced-density direction. It preserves the global
+overview while displaying only one readable task at a time.
+
+The lower screen has two persistent zones:
+
+1. a fixed summary row containing `待确认 N` and `运行中 N`;
+2. one borderless task focus containing state, position, project, and task
+   name.
+
+For the mixed example, the first task renders as:
+
+```text
+待确认 2                 运行中 3
+────────────────────────────
+
+待确认 · 1 / 2
+StopWatch
+确认固件刷写
+```
+
+The summary row never participates in the carousel. Its counts update only
+when the normalized active-task snapshot changes. The currently displayed
+task's state uses full orange-red or cyan emphasis in the summary; the other
+state remains visible with reduced emphasis.
+
+The task focus follows the same stable ordering as the state-first carousel:
+
+1. show every pending task once;
+2. show every running task once;
+3. return to the first pending task when pending remains non-empty;
+4. skip any empty state without displaying a blank carousel page.
+
+Each task remains visible for three seconds. Tapping the focus advances one
+task immediately and gives the selected task a fresh three-second dwell. The
+summary counts do not animate and must not resemble token usage or progress.
+
+When no active tasks exist, the summary remains visible as `待确认 0` and
+`运行中 0`; the task focus shows `暂无活跃任务` and automatic rotation stops.
+
+Q uses no card outline, rounded task container, task list, or second detail
+column. Project and task names remain at the larger low-density sizes.
+
 ## Variant N: Project-First Carousel
 
 N shows one active project at a time.
@@ -53,7 +98,8 @@ This variant answers: **Which project needs attention?**
 
 ## Variant O: State-First Nested Carousel
 
-O is the recommended direction. It shows one state and one task at a time.
+O remains the state-first comparison direction. It shows one state and one
+task at a time.
 
 For the mixed example, the first page is:
 
@@ -131,6 +177,9 @@ percentage treatment may make it resemble usage progress.
 
 The updated interactive prototype must verify:
 
+- Q with persistent pending/running counts while its task focus advances;
+- Q highlights the current task state without hiding the other count;
+- Q preserves `0 / 0` counts in the no-active-task state;
 - N, O, and P at the mixed `2 pending / 3 running` scenario;
 - readable project and task names without overlapping the page dots;
 - O rotates both tasks within pending before switching to running;
