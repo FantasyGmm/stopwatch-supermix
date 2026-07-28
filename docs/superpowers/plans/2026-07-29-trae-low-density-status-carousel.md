@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace the dense N/O/P browser mockups with three low-density carousels that show one project, state, or task focus at a time while preserving the approved TRAE upper screen.
+**Goal:** Preserve the N/O/P low-density comparisons and add Q, a balanced primary candidate with persistent pending/running counts above one readable rotating task.
 
-**Architecture:** Create a new disposable HTML prototype beside the existing N/O/P comparison so earlier alternatives remain recoverable. The page will share one normalized active-task dataset, while each variant owns a small independent cursor and render function. A single three-second scheduler and the manual advance control will call the same variant-specific step functions, keeping automatic and manual ordering identical.
+**Architecture:** The disposable HTML prototype shares one normalized active-task dataset while each variant owns an independent cursor and render function. Q derives its fixed summary and rotating detail from that same dataset, so counts cannot drift from the task queue. A single three-second scheduler and manual advance control call the same variant-specific step functions, keeping automatic and manual ordering identical.
 
 **Tech Stack:** Self-contained HTML/CSS/JavaScript, existing visual-companion server, in-app browser Playwright checks, Node.js syntax and structural assertions.
 
@@ -12,8 +12,8 @@
 
 ## File Map
 
-- Create: `.superpowers/brainstorm/5622-1785255196/content/trae-layout-compare-low-density.html`
-  - Owns the disposable N/O/P comparison, fake scenarios, carousel state, and interactive controls.
+- Modify: `.superpowers/brainstorm/5622-1785255196/content/trae-layout-compare-low-density.html`
+  - Owns the disposable N/O/P/Q comparison, fake scenarios, carousel state, and interactive controls.
 - Reuse unchanged:
   - `.superpowers/brainstorm/5622-1785255196/content/trae-pixel-head.png`
   - `.superpowers/brainstorm/5622-1785255196/content/trae-pixel-idle.png`
@@ -405,3 +405,157 @@ http://localhost:52202/#variant=O
 
 Do not build firmware, flash hardware, stage `.superpowers/`, or include the
 prototype in a production commit.
+
+### Task 5: Add Q Balanced Summary and Task Carousel
+
+**Files:**
+- Modify: `.superpowers/brainstorm/5622-1785255196/content/trae-layout-compare-low-density.html`
+- Reference: `docs/superpowers/specs/2026-07-29-trae-low-density-status-carousel-design.md`
+
+- [ ] **Step 1: Run a failing Q structure assertion**
+
+Run:
+
+```bash
+node -e 'const fs=require("fs"),a=require("assert");const h=fs.readFileSync(".superpowers/brainstorm/5622-1785255196/content/trae-layout-compare-low-density.html","utf8");for(const c of ["variantQ","q-summary","q-focus"])a(h.includes(c),`missing ${c}`)'
+```
+
+Expected: FAIL with `missing variantQ`.
+
+- [ ] **Step 2: Add Q markup and a fourth comparison tab**
+
+Add this lower-screen structure after P:
+
+```html
+<section class="variant" id="variantQ">
+  <div class="q-shell">
+    <div class="q-summary" id="qSummary">
+      <span class="q-metric pending"><small>待确认</small><b id="qPendingCount">0</b></span>
+      <span class="q-metric running"><small>运行中</small><b id="qRunningCount">0</b></span>
+    </div>
+    <div class="q-divider"></div>
+    <button class="q-focus" id="qFocus" aria-label="切换综合任务"></button>
+  </div>
+</section>
+```
+
+Add the external selector:
+
+```html
+<button data-variant="Q"><b>Q</b><span>综合方案</span></button>
+```
+
+Change `.variant-tabs` to `grid-template-columns:repeat(4,1fr)` and widen the
+desktop switcher content range to `minmax(420px,520px)`. The switcher is outside
+the circular watch and does not affect production layout.
+
+- [ ] **Step 3: Add fixed-summary and single-focus styling**
+
+Implement:
+
+```css
+.q-shell{position:absolute;left:82px;top:235px;width:302px;height:171px}
+.q-summary{height:35px;display:flex;align-items:center;justify-content:center;gap:38px}
+.q-metric{display:inline-flex;align-items:baseline;gap:6px;opacity:.45;transition:opacity .18s ease}
+.q-metric small{font-size:10px;font-weight:700}
+.q-metric b{font-size:18px;line-height:20px}
+.q-metric.pending{color:var(--pending)}
+.q-metric.running{color:var(--running)}
+.q-summary.pending .q-metric.pending,.q-summary.running .q-metric.running{opacity:1}
+.q-summary.empty .q-metric{opacity:.62}
+.q-divider{height:1px;background:rgba(97,108,120,.34)}
+.q-focus{width:100%;height:134px;border:0;background:transparent;color:inherit;text-align:left;padding:9px 20px;cursor:pointer}
+.q-state{font-size:10px;font-weight:700;letter-spacing:1px}
+.q-focus.pending .q-state{color:var(--pending)}
+.q-focus.running .q-state{color:var(--running)}
+.q-project{margin-top:9px;color:#9bb1ff;font-size:20px;line-height:25px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.q-task{margin-top:4px;color:#edf2f5;font-size:15px;line-height:20px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.q-page{margin-top:8px;color:#687480;font-size:9px}
+```
+
+The fixed summary consumes only 36 px. The task focus ends at y=405, leaving
+the existing page dots at y=416 and battery at y=438 unobstructed.
+
+- [ ] **Step 4: Add Q state and rendering**
+
+Extend the hash parser and variant list to include Q, set Q as the default for
+an absent hash, and add:
+
+```js
+let qFocusIndex=0;
+
+function renderQ(){
+  const g=groups();
+  const tasks=activeTasks();
+  const summary=el('qSummary');
+  const host=el('qFocus');
+  el('qPendingCount').textContent=g.pending.length;
+  el('qRunningCount').textContent=g.running.length;
+  if(!tasks.length){
+    summary.className='q-summary empty';
+    host.className='q-focus';
+    host.innerHTML='<span class="focus-empty">暂无活跃任务</span>';
+    return;
+  }
+  qFocusIndex%=tasks.length;
+  const task=tasks[qFocusIndex];
+  summary.className=`q-summary ${task.state}`;
+  host.className=`q-focus ${task.state}`;
+  host.innerHTML='<div class="q-state"></div><div class="q-project"></div><div class="q-task"></div><div class="q-page"></div>';
+  const stateTasks=g[task.state];
+  const stateIndex=stateTasks.indexOf(task);
+  host.querySelector('.q-state').textContent=`${task.state==='pending'?'待确认':'运行中'} · ${stateIndex+1} / ${stateTasks.length}`;
+  host.querySelector('.q-project').textContent=task.project||'--';
+  host.querySelector('.q-task').textContent=task.title||'--';
+  host.querySelector('.q-page').textContent=`任务 ${qFocusIndex+1} / ${tasks.length}`;
+}
+
+function advanceQ(){
+  const tasks=activeTasks();
+  if(tasks.length)qFocusIndex=(qFocusIndex+1)%tasks.length;
+}
+```
+
+Call `renderQ()` from `renderAll()`, `advanceQ()` from `step()` when Q is
+active, reset `qFocusIndex=0` on scenario changes, and bind `qFocus` to
+`step(true)`. Add the Q description:
+
+```js
+Q:'综合方案：固定显示待确认和运行中数量，下方按待确认优先轮播一条可读任务。'
+```
+
+- [ ] **Step 5: Run the Q structure and script assertions**
+
+Run:
+
+```bash
+node -e 'const fs=require("fs"),a=require("assert");const h=fs.readFileSync(".superpowers/brainstorm/5622-1785255196/content/trae-layout-compare-low-density.html","utf8");const s=h.match(/<script>([\s\S]*?)<\/script>/)[1];new Function(s);for(const c of ["variantQ","q-summary","q-focus"])a(h.includes(c),`missing ${c}`);for(const fn of ["renderQ","advanceQ"])a(s.includes(`function ${fn}`),`missing ${fn}`);console.log("Q structure and script checks ok")'
+```
+
+Expected: `Q structure and script checks ok`.
+
+- [ ] **Step 6: Verify Q interactively**
+
+Reload `http://localhost:52202/#variant=Q`, pause automatic demonstration, and
+reset the mixed scenario. Confirm the initial focus is:
+
+```text
+待确认 2 | 运行中 3 | 待确认 1 / 2 | StopWatch | 确认固件刷写
+```
+
+Click `执行下一步` twice. The fixed counts must remain `2` and `3`, while the
+detail moves to `WebStream / 确认权限变更` and then
+`StopWatch / 构建主干固件`.
+
+- [ ] **Step 7: Verify Q edge states and handoff**
+
+Confirm:
+
+- pending-only shows `待确认 3 / 运行中 0` and a pending focus;
+- running-only shows `待确认 0 / 运行中 3` and a running focus;
+- idle shows `待确认 0 / 运行中 0` plus `暂无活跃任务`;
+- browser warning/error logs are empty.
+
+Restore mixed data and automatic demonstration, leave the deliverable browser
+tab visible at `http://localhost:52202/#variant=Q`, and do not stage the
+`.superpowers` prototype.
