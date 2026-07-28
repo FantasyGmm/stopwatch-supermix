@@ -195,6 +195,8 @@ int main()
     assert(active.period_ms == kRobotIdleDurationMs);
     assert(inactive.paused && !inactive.action);
     assert(inactive.period_ms == kRobotIdleDurationMs);
+    assert(kRobotIdleDurationMs == 1300);
+    assert(kRobotActionDurationMs == 320);
     const RobotTimerStep from_idle = resolve_robot_timer_step(false);
     const RobotTimerStep from_action = resolve_robot_timer_step(true);
     assert(from_idle.action && from_idle.period_ms == kRobotActionDurationMs);

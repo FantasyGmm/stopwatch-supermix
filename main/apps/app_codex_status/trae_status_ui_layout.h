@@ -96,8 +96,8 @@ constexpr int kCardTitleY = 59;
 constexpr int kCardDetailY = 78;
 constexpr int kDeckHintY = 390;
 
-constexpr uint32_t kRobotIdleDurationMs = 2200;
-constexpr uint32_t kRobotActionDurationMs = 180;
+constexpr uint32_t kRobotIdleDurationMs = 1300;
+constexpr uint32_t kRobotActionDurationMs = 320;
 
 
 enum class ProcessHealth {
