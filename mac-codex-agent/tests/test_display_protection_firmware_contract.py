@@ -166,16 +166,20 @@ class DisplayProtectionFirmwareContractTests(unittest.TestCase):
         callback_end = clock_source.index("\n    });", callback_start)
         callback = clock_source[callback_start:callback_end]
         destroy_start = clock_source.index("void AppClock::onDestroy()")
-        destroy_end = clock_source.index("void AppClock::transitionTo", destroy_start)
+        update_start = clock_source.index("bool AppClock::updateAlarmTrigger()")
+        clear_start = clock_source.index("void AppClock::clearAlarmTrigger()", update_start)
+        update_body = clock_source[update_start:clear_start]
+        destroy_end = update_start
         destroy_body = clock_source[destroy_start:destroy_end]
 
         acquire = callback.index("DisplayKeepAwakeReason::AlarmRinging, true")
         flush = callback.index("applyPendingHardwareUpdate()")
         view = callback.index("std::make_unique<view::AlarmTriggerView>()")
-        release = callback.index("DisplayKeepAwakeReason::AlarmRinging, false")
         self.assertLess(acquire, flush)
         self.assertLess(flush, view)
-        self.assertLess(view, release)
+        self.assertIn(
+            "DisplayKeepAwakeReason::AlarmRinging, false", update_body
+        )
         self.assertIn(
             "DisplayKeepAwakeReason::AlarmRinging, false", destroy_body
         )
