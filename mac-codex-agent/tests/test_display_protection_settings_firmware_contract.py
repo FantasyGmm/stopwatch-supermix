@@ -74,9 +74,9 @@ class DisplayProtectionSettingsFirmwareContractTests(unittest.TestCase):
             self.worker.count("setTextFont(&lv_font_montserrat_20)"), 2
         )
 
-        self.assertIn("_ok_button->align(LV_ALIGN_TOP_MID, 0, 335)", self.worker)
-        self.assertIn("_ok_button->setSize(334, 86)", self.worker)
-        self.assertIn("_ok_button->setRadius(43)", self.worker)
+        self.assertIn("_ok_button->align(LV_ALIGN_CENTER, 0, 175)", self.worker)
+        self.assertIn("_ok_button->setSize(374, 130)", self.worker)
+        self.assertIn("_ok_button->setRadius(77)", self.worker)
         self.assertIn('_ok_button->label().setText("OK")', self.worker)
 
     def test_discrete_linked_sliders_use_labels_and_approved_style(self):
@@ -104,6 +104,12 @@ class DisplayProtectionSettingsFirmwareContractTests(unittest.TestCase):
         self.assertIn("if (_syncing_controls)", self.worker)
         self.assertIn("_syncing_controls = true", self.worker)
         self.assertIn("_syncing_controls = false", self.worker)
+
+    def test_sliders_expand_touch_target_for_watch_interaction(self):
+        style = self.worker.split("void applySliderStyle", 1)[1].split(
+            "void syncControls", 1
+        )[0]
+        self.assertIn("lv_obj_set_ext_click_area(slider.get(), 18)", style)
 
     def test_edits_only_mutate_the_draft_model(self):
         view = self.worker.split("DisplayProtectionWorker::DisplayProtectionWorker", 1)[0]

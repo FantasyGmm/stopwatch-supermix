@@ -80,9 +80,9 @@ public:
         syncControls();
 
         _ok_button = std::make_unique<Button>(_panel->get());
-        _ok_button->align(LV_ALIGN_TOP_MID, 0, 335);
-        _ok_button->setSize(334, 86);
-        _ok_button->setRadius(43);
+        _ok_button->align(LV_ALIGN_CENTER, 0, 175);
+        _ok_button->setSize(374, 130);
+        _ok_button->setRadius(77);
         _ok_button->setBorderWidth(0);
         _ok_button->setShadowWidth(0);
         _ok_button->setBgColor(lv_color_hex(0x4AD78C));
@@ -162,6 +162,7 @@ private:
         lv_obj_set_style_bg_opa(slider.get(), LV_OPA_COVER, LV_PART_KNOB);
         lv_obj_set_style_border_width(slider.get(), 0, LV_PART_KNOB);
         lv_obj_set_style_radius(slider.get(), LV_RADIUS_CIRCLE, LV_PART_KNOB);
+        lv_obj_set_ext_click_area(slider.get(), 18);
     }
 
     void syncControls()
