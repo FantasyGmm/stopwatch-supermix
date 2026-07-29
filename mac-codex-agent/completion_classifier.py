@@ -185,14 +185,14 @@ _REPORT_NOUN_SUFFIX_RE = re.compile(
     re.IGNORECASE,
 )
 _COORDINATED_ACTION_RE = re.compile(
-    r"(?:\b(?:and|then)\s+|,[ \t]+)(?:also\s+)?"
+    r"(?:\b(?:and|or|then)\s+|,[ \t]+)(?:also\s+)?"
     r"(?:approve|authorize|confirm|choose|select|provide|reply|retry|review|verify)\b|"
-    r"(?:并且|并|然后|和|及|、|，)(?:[^\r\n。！？.!?؟]{0,20}?再)?(?:请)?"
+    r"(?:并且|并|然后|和|及|或|、|，)(?:[^\r\n。！？.!?؟]{0,20}?再)?(?:请)?"
     r"(?:确认|选择|提供|回复|重新|重试|复核|批准|授权|验证)",
     re.IGNORECASE,
 )
 _COORDINATED_REQUIREMENT_NOUN_RE = re.compile(
-    r"(?:\band[ \t]+(?:also[ \t]+)?|,[ \t]*)"
+    r"(?:\b(?:and|or)[ \t]+(?:also[ \t]+)?|,[ \t]*)"
     r"(?:your[ \t]+)?"
     r"(?:approval|authorization|confirmation|choice|input|reply|verification)\b",
     re.IGNORECASE,
@@ -281,6 +281,9 @@ _RESOLUTION_RE = re.compile(
     r"\bno (?:choice|selection) is required\b|"
     r"\bthe choice (?:is|has been) resolved\b|"
     r"\bthe previously offered choice has already been applied\b)"
+    r"|(?P<security_pair>"
+    r"\bno (?:approval[ \t]+or[ \t]+authorization|"
+    r"authorization[ \t]+or[ \t]+approval)[ \t]+is[ \t]+required\b)"
     r"|(?P<approval>"
     r"(?:无需|不需要)(?:(?:你|您)的?)?批准|"
     r"\b(?:no approval is required|approval is (?:no longer|not) required)\b)"
@@ -521,14 +524,15 @@ _QUESTION_GOVERNING_ACTION_RE = re.compile(
     re.IGNORECASE,
 )
 _COORDINATED_QUESTION_ACTION_RE = re.compile(
-    r"(?:\b(?:and|or|then)[ \t]+|,[ \t]+)(?:also[ \t]+)?"
+    r"(?:\b(?:and|or|then)[ \t]+|,[ \t]+(?:and[ \t]+|then[ \t]+)?)"
+    r"(?:also[ \t]+)?"
     r"(?P<english>approve|authorize|verify|confirm)\b|"
-    r"(?:并且|并|和|及|或|、|，)(?:请)?"
+    r"(?:并且|并|然后|和|及|或|、|，)(?:请)?"
     r"(?P<chinese>批准|授权|验证|确认)",
     re.IGNORECASE,
 )
 _QUESTION_COMPLEMENT_RE = re.compile(
-    r"\b(?:that|whether)\b|(?:是否)",
+    r"\b(?:that|whether|if)\b|(?:是否)",
     re.IGNORECASE,
 )
 
@@ -557,9 +561,26 @@ def _governing_question_actions(
         action_prose[cursor:]
     ):
         intervening = action_prose[cursor : cursor + coordinated.start()]
-        if _QUESTION_COMPLEMENT_RE.search(intervening) is not None:
+        complement = _QUESTION_COMPLEMENT_RE.search(intervening)
+        if (
+            complement is not None
+            and complement.group().casefold() == "if"
+            and intervening[: complement.start()].strip()
+        ):
+            complement = None
+        restart = (
+            re.search(r"\bthen\b|然后", coordinated.group(), re.IGNORECASE)
+            is not None
+            or coordinated.group().lstrip().startswith((",", "，"))
+            or intervening.rstrip().endswith((",", "，"))
+        )
+        if complement is not None and not restart:
             break
         action = coordinated.group("english") or coordinated.group("chinese")
+        if coordinated.group("chinese") and re.match(
+            r"状态", action_prose[cursor + coordinated.end() :]
+        ):
+            break
         actions.append((_question_action_scope(action), cursor + coordinated.end()))
         cursor += coordinated.end()
     return tuple(actions)
@@ -645,7 +666,24 @@ def _action_referent(match: re.Match[str], clause: _Clause) -> str | None:
             return _normalize_referent(chinese.group(1))
     relative_end = match.end() - clause.start
     tail = clause.text[relative_end : relative_end + 160]
-    return _bounded_referent(tail)
+    referent = _bounded_referent(tail)
+    required_target = re.match(
+        r"\s+(?:is|are)[ \t]+required[ \t]+for[ \t]+(.+)",
+        tail,
+        re.IGNORECASE,
+    )
+    if required_target is not None:
+        referent = _bounded_referent(required_target.group(1))
+    if referent is None:
+        coordinated = list(_COORDINATED_ACTION_RE.finditer(tail))
+        if coordinated:
+            group_last = coordinated[0]
+            for candidate in coordinated[1:]:
+                if re.search(r"\bthen\b|然后", candidate.group(), re.IGNORECASE):
+                    break
+                group_last = candidate
+            referent = _bounded_referent(tail[group_last.end() :])
+    return referent
 
 
 def _question_referent(
@@ -672,14 +710,43 @@ def _governing_question_referent(
 ) -> str | None:
     _, action_end = actions[action_index]
     tail = clause.text[action_end:]
-    if _QUESTION_COMPLEMENT_RE.match(tail.lstrip()) is not None:
+    complement = _QUESTION_COMPLEMENT_RE.search(tail)
+    next_action = _COORDINATED_QUESTION_ACTION_RE.search(tail)
+    if complement is not None and (
+        next_action is None or complement.start() < next_action.start()
+    ):
         target = re.search(
             r"\bfor[ \t]+([^\r\n。！？.!?؟]+)", tail, re.IGNORECASE
         )
-        return _bounded_referent(target.group(1)) if target is not None else None
-    referent = _bounded_referent(tail)
+        if target is not None:
+            return _bounded_referent(target.group(1))
+        english_subject = re.match(
+            r"\s*(?:whether|if)[ \t]+(.+?)[ \t]+requires?\b",
+            tail,
+            re.IGNORECASE,
+        )
+        if english_subject is not None:
+            return _bounded_referent(english_subject.group(1))
+        chinese_subject = re.match(r"\s*(.+?)是否(?:需要|需)", tail)
+        return (
+            _bounded_referent(chinese_subject.group(1))
+            if chinese_subject is not None
+            else None
+        )
+    chinese_status = re.match(r"\s*([^，,;；。.!?！？؟]+状态)(?:吗|呢)?", tail)
+    referent = (
+        _normalize_referent(chinese_status.group(1))
+        if chinese_status is not None
+        else _bounded_referent(tail)
+    )
     if referent is None and action_index + 1 < len(actions):
-        referent = _bounded_referent(clause.text[actions[-1][1] :])
+        group_last = action_index
+        for next_index in range(action_index + 1, len(actions)):
+            between = clause.text[actions[next_index - 1][1] : actions[next_index][1]]
+            if re.search(r"\bthen\b|然后", between, re.IGNORECASE):
+                break
+            group_last = next_index
+        referent = _bounded_referent(clause.text[actions[group_last][1] :])
     return referent
 
 
@@ -705,6 +772,15 @@ def _resolution_referent(match: re.Match[str], clause: _Clause) -> str | None:
     relative_start = match.start() - clause.start
     prefix = clause.text[max(0, relative_start - 80) : relative_start]
     chinese = re.search(r"([^\s，,;；。.!?！？؟]{1,40})\s*$", prefix)
+    if chinese is not None and chinese.group(1) in {"也", "且"}:
+        coordinated = re.search(
+            r"([^\s，,;；。.!?！？؟]{1,40})"
+            r"(?:无需|不需要)(?:(?:你|您)的?)?(?:批准|授权|验证)"
+            r"[，,]\s*(?:也|且)\s*$",
+            prefix,
+        )
+        if coordinated is not None:
+            return _normalize_referent(coordinated.group(1))
     return _normalize_referent(chinese.group(1)) if chinese is not None else None
 
 
@@ -766,6 +842,10 @@ def _resolution_scopes(match: re.Match[str]) -> FrozenSet[_EvidenceScope]:
         return frozenset({_EvidenceScope.CONFIRMATION})
     if match.lastgroup == "choice":
         return frozenset({_EvidenceScope.CHOICE})
+    if match.lastgroup == "security_pair":
+        return frozenset(
+            {_EvidenceScope.APPROVAL, _EvidenceScope.AUTHORIZATION}
+        )
     if match.lastgroup == "approval":
         return frozenset({_EvidenceScope.APPROVAL})
     if match.lastgroup == "authorization":
@@ -1255,8 +1335,16 @@ def _required_action_evidence(
             clause is not None
             and primary_index >= 0
             and primary_starts[primary_index] >= clause.start
-            and _OWNED_REQUIREMENT_RE.search(primary_matches[primary_index].group())
-            is not None
+            and (
+                _OWNED_REQUIREMENT_RE.search(primary_matches[primary_index].group())
+                is not None
+                or re.search(
+                    r"\b(?:approval|authorization|verification)\b",
+                    primary_matches[primary_index].group(),
+                    re.IGNORECASE,
+                )
+                is not None
+            )
         ):
             action_matches.append(match)
 

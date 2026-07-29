@@ -1567,6 +1567,142 @@ class CompletionClassifierTests(unittest.TestCase):
             ("waiting", "text_direct_question"),
         )
 
+    def test_question_action_groups_share_only_local_trailing_referents(self):
+        result = classify_completion(
+            "Can you approve and authorize production, then verify staging? "
+            "No approval is required for production. "
+            "No authorization is required for production. "
+            "No verification is required for staging."
+        )
+        self.assertEqual(
+            (result.outcome, result.reason),
+            ("completed", "text_explicitly_resolved"),
+        )
+        non_question = classify_completion(
+            "Please approve and authorize production, then verify staging. "
+            "No approval is required for production. "
+            "No authorization is required for production. "
+            "No verification is required for staging."
+        )
+        self.assertEqual(
+            (non_question.outcome, non_question.reason),
+            ("completed", "text_explicitly_resolved"),
+        )
+
+    def test_complement_ranges_exclude_inner_actions_but_restore_outer_actions(self):
+        cases = (
+            (
+                "Can you confirm whether approval is required, then authorize release? "
+                "No confirmation is required.",
+                ("waiting", "text_direct_question"),
+            ),
+            (
+                "Can you confirm if I should approve or authorize deployment? "
+                "No confirmation is required.",
+                ("completed", "text_explicitly_resolved"),
+            ),
+            (
+                "Can you verify if approval is required? No verification is required.",
+                ("completed", "text_explicitly_resolved"),
+            ),
+            (
+                "你能验证生产是否需要批准，然后授权发布吗？无需验证。",
+                ("waiting", "text_direct_question"),
+            ),
+            (
+                "Can you confirm whether you approve and authorize deployment? "
+                "No confirmation is required.",
+                ("completed", "text_explicitly_resolved"),
+            ),
+            (
+                "你能确认生产是否需要批准，并授权发布吗？无需确认。",
+                ("waiting", "text_direct_question"),
+            ),
+            (
+                "Can you approve production, then verify whether staging "
+                "requires authorization? No approval is required for production. "
+                "No verification is required for staging.",
+                ("completed", "text_explicitly_resolved"),
+            ),
+        )
+        for message, expected in cases:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual((result.outcome, result.reason), expected)
+
+    def test_coordinated_security_resolutions_clear_each_scope(self):
+        messages = (
+            "Please approve and authorize deployment. "
+            "No approval or authorization is required.",
+            "请批准并授权部署。部署无需批准，也无需授权。",
+            "Please approve and authorize deployment. "
+            "No authorization or approval is required.",
+        )
+        for message in messages:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("completed", "text_explicitly_resolved"),
+                )
+
+    def test_non_question_or_security_actions_keep_each_scope(self):
+        messages = (
+            "Approval or authorization is required. No approval is required.",
+            "需要您的批准或授权。无需批准。",
+        )
+        for message in messages:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("waiting", "text_required_action"),
+                )
+
+        resolved = classify_completion(
+            "Approval or authorization is required for production. "
+            "No approval is required for production. "
+            "No authorization is required for production."
+        )
+        self.assertEqual(
+            (resolved.outcome, resolved.reason),
+            ("completed", "text_explicitly_resolved"),
+        )
+
+    def test_nearest_attribution_source_controls_each_requirement(self):
+        historical = classify_completion(
+            "The docs say approval is required, but the logs say authorization "
+            "is required in the old workflow."
+        )
+        self.assertEqual(
+            (historical.outcome, historical.reason),
+            ("completed", "completion_only"),
+        )
+
+        reopened = classify_completion(
+            "The docs say approval is required. The logs say authorization is "
+            "required in the old workflow, but please verify deployment."
+        )
+        self.assertEqual(
+            (reopened.outcome, reopened.reason),
+            ("waiting", "text_required_action"),
+        )
+
+    def test_question_referents_ignore_requirement_complements_and_status_nouns(self):
+        messages = (
+            "Can you verify whether production requires approval? "
+            "No verification is required for production.",
+            "你能验证生产部署是否需要批准吗？生产部署无需验证。",
+            "你能验证批准和授权状态吗？无需验证批准和授权状态。",
+        )
+        for message in messages:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("completed", "text_explicitly_resolved"),
+                )
+
     def test_chinese_question_object_actions_only_coordinate_at_boundaries(self):
         result = classify_completion("你能验证批准状态并授权发布吗？无需验证。")
         self.assertEqual(
