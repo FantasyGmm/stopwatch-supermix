@@ -341,6 +341,8 @@ _EXPECTATION_RESOLUTION_PREFIX_RE = re.compile(
     r"(?:isn|aren|wasn|weren)['’]t|"
     r"(?:has|have|had)(?:[ \t]+not)?[ \t]+been|"
     r"(?:hasn|haven|hadn)['’]t[ \t]+been|"
+    r"(?:will|would)(?:[ \t]+not)?[ \t]+have[ \t]+been|"
+    r"(?:won|wouldn)['’]t[ \t]+have[ \t]+been|"
     r"(?:will|would)(?:[ \t]+not)?[ \t]+be|"
     r"(?:won|wouldn)['’]t[ \t]+be)[ \t]+that)\b",
     re.IGNORECASE,
@@ -391,16 +393,33 @@ _CONFIRMATION_POLARITY_RE = re.compile(
         (?P<negative>
             (?:
                 (?:(?:(?:has|have|had)[ \t]+(?:not|never)
-                        (?:[ \t]+(?:yet|ever|actually|explicitly|fully|formally|still))
+                        (?:[ \t]+(?:already|yet|ever|actually|explicitly|fully|formally|still))
                         {0,2}[ \t]+been
-                    |(?:hasn|haven|hadn)['’]t[ \t]+been
+                    |(?:hasn|haven|hadn)['’]t
+                        (?:[ \t]+(?:already|yet|ever|actually|explicitly|fully|formally|still))
+                        {0,2}[ \t]+been
                     |(?:is|are|was|were)[ \t]+not
+                        (?:[ \t]+(?:already|yet|ever|actually|explicitly|fully|formally|still))
+                        {0,2}
                     |(?:isn|aren|wasn|weren)['’]t
-                    |(?:cannot|can['’]t)[ \t]+(?:be|have(?:[ \t]+been)?)
+                        (?:[ \t]+(?:already|yet|ever|actually|explicitly|fully|formally|still))
+                        {0,2}
+                    |(?:cannot|can['’]t)
+                        (?:[ \t]+(?:already|yet|ever|actually|explicitly|fully|formally|still))
+                        {0,2}[ \t]+(?:be|have
+                            (?:[ \t]+(?:already|yet|ever|actually|explicitly|fully|formally|still))
+                            {0,2}(?:[ \t]+been)?)
                     |(?:may|might|must|will|would|can|could|should)
-                        [ \t]+not[ \t]+(?:be|have(?:[ \t]+been)?)
+                        [ \t]+not
+                        (?:[ \t]+(?:already|yet|ever|actually|explicitly|fully|formally|still))
+                        {0,2}[ \t]+(?:be|have
+                            (?:[ \t]+(?:already|yet|ever|actually|explicitly|fully|formally|still))
+                            {0,2}(?:[ \t]+been)?)
                     |(?:mightn|mustn|won|wouldn|couldn|shouldn)['’]t
-                        [ \t]+(?:be|have(?:[ \t]+been)?))
+                        (?:[ \t]+(?:already|yet|ever|actually|explicitly|fully|formally|still))
+                        {0,2}[ \t]+(?:be|have
+                            (?:[ \t]+(?:already|yet|ever|actually|explicitly|fully|formally|still))
+                            {0,2}(?:[ \t]+been)?))
                     [ \t]+confirmed[ \t]*,?[ \t]+that)
                 |
                 (?:
@@ -435,10 +454,14 @@ _CONFIRMATION_POLARITY_RE = re.compile(
             |can[ \t]+(?:later|eventually)[ \t]+confirm
             |(?:may|might|must|should|would|will|can|could)
                 (?:[ \t]+(?:already|possibly|probably|eventually|later|perhaps)){0,2}
-                [ \t]+have[ \t]+(?:been[ \t]+)?confirmed
+                [ \t]+have
+                (?:[ \t]+(?:already|possibly|probably|eventually|later|perhaps)){0,2}
+                [ \t]+(?:been[ \t]+)?confirmed
             |(?:may|might|must|should|would|will|can|could)
+                (?:[ \t]+(?:already|possibly|probably|eventually|later|perhaps)){0,2}
                 [ \t]+be[ \t]+confirmed
             |(?:may|might|must|should|would|will|could)['’]ve
+                (?:[ \t]+(?:already|possibly|probably|eventually|later|perhaps)){0,2}
                 [ \t]+(?:been[ \t]+)?confirmed
             |(?:has|have|had)[ \t]+yet[ \t]+to[ \t]+confirm)
             [ \t]*,?[ \t]+that
@@ -463,16 +486,37 @@ _CONFIRMATION_POSITIVE_VERB_PATTERN = (
     r"(?:(?:has|have|had)[ \t]+(?:been[ \t]+)?confirmed|"
     r"(?:do|does|did|can)[ \t]+confirm|confirm(?:s|ed))"
 )
-_CONFIRMATION_NEW_SUBJECT_BREAK_RE = re.compile(
-    rf"[;；]|(?:,[ \t]*)?(?:and|but|then)[ \t]+"
-    rf"{_CONFIRMATION_MAIN_SUBJECT_PATTERN}\b|"
-    rf",[ \t]*however[ \t]*,[ \t]*"
-    rf"{_CONFIRMATION_MAIN_SUBJECT_PATTERN}\b",
+_CONFIRMATION_BREAK_MODIFIER_PATTERN = (
+    r"(?:(?:later|eventually|explicitly|finally|subsequently)[ \t]+){0,2}"
+)
+_CONFIRMATION_CONTRASTIVE_POSITIVE_BREAK_RE = re.compile(
+    rf",[ \t]*(?:but[ \t]+"
+    rf"(?:{_CONFIRMATION_MAIN_SUBJECT_PATTERN}[ \t]+)?|"
+    rf"however[ \t]*,[ \t]*{_CONFIRMATION_MAIN_SUBJECT_PATTERN}[ \t]+)"
+    rf"{_CONFIRMATION_BREAK_MODIFIER_PATTERN}"
+    rf"{_CONFIRMATION_POSITIVE_VERB_PATTERN}\b",
     re.IGNORECASE,
 )
-_CONFIRMATION_INHERITED_POSITIVE_BREAK_RE = re.compile(
+_CONFIRMATION_CONTRASTIVE_DIRECT_BREAK_RE = re.compile(
+    r",[ \t]*(?:but[ \t]+|however[ \t]*,[ \t]*)"
+    r"(?:approval|authorization|verification)\b",
+    re.IGNORECASE,
+)
+_CONFIRMATION_LIST_TAIL_RE = re.compile(
+    r",[ \t]*and[ \t]+(?:approval|authorization|verification)\b",
+    re.IGNORECASE,
+)
+_CONFIRMATION_PRIOR_RESOLUTION_SUBJECT_BREAK_RE = re.compile(
+    rf"(?:\bbut\b[ \t]+{_CONFIRMATION_MAIN_SUBJECT_PATTERN}[ \t]+"
+    rf"{_CONFIRMATION_BREAK_MODIFIER_PATTERN}"
+    rf"{_CONFIRMATION_POSITIVE_VERB_PATTERN}\b|"
+    rf",[ \t]*then\b[ \t]+{_CONFIRMATION_MAIN_SUBJECT_PATTERN}\b)",
+    re.IGNORECASE,
+)
+_CONFIRMATION_PRIOR_RESOLUTION_POSITIVE_BREAK_RE = re.compile(
     rf",[ \t]*(?:(?:and|but|then)[ \t]+|however[ \t]*,[ \t]*)"
-    rf"(?:(?:later|eventually|explicitly|finally|subsequently)[ \t]+){{0,2}}"
+    rf"(?:{_CONFIRMATION_MAIN_SUBJECT_PATTERN}[ \t]+)?"
+    rf"{_CONFIRMATION_BREAK_MODIFIER_PATTERN}"
     rf"{_CONFIRMATION_POSITIVE_VERB_PATTERN}\b",
     re.IGNORECASE,
 )
@@ -1224,17 +1268,27 @@ def _resolution_scopes(match: re.Match[str]) -> FrozenSet[_EvidenceScope]:
 
 
 def _has_confirmation_complement_break(context: str) -> bool:
-    new_subject_break = _CONFIRMATION_NEW_SUBJECT_BREAK_RE.search(context)
-    if new_subject_break is not None:
-        if new_subject_break.group().startswith((";", "；")):
+    if re.search(r"[;；]", context) is not None:
+        return True
+    if _CONFIRMATION_CONTRASTIVE_POSITIVE_BREAK_RE.search(context) is not None:
+        return True
+    direct_break = _CONFIRMATION_CONTRASTIVE_DIRECT_BREAK_RE.search(context)
+    if direct_break is not None:
+        has_list_tail = _CONFIRMATION_LIST_TAIL_RE.search(
+            context, direct_break.end()
+        ) is not None
+        has_prior_resolution = _RESOLUTION_RE.search(
+            context[: direct_break.start()]
+        ) is not None
+        if not has_list_tail or not has_prior_resolution:
             return True
-        if _RESOLUTION_RE.search(context[: new_subject_break.start()]) is not None:
-            return True
-    for inherited_break in _CONFIRMATION_INHERITED_POSITIVE_BREAK_RE.finditer(
-        context
+    for qualified_break_re in (
+        _CONFIRMATION_PRIOR_RESOLUTION_SUBJECT_BREAK_RE,
+        _CONFIRMATION_PRIOR_RESOLUTION_POSITIVE_BREAK_RE,
     ):
-        if _RESOLUTION_RE.search(context[: inherited_break.start()]) is not None:
-            return True
+        for qualified_break in qualified_break_re.finditer(context):
+            if _RESOLUTION_RE.search(context[: qualified_break.start()]) is not None:
+                return True
     return False
 
 

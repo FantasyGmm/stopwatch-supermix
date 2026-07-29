@@ -2305,6 +2305,18 @@ class CompletionClassifierTests(unittest.TestCase):
             "then confirmed that approval is not required.",
             "Please approve deployment. We cannot confirm that authorization is not "
             "required, but later confirmed that approval is not required.",
+            "Please approve deployment. We cannot confirm that the tests passed, but "
+            "we confirmed that approval is not required.",
+            "Please approve deployment. We cannot confirm that the tests passed, but "
+            "approval is not required.",
+            "Please approve and authorize deployment. We cannot confirm that the tests "
+            "passed, but approval is not required, and authorization is not required.",
+            "Please approve and authorize deployment. We cannot confirm that the tests "
+            "passed, but authorization is not required, and approval is not required.",
+            "Please approve deployment. We cannot confirm that the tests passed, "
+            "however, approval is not required.",
+            "Please approve deployment. We cannot confirm that the tests passed, "
+            "however, we confirmed that approval is not required.",
         )
         for message in resolved_messages:
             with self.subTest(kind="resolved", message=message):
@@ -2391,6 +2403,10 @@ class CompletionClassifierTests(unittest.TestCase):
             "not required.",
             "Please approve deployment. Our expectation would be that approval is "
             "not required.",
+            "Please approve deployment. Our expectation will have been that approval "
+            "is not required.",
+            "Please approve deployment. Our expectation would have been that approval "
+            "is not required.",
             "Please approve deployment. Our expectation was not that approval is not "
             "required.",
             "Please approve deployment. Our expectation had not been that approval "
@@ -2466,6 +2482,10 @@ class CompletionClassifierTests(unittest.TestCase):
             "not required.",
             "Please approve deployment. It hasn't been confirmed that approval is not "
             "required.",
+            "Please approve deployment. It hasn't yet been confirmed that approval "
+            "is not required.",
+            "Please approve deployment. It has not already been confirmed that approval "
+            "is not required.",
             "Please approve deployment. We shouldn't have confirmed that approval is "
             "not required.",
             "Please approve deployment. We couldn't have confirmed that approval is "
@@ -2520,6 +2540,14 @@ class CompletionClassifierTests(unittest.TestCase):
             "not required.",
             "Please approve deployment. It won't be confirmed that approval is not "
             "required.",
+            "Please approve deployment. It won't yet be confirmed that approval is "
+            "not required.",
+            "Please approve deployment. It cannot yet be confirmed that approval is "
+            "not required.",
+            "Please approve deployment. It won't have already been confirmed that "
+            "approval is not required.",
+            "Please approve deployment. It cannot have already been confirmed that "
+            "approval is not required.",
             "Please approve deployment. It shouldn't be confirmed that approval is "
             "not required.",
             "Please approve deployment. It couldn't be confirmed that approval is not "
@@ -2544,6 +2572,8 @@ class CompletionClassifierTests(unittest.TestCase):
             "is not required.",
             "Please approve deployment. It may already have been confirmed that approval "
             "is not required.",
+            "Please approve deployment. It may have already been confirmed that approval "
+            "is not required.",
             "Please approve deployment. It wasn't confirmed that approval is not "
             "required.",
             "Please approve deployment. It has never been confirmed that approval is "
@@ -2560,6 +2590,14 @@ class CompletionClassifierTests(unittest.TestCase):
             "confirmed that approval is not required.",
             "Please approve deployment. We cannot confirm that Alice and the team "
             "confirmed that approval is not required.",
+            "Please approve deployment. We cannot confirm that the tests passed, but "
+            "we discussed whether approval is not required.",
+            "Please approve deployment. We cannot confirm that the tests passed, and "
+            "we confirmed that approval is not required.",
+            "Please approve deployment. We cannot confirm that verification is not "
+            "required, authorization is not required, and approval is not required.",
+            "Please approve deployment. We cannot confirm that verification is not "
+            "required, but authorization is not required, and approval is not required.",
             "Please approve deployment. We expected, but did not confirm, that "
             "authorization is not required, and approval is not required.",
             "Please approve deployment. We expect authorization is not required, and "
