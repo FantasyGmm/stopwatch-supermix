@@ -1672,6 +1672,18 @@ class CompletionClassifierTests(unittest.TestCase):
             "你能确认团队是否完成复核并提供输入了吗？无需确认。",
             "Can you confirm whether deployment is ready and review is complete? "
             "No confirmation is required.",
+            "Can you confirm whether I should wait for approval and then authorize "
+            "it? No confirmation is required.",
+            "Can you confirm whether we should wait for approval and then authorize "
+            "it? No confirmation is required.",
+            "Can you confirm whether deployment is ready and review passed? "
+            "No confirmation is required.",
+            "Can you confirm whether deployment is ready and review failed? "
+            "No confirmation is required.",
+            "Can you confirm whether deployment is ready and review succeeded? "
+            "No confirmation is required.",
+            "Can you confirm whether deployment is ready and review has completed? "
+            "No confirmation is required.",
         )
         for message in inner_messages:
             with self.subTest(kind="inner", message=message):
@@ -1698,6 +1710,8 @@ class CompletionClassifierTests(unittest.TestCase):
             "你能确认是否需要批准，并且请授权发布吗？无需确认。",
             "你能确认是否需要批准，并且你能验证发布吗？无需确认。",
             "Can you confirm whether tests pass and also provide input? "
+            "No confirmation is required.",
+            "Can you confirm whether tests pass and provide input? "
             "No confirmation is required.",
             "你能确认构建是否通过并提供输入了吗？无需确认。",
             "你能确认构建是否通过并提供输入过吗？无需确认。",
@@ -2203,6 +2217,33 @@ class CompletionClassifierTests(unittest.TestCase):
             "Please approve and authorize deployment. Approval and authorization "
             "are no longer required.",
             "请批准并授权部署。批准和授权不再需要。",
+            "请批准并授权部署。批准和授权已不再需要。",
+            "Please approve deployment. We do not expect tests to pass, but "
+            "approval is not required.",
+            "Please approve deployment. The docs say tests failed, but approval "
+            "is not required.",
+            "Please approve deployment. Contrary to expectations, approval is not "
+            "required.",
+            "Please approve deployment. Despite our expectation, approval is not "
+            "required.",
+            "Please approve deployment. We expected delays, and approval is not "
+            "required.",
+            "Please approve deployment. Our earlier expectation was wrong: approval "
+            "is not required.",
+            "Please approve deployment. Contrary to what we expected, approval is "
+            "not required.",
+            "Please approve deployment. Although we expected approval to be required, "
+            "approval is not required.",
+            "Please approve deployment. What we expected was wrong: approval is not "
+            "required.",
+            "Please approve deployment. Even though we expected approval to be "
+            "required, approval is not required.",
+            "Please approve deployment. Despite what we expected, approval is not "
+            "required.",
+            "Please approve deployment. We expected delays, so approval is not "
+            "required.",
+            "Please approve deployment. We expected not only delays but outages, but "
+            "approval is not required.",
         )
         for message in resolved_messages:
             with self.subTest(kind="resolved", message=message):
@@ -2221,6 +2262,74 @@ class CompletionClassifierTests(unittest.TestCase):
             "and authorization are not required.",
             "Please approve and authorize deployment. It isn't expected that approval "
             "and authorization are not required.",
+            "Please approve deployment. It was expected that approval is not "
+            "required.",
+            "Please approve deployment. We did not expect that approval is not "
+            "required.",
+            "Please approve deployment. We expected that approval is not required.",
+            "Please approve deployment. We were expecting that approval is not "
+            "required.",
+            "Please approve deployment. We are expecting that approval is not "
+            "required.",
+            "Please approve deployment. We have been expecting that approval is not "
+            "required.",
+            "Please approve deployment. We will expect that approval is not required.",
+            "Please approve deployment. We're expecting that approval is not "
+            "required.",
+            "Please approve deployment. We weren't expecting that approval is not "
+            "required.",
+            "Please approve deployment. We hadn't expected that approval is not "
+            "required.",
+            "Please approve deployment. We'll expect that approval is not required.",
+            "Please approve deployment. It had not been expected that approval is "
+            "not required.",
+            "Please approve deployment. We wouldn't expect that approval is not "
+            "required.",
+            "Please approve deployment. We shouldn't expect that approval is not "
+            "required.",
+            "Please approve deployment. It won't be expected that approval is not "
+            "required.",
+            "Please approve deployment. It's been expected that approval is not "
+            "required.",
+            "Please approve deployment. We haven't yet expected that approval is not "
+            "required.",
+            "Please approve deployment. We expect, however, that approval is not "
+            "required.",
+            "Please approve deployment. It should not be expected that approval is "
+            "not required.",
+            "Please approve deployment. It could not be expected that approval is "
+            "not required.",
+            "Please approve deployment. It's not been expected that approval is not "
+            "required.",
+            "Please approve deployment. It'll not be expected that approval is not "
+            "required.",
+            "Please approve deployment. It's expected that approval is not required.",
+            "Please approve deployment. It'd be expected that approval is not "
+            "required.",
+            "Please approve deployment. We would have expected that approval is not "
+            "required.",
+            "Please approve deployment. We wouldn't have expected that approval is "
+            "not required.",
+            "Please approve deployment. We will have expected that approval is not "
+            "required.",
+            "Please approve deployment. We would have been expecting that approval "
+            "is not required.",
+            "Please approve deployment. It would have been expected that approval is "
+            "not required.",
+            "Please approve deployment. It wouldn't have been expected that approval "
+            "is not required.",
+            "Please approve deployment. Our expectation is that approval is not "
+            "required.",
+            "Please approve deployment. The expectation is that approval is not "
+            "required.",
+            "Please approve deployment. We expect authorization is not required, and "
+            "approval is not required.",
+            "Please approve deployment. Although we expect, however, that approval is "
+            "not required, deployment remains blocked.",
+            "Please approve deployment. Even though we expect authorization is not "
+            "required, and approval is not required, deployment remains blocked.",
+            "Please approve deployment. We expect not only that authorization is not "
+            "required but that approval is not required.",
             "Please approve and authorize deployment. Approval and authorization "
             "are not required according to the logs.",
             "Please approve and authorize deployment. Approval and authorization "
@@ -2231,6 +2340,11 @@ class CompletionClassifierTests(unittest.TestCase):
             "are not required according to the latest logs.",
             "Please approve and authorize deployment. Approval and authorization "
             "are no longer required per the latest incident report.",
+            "Please approve deployment. Approval is not required according to the "
+            "most recent CI logs.",
+            "Please approve deployment. Approval is not required per the most recent "
+            "CI incident report.",
+            "Please approve deployment. Approval is not required yet.",
         )
         for message in guarded_messages:
             with self.subTest(kind="guarded", message=message):

@@ -301,7 +301,7 @@ _RESOLUTION_RE = re.compile(
     r"[ \t]+are[ \t]+(?:no[ \t]+longer|not)[ \t]+required\b|"
     r"(?:批准|授权|验证)"
     r"(?:(?:[、，,][ \t]*(?:或|及|和|并|与|以及)?|"
-    r"(?:或|及|和|并|与|以及))(?:批准|授权|验证))+不再需要|"
+    r"(?:或|及|和|并|与|以及))(?:批准|授权|验证))+已?不再需要|"
     r"(?:无需|不需要)(?:(?:你|您)的?)?"
     r"(?:批准|授权|验证)"
     r"(?:(?:[、，,][ \t]*(?:或|及|和|并|与|以及)?|"
@@ -324,6 +324,12 @@ _RESOLUTION_RE = re.compile(
     r"\bno action remains\b)",
     re.IGNORECASE,
 )
+_EXPECTATION_RESOLUTION_PREFIX_RE = re.compile(
+    r"\b(?:expect(?:ed|ing|s)?|anticipat(?:e|ed|es|ing)|"
+    r"(?:(?:the|our|my|your|their|its)[ \t]+)?expectations?[ \t]+"
+    r"(?:is|are|was|were)[ \t]+that)\b",
+    re.IGNORECASE,
+)
 _INVALID_RESOLUTION_PREFIX_RE = re.compile(
     r"(?:\b(?:is not|isn't|was not|wasn't|not) (?:true|the case) that\b|"
     r"\b(?:do not|don't) assume\b|"
@@ -333,12 +339,8 @@ _INVALID_RESOLUTION_PREFIX_RE = re.compile(
     r"suggest|suggests)\b|"
     r"\b(?:according[ \t]+to|per)[ \t]+"
     r"(?:(?:the|our|your|their|its)[ \t]+)?"
-    r"(?:[A-Za-z-]+[ \t]+){0,2}"
+    r"(?:[A-Za-z0-9_-]+[ \t]+)*?"
     r"(?:docs?|documentation|examples?|logs?|incident[ \t]+report)\b|"
-    r"\b(?:it[ \t]+(?:is(?:[ \t]+not)?|isn['’]t)[ \t]+expected[ \t]+that|"
-    r"(?:I|we|they)[ \t]+(?:(?:(?:do|does)[ \t]+not|"
-    r"(?:don|doesn)['’]t)[ \t]+)?"
-    r"(?:expect|expects|anticipate|anticipates)(?:[ \t]+that)?)\b|"
     r"\b(?:after|once|when|if|until|then)\b|"
     r"(?:并非|不是|文档(?:说|写道|指出)|"
     r"根据[\u4e00-\u9fff]{0,8}文档|之后|以后|如果|待))",
@@ -349,11 +351,25 @@ _INVALID_RESOLUTION_SUFFIX_RE = re.compile(
     r"\bto[ \t]+be\b|"
     r"\b(?:according[ \t]+to|per)[ \t]+"
     r"(?:(?:the|our|your|their|its)[ \t]+)?"
-    r"(?:[A-Za-z-]+[ \t]+){0,2}"
+    r"(?:[A-Za-z0-9_-]+[ \t]+)*?"
     r"(?:docs?|documentation|examples?|logs?|incident[ \t]+report)\b|"
+    r"\byet\b|"
     r"(?:之后|以后|如果|待))",
     re.IGNORECASE,
 )
+_RESOLUTION_CONTEXT_BREAK_RE = re.compile(
+    r"\bbut\b|[;；]|,[ \t]*(?:although|yet)\b|"
+    r"\bhowever\b(?![ \t]*,[ \t]*that\b)|"
+    r",[ \t]+(?:and|so)[ \t]*$",
+    re.IGNORECASE,
+)
+_LEADING_RESOLUTION_REVERSAL_RE = re.compile(
+    r"^[ \t]*(?:(?:although\b|even[ \t]+though\b|despite\b|"
+    r"contrary[ \t]+to\b)[^\r\n]{0,110},|"
+    r"what\b[^:\r\n]{0,90}\b(?:is|was)[ \t]+wrong:)[ \t]*$",
+    re.IGNORECASE,
+)
+_CORRELATIVE_NOT_ONLY_RE = re.compile(r"\bnot[ \t]+only\b", re.IGNORECASE)
 _ASSISTANT_CONTINUATION_SUFFIX_RE = re.compile(
     r"^\s*[，,;；]?\s*(?:(?:afterward|afterwards|later|then)\s+)?"
     r"I(?:'ll|\s+will)\b|"
@@ -608,7 +624,11 @@ _QUESTION_COMPLETED_OUTER_ACTION_RE = re.compile(
 )
 _QUESTION_ACTION_STATE_SUBJECT_RE = re.compile(
     rf"{_QUESTION_ACTION_PATTERN}\b[ \t]+"
-    r"(?:is|are|was|were|remains?)\b",
+    r"(?:(?:is|are|was|were|remains?)\b|"
+    r"(?:has|have|had)[ \t]+"
+    r"(?:completed|failed|finished|passed|succeeded)\b|"
+    r"(?:complete|completed|fail|failed|finish|finished|pass|passed|"
+    r"succeed|succeeded)\b)",
     re.IGNORECASE,
 )
 
@@ -1112,12 +1132,47 @@ def _valid_resolution_matches(
         clause_start = clauses[clause_index].start if clauses else 0
         clause_end = clauses[clause_index].end if clauses else len(prose)
         prefix = prose[max(clause_start, match.start() - 120) : match.start()]
+        reversal = _LEADING_RESOLUTION_REVERSAL_RE.match(prefix)
+        if reversal is not None:
+            prefix = prefix[reversal.end() :]
+        for context_break in reversed(
+            list(_RESOLUTION_CONTEXT_BREAK_RE.finditer(prefix))
+        ):
+            preceding_context = prefix[: context_break.start()]
+            coordinated_expectation = (
+                context_break.group(0).lstrip().lower().startswith(",")
+                and "and" in context_break.group(0).lower()
+                and _EXPECTATION_RESOLUTION_PREFIX_RE.search(preceding_context)
+                is not None
+                and _RESOLUTION_RE.search(preceding_context) is not None
+            )
+            not_only_matches = list(
+                _CORRELATIVE_NOT_ONLY_RE.finditer(preceding_context)
+            )
+            correlative_expectation = (
+                context_break.group(0).strip().lower() == "but"
+                and bool(not_only_matches)
+                and _EXPECTATION_RESOLUTION_PREFIX_RE.search(preceding_context)
+                is not None
+                and _RESOLUTION_CONTEXT_BREAK_RE.search(
+                    preceding_context[not_only_matches[-1].end() :]
+                )
+                is None
+            )
+            if coordinated_expectation or correlative_expectation:
+                continue
+            prefix = prefix[context_break.end() :]
+            break
         suffix = prose[match.end() : min(clause_end, match.end() + 120)]
         invalid_suffix = _INVALID_RESOLUTION_SUFFIX_RE.search(suffix) is not None
         assistant_continuation = (
             _ASSISTANT_CONTINUATION_SUFFIX_RE.search(suffix) is not None
         )
-        if _INVALID_RESOLUTION_PREFIX_RE.search(prefix) is None and (
+        invalid_prefix = (
+            _INVALID_RESOLUTION_PREFIX_RE.search(prefix) is not None
+            or _EXPECTATION_RESOLUTION_PREFIX_RE.search(prefix) is not None
+        )
+        if not invalid_prefix and (
             not invalid_suffix or assistant_continuation
         ):
             matches.append(match)
