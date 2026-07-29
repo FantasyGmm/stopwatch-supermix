@@ -837,6 +837,22 @@ class CompletionClassifierTests(unittest.TestCase):
                     ("completed", "text_explicitly_resolved"),
                 )
 
+    def test_compact_chinese_state_questions_are_not_choice_scope(self):
+        messages = (
+            "系统还是失败？无需选择。",
+            "构建还是报错？无需选择。",
+            "测试还是失败？",
+            "服务还是离线？",
+        )
+
+        for message in messages:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("waiting", "text_direct_question"),
+                )
+
     def test_direct_imperatives_and_chinese_coordination_require_action(self):
         messages = (
             "Choose production or staging.",
@@ -1042,11 +1058,56 @@ class CompletionClassifierTests(unittest.TestCase):
                     ("completed", "completion_only"),
                 )
 
+    def test_modified_objects_and_review_of_reports_are_distinct(self):
+        action_messages = (
+            "The build is ready: review failed tests.",
+            "The build is ready: retry failed deployment.",
+            "Before merging — confirm pending changes.",
+        )
+        report_messages = (
+            "Results: review of the diff was successful.",
+            "Report — review of the code passed.",
+        )
+
+        for message in action_messages:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("waiting", "text_required_action"),
+                )
+        for message in report_messages:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("completed", "completion_only"),
+                )
+
     def test_direct_action_patterns_accept_horizontal_whitespace(self):
         messages = (
             "Can\tyou confirm deployment.",
             "Need\tyour confirmation.",
             "Waiting\tfor your reply.",
+        )
+
+        for message in messages:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("waiting", "text_required_action"),
+                )
+
+    def test_approval_verification_and_obligation_grammar_requires_action(self):
+        messages = (
+            "Please approve it.",
+            "Device verification is still required.",
+            "Blocked pending hardware verification.",
+            "Waiting for your approval.",
+            "Please authorize the deployment.",
+            "You must review the diff.",
+            "You need to provide the token.",
         )
 
         for message in messages:

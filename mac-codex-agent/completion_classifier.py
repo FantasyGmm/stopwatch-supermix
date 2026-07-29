@@ -65,10 +65,18 @@ _REQUIRED_ACTION_RE = re.compile(
     r"需要(?:你|您)(?:确认|选择|提供|回复|操作)|"
     r"需要进一步指令|无法继续|"
     r"\bplease[ \t]+(?:confirm|choose|select|provide|reply|retry|review)\b|"
+    r"\bplease[ \t]+(?:approve|authorize|verify)\b|"
     r"\bcan[ \t]+you[ \t]+(?:confirm|choose|select|provide|reply|retry|review)\b|"
     r"\bwaiting[ \t]+for[ \t]+your[ \t]+"
-    r"(?:reply|confirmation|choice|input)\b|"
+    r"(?:reply|confirmation|choice|input|approval|authorization|verification)\b|"
     r"\bneed[ \t]+your[ \t]+(?:confirmation|choice|input|reply)\b|"
+    r"\b(?:[A-Za-z-]+[ \t]+){0,3}"
+    r"(?:approval|authorization|verification)[ \t]+"
+    r"(?:is|remains)[ \t]+(?:still[ \t]+)?required\b|"
+    r"\bblocked[ \t]+pending[ \t]+(?:[A-Za-z-]+[ \t]+){0,2}"
+    r"(?:approval|authorization|verification)\b|"
+    r"\byou[ \t]+(?:must|need[ \t]+to)[ \t]+"
+    r"(?:approve|authorize|confirm|choose|select|provide|reply|retry|review|verify)\b|"
     r"\bcannot[ \t]+continue\b|"
     r"\blet[ \t]+me[ \t]+know\b|告诉我)",
     re.IGNORECASE,
@@ -100,7 +108,14 @@ _IMPERATIVE_OBJECT_RE = re.compile(
     re.IGNORECASE,
 )
 _REPORT_CONTINUATION_RE = re.compile(
-    r"^[ \t]+(?:successful|finished|pending|complete(?:d)?|passed|failed)\b|"
+    r"^[ \t]+of[ \t]+[^\r\n。！？.!?؟]{1,48}[ \t]+"
+    r"(?:(?:is|are|was|were)[ \t]+"
+    r"(?:successful|complete(?:d)?|finished|pending|failed)|"
+    r"(?:passed|succeeded|failed|completed|finished))\b|"
+    r"^[ \t]+(?:successful|finished|complete|passed)\b|"
+    r"^[ \t]+(?:pending|completed?|failed)\b"
+    r"(?:[ \t]+(?:internally|automatically|successfully))?"
+    r"[ \t]*[.!?]|"
     r"^[ \t]+(?:(?:the|an?|this|that|these|those|your|our)[ \t]+)?"
     r"[A-Za-z0-9][A-Za-z0-9_-]*[ \t]+"
     r"(?:(?:is|are|was|were|has|have|had)\b|"
@@ -155,18 +170,16 @@ _ALTERNATIVE_CHOICE_RE = re.compile(
     r"(?:你|您)[^\r\n。！？.!?؟]{0,12}"
     r"(?:要|希望|想|使用|选择|选)[^\r\n。！？.!?؟]{0,16}"
     r"还是[^\r\n。！？.!?؟]{1,16}|"
-    r"^\s*(?![\u3400-\u9fff]{0,12}(?:使用|采用|报告))"
-    r"(?![\u3400-\u9fff]{1,8}还是(?:没|未|不))"
-    r"(?![\u3400-\u9fff]{1,8}还是"
-    r"[\u3400-\u9fff]{0,8}(?:了)?吗\s*[？?])"
-    r"[\u3400-\u9fff]{1,8}[ \t]*还是[ \t]*"
-    r"[\u3400-\u9fff]{1,8}\s*[？?]?[。.]?\s*$|"
+    r"^\s*(?:生产|预发|开发|测试)[ \t]*还是[ \t]*"
+    r"(?:生产|预发|开发|测试)\s*[？?]?[。.]?\s*$|"
+    r"^\s*(?:继续|停止)[ \t]*还是[ \t]*"
+    r"(?:继续|停止)\s*[？?]?[。.]?\s*$|"
     r"^\s*[\u3400-\u9fff][ \t]*还是[ \t]*"
     r"[\u3400-\u9fff]\s*[？?]?[。.]?\s*$|"
     r"^\s*(?![\u3400-\u9fff]{0,12}(?:使用|采用|报告))"
-    r"[\u3400-\u9fff]{1,12}(?:环境|方案|选项|版本|模式|版)"
+    r"[\u3400-\u9fff]{1,12}(?:环境|方案|选项|版本|模式|版|色)"
     r"[ \t]*还是[ \t]*"
-    r"[\u3400-\u9fff]{1,12}(?:环境|方案|选项|版本|模式|版)"
+    r"[\u3400-\u9fff]{1,12}(?:环境|方案|选项|版本|模式|版|色)"
     r"\s*[？?]?[。.]?\s*$",
     re.IGNORECASE,
 )
@@ -535,7 +548,10 @@ def _action_scopes(match: re.Match[str], clause: _Clause) -> FrozenSet[_Evidence
     ):
         return frozenset({_EvidenceScope.CHOICE})
     if re.search(
-        r"(?:确认|\bconfirm(?:ation)?\b)", action, re.IGNORECASE
+        r"(?:确认|\bconfirm(?:ation)?\b|"
+        r"\b(?:approve|approval|authorize|authorization|verify|verification)\b)",
+        action,
+        re.IGNORECASE,
     ):
         return frozenset({_EvidenceScope.CONFIRMATION})
     if re.search(r"\b(?:reply|respond)\b", action, re.IGNORECASE) and re.search(
