@@ -751,6 +751,32 @@ class CompletionClassifierTests(unittest.TestCase):
             ("waiting", "text_direct_question"),
         )
 
+    def test_choice_scope_distinguishes_handoffs_from_descriptive_questions(self):
+        descriptive_questions = (
+            "Did you use production or staging? No choice is required.",
+            "Why did you use production or staging? No choice is required.",
+            "Does the parser use A or B internally? No choice is required.",
+        )
+        resolved_handoffs = (
+            "生产环境还是预发环境？无需选择。",
+            "你要 A 还是 B？无需选择。",
+        )
+
+        for message in descriptive_questions:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("waiting", "text_direct_question"),
+                )
+        for message in resolved_handoffs:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("completed", "text_explicitly_resolved"),
+                )
+
     def test_direct_imperatives_and_chinese_coordination_require_action(self):
         messages = (
             "Choose production or staging.",
@@ -825,6 +851,32 @@ class CompletionClassifierTests(unittest.TestCase):
         completed_messages = (
             "Status: review complete.",
             "Phase — review complete.",
+        )
+
+        for message in waiting_messages:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("waiting", "text_required_action"),
+                )
+        for message in completed_messages:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("completed", "completion_only"),
+                )
+
+    def test_action_list_prefixes_are_distinct_from_report_headings(self):
+        waiting_messages = (
+            "Next steps: review, test, and deploy.",
+            "Action required: review, test, and deploy.",
+        )
+        completed_messages = (
+            "Status: review successful.",
+            "Phase — review finished.",
+            "The summary: review pending internally.",
         )
 
         for message in waiting_messages:
@@ -921,6 +973,21 @@ class CompletionClassifierTests(unittest.TestCase):
                         (result.outcome, result.reason),
                         ("waiting", "text_required_action"),
                     )
+
+    def test_coordinated_nouns_belong_only_to_requirement_phrases(self):
+        messages = (
+            "Please confirm the choice and input. No confirmation is required.",
+            "Please confirm deployment, input included. "
+            "No confirmation is required.",
+        )
+
+        for message in messages:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("completed", "text_explicitly_resolved"),
+                )
 
     def test_choice_groups_are_isolated_within_a_block(self):
         result = classify_completion(
@@ -1114,6 +1181,25 @@ class CompletionClassifierTests(unittest.TestCase):
             ),
             (
                 "Let me know if you'd like more help; please confirm deployment.",
+                "waiting",
+                "text_required_action",
+            ),
+        )
+
+        for message, outcome, reason in cases:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual((result.outcome, result.reason), (outcome, reason))
+
+    def test_courtesy_contraction_accepts_internal_horizontal_whitespace(self):
+        cases = (
+            (
+                "Let me know if you'd like  more help.",
+                "completed",
+                "completion_only",
+            ),
+            (
+                "Let me know if you'd like\tmore help; please confirm deployment.",
                 "waiting",
                 "text_required_action",
             ),

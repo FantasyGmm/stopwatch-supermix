@@ -79,6 +79,12 @@ _IMPERATIVE_ACTION_RE = re.compile(
     re.IGNORECASE,
 )
 _IMPERATIVE_BOUNDARY_RE = re.compile(r"[;；:：]|[ \t]+[—–-][ \t]+")
+_ACTION_LIST_PREFIX_RE = re.compile(
+    r"(?:next[ \t]+steps?|actions?[ \t]+required)\s*$", re.IGNORECASE
+)
+_REPORT_PREFIX_RE = re.compile(
+    r"(?:(?:the[ \t]+)?summary|status|phase)\s*$", re.IGNORECASE
+)
 _REPORT_NOUN_SUFFIX_RE = re.compile(
     r"^\s*(?:[,，](?!\s*(?:(?:then[ \t]+)?"
     r"(?:confirm|choose|select|provide|reply|retry|review)\b|"
@@ -91,10 +97,18 @@ _REPORT_NOUN_SUFFIX_RE = re.compile(
 _COORDINATED_ACTION_RE = re.compile(
     r"\b(?:and|then)\s+(?:also\s+)?"
     r"(?:confirm|choose|select|provide|reply|retry|review)\b|"
-    r"(?:\band[ \t]+(?:also[ \t]+)?(?:your[ \t]+)?|,[ \t]*)"
-    r"(?:confirmation|choice|input|reply)\b|"
     r"(?:并且|并|然后)(?:[^\r\n。！？.!?؟]{0,20}?再)?(?:请)?"
     r"(?:确认|选择|提供|回复|重新|重试|复核)",
+    re.IGNORECASE,
+)
+_COORDINATED_REQUIREMENT_NOUN_RE = re.compile(
+    r"(?:\band[ \t]+(?:also[ \t]+)?(?:your[ \t]+)?|,[ \t]*)"
+    r"(?:confirmation|choice|input|reply)\b",
+    re.IGNORECASE,
+)
+_OWNED_REQUIREMENT_RE = re.compile(
+    r"\b(?:waiting[ \t]+for[ \t]+your|need[ \t]+your)[ \t]+"
+    r"(?:confirmation|choice|input|reply)\b",
     re.IGNORECASE,
 )
 _COMMUNICATIVE_CHOICE_RE = re.compile(
@@ -105,21 +119,26 @@ _COMMUNICATIVE_CHOICE_RE = re.compile(
 )
 _ALTERNATIVE_CHOICE_RE = re.compile(
     r"^\s*[A-Z1-9]\s*(?:or|或|还是)\s*[A-Z1-9]\s*[?？؟]?[.!。]?\s*$|"
+    r"\b(?:do|will|would|can|could|should|may)[ \t]+"
+    r"(?:you|we|I)[ \t]+[^\r\n。！？.!?؟]{0,40}"
     r"\b(?:prefer|use|choose|select|pick)\b"
     r"[^\r\n。！？.!?؟]{0,80}\bor\b|"
-    r"(?:使用|选择|选)[^\r\n。！？.!?؟]{0,80}(?:或|还是)",
+    r"(?:使用|选择|选)[^\r\n。！？.!?؟]{0,80}(?:或|还是)|"
+    r"[\u3400-\u9fffA-Za-z0-9][^\r\n。！？.!?؟]{0,24}"
+    r"还是[^\r\n。！？.!?؟]{0,24}[\u3400-\u9fffA-Za-z0-9]",
     re.IGNORECASE,
 )
 _COURTESY_CLAUSE_RE = re.compile(
     r"(?:^\s*(?:[-*]\s*)?(?:"
-    r"if you(?:['’]d| would) like\b|"
-    r"if you (?:want|need) (?:more|additional|further)\b|"
+    r"if[ \t]+you(?:['’]d|[ \t]+would)[ \t]+like\b|"
+    r"if[ \t]+you[ \t]+(?:want|need)[ \t]+(?:more|additional|further)\b|"
     r"如果你(?:愿意|想(?:要)?(?:了解)?更多)|"
     r"如(?:果)?需(?:要)?更多)"
     r"|\blet[ \t]+me[ \t]+know[ \t]+if[ \t]+"
-    r"you(?:['’]d| would) like "
+    r"you(?:['’]d|[ \t]+would)[ \t]+like[ \t]+"
     r"(?:more|additional|further)\b|"
-    r"\blet[ \t]+me[ \t]+know[ \t]+if[ \t]+you[ \t]+(?:want|need) "
+    r"\blet[ \t]+me[ \t]+know[ \t]+if[ \t]+you[ \t]+"
+    r"(?:want|need)[ \t]+"
     r"(?:more|additional|further)\b)",
     re.IGNORECASE,
 )
@@ -895,10 +914,15 @@ def _required_action_evidence(
         prefix = prose[prefix_start : match.start()]
         boundaries = list(_IMPERATIVE_BOUNDARY_RE.finditer(prefix))
         if boundaries:
-            suffix = prose[match.end() : match.end() + 80]
-            if _REPORT_NOUN_SUFFIX_RE.search(suffix) is not None:
+            boundary = boundaries[-1]
+            boundary_context = prefix[: boundary.start()]
+            action_list = _ACTION_LIST_PREFIX_RE.search(boundary_context) is not None
+            if not action_list and _REPORT_PREFIX_RE.search(boundary_context) is not None:
                 continue
-            prefix = prefix[boundaries[-1].end() :]
+            suffix = prose[match.end() : match.end() + 80]
+            if not action_list and _REPORT_NOUN_SUFFIX_RE.search(suffix) is not None:
+                continue
+            prefix = prefix[boundary.end() :]
         elif prefix_start > clause_start:
             continue
         if re.fullmatch(r"\s*(?:[-*]\s*)?", prefix):
@@ -919,6 +943,23 @@ def _required_action_evidence(
             clause is not None
             and primary_index >= 0
             and primary_starts[primary_index] >= clause.start
+        ):
+            action_matches.append(match)
+    clause_index = 0
+    for match in _COORDINATED_REQUIREMENT_NOUN_RE.finditer(prose):
+        while (
+            clause_index + 1 < len(clauses)
+            and match.start() >= clauses[clause_index].end
+        ):
+            clause_index += 1
+        clause = clauses[clause_index] if clauses else None
+        primary_index = bisect.bisect_left(primary_starts, match.start()) - 1
+        if (
+            clause is not None
+            and primary_index >= 0
+            and primary_starts[primary_index] >= clause.start
+            and _OWNED_REQUIREMENT_RE.search(primary_matches[primary_index].group())
+            is not None
         ):
             action_matches.append(match)
 
