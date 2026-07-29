@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CXX="${CXX:-c++}"
 PYTHON="${PYTHON:-$ROOT/mac-codex-agent/.venv/bin/python}"
-TOTAL_STAGES=48
+TOTAL_STAGES=49
 STAGE_INDEX=0
 CONTRACT_ONLY=0
 HOST_TESTS_ONLY=0
@@ -393,6 +393,16 @@ run_host_test secure_pairing_protocol_test \
     -I"$MBEDTLS_SOURCE/include" \
     tests/secure_pairing_protocol_test.cpp \
     main/apps/app_codex_status/secure_pairing_protocol.cpp \
+    main/apps/app_codex_status/secure_pairing_crypto.cpp \
+    "$MBEDTLS_BUILD/library/libmbedcrypto.a"
+
+stage "Authorized Agent registry host test"
+run_host_test agent_registry_test \
+    -std=c++17 -Wall -Wextra -Werror -DSTOPWATCH_HOST_TEST -I. \
+    -I"$MBEDTLS_SOURCE/include" \
+    tests/agent_registry_test.cpp \
+    main/apps/app_codex_status/agent_registry.cpp \
+    main/apps/app_codex_status/agent_registry_store.cpp \
     main/apps/app_codex_status/secure_pairing_crypto.cpp \
     "$MBEDTLS_BUILD/library/libmbedcrypto.a"
 

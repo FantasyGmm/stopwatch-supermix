@@ -43,7 +43,7 @@ class DisplayProtectionFirmwareContractTests(unittest.TestCase):
                 "main/apps/app_codex_status/status_page_swipe_logic.cpp",
             ),
         }
-        self.assertIn("TOTAL_STAGES=48", runner)
+        self.assertIn("TOTAL_STAGES=49", runner)
         for title in (
             "Display protection configuration host test",
             "AMOLED protection state machine host tests",
