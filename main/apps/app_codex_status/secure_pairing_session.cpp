@@ -122,7 +122,10 @@ bool encode_authentication_challenge(
 {
     output_size = 0;
     if (output == nullptr ||
-        output_capacity < kAuthenticationChallengeSize ||
+        value.display_name_size == 0 ||
+        value.display_name_size > kAgentNameBytes ||
+        output_capacity <
+            kAuthenticationChallengeFixedSize + value.display_name_size ||
         value.transaction_id == 0 || value.key_epoch == 0 ||
         value.connection_role != 1 ||
         !nonzero(value.watch_id.data(), value.watch_id.size()) ||
@@ -150,8 +153,13 @@ bool encode_authentication_challenge(
     offset += value.connection_nonce.size();
     write_u32(value.key_epoch, output + offset);
     offset += 4;
+    output[offset++] = static_cast<uint8_t>(value.display_name_size);
+    std::copy_n(
+        value.display_name.begin(), value.display_name_size, output + offset);
+    offset += value.display_name_size;
     output_size = offset;
-    return output_size == kAuthenticationChallengeSize;
+    return output_size ==
+           kAuthenticationChallengeFixedSize + value.display_name_size;
 }
 
 bool encode_credential_ack(
@@ -370,8 +378,13 @@ SessionResult SecurePairingSession::request_authentication(
         return SessionResult::Busy;
     }
     const AgentRecord* record = registry.find(request.fingerprint);
+    AgentRegistry validation = registry;
     if (request.connection_handle == 0xffff || request.transaction_id == 0 ||
-        record == nullptr) {
+        record == nullptr ||
+        validation.rename(
+            request.fingerprint,
+            request.display_name,
+            request.display_name_size) != RegistryResult::Ok) {
         return record == nullptr
                    ? SessionResult::UnknownAgent
                    : SessionResult::InvalidRequest;
@@ -380,6 +393,8 @@ SessionResult SecurePairingSession::request_authentication(
     challenge.transaction_id = request.transaction_id;
     challenge.watch_id = registry.watch_id();
     challenge.key_epoch = registry.key_epoch();
+    challenge.display_name = request.display_name;
+    challenge.display_name_size = request.display_name_size;
     if (!fill_nonzero(
             entropy,
             entropy_context,
@@ -401,7 +416,8 @@ SessionResult SecurePairingSession::request_authentication(
 SessionResult SecurePairingSession::authenticate(
     const uint8_t* signature,
     size_t signature_size,
-    const AgentRegistry& registry,
+    AgentRegistry& registry,
+    AgentRegistryStore& store,
     RegistryEntropy entropy,
     void* entropy_context,
     uint64_t now_ms)
@@ -430,6 +446,28 @@ SessionResult SecurePairingSession::authenticate(
             signature_size) ||
         _authentication_request.agent_key_epoch > registry.key_epoch()) {
         return fail_attempt(SessionResult::AuthenticationFailed, now_ms);
+    }
+    const size_t current_name_size = std::strlen(record->display_name.data());
+    const bool name_changed =
+        current_name_size != _authentication_request.display_name_size ||
+        !std::equal(
+            _authentication_request.display_name.begin(),
+            _authentication_request.display_name.begin() +
+                _authentication_request.display_name_size,
+            record->display_name.begin());
+    if (name_changed) {
+        const RegistrySnapshot before = registry.snapshot();
+        if (registry.rename(
+                _authentication_request.fingerprint,
+                _authentication_request.display_name,
+                _authentication_request.display_name_size) !=
+                RegistryResult::Ok ||
+            store.save(registry) != StoreResult::Ok) {
+            (void)AgentRegistry::restore(before, registry);
+            clear_transaction(PairingState::Idle);
+            return SessionResult::StorageFailure;
+        }
+        record = registry.find(_authentication_request.fingerprint);
     }
     if (_authentication_request.agent_key_epoch == registry.key_epoch()) {
         const AgentFingerprint authenticated = record->fingerprint;

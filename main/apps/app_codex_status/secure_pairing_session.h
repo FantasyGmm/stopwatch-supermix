@@ -12,7 +12,9 @@ namespace secure_pairing {
 
 constexpr uint64_t kPairingSessionTimeoutMs = 60000;
 constexpr uint64_t kPairingCooldownMs = 60000;
-constexpr size_t kAuthenticationChallengeSize = 48;
+constexpr size_t kAuthenticationChallengeFixedSize = 49;
+constexpr size_t kAuthenticationChallengeSize =
+    kAuthenticationChallengeFixedSize + kAgentNameBytes;
 constexpr size_t kCredentialPlaintextSize = 59;
 constexpr size_t kCredentialCiphertextSize =
     kCredentialPlaintextSize + crypto::kTagSize;
@@ -65,6 +67,8 @@ struct AuthenticationRequest {
     uint32_t transaction_id = 0;
     AgentFingerprint fingerprint = {};
     uint32_t agent_key_epoch = 0;
+    AgentName display_name = {};
+    size_t display_name_size = 0;
 };
 
 struct AuthenticationChallenge {
@@ -73,6 +77,8 @@ struct AuthenticationChallenge {
     RandomValue connection_nonce = {};
     uint32_t key_epoch = 0;
     uint8_t connection_role = 1;
+    AgentName display_name = {};
+    size_t display_name_size = 0;
 };
 
 struct CredentialEnvelope {
@@ -140,7 +146,8 @@ public:
     SessionResult authenticate(
         const uint8_t* signature,
         size_t signature_size,
-        const AgentRegistry& registry,
+        AgentRegistry& registry,
+        AgentRegistryStore& store,
         RegistryEntropy entropy,
         void* entropy_context,
         uint64_t now_ms);

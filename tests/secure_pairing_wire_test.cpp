@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
+#include <string>
 #include <cstdint>
 #include <cstring>
 
@@ -92,8 +93,9 @@ void test_discovery_response_matches_python_fixture()
 void test_python_authentication_request_fixture_decodes_exactly()
 {
     const auto encoded = decode_hex(
-        "535750520108000000090014"
-        "4646464646464646464646464646464600000002");
+        "53575052010800000009001f"
+        "46464646464646464646464646464646000000020a"
+        "53747564696f204d6163");
     WireFrameView frame = {};
     AuthenticationRequest request = {};
     assert(decode_wire_frame(encoded.data(), encoded.size(), frame));
@@ -102,6 +104,8 @@ void test_python_authentication_request_fixture_decodes_exactly()
     assert(request.transaction_id == 9);
     assert(request.agent_key_epoch == 2);
     assert(request.fingerprint[0] == 'F');
+    assert(request.display_name_size == 10);
+    assert(std::string(request.display_name.data()) == "Studio Mac");
 }
 
 void test_credential_envelope_and_proof_are_bounded()

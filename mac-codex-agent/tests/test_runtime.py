@@ -357,8 +357,15 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 return old
 
         class Client:
-            async def authenticate(self, transport, identity, credential):
-                self.arguments = (transport, identity, credential)
+            async def authenticate(
+                self, transport, identity, credential, display_name
+            ):
+                self.arguments = (
+                    transport,
+                    identity,
+                    credential,
+                    display_name,
+                )
                 return AuthenticationResult(True, True, updated)
 
         class Transport:
@@ -378,7 +385,8 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(result, updated)
-        self.assertEqual(client.arguments[-1], old)
+        self.assertEqual(client.arguments[2], old)
+        self.assertEqual(client.arguments[3], "Travel Agent")
         self.assertEqual(states[0][0], PairingState.REKEYING)
         self.assertEqual(states[-1][0], PairingState.PAIRED)
 
@@ -1854,9 +1862,13 @@ class FakeRuntime:
         self.voice_setup_failures = []
         self.voice_setup_results = []
         self.voice_setup_token = object()
+        self.agent_names = []
 
     def submit(self, command):
         self.commands.append(command)
+
+    def set_agent_name(self, value):
+        self.agent_names.append(value)
 
     def refresh_voice_readiness(self):
         self.voice_refresh_count += 1
@@ -1872,6 +1884,30 @@ class FakeRuntime:
 
 
 class AgentControllerTests(unittest.TestCase):
+    def test_rename_persists_name_updates_menu_and_reconnects_for_signed_sync(self):
+        class IdentityStore:
+            def load_or_create(self):
+                return type("Identity", (), {"display_name": "Studio Mac"})()
+
+            def rename(self, value):
+                self.requested = value
+                return "Travel Agent"
+
+        runtime = FakeRuntime()
+        identity_store = IdentityStore()
+        controller = AgentController(
+            preferences=MemoryPreferences(True),
+            runtime=runtime,
+            identity_store=identity_store,
+        )
+
+        result = controller.rename_agent("  Travel Agent  ")
+
+        self.assertEqual(result, "Travel Agent")
+        self.assertEqual(identity_store.requested, "  Travel Agent  ")
+        self.assertEqual(runtime.agent_names, ["Studio Mac", "Travel Agent"])
+        self.assertEqual(runtime.commands, [AgentCommand.RECONNECT])
+
     def test_voice_setup_result_is_reported_through_the_runtime(self):
         runtime = FakeRuntime()
         controller = AgentController(

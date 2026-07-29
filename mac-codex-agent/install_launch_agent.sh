@@ -233,12 +233,14 @@ import sys
 import AppKit
 import ApplicationServices
 import Quartz
+import Security
 import bleak
 import certifi
 import cryptography
 import PIL
 from cryptography.hazmat.primitives.ciphers.aead import AESCCM
 import agent
+import agent_identity
 import app_state
 import codex_adapter
 import combined_collector
@@ -247,6 +249,10 @@ import ima_adpcm
 import menu_app
 import protocol
 import runtime
+import pairing_client
+import secure_pairing_crypto
+import secure_pairing_protocol
+import secure_pairing_wire
 import sitecustomize
 import task_alerts
 import trae_adapter
@@ -257,6 +263,7 @@ import voice_input_crypto
 import voice_input_protocol
 import voice_session
 import voice_shortcut
+import watch_credentials
 
 app_root = pathlib.Path(os.environ["PYTHONHOME"]).resolve().parents[4]
 external = []
@@ -289,6 +296,12 @@ validate_app_contents() {
         "$resources/app/voice_input_protocol.py" \
         "$resources/app/voice_session.py" \
         "$resources/app/ima_adpcm.py" \
+        "$resources/app/agent_identity.py" \
+        "$resources/app/watch_credentials.py" \
+        "$resources/app/pairing_client.py" \
+        "$resources/app/secure_pairing_crypto.py" \
+        "$resources/app/secure_pairing_protocol.py" \
+        "$resources/app/secure_pairing_wire.py" \
         "$resources/site-packages/AppKit/__init__.py" \
         "$resources/site-packages/Quartz/__init__.py" \
         "$resources/site-packages/bleak/__init__.py" \
@@ -543,6 +556,7 @@ build_staged_app() {
         runtime.py \
         app_state.py \
         agent.py \
+        agent_identity.py \
         codex_adapter.py \
         combined_collector.py \
         completion_classifier.py \
@@ -550,12 +564,17 @@ build_staged_app() {
         trae_adapter.py \
         trae_tasks.py \
         protocol.py \
+        pairing_client.py \
+        secure_pairing_crypto.py \
+        secure_pairing_protocol.py \
+        secure_pairing_wire.py \
         voice_driver.py \
         voice_shortcut.py \
         voice_audio.py \
         voice_input_crypto.py \
         voice_input_protocol.py \
         voice_session.py \
+        watch_credentials.py \
         ima_adpcm.py; do
         cp "$ROOT_DIR/$module" "$STAGING_CODE/$module"
     done

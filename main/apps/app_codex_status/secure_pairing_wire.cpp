@@ -12,8 +12,8 @@ constexpr uint8_t kWireVersion = 1;
 constexpr size_t kDiscoveryResponseSize = 20;
 constexpr size_t kPairingRequestFixedSize = 83;
 constexpr size_t kPairingOfferSize = 65;
-constexpr size_t kAuthenticationRequestSize = 20;
-constexpr size_t kAuthenticationChallengeWireSize = 37;
+constexpr size_t kAuthenticationRequestFixedSize = 21;
+constexpr size_t kAuthenticationChallengeWireFixedSize = 38;
 constexpr size_t kCredentialEnvelopeFixedSize = 66;
 
 bool nonzero(const uint8_t* data, size_t size)
@@ -250,7 +250,7 @@ bool decode_authentication_request(
     output = {};
     if (frame.type != WireMessageType::AuthenticationRequest ||
         frame.payload == nullptr ||
-        frame.payload_size != kAuthenticationRequestSize ||
+        frame.payload_size < kAuthenticationRequestFixedSize ||
         connection_handle == 0xffff) {
         return false;
     }
@@ -258,6 +258,17 @@ bool decode_authentication_request(
     output.transaction_id = frame.transaction_id;
     std::copy_n(frame.payload, 16, output.fingerprint.begin());
     output.agent_key_epoch = read_u32(frame.payload + 16);
+    output.display_name_size = frame.payload[20];
+    if (output.display_name_size == 0 ||
+        output.display_name_size > kAgentNameBytes ||
+        frame.payload_size !=
+            kAuthenticationRequestFixedSize + output.display_name_size) {
+        return false;
+    }
+    std::copy_n(
+        frame.payload + kAuthenticationRequestFixedSize,
+        output.display_name_size,
+        output.display_name.begin());
     return output.agent_key_epoch != 0 &&
            nonzero(output.fingerprint.data(), output.fingerprint.size());
 }
@@ -268,8 +279,12 @@ bool encode_authentication_challenge_wire(
     size_t output_capacity,
     size_t& output_size)
 {
-    std::array<uint8_t, kAuthenticationChallengeWireSize> payload = {};
-    if (challenge.key_epoch == 0 || challenge.connection_role != 1) {
+    std::array<uint8_t,
+               kAuthenticationChallengeWireFixedSize + kAgentNameBytes>
+        payload = {};
+    if (challenge.key_epoch == 0 || challenge.connection_role != 1 ||
+        challenge.display_name_size == 0 ||
+        challenge.display_name_size > kAgentNameBytes) {
         return false;
     }
     std::copy(
@@ -280,11 +295,16 @@ bool encode_authentication_challenge_wire(
         payload.begin() + 16);
     write_u32(challenge.key_epoch, payload.data() + 32);
     payload[36] = challenge.connection_role;
+    payload[37] = static_cast<uint8_t>(challenge.display_name_size);
+    std::copy_n(
+        challenge.display_name.begin(),
+        challenge.display_name_size,
+        payload.begin() + kAuthenticationChallengeWireFixedSize);
     return encode_frame(
         WireMessageType::AuthenticationChallenge,
         challenge.transaction_id,
         payload.data(),
-        payload.size(),
+        kAuthenticationChallengeWireFixedSize + challenge.display_name_size,
         output,
         output_capacity,
         output_size);

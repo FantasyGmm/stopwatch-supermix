@@ -24,8 +24,8 @@ _HEADER = struct.Struct(">4sBBIH")
 _DISCOVERY_RESPONSE = struct.Struct(">16sI")
 _PAIRING_REQUEST = struct.Struct(">16s33s33sB")
 _PAIRING_OFFER = struct.Struct(">16s16s33s")
-_AUTHENTICATION_REQUEST = struct.Struct(">16sI")
-_AUTHENTICATION_CHALLENGE = struct.Struct(">16s16sIB")
+_AUTHENTICATION_REQUEST = struct.Struct(">16sIB")
+_AUTHENTICATION_CHALLENGE = struct.Struct(">16s16sIBB")
 _CREDENTIAL_ENVELOPE = struct.Struct(">BI33s13s13sH")
 _LENGTH_PREFIX = struct.Struct(">H")
 
@@ -214,34 +214,49 @@ def decode_pairing_confirmation(payload: bytes) -> bool:
 def encode_authentication_request(request: AuthenticationRequest) -> bytes:
     if request.agent_key_epoch <= 0 or request.agent_key_epoch > 0xFFFFFFFF:
         raise PairingWireError("Agent key epoch is invalid")
+    name = request.display_name.encode("utf-8")
+    if not name or len(name) > MAX_AGENT_NAME_BYTES:
+        raise PairingWireError("Agent display name is invalid")
     return encode_frame(
         WireMessageType.AUTHENTICATION_REQUEST,
         request.transaction_id,
         _AUTHENTICATION_REQUEST.pack(
             _bytes(request.fingerprint, 16, "Agent fingerprint"),
             request.agent_key_epoch,
-        ),
+            len(name),
+        ) + name,
     )
 
 
 def decode_authentication_request(
     transaction_id: int, payload: bytes
 ) -> AuthenticationRequest:
-    if len(payload) != _AUTHENTICATION_REQUEST.size:
+    if len(payload) < _AUTHENTICATION_REQUEST.size:
         raise PairingWireError("authentication request has invalid size")
-    fingerprint, key_epoch = _AUTHENTICATION_REQUEST.unpack(payload)
+    fingerprint, key_epoch, name_size = _AUTHENTICATION_REQUEST.unpack_from(payload)
+    name = payload[_AUTHENTICATION_REQUEST.size :]
+    if name_size != len(name) or not name or len(name) > MAX_AGENT_NAME_BYTES:
+        raise PairingWireError("Agent display name is invalid")
+    try:
+        display_name = name.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise PairingWireError("Agent display name is invalid") from error
     if key_epoch <= 0:
         raise PairingWireError("Agent key epoch is invalid")
     return AuthenticationRequest(
         _transaction(transaction_id),
         _bytes(fingerprint, 16, "Agent fingerprint"),
         key_epoch,
+        display_name,
     )
 
 
 def encode_authentication_challenge(challenge: AuthenticationChallenge) -> bytes:
     if challenge.key_epoch <= 0 or challenge.connection_role != 1:
         raise PairingWireError("authentication challenge is invalid")
+    name = challenge.display_name.encode("utf-8")
+    if not name or len(name) > MAX_AGENT_NAME_BYTES:
+        raise PairingWireError("authentication display name is invalid")
     return encode_frame(
         WireMessageType.AUTHENTICATION_CHALLENGE,
         challenge.transaction_id,
@@ -250,16 +265,26 @@ def encode_authentication_challenge(challenge: AuthenticationChallenge) -> bytes
             _bytes(challenge.connection_nonce, 16, "connection nonce"),
             challenge.key_epoch,
             challenge.connection_role,
-        ),
+            len(name),
+        ) + name,
     )
 
 
 def decode_authentication_challenge(
     transaction_id: int, payload: bytes
 ) -> AuthenticationChallenge:
-    if len(payload) != _AUTHENTICATION_CHALLENGE.size:
+    if len(payload) < _AUTHENTICATION_CHALLENGE.size:
         raise PairingWireError("authentication challenge has invalid size")
-    watch_id, nonce, key_epoch, role = _AUTHENTICATION_CHALLENGE.unpack(payload)
+    watch_id, nonce, key_epoch, role, name_size = (
+        _AUTHENTICATION_CHALLENGE.unpack_from(payload)
+    )
+    name = payload[_AUTHENTICATION_CHALLENGE.size :]
+    if name_size != len(name) or not name or len(name) > MAX_AGENT_NAME_BYTES:
+        raise PairingWireError("authentication display name is invalid")
+    try:
+        display_name = name.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise PairingWireError("authentication display name is invalid") from error
     if key_epoch <= 0 or role != 1:
         raise PairingWireError("authentication challenge is invalid")
     return AuthenticationChallenge(
@@ -268,6 +293,7 @@ def decode_authentication_challenge(
         _bytes(nonce, 16, "connection nonce"),
         key_epoch,
         role,
+        display_name,
     )
 
 

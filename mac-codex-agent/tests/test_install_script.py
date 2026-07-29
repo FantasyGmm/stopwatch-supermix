@@ -64,6 +64,7 @@ class InstallScriptTests(unittest.TestCase):
             "runtime.py",
             "app_state.py",
             "agent.py",
+            "agent_identity.py",
             "codex_adapter.py",
             "trae_tasks.py",
             "trae_adapter.py",
@@ -71,12 +72,18 @@ class InstallScriptTests(unittest.TestCase):
             "completion_classifier.py",
             "task_alerts.py",
             "protocol.py",
+            "pairing_client.py",
+            "secure_pairing_crypto.py",
+            "secure_pairing_protocol.py",
+            "secure_pairing_wire.py",
+            "watch_credentials.py",
             "trae_tasks.py",
             "trae_adapter.py",
             "combined_collector.py",
         ):
             self.assertIn(module, script)
         self.assertIn("STOPWATCH_CODEX_APP", script)
+        self.assertIn("import Security", script)
         self.assertNotIn('open -W -n "$APP_DIR"', script)
 
     def test_packaging_preserves_existing_product_identity(self):

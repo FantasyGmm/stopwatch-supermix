@@ -239,6 +239,12 @@ int main()
     authentication.transaction_id = 43;
     authentication.fingerprint = fingerprint;
     authentication.agent_key_epoch = registry.key_epoch();
+    constexpr char kRenamed[] = "Renamed Mac";
+    authentication.display_name_size = sizeof(kRenamed) - 1;
+    std::copy_n(
+        kRenamed,
+        authentication.display_name_size,
+        authentication.display_name.begin());
     assert(
         session.request_authentication(
             authentication, registry, fill_entropy, &entropy, 2000) ==
@@ -265,11 +271,17 @@ int main()
             signature.data(),
             signature_size,
             registry,
+            store,
             fill_entropy,
             &entropy,
             2100) == SessionResult::Ok);
     assert(session.state() == PairingState::Authenticated);
     assert(!session.presentation().credential_ready);
+    assert(std::string(registry.find(fingerprint)->display_name.data()) ==
+           "Renamed Mac");
+    assert(store.load(persisted) == StoreResult::Ok);
+    assert(std::string(persisted.find(fingerprint)->display_name.data()) ==
+           "Renamed Mac");
 
     AgentRegistry rotated = registry;
     const auto second = request(
@@ -320,6 +332,7 @@ int main()
             signature.data(),
             signature_size,
             rotated,
+            store,
             fill_entropy,
             &entropy,
             3100) == SessionResult::Ok);

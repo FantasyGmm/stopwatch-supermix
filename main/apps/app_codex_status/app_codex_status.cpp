@@ -2057,12 +2057,14 @@ void AppCodexStatus::process_secure_pairing(uint32_t now_ms)
             secure_pairing::WireMessageType::AuthenticationProof) {
             const uint8_t* signature = nullptr;
             size_t signature_size = 0;
-            if (!secure_pairing::decode_authentication_proof(
+            if (_agent_registry_store == nullptr ||
+                !secure_pairing::decode_authentication_proof(
                     frame, signature, signature_size) ||
                 _secure_pairing_session.authenticate(
                     signature,
                     signature_size,
                     _agent_registry,
+                    *_agent_registry_store,
                     fill_agent_entropy,
                     nullptr,
                     now_ms) != secure_pairing::SessionResult::Ok) {

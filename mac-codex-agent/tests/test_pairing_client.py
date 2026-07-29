@@ -54,6 +54,7 @@ class FakeWatch:
         self._auth_keys = None
         self.acks = []
         self.tamper_envelope = False
+        self.authentication_name_override = None
 
     async def request_pairing(self, request):
         self._pairing_request = request
@@ -144,6 +145,9 @@ class FakeWatch:
             connection_nonce=bytes(range(106, 122)),
             key_epoch=self.key_epoch,
             connection_role=1,
+            display_name=(
+                self.authentication_name_override or request.display_name
+            ),
         )
         return self._auth_challenge
 
@@ -236,7 +240,7 @@ class PairingClientTests(unittest.IsolatedAsyncioTestCase):
             fingerprint=self.watch.fingerprint,
         )
         result = await self.client.authenticate(
-            self.watch, self.identity, current
+            self.watch, self.identity, current, "Studio Mac"
         )
         self.assertTrue(result.authenticated)
         self.assertTrue(result.rekeyed)
@@ -246,11 +250,28 @@ class PairingClientTests(unittest.IsolatedAsyncioTestCase):
 
         self.store.events.clear()
         result = await self.client.authenticate(
-            self.watch, self.identity, result.credential
+            self.watch, self.identity, result.credential, "Studio Mac"
         )
         self.assertTrue(result.authenticated)
         self.assertFalse(result.rekeyed)
         self.assertEqual(self.store.events, [])
+
+    async def test_authentication_rejects_a_watch_challenge_with_changed_name(self):
+        current = WatchCredential(
+            watch_id=self.watch.watch_id,
+            master_key=b"x" * 16,
+            key_epoch=3,
+            fingerprint=self.watch.fingerprint,
+        )
+        self.watch.authentication_name_override = "Attacker Name"
+
+        with self.assertRaisesRegex(ValueError, "mismatched challenge"):
+            await self.client.authenticate(
+                self.watch,
+                self.identity,
+                current,
+                "Studio Mac",
+            )
 
     async def test_tampered_wrapped_credential_is_rejected_without_store_or_ack(self):
         await self.client.request_pairing(

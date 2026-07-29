@@ -18,14 +18,24 @@ from AppKit import (
     NSControlStateValueOn,
 )
 
-from app_state import AgentSnapshot, CodexSnapshot, ConnectionState, TraeSnapshot
-from menu_app import MenuBarApplication, confirm_voice_setup
+from app_state import (
+    AgentSnapshot,
+    CodexSnapshot,
+    ConnectionState,
+    PairingState,
+    TraeSnapshot,
+)
+from menu_app import MenuBarApplication, confirm_voice_setup, prompt_agent_name
 from voice_driver import BlackHoleInstaller, DriverInstallError, DriverState
 from voice_session import VoiceState
 
 
 class FakeController:
-    def __init__(self, voice_state=VoiceState.READY):
+    def __init__(
+        self,
+        voice_state=VoiceState.READY,
+        pairing_state=PairingState.PAIRED,
+    ):
         self.started = False
         self.stopped = False
         self.connection_values = []
@@ -36,6 +46,9 @@ class FakeController:
         self.voice_setup_failures = []
         self.voice_setup_results = []
         self.voice_revision = 0
+        self.agent_name = "Studio Mac"
+        self.pairing_state = pairing_state
+        self.renamed_agents = []
 
     def start(self):
         self.started = True
@@ -46,6 +59,14 @@ class FakeController:
             True,
             voice_state=self.voice_state,
             voice_detail=self.voice_detail,
+            agent_name=self.agent_name,
+            pairing_state=self.pairing_state,
+            verification_code=(
+                "123456"
+                if self.pairing_state is PairingState.AWAITING_CONFIRMATION
+                else ""
+            ),
+            watch_identity_suffix="0E0F",
             codex=CodexSnapshot.from_status(
                 {
                     "codex_model": "gpt-5.3",
@@ -105,6 +126,12 @@ class FakeController:
     def reconnect(self):
         self.reconnect_count += 1
 
+    def rename_agent(self, value):
+        self.renamed_agents.append(value)
+        self.agent_name = value.strip()
+        self.reconnect_count += 1
+        return self.agent_name
+
     def refresh_voice_readiness(self):
         self.voice_refresh_count += 1
 
@@ -148,6 +175,90 @@ class FakeController:
 
 
 class MenuBarApplicationTests(unittest.TestCase):
+    def test_agent_name_prompt_returns_text_only_after_save(self):
+        class Field:
+            def __init__(self):
+                self.value = ""
+
+            def setStringValue_(self, value):
+                self.value = value
+
+            def stringValue(self):
+                return "Travel Agent"
+
+        class Alert:
+            def __init__(self, result):
+                self.result = result
+                self.buttons = []
+                self.accessory = None
+
+            def setMessageText_(self, _value):
+                pass
+
+            def setInformativeText_(self, _value):
+                pass
+
+            def setAccessoryView_(self, value):
+                self.accessory = value
+
+            def addButtonWithTitle_(self, value):
+                self.buttons.append(value)
+
+            def runModal(self):
+                return self.result
+
+        field = Field()
+        alert = Alert(NSAlertFirstButtonReturn)
+        self.assertEqual(
+            prompt_agent_name(
+                "Studio Mac",
+                alert_factory=lambda: alert,
+                field_factory=lambda: field,
+            ),
+            "Travel Agent",
+        )
+        self.assertEqual(field.value, "Studio Mac")
+        self.assertEqual(alert.buttons, ["Save", "Cancel"])
+        self.assertIs(alert.accessory, field)
+        self.assertIsNone(
+            prompt_agent_name(
+                "Studio Mac",
+                alert_factory=lambda: Alert(0),
+                field_factory=Field,
+            )
+        )
+
+    def test_pairing_rows_and_agent_rename_action_are_visible(self):
+        NSApplication.sharedApplication()
+        controller = FakeController(
+            pairing_state=PairingState.AWAITING_CONFIRMATION
+        )
+        delegate = MenuBarApplication.alloc().initWithController_(controller)
+        delegate.applicationDidFinishLaunching_(None)
+        self.addCleanup(delegate._shutdown)
+
+        self.assertEqual(delegate.agent_label.stringValue(), "Agent: Studio Mac")
+        self.assertEqual(delegate.pairing_label.stringValue(), "Pairing: Confirm on Watch")
+        self.assertEqual(delegate.verification_label.stringValue(), "Verification Code: 123456")
+        self.assertEqual(delegate.watch_identity_label.stringValue(), "Watch: · 0E0F")
+        delegate.agent_name_prompt = lambda current: "Travel Agent"
+
+        delegate.renameAgent_(None)
+
+        self.assertEqual(controller.renamed_agents, ["Travel Agent"])
+        self.assertEqual(delegate.agent_label.stringValue(), "Agent: Travel Agent")
+
+    def test_failed_pairing_exposes_retry_action(self):
+        NSApplication.sharedApplication()
+        controller = FakeController(pairing_state=PairingState.ERROR)
+        delegate = MenuBarApplication.alloc().initWithController_(controller)
+        delegate.applicationDidFinishLaunching_(None)
+        self.addCleanup(delegate._shutdown)
+
+        self.assertFalse(delegate.retry_pairing_item.isHidden())
+        delegate.retryPairing_(None)
+        self.assertEqual(controller.reconnect_count, 1)
+
     def test_confirmation_explains_authorization_and_possible_restart(self):
         class Alert:
             def __init__(self):
@@ -609,6 +720,9 @@ class MenuBarApplicationTests(unittest.TestCase):
             delegate.trae_detail_item,
             delegate.connection_header_item,
             delegate.agent_item,
+            delegate.pairing_item,
+            delegate.verification_item,
+            delegate.watch_identity_item,
             delegate.bluetooth_item,
             delegate.device_item,
         ):

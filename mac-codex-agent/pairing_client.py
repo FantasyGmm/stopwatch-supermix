@@ -35,7 +35,7 @@ _CREDENTIAL_MAGIC = b"SWCRED"
 _ENVELOPE_MAGIC = b"SWENV"
 _ACK_MAGIC = b"SWACK"
 _AUTH_MAGIC = b"SWAUTH"
-_AUTH_CHALLENGE = struct.Struct(">6sBBI16s16sI")
+_AUTH_CHALLENGE = struct.Struct(">6sBBI16s16sIB")
 _CREDENTIAL = struct.Struct(">6sB16sI16s16s")
 _ENVELOPE_AAD = struct.Struct(">5sBBI")
 _ACK_AAD = struct.Struct(">5sBI")
@@ -68,6 +68,7 @@ class AuthenticationRequest:
     transaction_id: int
     fingerprint: bytes
     agent_key_epoch: int
+    display_name: str
 
 
 @dataclass(frozen=True)
@@ -77,6 +78,7 @@ class AuthenticationChallenge:
     connection_nonce: bytes
     key_epoch: int
     connection_role: int
+    display_name: str
 
 
 @dataclass(frozen=True)
@@ -166,6 +168,9 @@ def encode_authentication_challenge(
         raise ValueError("authentication key epoch is invalid")
     if challenge.connection_role != 1:
         raise ValueError("authentication role is invalid")
+    name = challenge.display_name.encode("utf-8")
+    if not name or len(name) > 24:
+        raise ValueError("authentication display name is invalid")
     return _AUTH_CHALLENGE.pack(
         _AUTH_MAGIC,
         PAIRING_VERSION,
@@ -174,7 +179,8 @@ def encode_authentication_challenge(
         challenge.watch_id,
         challenge.connection_nonce,
         challenge.key_epoch,
-    )
+        len(name),
+    ) + name
 
 
 def encode_credential_plaintext(credential: WatchCredential) -> bytes:
@@ -359,6 +365,7 @@ class PairingClient:
         transport,
         identity: ec.EllipticCurvePrivateKey,
         credential: WatchCredential,
+        display_name: str,
     ) -> AuthenticationResult:
         if self._pending_authentication is not None:
             raise RuntimeError("an authentication request is already pending")
@@ -369,11 +376,13 @@ class PairingClient:
             transaction_id=self._new_transaction_id(),
             fingerprint=credential.fingerprint,
             agent_key_epoch=credential.key_epoch,
+            display_name=display_name,
         )
         challenge = await transport.begin_authentication(request)
         if (
             challenge.transaction_id != request.transaction_id
             or challenge.watch_id != credential.watch_id
+            or challenge.display_name != request.display_name
         ):
             raise ValueError("watch returned a mismatched challenge")
         encoded = encode_authentication_challenge(challenge)

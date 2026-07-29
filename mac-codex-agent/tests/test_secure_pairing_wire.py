@@ -63,9 +63,9 @@ class PairingWireTests(unittest.TestCase):
         self.assertEqual(decode_pairing_offer(transaction_id, payload), offer)
 
     def test_authentication_request_and_challenge_round_trip(self):
-        request = AuthenticationRequest(9, b"F" * 16, 2)
+        request = AuthenticationRequest(9, b"F" * 16, 2, "Studio Mac")
         challenge = AuthenticationChallenge(
-            9, b"W" * 16, b"C" * 16, 5, 1
+            9, b"W" * 16, b"C" * 16, 5, 1, "Studio Mac"
         )
 
         request_frame = decode_frame(encode_authentication_request(request))

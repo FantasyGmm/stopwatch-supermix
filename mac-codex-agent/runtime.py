@@ -113,6 +113,8 @@ class SecureConnectionAuthorizer:
         self._pairing_client = pairing_client or PairingClient(
             self._credential_store
         )
+        self._state_lock = threading.Lock()
+        self._current_watch_id: Optional[bytes] = None
 
     async def authorize(self, transport, publish) -> WatchCredential:
         identity = await _run_in_daemon_thread(
@@ -129,6 +131,8 @@ class SecureConnectionAuthorizer:
             or discovery.key_epoch <= 0
         ):
             raise ValueError("watch discovery response is invalid")
+        with self._state_lock:
+            self._current_watch_id = discovery.watch_id
         watch_suffix = discovery.watch_id.hex()[-4:].upper()
         credential = await _run_in_daemon_thread(
             lambda: self._credential_store.load(discovery.watch_id)
@@ -168,6 +172,7 @@ class SecureConnectionAuthorizer:
                 transport,
                 identity.private_key,
                 credential,
+                identity.display_name,
             )
             if not result.authenticated:
                 raise PermissionError("Agent authentication was rejected")
@@ -185,6 +190,14 @@ class SecureConnectionAuthorizer:
             identity.display_name,
         )
         return credential
+
+    def forget_current_watch(self) -> bool:
+        with self._state_lock:
+            watch_id = self._current_watch_id
+        if watch_id is None:
+            return False
+        self._credential_store.forget(watch_id)
+        return True
 
 
 def _new_voice_nonce() -> bytes:
@@ -294,6 +307,14 @@ class AgentRuntime:
     def snapshot(self) -> AgentSnapshot:
         with self._state_lock:
             return self._snapshot
+
+    def set_agent_name(self, display_name: str) -> None:
+        with self._state_lock:
+            self._snapshot = dataclasses.replace(
+                self._snapshot,
+                agent_name=display_name,
+                changed_at=time.time(),
+            )
 
     def submit(self, command: AgentCommand) -> None:
         with self._command_lock:
@@ -993,10 +1014,23 @@ class AgentController:
         self,
         preferences: Optional[Preferences] = None,
         runtime: Optional[AgentRuntime] = None,
+        identity_store=None,
+        credential_store=None,
+        secure_authorizer=None,
     ):
         self._preferences = preferences or UserDefaultsPreferences()
         self._collector = None
+        self._identity_store = identity_store
+        self._secure_authorizer = secure_authorizer
         if runtime is None:
+            self._identity_store = self._identity_store or AgentIdentityStore()
+            credential_store = credential_store or WatchCredentialStore()
+            self._secure_authorizer = self._secure_authorizer or (
+                SecureConnectionAuthorizer(
+                    identity_store=self._identity_store,
+                    credential_store=credential_store,
+                )
+            )
             self._collector = CompositeStateCollector(
                 CodexStateCollector(alert_tracker=TaskAlertTracker()),
                 TraeStateCollector(),
@@ -1004,9 +1038,16 @@ class AgentController:
             runtime = AgentRuntime(
                 collector=self._collector,
                 connection_enabled=self._preferences.connection_enabled(),
-                secure_authorizer=SecureConnectionAuthorizer(),
+                secure_authorizer=self._secure_authorizer,
             )
         self._runtime = runtime
+        if self._identity_store is not None:
+            try:
+                self._runtime.set_agent_name(
+                    self._identity_store.load_or_create().display_name
+                )
+            except Exception:
+                LOGGER.warning("Agent name is unavailable from Keychain")
         self._thread: Optional[threading.Thread] = None
         self._stop_lock = threading.Lock()
 
@@ -1032,6 +1073,14 @@ class AgentController:
 
     def reconnect(self) -> None:
         self._runtime.submit(AgentCommand.RECONNECT)
+
+    def rename_agent(self, value: str) -> str:
+        if self._identity_store is None:
+            raise RuntimeError("Agent identity store is unavailable")
+        display_name = self._identity_store.rename(value)
+        self._runtime.set_agent_name(display_name)
+        self._runtime.submit(AgentCommand.RECONNECT)
+        return display_name
 
     def refresh_voice_readiness(self) -> None:
         self._runtime.refresh_voice_readiness()
