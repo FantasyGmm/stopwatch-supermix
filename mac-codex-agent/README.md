@@ -113,42 +113,38 @@ synchronization continue even when voice input is unavailable.
 
 ## Voice Key And Security
 
-Production voice uses one random 16-byte key shared by this Mac Agent and this
-watch. Provision it before the production firmware build:
+Production firmware has no compiled voice key and does not read
+`STOPWATCH_VOICE_KEY_FILE`. On first boot the watch creates its registry and a
+random 16-byte master voice key at epoch one. A new Mac uses P-256 ECDH and a
+six-digit verification code; compare the code on both devices and approve the
+request physically on the watch. The watch can authorize up to eight Agents.
+
+Each Agent stores an independent P-256 signing identity and per-watch
+credential in macOS Keychain. Authorized Agents share the watch master key to
+save watch storage. Pull down on the watch Codex page to switch the active
+Agent. A new pairing request remains pending and does not interrupt the active
+Agent. Use **Agent Name...** in the menu app to edit the name shown on the
+watch; reconnect authentication signs the requested name before it is stored.
+
+Removing an Agent on the watch rotates the master key and increments its epoch.
+Connected Agents update immediately; an authorized offline Agent signs a fresh
+challenge and receives the current key on its next connection. A removed Agent
+cannot authenticate or obtain the rotated key. Reset All Agents clears the
+registry, rotates again, and requires physical enrollment for every Mac.
+
+For one migration release, remove the obsolete fixed Keychain item with:
 
 ```bash
-PYTHON="$PWD/mac-codex-agent/.venv/bin/python"
-"$PYTHON" scripts/provision_voice_key.py provision
-./scripts/build_unified_candidate.sh --clean
+mac-codex-agent/.venv/bin/python \
+  scripts/provision_voice_key.py remove-legacy-voice-key
 ```
 
-The default external key file is:
-
-```text
-~/Library/Application Support/StopWatch Codex Agent/device-key.hex
-```
-
-It contains exactly 32 lowercase hexadecimal characters and must have mode
-`0600`. `STOPWATCH_VOICE_KEY_FILE` overrides this path for an intentionally
-isolated build or test. The provision command imports the same key into macOS
-Keychain under:
-
-```text
-service: `com.stopwatch.codex-agent.voice`
-account: `StopWatch-Codex`
-```
-
-The firmware build generates its ignored key header inside the selected build
-directory. The key is excluded from Git, the app bundle, command-line
-arguments, logs, status snapshots, validation reports, and diagnostic probe
-keys. A missing, malformed, or non-`0600` file fails the firmware build.
-
-Reinstalling the app does not copy or rotate the key. After reinstalling macOS
-or deleting the Keychain item, rerun the provision command with the same key
-file. Key rotation requires replacing the external key with a new mode-`0600`
-value, rerunning provisioning, rebuilding the firmware, and reflashing the
-watch; the old Agent/watch pair cannot communicate by voice after only one side
-is changed. The app bundle itself does not need rebuilding for a key rotation.
+The cleanup command can delete only service
+`com.stopwatch.codex-agent.voice`, account `StopWatch-Codex`; it never creates,
+imports, or prints a key. Existing watches must be flashed once with this
+firmware because older firmware cannot perform secure runtime enrollment.
+If every Agent credential is lost, use **Reset All Agents** on the watch and
+enroll each Mac again physically; a former credential is not a recovery bypass.
 
 The production boundary is application-layer AES-128-CCM protocol version 3.
 The clear packet header is authenticated, audio is encrypted with an 8-byte

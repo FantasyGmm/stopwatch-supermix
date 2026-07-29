@@ -27,9 +27,8 @@ PUBLISH_HAD_PRIOR=0
 PUBLISH_ROLLBACK_REQUIRED=0
 PUBLISH_LOCK_OWNED=0
 
-# Task 10 intentionally owns external device-key provisioning because
-# Task 10 creates the protocol/header provisioning script. Packaging never
-# receives, generates, logs, or bundles device-key material or a key header.
+# Production voice keys are created and rotated by the watch registry at
+# runtime. Packaging never receives, generates, logs, or bundles key material.
 
 verify_driver_package() {
     local package_path="$1"

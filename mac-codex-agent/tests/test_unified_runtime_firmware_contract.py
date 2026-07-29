@@ -265,10 +265,10 @@ class UnifiedRuntimeFirmwareContractTest(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, runner)
 
-        self.assertIn("STOPWATCH_VOICE_KEY_FILE", runner)
+        self.assertNotIn("STOPWATCH_VOICE_KEY_FILE", runner)
         self.assertIn("STOPWATCH_BUILD_DIR", runner)
         self.assertIn("STOPWATCH_SDKCONFIG", runner)
-        self.assertIn("secrets.token_hex(16)", runner)
+        self.assertNotIn("secrets.token_hex(16)", runner)
         self.assertNotIn("$ROOT/build-unified", runner)
 
     def test_unified_validation_report_separates_targeted_and_campaign_evidence(self):

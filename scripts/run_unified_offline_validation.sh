@@ -92,21 +92,8 @@ if [[ "$CONTRACT_ONLY" -eq 0 ]]; then
     fi
 
     if [[ "$HOST_TESTS_ONLY" -eq 0 ]]; then
-        export STOPWATCH_VOICE_KEY_FILE="$HOST_TEST_DIR/device-key.hex"
         export STOPWATCH_BUILD_DIR="$HOST_TEST_DIR/firmware-build"
         export STOPWATCH_SDKCONFIG="$HOST_TEST_DIR/sdkconfig.unified"
-        (
-            umask 077
-            "$PYTHON" - <<'PY'
-import os
-import pathlib
-import secrets
-
-path = pathlib.Path(os.environ["STOPWATCH_VOICE_KEY_FILE"])
-path.write_text(secrets.token_hex(16) + "\n", encoding="ascii")
-PY
-        )
-
         if ! command -v idf.py >/dev/null 2>&1; then
             IDF_EXPORT="${IDF_PATH:-$HOME/esp/esp-idf-v5.5.4}/export.sh"
             if [[ ! -f "$IDF_EXPORT" ]]; then

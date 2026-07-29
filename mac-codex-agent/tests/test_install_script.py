@@ -194,17 +194,21 @@ class InstallScriptTests(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, script)
 
-    def test_installer_defers_key_provisioning_and_verifies_code_signature(self):
+    def test_installer_never_provisions_keys_and_verifies_code_signature(self):
         script = self.read_script()
 
-        self.assertIn("Task 10 intentionally owns external device-key provisioning", script)
-        self.assertIn("Task 10 creates the protocol/header provisioning script", script)
+        self.assertIn(
+            "Production voice keys are created and rotated by the watch registry",
+            script,
+        )
         for forbidden in (
             "openssl rand",
             "/dev/urandom",
             "security add-generic-password",
             "voice_input_crypto.h",
             "xxd -i",
+            "STOPWATCH_VOICE_KEY_FILE",
+            "voice_input_device_key.h",
         ):
             self.assertNotIn(forbidden, script)
         self.assertIn(
