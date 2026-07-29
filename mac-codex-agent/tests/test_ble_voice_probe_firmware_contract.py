@@ -86,6 +86,47 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         self.assertIn("_production_control_guard.reset()", disconnect)
         self.assertIn("_connection_epoch.fetch_add", disconnect)
 
+    def test_production_voice_uses_runtime_key_and_strict_epoch(self):
+        transport_header = (
+            ROOT / "main/apps/app_codex_status/codex_ble_transport.h"
+        ).read_text()
+        transport_source = (
+            ROOT / "main/apps/app_codex_status/codex_ble_transport.cpp"
+        ).read_text()
+        controller_header = (
+            ROOT / "main/apps/app_codex_status/voice_input_controller.h"
+        ).read_text()
+        controller_source = (
+            ROOT / "main/apps/app_codex_status/voice_input_controller.cpp"
+        ).read_text()
+        crypto_header = (
+            ROOT / "main/apps/app_codex_status/voice_input_crypto.h"
+        ).read_text()
+        protocol_header = (
+            ROOT / "main/apps/app_codex_status/voice_input_protocol.h"
+        ).read_text()
+
+        self.assertIn("kProtocolVersion = 4", protocol_header)
+        self.assertIn("uint32_t key_epoch", protocol_header)
+        self.assertIn("uint32_t expected_key_epoch", protocol_header)
+        self.assertIn("set_voice_credential", transport_header)
+        self.assertIn("clear_voice_credential", transport_header)
+        self.assertIn("_production_voice_key_epoch", transport_header)
+        self.assertIn("_production_voice_key_epoch.load", transport_source)
+        self.assertIn("set_credential", controller_header)
+        self.assertIn("clear_credential", controller_header)
+        self.assertIn("_key_epoch", controller_header)
+        self.assertIn("_crypto->set_key", controller_source)
+        self.assertIn("_crypto->clear", controller_source)
+        self.assertIn("bool set_key", crypto_header)
+        self.assertIn("void clear", crypto_header)
+
+        production = "\n".join(
+            (transport_header, transport_source, controller_header, controller_source)
+        )
+        self.assertNotIn("device_context", production)
+        self.assertNotIn("generated::kDeviceKey", production)
+
     def test_app_routes_button_edges_after_wake_and_cancels_before_home(self):
         header = (ROOT / "main/apps/app_codex_status/app_codex_status.h").read_text()
         source = (ROOT / "main/apps/app_codex_status/app_codex_status.cpp").read_text()

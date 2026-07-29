@@ -61,6 +61,7 @@ from voice_shortcut import (
 LOGGER = logging.getLogger(__name__)
 DEFAULT_RETRY_DELAYS = (1.0, 2.0, 4.0, 8.0, 16.0, 30.0)
 VOICE_TARGET_BPS = 8192
+VOICE_KEY_EPOCH = 1
 _VOICE_SECRET_HEX = re.compile(
     r"(?i)(?<![0-9a-f])[0-9a-f]{32,}(?![0-9a-f])"
 )
@@ -81,6 +82,7 @@ _VOICE_UNAVAILABLE_REASONS = {
 class _BleSessionContext:
     transport: object
     voice_key: Optional[bytes] = None
+    voice_key_epoch: int = VOICE_KEY_EPOCH
     voice_service: Optional[object] = None
     voice_failed: bool = False
     shutdown_task: Optional[asyncio.Task] = None
@@ -112,7 +114,10 @@ def _blackhole_receipt_present() -> bool:
     return result.returncode == 0
 
 
-def _create_voice_session(key: bytes) -> VoiceSessionService:
+def _create_voice_session(
+    key: bytes,
+    key_epoch: int = VOICE_KEY_EPOCH,
+) -> VoiceSessionService:
     bridge = VoiceAudioBridge()
     route = VoiceAudioRoute(bridge)
     shortcut = FnShortcutController()
@@ -140,6 +145,7 @@ def _create_voice_session(key: bytes) -> VoiceSessionService:
         route,
         shortcut,
         key,
+        key_epoch=key_epoch,
         readiness_checker=readiness,
     )
 
@@ -515,7 +521,11 @@ class AgentRuntime:
             reason = _VOICE_UNAVAILABLE_REASONS.get(
                 state, INITIALIZATION_FAILED
             )
-            payload = self._encode_unavailable_payload(key, reason)
+            payload = self._encode_unavailable_payload(
+                key,
+                reason,
+                context.voice_key_epoch,
+            )
             await self._disable_voice(transport, payload)
             return
 
@@ -530,7 +540,10 @@ class AgentRuntime:
 
         try:
             ready_payload = encode_ready(
-                key, self._voice_nonce_factory(), VOICE_TARGET_BPS
+                key,
+                self._voice_nonce_factory(),
+                VOICE_TARGET_BPS,
+                key_epoch=context.voice_key_epoch,
             )
         except Exception as error:
             await self._isolate_voice_failure(context, error)
@@ -540,10 +553,18 @@ class AgentRuntime:
         except Exception as error:
             await self._isolate_voice_failure(context, error)
 
-    def _encode_unavailable_payload(self, key: bytes, reason: int):
+    def _encode_unavailable_payload(
+        self,
+        key: bytes,
+        reason: int,
+        key_epoch: int = VOICE_KEY_EPOCH,
+    ):
         try:
             return encode_unavailable(
-                key, self._voice_nonce_factory(), reason
+                key,
+                self._voice_nonce_factory(),
+                reason,
+                key_epoch=key_epoch,
             )
         except Exception as error:
             self._transition_voice(VoiceState.ERROR, str(error))
@@ -599,7 +620,9 @@ class AgentRuntime:
         unavailable_payload = None
         if context.voice_key is not None:
             unavailable_payload = self._encode_unavailable_payload(
-                context.voice_key, INITIALIZATION_FAILED
+                context.voice_key,
+                INITIALIZATION_FAILED,
+                context.voice_key_epoch,
             )
         await self._disable_voice(context.transport, unavailable_payload)
         if context.voice_service is not None:
@@ -640,7 +663,9 @@ class AgentRuntime:
         unavailable_payload = None
         if context.voice_key is not None:
             unavailable_payload = self._encode_unavailable_payload(
-                context.voice_key, INITIALIZATION_FAILED
+                context.voice_key,
+                INITIALIZATION_FAILED,
+                context.voice_key_epoch,
             )
 
         retired_consumer = self._retire_voice_generation(context.transport)

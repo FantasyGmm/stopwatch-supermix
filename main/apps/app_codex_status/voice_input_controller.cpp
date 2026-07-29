@@ -78,10 +78,17 @@ bool ControlReplayGuard::decode_once(
     const uint8_t* bytes,
     size_t length,
     crypto::CcmContext& crypto,
+    uint32_t expected_key_epoch,
     VoiceControl& control)
 {
     VoiceControl candidate = {};
-    if (!decode_control(bytes, length, crypto, candidate) || _count >= _nonces.size()) {
+    if (!decode_control(
+            bytes,
+            length,
+            crypto,
+            expected_key_epoch,
+            candidate) ||
+        _count >= _nonces.size()) {
         return false;
     }
     if (std::find(_nonces.begin(), _nonces.begin() + _count,
@@ -231,20 +238,33 @@ VoiceButtonDispatchDecision VoiceButtonDispatcher::dispatch(
 #if !defined(STOPWATCH_HOST_TEST)
 VoiceInputController::VoiceInputController()
     : _capture_pipeline(std::make_unique<VoiceCapturePipeline>()),
-      _crypto(&voice_input::crypto::device_context()),
+      _owned_crypto(std::make_unique<voice_input::crypto::CcmContext>()),
       _owned_entropy(std::make_unique<DeviceEntropy>())
 {
+    _crypto = _owned_crypto.get();
     _entropy = _owned_entropy.get();
+}
+#endif
+
+#if defined(STOPWATCH_HOST_TEST)
+VoiceInputController::VoiceInputController(
+    VoiceCaptureBackend& backend,
+    voice_input::crypto::CcmContext& crypto,
+    VoiceInputEntropy& entropy)
+    : VoiceInputController(backend, crypto, entropy, 1)
+{
 }
 #endif
 
 VoiceInputController::VoiceInputController(
     VoiceCaptureBackend& backend,
     voice_input::crypto::CcmContext& crypto,
-    VoiceInputEntropy& entropy)
+    VoiceInputEntropy& entropy,
+    uint32_t key_epoch)
     : _capture_pipeline(std::make_unique<VoiceCapturePipeline>(backend)),
       _crypto(&crypto),
-      _entropy(&entropy)
+      _entropy(&entropy),
+      _key_epoch(key_epoch)
 {
 }
 
@@ -258,7 +278,7 @@ bool VoiceInputController::initialize()
     if (_initialized) {
         return true;
     }
-    if (_capture_pipeline == nullptr || _crypto == nullptr || !_crypto->ready() ||
+    if (_capture_pipeline == nullptr || _crypto == nullptr ||
         _entropy == nullptr) {
         _ui_state = VoiceInputUiState::Error;
         return false;
@@ -331,9 +351,42 @@ void VoiceInputController::shutdown()
     _initialized = false;
 }
 
+bool VoiceInputController::set_credential(
+    const voice_input::crypto::Key& key,
+    uint32_t key_epoch)
+{
+    if (key_epoch == 0 || _crypto == nullptr) {
+        return false;
+    }
+    handle_disconnect();
+    std::lock_guard<std::mutex> lock(_mutex);
+    if (!_crypto->set_key(key)) {
+        _key_epoch = 0;
+        _ui_state = VoiceInputUiState::Error;
+        return false;
+    }
+    _key_epoch = key_epoch;
+    _ui_state = VoiceInputUiState::Off;
+    return true;
+}
+
+void VoiceInputController::clear_credential()
+{
+    handle_disconnect();
+    std::lock_guard<std::mutex> lock(_mutex);
+    if (_crypto != nullptr) {
+        _crypto->clear();
+    }
+    _key_epoch = 0;
+    _ready = false;
+    _ui_state = VoiceInputUiState::Off;
+}
+
 void VoiceInputController::set_ready(bool ready, uint16_t negotiated_mtu)
 {
-    const bool usable = ready && negotiated_mtu >= kMinimumAudioMtu;
+    const bool usable =
+        ready && negotiated_mtu >= kMinimumAudioMtu && _crypto != nullptr &&
+        _crypto->ready() && _key_epoch != 0;
     _negotiated_mtu = negotiated_mtu;
     if (!usable) {
         handle_disconnect();
@@ -672,6 +725,7 @@ bool VoiceInputController::prepare_begin(uint32_t now_ms)
     logical.session = _session.session();
     logical.sequence = 0;
     logical.watch_ms = now_ms;
+    logical.key_epoch = _key_epoch;
     logical.session_nonce = _session_nonce;
     logical.payload_size = voice_input::encode_begin_body(
         voice_input::BeginBody{}, logical.payload.data(), logical.payload.size());
@@ -706,6 +760,7 @@ bool VoiceInputController::prepare_audio(
                 logical.session = _session.session();
                 logical.sequence = sequence;
                 logical.watch_ms = now_ms;
+                logical.key_epoch = _key_epoch;
                 logical.session_nonce = _session_nonce;
                 logical.payload_size = adpcm.size();
                 std::copy(adpcm.begin(), adpcm.end(), logical.payload.begin());
@@ -767,6 +822,7 @@ bool VoiceInputController::prepare_terminal_at(
     logical.session = _session.session();
     logical.sequence = sequence;
     logical.watch_ms = now_ms;
+    logical.key_epoch = _key_epoch;
     logical.session_nonce = _session_nonce;
     logical.payload_size = payload_size;
     std::copy_n(payload, payload_size, logical.payload.begin());
@@ -966,6 +1022,10 @@ bool VoiceInputController::enqueue_encoded(
     wire.kind = logical.kind;
     wire.session = logical.session;
     wire.sequence = logical.sequence;
+    if (_crypto == nullptr || !_crypto->ready() || _key_epoch == 0 ||
+        logical.key_epoch != _key_epoch) {
+        return false;
+    }
     wire.size = voice_input::encode_notification(
         logical, *_crypto, wire.bytes.data(), wire.bytes.size());
     return wire.size != 0;

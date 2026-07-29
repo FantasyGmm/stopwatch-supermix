@@ -41,6 +41,9 @@ bool valid_reason(uint8_t reason)
 
 bool control_values_valid(const VoiceControl& control)
 {
+    if (control.key_epoch == 0) {
+        return false;
+    }
     if (control.kind == ControlKind::Ready) {
         return control.reason == 0 && control.target_bps == kTargetBitrate;
     }
@@ -101,6 +104,7 @@ size_t logical_payload_size(NotificationKind kind)
 bool logical_payload_valid(const VoiceNotification& notification)
 {
     if (!valid_notification_kind(notification.kind) || notification.session == 0 ||
+        notification.key_epoch == 0 ||
         notification.payload_size != logical_payload_size(notification.kind)) {
         return false;
     }
@@ -136,7 +140,8 @@ void encode_header(
     write_u16(output + 2, notification.session);
     write_u32(output + 4, notification.sequence);
     write_u32(output + 8, notification.watch_ms);
-    write_u16(output + 12, payload_size);
+    write_u32(output + 12, notification.key_epoch);
+    write_u16(output + 16, payload_size);
 }
 
 }  // namespace
@@ -155,8 +160,9 @@ size_t encode_control(
     aad[0] = kProtocolVersion;
     aad[1] = static_cast<uint8_t>(control.kind);
     aad[2] = control.reason;
+    write_u32(aad + 4, control.key_epoch);
     std::copy(
-        control.exchange_nonce.begin(), control.exchange_nonce.end(), aad + 4);
+        control.exchange_nonce.begin(), control.exchange_nonce.end(), aad + 8);
     uint8_t body[kControlBodySize] = {};
     write_u32(body, control.target_bps);
     size_t encrypted_size = 0;
@@ -182,10 +188,12 @@ bool decode_control(
     const uint8_t* bytes,
     size_t length,
     crypto::CcmContext& crypto,
+    uint32_t expected_key_epoch,
     VoiceControl& control)
 {
     if (bytes == nullptr || length != kControlSize ||
         bytes[0] != kProtocolVersion || bytes[3] != 0 ||
+        expected_key_epoch == 0 || read_u32(bytes + 4) != expected_key_epoch ||
         (bytes[1] != static_cast<uint8_t>(ControlKind::Ready) &&
          bytes[1] != static_cast<uint8_t>(ControlKind::Unavailable))) {
         return false;
@@ -193,7 +201,11 @@ bool decode_control(
     VoiceControl candidate = {};
     candidate.kind = static_cast<ControlKind>(bytes[1]);
     candidate.reason = bytes[2];
-    std::copy_n(bytes + 4, candidate.exchange_nonce.size(), candidate.exchange_nonce.begin());
+    candidate.key_epoch = read_u32(bytes + 4);
+    std::copy_n(
+        bytes + 8,
+        candidate.exchange_nonce.size(),
+        candidate.exchange_nonce.begin());
     uint8_t body[kControlBodySize] = {};
     size_t body_size = 0;
     if (!crypto.decrypt(
@@ -269,6 +281,7 @@ bool decode_notification(
     const uint8_t* bytes,
     size_t length,
     crypto::CcmContext& crypto,
+    uint32_t expected_key_epoch,
     const crypto::ExchangeNonce* session_nonce,
     VoiceNotification& notification)
 {
@@ -281,8 +294,11 @@ bool decode_notification(
     candidate.session = read_u16(bytes + 2);
     candidate.sequence = read_u32(bytes + 4);
     candidate.watch_ms = read_u32(bytes + 8);
-    const size_t wire_payload_size = read_u16(bytes + 12);
+    candidate.key_epoch = read_u32(bytes + 12);
+    const size_t wire_payload_size = read_u16(bytes + 16);
     if (!valid_notification_kind(candidate.kind) || candidate.session == 0 ||
+        expected_key_epoch == 0 ||
+        candidate.key_epoch != expected_key_epoch ||
         length != kNotificationHeaderSize + wire_payload_size) {
         return false;
     }

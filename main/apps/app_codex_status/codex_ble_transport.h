@@ -38,6 +38,10 @@ public:
     uint16_t negotiated_mtu() const;
     size_t voice_notification_limit() const;
     CodexBleNotifyResult notify_voice(const uint8_t* data, size_t length);
+    bool set_voice_credential(
+        const voice_input::crypto::Key& key,
+        uint32_t key_epoch);
+    void clear_voice_credential();
 
     bool enqueue_frame_from_ble(const uint8_t* data, size_t length);
     bool enqueue_voice_control_from_ble(const uint8_t* data, size_t length);
@@ -52,6 +56,8 @@ private:
     void* _voice_control_queue = nullptr;
     void* _production_voice_control_queue = nullptr;
     voice_input::ControlReplayGuard _production_control_guard;
+    voice_input::crypto::CcmContext _production_voice_crypto;
+    std::atomic<uint32_t> _production_voice_key_epoch{0};
     CodexBleReassembler _reassembler;
     std::deque<CodexBleMessage> _messages;
     std::atomic<bool> _connected{false};

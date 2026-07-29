@@ -607,6 +607,25 @@ CodexBleNotifyResult CodexBleTransport::notify_voice(const uint8_t* data, size_t
     return CodexBleNotifyResult::NotReady;
 }
 
+bool CodexBleTransport::set_voice_credential(
+    const voice_input::crypto::Key& key,
+    uint32_t key_epoch)
+{
+    if (key_epoch == 0 || !_production_voice_crypto.set_key(key)) {
+        return false;
+    }
+    _production_voice_key_epoch = key_epoch;
+    _production_control_guard.reset();
+    return true;
+}
+
+void CodexBleTransport::clear_voice_credential()
+{
+    _production_voice_key_epoch = 0;
+    _production_voice_crypto.clear();
+    _production_control_guard.reset();
+}
+
 
 bool CodexBleTransport::enqueue_frame_from_ble(const uint8_t* data, size_t length)
 {
@@ -631,10 +650,13 @@ bool CodexBleTransport::enqueue_voice_control_from_ble(const uint8_t* data, size
             return false;
         }
         QueuedProductionVoiceControl production = {};
+        const uint32_t expected_key_epoch =
+            _production_voice_key_epoch.load();
         if (!_production_control_guard.decode_once(
                 data,
                 length,
-                voice_input::crypto::device_context(),
+                _production_voice_crypto,
+                expected_key_epoch,
                 production.control)) {
             return false;
         }

@@ -13,7 +13,13 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 from app_state import ConnectionState, MemoryPreferences
 from agent import BleStatusTransport
 from protocol import EVENT_MESSAGE, STATUS_MESSAGE
-from runtime import AgentCommand, AgentController, AgentRuntime, _create_voice_session
+from runtime import (
+    VOICE_KEY_EPOCH,
+    AgentCommand,
+    AgentController,
+    AgentRuntime,
+    _create_voice_session,
+)
 from voice_audio import VoiceAudioDeviceNotFound, VoiceAudioError
 from voice_driver import DriverState
 from voice_input_crypto import VoiceKeyError
@@ -28,11 +34,43 @@ from voice_input_protocol import (
     RESTART_REQUIRED,
     TYPELESS_NOT_RUNNING,
     UNAVAILABLE,
-    decode_control,
-    pack_notification,
+    decode_control as _decode_control,
+    pack_notification as _pack_notification,
     EndSummary,
 )
-from voice_session import VoiceSessionService, VoiceState
+from voice_session import VoiceSessionService as _VoiceSessionService, VoiceState
+
+
+def decode_control(key, raw, *, expected_epoch=VOICE_KEY_EPOCH):
+    return _decode_control(key, raw, expected_epoch=expected_epoch)
+
+
+def pack_notification(
+    key,
+    kind,
+    session,
+    sequence,
+    watch_ms,
+    payload,
+    session_nonce,
+    *,
+    key_epoch=VOICE_KEY_EPOCH,
+):
+    return _pack_notification(
+        key,
+        kind,
+        session,
+        sequence,
+        watch_ms,
+        payload,
+        session_nonce,
+        key_epoch=key_epoch,
+    )
+
+
+def VoiceSessionService(route, shortcut, key, **kwargs):
+    kwargs.setdefault("key_epoch", VOICE_KEY_EPOCH)
+    return _VoiceSessionService(route, shortcut, key, **kwargs)
 
 
 class FakeCollector:

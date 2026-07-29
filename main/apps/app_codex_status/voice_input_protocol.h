@@ -8,15 +8,15 @@
 
 namespace voice_input {
 
-constexpr uint8_t kProtocolVersion = 3;
+constexpr uint8_t kProtocolVersion = 4;
 constexpr uint32_t kTargetBitrate = 8192;
 constexpr uint8_t kImaAdpcmCodec = 1;
 constexpr uint16_t kSampleRate = 16000;
 constexpr uint16_t kBlockSamples = 320;
-constexpr size_t kControlAadSize = 12;
+constexpr size_t kControlAadSize = 16;
 constexpr size_t kControlBodySize = 4;
 constexpr size_t kControlSize = kControlAadSize + kControlBodySize + crypto::kTagSize;
-constexpr size_t kNotificationHeaderSize = 14;
+constexpr size_t kNotificationHeaderSize = 18;
 constexpr size_t kBeginBodySize = 5;
 constexpr size_t kAudioPlaintextSize = 164;
 constexpr size_t kEndBodySize = 26;
@@ -43,6 +43,7 @@ enum class UnavailableReason : uint8_t {
 struct VoiceControl {
     ControlKind kind = ControlKind::Unavailable;
     uint8_t reason = 0;
+    uint32_t key_epoch = 0;
     crypto::ExchangeNonce exchange_nonce = {};
     uint32_t target_bps = 0;
 };
@@ -73,6 +74,7 @@ struct VoiceNotification {
     uint16_t session = 0;
     uint32_t sequence = 0;
     uint32_t watch_ms = 0;
+    uint32_t key_epoch = 0;
     crypto::ExchangeNonce session_nonce = {};
     size_t payload_size = 0;
     std::array<uint8_t, kAudioPlaintextSize> payload = {};
@@ -87,6 +89,7 @@ bool decode_control(
     const uint8_t* bytes,
     size_t length,
     crypto::CcmContext& crypto,
+    uint32_t expected_key_epoch,
     VoiceControl& control);
 
 size_t encode_notification(
@@ -98,6 +101,7 @@ bool decode_notification(
     const uint8_t* bytes,
     size_t length,
     crypto::CcmContext& crypto,
+    uint32_t expected_key_epoch,
     const crypto::ExchangeNonce* session_nonce,
     VoiceNotification& notification);
 

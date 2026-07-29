@@ -28,6 +28,7 @@ public:
         const uint8_t* bytes,
         size_t length,
         crypto::CcmContext& crypto,
+        uint32_t expected_key_epoch,
         VoiceControl& control);
     void reset();
 
@@ -124,14 +125,25 @@ public:
 #ifndef STOPWATCH_HOST_TEST
     VoiceInputController();
 #endif
+#if defined(STOPWATCH_HOST_TEST)
     VoiceInputController(
         VoiceCaptureBackend& backend,
         voice_input::crypto::CcmContext& crypto,
         VoiceInputEntropy& entropy);
+#endif
+    VoiceInputController(
+        VoiceCaptureBackend& backend,
+        voice_input::crypto::CcmContext& crypto,
+        VoiceInputEntropy& entropy,
+        uint32_t key_epoch);
     ~VoiceInputController();
 
     bool initialize();
     void shutdown();
+    bool set_credential(
+        const voice_input::crypto::Key& key,
+        uint32_t key_epoch);
+    void clear_credential();
     void set_ready(bool ready, uint16_t negotiated_mtu);
     void handle_connection_epoch(uint32_t connection_epoch);
     void handle_button(bool pressed, uint32_t now_ms) override;
@@ -186,6 +198,7 @@ private:
 
     std::unique_ptr<VoiceCapturePipeline> _capture_pipeline;
     voice_input::crypto::CcmContext* _crypto = nullptr;
+    std::unique_ptr<voice_input::crypto::CcmContext> _owned_crypto;
     VoiceInputEntropy* _entropy = nullptr;
     std::unique_ptr<VoiceInputEntropy> _owned_entropy;
     voice_input::VoiceInputSession _session;
@@ -202,6 +215,7 @@ private:
     uint16_t _negotiated_mtu = 23;
     uint16_t _next_session = 1;
     uint32_t _connection_epoch = 0;
+    uint32_t _key_epoch = 0;
     uint32_t _last_accepted_sequence = 0;
     uint8_t _congestion_retries = 0;
     size_t _queued_audio_packets = 0;

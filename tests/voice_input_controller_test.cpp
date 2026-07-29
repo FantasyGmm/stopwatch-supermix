@@ -17,6 +17,7 @@ constexpr voice_input::crypto::Key kKey = {
     0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
     0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
 };
+constexpr uint32_t kKeyEpoch = 7;
 
 class FakeBackend final : public VoiceCaptureBackend {
 public:
@@ -185,8 +186,27 @@ voice_input::VoiceNotification decode(
 {
     voice_input::VoiceNotification decoded = {};
     assert(voice_input::decode_notification(
-        wire.bytes.data(), wire.size, crypto, nonce, decoded));
+        wire.bytes.data(), wire.size, crypto, 1, nonce, decoded));
     return decoded;
+}
+
+void test_runtime_credential_gates_readiness_and_clears_active_key()
+{
+    FakeBackend backend;
+    FakeEntropy entropy;
+    voice_input::crypto::CcmContext crypto;
+    VoiceInputController controller(backend, crypto, entropy, 0);
+    assert(controller.initialize());
+
+    controller.set_ready(true, 256);
+    assert(controller.ui_state() == VoiceInputUiState::Off);
+    assert(controller.set_credential(kKey, kKeyEpoch));
+    controller.set_ready(true, 256);
+    assert(controller.ui_state() == VoiceInputUiState::Ready);
+
+    controller.clear_credential();
+    assert(!crypto.ready());
+    assert(controller.ui_state() == VoiceInputUiState::Off);
 }
 
 void test_requires_ready_subscription_and_audio_mtu()
@@ -200,12 +220,12 @@ void test_requires_ready_subscription_and_audio_mtu()
     assert(backend.acquire_calls == 0);
     controller.handle_button(false, 11);
 
-    controller.set_ready(true, 188);
+    controller.set_ready(true, 192);
     controller.handle_button(true, 20);
     assert(backend.acquire_calls == 0);
     assert(controller.ui_state() == VoiceInputUiState::Off);
 
-    controller.set_ready(true, 189);
+    controller.set_ready(true, 193);
     controller.handle_button(false, 21);
     controller.handle_button(true, 22);
     assert(backend.acquire_calls == 1);
@@ -587,21 +607,22 @@ void test_control_authentication_and_replay_guard()
     voice_input::ControlReplayGuard guard;
     voice_input::VoiceControl ready = {};
     ready.kind = voice_input::ControlKind::Ready;
+    ready.key_epoch = 1;
     ready.exchange_nonce = {1, 2, 3, 4, 5, 6, 7, 8};
     ready.target_bps = voice_input::kTargetBitrate;
     std::array<uint8_t, voice_input::kControlSize> bytes = {};
     assert(voice_input::encode_control(
                ready, crypto, bytes.data(), bytes.size()) == bytes.size());
     voice_input::VoiceControl decoded = {};
-    assert(guard.decode_once(bytes.data(), bytes.size(), crypto, decoded));
+    assert(guard.decode_once(bytes.data(), bytes.size(), crypto, 1, decoded));
     assert(decoded.kind == voice_input::ControlKind::Ready);
-    assert(!guard.decode_once(bytes.data(), bytes.size(), crypto, decoded));
+    assert(!guard.decode_once(bytes.data(), bytes.size(), crypto, 1, decoded));
     guard.reset();
     bytes.back() ^= 1;
-    assert(!guard.decode_once(bytes.data(), bytes.size(), crypto, decoded));
+    assert(!guard.decode_once(bytes.data(), bytes.size(), crypto, 1, decoded));
     bytes.back() ^= 1;
     bytes[0] = 1;
-    assert(!guard.decode_once(bytes.data(), bytes.size(), crypto, decoded));
+    assert(!guard.decode_once(bytes.data(), bytes.size(), crypto, 1, decoded));
 }
 
 void test_simultaneous_buttons_are_reserved_for_home()
@@ -870,6 +891,7 @@ void test_cancel_waits_for_inflight_producer_cleanup()
 
 int main()
 {
+    test_runtime_credential_gates_readiness_and_clears_active_key();
     test_requires_ready_subscription_and_audio_mtu();
     test_begin_audio_end_order_and_counters();
     test_release_during_read_keeps_final_complete_block();
