@@ -71,6 +71,16 @@ class WatchCredentialTests(unittest.TestCase):
         self.assertEqual(len(keychain.replacements), writes_before + 1)
         self.assertEqual(store.load(original.watch_id), rotated)
 
+    def test_pairing_client_save_alias_uses_same_atomic_replace_path(self):
+        keychain = MemoryKeychain()
+        store = WatchCredentialStore(keychain)
+        saved = credential(7, 4)
+
+        store.save(saved)
+
+        self.assertEqual(store.load(saved.watch_id), saved)
+        self.assertEqual(len(keychain.replacements), 1)
+
     def test_stale_epoch_and_same_epoch_key_change_are_rejected(self):
         store = WatchCredentialStore(MemoryKeychain())
         current = credential(3, 5)

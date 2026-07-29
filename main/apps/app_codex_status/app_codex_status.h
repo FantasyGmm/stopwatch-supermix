@@ -18,6 +18,8 @@
 #include "codex_pending_soft_glow.h"
 #include "agent_panel_model.h"
 #include "agent_registry_store.h"
+#include "secure_pairing_session.h"
+#include "secure_pairing_wire.h"
 #include "status_message_router.h"
 #include "status_page_swipe_logic.h"
 #include "trae_card_tap_logic.h"
@@ -111,6 +113,7 @@ private:
     VoiceButtonDispatcher _voice_button_dispatcher;
     AgentPanelModel _agent_panel_model;
     secure_pairing::AgentRegistry _agent_registry;
+    secure_pairing::SecurePairingSession _secure_pairing_session;
     std::unique_ptr<secure_pairing::NvsRegistryStorageBackend>
         _agent_registry_backend;
     std::unique_ptr<secure_pairing::AgentRegistryStore>
@@ -119,6 +122,14 @@ private:
     bool _agent_panel_dirty = false;
     bool _agent_switch_pending = false;
     secure_pairing::AgentFingerprint _agent_switch_target = {};
+    enum class PairingCompletion : uint8_t {
+        None,
+        Authentication,
+        CredentialAck,
+    };
+    PairingCompletion _pairing_completion = PairingCompletion::None;
+    uint32_t _pairing_completion_transaction = 0;
+    bool _pairing_allow_switch = false;
     std::mutex _agent_decision_mutex;
     AgentPanelDecision _pending_agent_decision = {};
     bool _production_voice_ready = false;
@@ -155,6 +166,21 @@ private:
         const AgentPanelDecision& decision,
         uint32_t now_ms);
     void sync_agent_panel_registry();
+    void process_secure_pairing(uint32_t now_ms);
+    bool send_pairing_empty(
+        uint16_t connection_handle,
+        secure_pairing::WireMessageType type,
+        uint32_t transaction_id);
+    bool send_pairing_credential(
+        uint16_t connection_handle,
+        const secure_pairing::CredentialEnvelope& envelope);
+    void complete_authenticated_pending(
+        uint16_t connection_handle,
+        PairingCompletion completion,
+        uint32_t transaction_id,
+        bool allow_switch,
+        bool disconnect_if_not_selected);
+    void clear_pairing_runtime();
     void complete_agent_switch_if_ready();
     bool save_agent_registry();
     static void agent_panel_event_cb(lv_event_t* event);

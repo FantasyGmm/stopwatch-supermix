@@ -129,6 +129,10 @@ class WatchCredentialStore:
                 "watch credential is unavailable from Keychain"
             ) from None
 
+    def save(self, credential: WatchCredential) -> None:
+        """PairingClient-compatible atomic credential commit."""
+        self.replace(credential)
+
     def forget(self, watch_id: bytes) -> None:
         try:
             self._keychain.delete(_service(watch_id), WATCH_ACCOUNT)

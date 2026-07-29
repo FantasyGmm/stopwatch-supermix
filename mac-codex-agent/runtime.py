@@ -10,25 +10,31 @@ import re
 import secrets
 import subprocess
 import threading
+import time
 from typing import Callable, List, Optional, Sequence
 
 from agent import (
     STATUS_INTERVAL_SECONDS,
     BleStatusTransport,
     CodexStatusAgent,
+    WatchDiscovery,
 )
+from agent_identity import AgentIdentityStore
 from app_state import (
     AgentSnapshot,
     CodexSnapshot,
     ConnectionState,
+    PairingState,
     Preferences,
     TraeSnapshot,
     UserDefaultsPreferences,
 )
 from codex_adapter import CodexStateCollector
 from combined_collector import CompositeStateCollector
+from pairing_client import PairingClient, WatchCredential
 from task_alerts import TaskAlertTracker
 from trae_adapter import TraeStateCollector
+from watch_credentials import WatchCredentialStore
 from voice_audio import (
     VoiceAudioBridge,
     VoiceAudioDeviceNotFound,
@@ -91,6 +97,94 @@ class _BleSessionContext:
 @dataclasses.dataclass(frozen=True)
 class VoiceSetupToken:
     revision: int
+
+
+class SecureConnectionAuthorizer:
+    """Authenticate a known watch or enroll an unknown watch before use."""
+
+    def __init__(
+        self,
+        identity_store=None,
+        credential_store=None,
+        pairing_client=None,
+    ):
+        self._identity_store = identity_store or AgentIdentityStore()
+        self._credential_store = credential_store or WatchCredentialStore()
+        self._pairing_client = pairing_client or PairingClient(
+            self._credential_store
+        )
+
+    async def authorize(self, transport, publish) -> WatchCredential:
+        identity = await _run_in_daemon_thread(
+            self._identity_store.load_or_create
+        )
+        discovery = await transport.discover_watch()
+        if (
+            not isinstance(discovery, WatchDiscovery)
+            or not isinstance(discovery.watch_id, bytes)
+            or len(discovery.watch_id) != 16
+            or not any(discovery.watch_id)
+            or not isinstance(discovery.key_epoch, int)
+            or isinstance(discovery.key_epoch, bool)
+            or discovery.key_epoch <= 0
+        ):
+            raise ValueError("watch discovery response is invalid")
+        watch_suffix = discovery.watch_id.hex()[-4:].upper()
+        credential = await _run_in_daemon_thread(
+            lambda: self._credential_store.load(discovery.watch_id)
+        )
+        if credential is None:
+            publish(
+                PairingState.REQUESTING,
+                "",
+                watch_suffix,
+                identity.display_name,
+            )
+            presentation = await self._pairing_client.request_pairing(
+                transport,
+                identity.private_key,
+                identity.display_name,
+            )
+            if presentation.watch_id != discovery.watch_id:
+                raise ValueError("pairing response belongs to another watch")
+            publish(
+                PairingState.AWAITING_CONFIRMATION,
+                presentation.verification_code,
+                watch_suffix,
+                identity.display_name,
+            )
+            result = await self._pairing_client.confirm_pairing(True)
+            if not result.paired or result.credential is None:
+                raise PermissionError("pairing was rejected on watch")
+            credential = result.credential
+        else:
+            state = (
+                PairingState.REKEYING
+                if credential.key_epoch != discovery.key_epoch
+                else PairingState.AUTHENTICATING
+            )
+            publish(state, "", watch_suffix, identity.display_name)
+            result = await self._pairing_client.authenticate(
+                transport,
+                identity.private_key,
+                credential,
+            )
+            if not result.authenticated:
+                raise PermissionError("Agent authentication was rejected")
+            credential = result.credential
+
+        if (
+            credential.watch_id != discovery.watch_id
+            or credential.key_epoch != discovery.key_epoch
+        ):
+            raise ValueError("watch credential epoch is not current")
+        publish(
+            PairingState.PAIRED,
+            "",
+            watch_suffix,
+            identity.display_name,
+        )
+        return credential
 
 
 def _new_voice_nonce() -> bytes:
@@ -169,6 +263,7 @@ class AgentRuntime:
         voice_key_loader=None,
         voice_session_factory=None,
         voice_nonce_factory=None,
+        secure_authorizer=None,
     ):
         self._collector = collector
         self._transport_factory = transport_factory
@@ -179,6 +274,7 @@ class AgentRuntime:
         self._voice_key_loader = voice_key_loader or load_key_from_keychain
         self._voice_session_factory = voice_session_factory or _create_voice_session
         self._voice_nonce_factory = voice_nonce_factory or _new_voice_nonce
+        self._secure_authorizer = secure_authorizer
         self._state_lock = threading.Lock()
         self._snapshot = AgentSnapshot(
             ConnectionState.SCANNING
@@ -243,14 +339,12 @@ class AgentRuntime:
     def _transition(self, state: ConnectionState, detail: str = "") -> None:
         with self._state_lock:
             previous = self._snapshot
-            snapshot = AgentSnapshot(
-                state,
-                self._connection_enabled,
-                detail,
-                voice_state=previous.voice_state,
-                voice_detail=previous.voice_detail,
-                codex=previous.codex,
-                trae=previous.trae,
+            snapshot = dataclasses.replace(
+                previous,
+                state=state,
+                connection_enabled=self._connection_enabled,
+                detail=detail,
+                changed_at=time.time(),
             )
             self._snapshot = snapshot
         if previous.state is not state or previous.detail != detail:
@@ -261,13 +355,11 @@ class AgentRuntime:
         with self._state_lock:
             previous = self._snapshot
             self._voice_revision += 1
-            self._snapshot = AgentSnapshot(
-                previous.state,
-                previous.connection_enabled,
-                previous.detail,
+            self._snapshot = dataclasses.replace(
+                previous,
                 voice_state=state,
                 voice_detail=detail,
-                codex=previous.codex,
+                changed_at=time.time(),
             )
         if previous.voice_state is not state or previous.voice_detail != detail:
             LOGGER.info(
@@ -291,13 +383,11 @@ class AgentRuntime:
             ):
                 return False
             self._voice_revision += 1
-            self._snapshot = AgentSnapshot(
-                previous.state,
-                previous.connection_enabled,
-                previous.detail,
+            self._snapshot = dataclasses.replace(
+                previous,
                 voice_state=state,
                 voice_detail=detail,
-                codex=previous.codex,
+                changed_at=time.time(),
             )
         LOGGER.info(
             "Voice state: %s%s",
@@ -305,6 +395,30 @@ class AgentRuntime:
             ": " + detail if detail else "",
         )
         return True
+
+    def _transition_pairing(
+        self,
+        state: PairingState,
+        verification_code: str = "",
+        watch_identity_suffix: str = "",
+        agent_name: str = "",
+    ) -> None:
+        with self._state_lock:
+            previous = self._snapshot
+            self._snapshot = dataclasses.replace(
+                previous,
+                pairing_state=state,
+                verification_code=(
+                    verification_code
+                    if len(verification_code) == 6
+                    and verification_code.isascii()
+                    and verification_code.isdigit()
+                    else ""
+                ),
+                watch_identity_suffix=watch_identity_suffix,
+                agent_name=agent_name or previous.agent_name,
+                changed_at=time.time(),
+            )
 
     async def run(self) -> None:
         loop = asyncio.get_running_loop()
@@ -416,14 +530,13 @@ class AgentRuntime:
                 trae = TraeSnapshot.from_status(status)
                 with self._state_lock:
                     previous = self._snapshot
-                    self._snapshot = AgentSnapshot(
-                        previous.state,
-                        previous.connection_enabled,
-                        previous.detail,
+                    self._snapshot = dataclasses.replace(
+                        previous,
                         voice_state=previous.voice_state,
                         voice_detail=previous.voice_detail,
                         codex=codex,
                         trae=trae,
+                        changed_at=time.time(),
                     )
                 self._latest_status = status
                 if first_status:
@@ -446,6 +559,12 @@ class AgentRuntime:
             )
             if not connected:
                 return "not_found"
+            if self._secure_authorizer is not None:
+                credential = await self._secure_authorizer.authorize(
+                    transport, self._transition_pairing
+                )
+                context.voice_key = credential.master_key
+                context.voice_key_epoch = credential.key_epoch
             self._transition(ConnectionState.CONNECTED)
             status_agent = CodexStatusAgent(self._collector, transport)
             await status_agent.sync_time()
@@ -473,15 +592,22 @@ class AgentRuntime:
             await self._await_session_shutdown(context, voice_was_recording)
 
     async def _prepare_voice(self, context: _BleSessionContext) -> None:
-        try:
-            key = await _run_in_daemon_thread(self._voice_key_loader)
-        except Exception as error:
-            self._transition_voice(VoiceState.ERROR, str(error))
-            return
-        context.voice_key = key
+        key = context.voice_key
+        if key is None:
+            try:
+                key = await _run_in_daemon_thread(self._voice_key_loader)
+            except Exception as error:
+                self._transition_voice(VoiceState.ERROR, str(error))
+                return
+            context.voice_key = key
 
         try:
-            service = self._voice_session_factory(key)
+            if self._secure_authorizer is None:
+                service = self._voice_session_factory(key)
+            else:
+                service = self._voice_session_factory(
+                    key, key_epoch=context.voice_key_epoch
+                )
         except Exception as error:
             await self._isolate_voice_failure(context, error)
             return
@@ -878,6 +1004,7 @@ class AgentController:
             runtime = AgentRuntime(
                 collector=self._collector,
                 connection_enabled=self._preferences.connection_enabled(),
+                secure_authorizer=SecureConnectionAuthorizer(),
             )
         self._runtime = runtime
         self._thread: Optional[threading.Thread] = None

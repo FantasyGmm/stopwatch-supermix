@@ -10,14 +10,22 @@ from unittest.mock import patch
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from agent import (
+    PAIRING_CONTROL_UUID,
+    PAIRING_TX_UUID,
     VOICE_NOTIFICATION_QUEUE_SIZE,
     VOICE_CONTROL_UUID,
     VOICE_TX_UUID,
     BleStatusTransport,
     CodexStatusAgent,
+    WatchDiscovery,
     _compact_json_bytes,
     _watch_codex_status,
     _watch_trae_status,
+)
+from secure_pairing_wire import (
+    WireMessageType,
+    decode_frame as decode_pairing_frame,
+    encode_discovery_response,
 )
 from protocol import EVENT_MESSAGE, MAX_MESSAGE_SIZE, STATUS_MESSAGE, encode_message
 
@@ -534,6 +542,46 @@ class CodexStatusAgentTests(unittest.TestCase):
 
 
 class BleStatusTransportVoiceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_watch_discovery_uses_only_restricted_pairing_gatt(self):
+        watch_id = bytes(range(16))
+
+        class Client:
+            is_connected = True
+
+            def __init__(self):
+                self.calls = []
+                self.callback = None
+
+            async def start_notify(self, uuid, callback):
+                self.calls.append(("notify", uuid))
+                self.callback = callback
+
+            async def write_gatt_char(self, uuid, frame, response):
+                self.calls.append(("write", uuid, response))
+                kind, transaction_id, _ = decode_pairing_frame(frame)
+                self.assert_kind = kind
+                asyncio.get_running_loop().call_soon(
+                    self.callback,
+                    None,
+                    encode_discovery_response(transaction_id, watch_id, 7),
+                )
+
+        client = Client()
+        transport = BleStatusTransport()
+        transport._client = client
+        await transport.start_pairing_notifications()
+
+        discovery = await transport.discover_watch()
+
+        self.assertEqual(discovery, WatchDiscovery(watch_id, 7))
+        self.assertIs(client.assert_kind, WireMessageType.DISCOVERY_REQUEST)
+        self.assertEqual(
+            client.calls,
+            [
+                ("notify", PAIRING_TX_UUID),
+                ("write", PAIRING_CONTROL_UUID, True),
+            ],
+        )
     async def test_status_write_times_out_when_corebluetooth_never_completes(self):
         class Client:
             is_connected = True

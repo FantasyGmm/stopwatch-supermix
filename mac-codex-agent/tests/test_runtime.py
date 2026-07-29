@@ -7,17 +7,27 @@ import time
 import unittest
 from unittest.mock import patch
 
+from cryptography.hazmat.primitives.asymmetric import ec
+
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
-from app_state import ConnectionState, MemoryPreferences
-from agent import BleStatusTransport
+from app_state import ConnectionState, MemoryPreferences, PairingState
+from agent import BleStatusTransport, WatchDiscovery
+from pairing_client import (
+    AuthenticationResult,
+    PairingPresentation,
+    PairingResult,
+    WatchCredential,
+)
+from secure_pairing_crypto import public_key_bytes
 from protocol import EVENT_MESSAGE, STATUS_MESSAGE
 from runtime import (
     VOICE_KEY_EPOCH,
     AgentCommand,
     AgentController,
     AgentRuntime,
+    SecureConnectionAuthorizer,
     _create_voice_session,
 )
 from voice_audio import VoiceAudioDeviceNotFound, VoiceAudioError
@@ -266,6 +276,159 @@ async def wait_for_messages(transport, count):
 
 
 class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_unknown_watch_enrolls_and_publishes_verification_code(self):
+        identity_key = ec.derive_private_key(17, ec.SECP256R1())
+        identity_public = public_key_bytes(identity_key.public_key())
+        fingerprint = __import__("hashlib").sha256(identity_public).digest()[:16]
+        watch_id = bytes(range(16))
+        credential = WatchCredential(
+            watch_id=watch_id,
+            master_key=b"K" * 16,
+            key_epoch=3,
+            fingerprint=fingerprint,
+        )
+        events = []
+
+        class IdentityStore:
+            def load_or_create(self):
+                return type(
+                    "Identity",
+                    (),
+                    {
+                        "private_key": identity_key,
+                        "display_name": "Desk Agent",
+                    },
+                )()
+
+        class CredentialStore:
+            def load(self, requested_watch_id):
+                self.requested_watch_id = requested_watch_id
+                return None
+
+        class Client:
+            async def request_pairing(self, transport, identity, display_name):
+                events.append(("request", transport, identity, display_name))
+                return PairingPresentation(19, watch_id, "482731")
+
+            async def confirm_pairing(self, accepted):
+                events.append(("confirm", accepted))
+                return PairingResult(True, credential)
+
+        class Transport:
+            async def discover_watch(self):
+                return WatchDiscovery(watch_id, 3)
+
+        states = []
+        authorizer = SecureConnectionAuthorizer(
+            identity_store=IdentityStore(),
+            credential_store=CredentialStore(),
+            pairing_client=Client(),
+        )
+
+        result = await authorizer.authorize(
+            Transport(), lambda *state: states.append(state)
+        )
+
+        self.assertEqual(result, credential)
+        self.assertEqual(events[0][-1], "Desk Agent")
+        self.assertEqual(events[-1], ("confirm", True))
+        self.assertIn(
+            (PairingState.AWAITING_CONFIRMATION, "482731", "0E0F", "Desk Agent"),
+            states,
+        )
+        self.assertEqual(states[-1][0], PairingState.PAIRED)
+
+    async def test_known_watch_authenticates_and_accepts_new_epoch(self):
+        watch_id = bytes(range(16))
+        old = WatchCredential(watch_id, b"A" * 16, 2, b"F" * 16)
+        updated = WatchCredential(watch_id, b"B" * 16, 5, b"F" * 16)
+
+        class IdentityStore:
+            def load_or_create(self):
+                return type(
+                    "Identity",
+                    (),
+                    {"private_key": object(), "display_name": "Travel Agent"},
+                )()
+
+        class CredentialStore:
+            def load(self, requested_watch_id):
+                self.requested_watch_id = requested_watch_id
+                return old
+
+        class Client:
+            async def authenticate(self, transport, identity, credential):
+                self.arguments = (transport, identity, credential)
+                return AuthenticationResult(True, True, updated)
+
+        class Transport:
+            async def discover_watch(self):
+                return WatchDiscovery(watch_id, 5)
+
+        client = Client()
+        states = []
+        authorizer = SecureConnectionAuthorizer(
+            identity_store=IdentityStore(),
+            credential_store=CredentialStore(),
+            pairing_client=client,
+        )
+
+        result = await authorizer.authorize(
+            Transport(), lambda *state: states.append(state)
+        )
+
+        self.assertEqual(result, updated)
+        self.assertEqual(client.arguments[-1], old)
+        self.assertEqual(states[0][0], PairingState.REKEYING)
+        self.assertEqual(states[-1][0], PairingState.PAIRED)
+
+    async def test_runtime_does_not_open_production_surface_before_authorization(self):
+        release = asyncio.Event()
+        credential = WatchCredential(
+            bytes(range(16)), b"K" * 16, 9, b"F" * 16
+        )
+
+        class Authorizer:
+            async def authorize(self, transport, publish):
+                publish(PairingState.AUTHENTICATING, "", "0E0F", "Desk Agent")
+                await release.wait()
+                return credential
+
+        factory = FakeTransportFactory([{"disconnect_after_messages": 2}])
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            transport_factory=factory,
+            secure_authorizer=Authorizer(),
+            voice_session_factory=lambda key, key_epoch: type(
+                "VoiceSession",
+                (),
+                {
+                    "state": VoiceState.ERROR,
+                    "prepare": lambda self: asyncio.sleep(0, result=VoiceState.ERROR),
+                    "disconnect": lambda self: asyncio.sleep(0),
+                },
+            )(),
+            status_interval=0.01,
+        )
+        session = asyncio.create_task(runtime._run_session())
+        await factory.wait_for_instances(1)
+        await asyncio.sleep(0)
+
+        self.assertEqual(factory.instances[0].messages, [])
+        self.assertEqual(factory.instances[0].voice_payloads, [])
+        self.assertIs(runtime.snapshot().pairing_state, PairingState.AUTHENTICATING)
+
+        release.set()
+        result = await asyncio.wait_for(session, 1)
+
+        self.assertEqual(result, "disconnected")
+        self.assertEqual(
+            [message_type for message_type, _ in factory.instances[0].messages],
+            [EVENT_MESSAGE, STATUS_MESSAGE],
+        )
+        self.assertEqual(runtime.snapshot().agent_name, "Desk Agent")
+        self.assertEqual(runtime.snapshot().watch_identity_suffix, "0E0F")
+
     async def test_collects_trae_snapshot_independently(self):
         collector = FakeCollector(
             [

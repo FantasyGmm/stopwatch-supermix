@@ -64,6 +64,43 @@ class AgentPanelFirmwareContractTests(unittest.TestCase):
         self.assertIn("request_active_disconnect", dispatch)
         self.assertNotIn("LvglLockGuard", dispatch)
 
+    def test_pairing_gatt_frames_drive_session_and_physical_approval(self):
+        header = (
+            ROOT / "main/apps/app_codex_status/app_codex_status.h"
+        ).read_text()
+        source = (
+            ROOT / "main/apps/app_codex_status/app_codex_status.cpp"
+        ).read_text()
+        self.assertIn("SecurePairingSession _secure_pairing_session", header)
+        self.assertIn("process_secure_pairing", header)
+        pairing = source.split(
+            "void AppCodexStatus::process_secure_pairing", 1
+        )[1].split("void AppCodexStatus::complete_agent_switch_if_ready", 1)[0]
+        for operation in (
+            "take_pairing_frame",
+            "decode_pairing_request",
+            "request_pairing",
+            "request_authentication",
+            "authenticate",
+            "acknowledge_credential",
+        ):
+            self.assertIn(operation, pairing)
+        self.assertIn("authorize_pending", source)
+
+        dispatch = source.split(
+            "void AppCodexStatus::dispatch_agent_panel_decision", 1
+        )[1].split("bool AppCodexStatus::send_pairing_empty", 1)[0]
+        self.assertIn("AgentPanelAction::AllowPairing", dispatch)
+        self.assertIn("AgentPanelAction::AllowAndSwitch", dispatch)
+        self.assertIn("_secure_pairing_session.confirm_pairing", dispatch)
+
+    def test_secure_pairing_enables_hkdf_in_all_firmware_builds(self):
+        defaults = (ROOT / "sdkconfig.defaults").read_text(encoding="utf-8")
+        checked_in = (ROOT / "sdkconfig").read_text(encoding="utf-8")
+
+        self.assertIn("CONFIG_MBEDTLS_HKDF_C=y", defaults.splitlines())
+        self.assertIn("CONFIG_MBEDTLS_HKDF_C=y", checked_in.splitlines())
+
 
 if __name__ == "__main__":
     unittest.main()
