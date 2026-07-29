@@ -63,6 +63,26 @@ class CompletionClassifierTests(unittest.TestCase):
         self.assertEqual((result.outcome, result.reason), ("completed", "completion_only"))
         self.assertLess(elapsed, 1.0)
 
+    def test_confirmation_resolution_lists_scale_near_linearly(self):
+        def measure(count):
+            message = (
+                "Please approve deployment. We confirmed that "
+                + "approval is not required, " * count
+            )
+            started = time.monotonic()
+            result = classify_completion(message)
+            return time.monotonic() - started, result
+
+        small_elapsed, _ = measure(300)
+        large_elapsed, result = measure(1_200)
+
+        self.assertEqual(
+            (result.outcome, result.reason),
+            ("completed", "text_explicitly_resolved"),
+        )
+        self.assertLess(large_elapsed, 2.0)
+        self.assertLess(large_elapsed, small_elapsed * 7 + 0.1)
+
     def test_question_parsing_scales_near_linearly(self):
         def measure(count):
             message = " ".join("Can I continue?" for _ in range(count))
@@ -2279,6 +2299,22 @@ class CompletionClassifierTests(unittest.TestCase):
             "Please approve deployment. It is confirmed that approval is not required.",
             "Please approve deployment. It was confirmed that approval is not required.",
             "Please approve deployment. We can confirm that approval is not required.",
+            "Please approve deployment. We can definitively confirm that approval is "
+            "not required.",
+            "Please approve deployment. We can clearly confirm that approval is not "
+            "required.",
+            "Please approve deployment. We clearly confirmed that approval is not "
+            "required.",
+            "Please approve deployment. We did clearly confirm that approval is not "
+            "required.",
+            "Please approve deployment. We have clearly confirmed that approval is not "
+            "required.",
+            "Please approve deployment. It has clearly been confirmed that approval is "
+            "not required.",
+            "Please approve deployment. It was definitively confirmed that approval is "
+            "not required.",
+            "Please approve deployment. It is definitively confirmed that approval is "
+            "not required.",
             "Please approve deployment. We can not only confirm that approval is not "
             "required but also document it.",
             "Please approve deployment. The team confirms that approval is not required.",
@@ -2330,6 +2366,9 @@ class CompletionClassifierTests(unittest.TestCase):
             "however, we confirmed that approval is not required.",
             "Please approve deployment. We cannot confirm that the tests passed, "
             "however, later confirmed that approval is not required.",
+            "Please approve deployment. We cannot confirm that the team confirmed that "
+            "approval is not required. We later confirmed that approval is not "
+            "required.",
         )
         for message in resolved_messages:
             with self.subTest(kind="resolved", message=message):
@@ -2342,9 +2381,6 @@ class CompletionClassifierTests(unittest.TestCase):
         guarded_messages = (
             "Please approve deployment. It is not true that we confirmed authorization "
             "is not required, and we later confirmed that approval is not required.",
-            "Please approve deployment. We cannot confirm that the team confirmed that "
-            "approval is not required. We later confirmed that approval is not "
-            "required.",
             "Please approve deployment. We expected and confirmed that approval is "
             "not required.",
             "Please approve deployment. The incident report suggests and confirms "
@@ -2532,22 +2568,6 @@ class CompletionClassifierTests(unittest.TestCase):
             "be confirmed that approval is not required.",
             "Please approve deployment. Our expectation remains that approval is not "
             "required.",
-            "Please approve deployment. We can definitively confirm that approval is "
-            "not required.",
-            "Please approve deployment. We can clearly confirm that approval is not "
-            "required.",
-            "Please approve deployment. We clearly confirmed that approval is not "
-            "required.",
-            "Please approve deployment. We did clearly confirm that approval is not "
-            "required.",
-            "Please approve deployment. We have clearly confirmed that approval is not "
-            "required.",
-            "Please approve deployment. It has clearly been confirmed that approval is "
-            "not required.",
-            "Please approve deployment. It was definitively confirmed that approval is "
-            "not required.",
-            "Please approve deployment. It is definitively confirmed that approval is "
-            "not required.",
             "Please approve deployment. We did not merely promise to confirm that "
             "approval is not required.",
             "Please approve deployment. We do not only plan to confirm that approval is "
@@ -2769,6 +2789,226 @@ class CompletionClassifierTests(unittest.TestCase):
                 self.assertEqual(
                     (result.outcome, result.reason),
                     ("waiting", "text_required_action"),
+                )
+
+    def test_confirmation_token_events_are_clause_scoped(self):
+        completed_messages = (
+            "Please approve deployment. Update: we confirmed that approval is not "
+            "required.",
+            "Please approve deployment. We cannot confirm that tests passed: Alice "
+            "confirmed that approval is not required.",
+            "Please approve deployment. We cannot confirm that tests passed; Alice "
+            "confirmed in summary that approval is not required.",
+            "Please approve deployment. We cannot confirm that tests passed. The "
+            "release manager confirmed with certainty that approval is not required.",
+        )
+        guarded_messages = (
+            "Please approve deployment. Update: we will confirm later that approval is "
+            "not required.",
+            "Please approve deployment. We cannot confirm that tests passed: Alice may "
+            "have confirmed that approval is not required.",
+            "Please approve deployment. We cannot confirm that tests passed; Alice "
+            "mistakenly confirmed in summary that approval is not required.",
+            "Please approve deployment. We cannot confirm that tests passed. The "
+            "release manager cannot confirm with certainty that approval is not "
+            "required.",
+        )
+        for message in completed_messages:
+            with self.subTest(kind="completed", message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("completed", "text_explicitly_resolved"),
+                )
+        for message in guarded_messages:
+            with self.subTest(kind="guarded", message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("waiting", "text_required_action"),
+                )
+
+    def test_confirmation_token_events_parse_tense_polarity_and_subject(self):
+        completed_messages = (
+            "Please approve deployment. We clearly confirmed that approval is not "
+            "required.",
+            "Please approve deployment. We had already confirmed that approval is not "
+            "required.",
+            "Please approve deployment. It has already been confirmed by the team that "
+            "approval is not required.",
+            "Please approve deployment. It was confirmed by Alice that approval is not "
+            "required.",
+            "Please approve deployment. The release manager confirmed that approval is "
+            "not required.",
+            "Please approve deployment. Alice confirmed later that approval is not "
+            "required.",
+            "Please approve deployment. The next release manager confirmed that "
+            "approval is not required.",
+            "Please approve deployment. Following the audit, Alice confirmed that "
+            "approval is not required.",
+            "Please approve deployment. Alice confirmed the following week that "
+            "approval is not required.",
+            "Please approve deployment. We can confirm from the following report that "
+            "approval is not required.",
+            "Please approve deployment. We can confirm the next statement from Alice "
+            "that approval is not required.",
+            "Please approve deployment. We can confirm after all that approval is not "
+            "required.",
+            "Please approve deployment. We can confirm once again that approval is not "
+            "required.",
+            "Please approve deployment. We can confirm once and for all that approval "
+            "is not required.",
+            "Please approve deployment. After all, we can confirm that approval is not "
+            "required.",
+            "Please approve deployment. Once again, we can confirm that approval is not "
+            "required.",
+        )
+        guarded_messages = (
+            "Please approve deployment. We will confirm later that approval is not "
+            "required.",
+            "Please approve deployment. The release manager cannot confirm with "
+            "certainty that approval is not required.",
+            "Please approve deployment. It has not been confirmed by the team that "
+            "approval is not required.",
+            "Please approve deployment. It may have been confirmed by the team that "
+            "approval is not required.",
+            "Please approve deployment. The report mistakenly confirmed that approval "
+            "is not required.",
+            "Please approve deployment. Alice probably confirmed later that approval is "
+            "not required.",
+            "Please approve deployment. It mustn't be confirmed that approval is not "
+            "required.",
+            "Please approve deployment. It shan't be confirmed that approval is not "
+            "required.",
+            "Please approve deployment. They aren't confirmed that approval is not "
+            "required.",
+            "Please approve deployment. It needn't be confirmed that approval is not "
+            "required.",
+            "Please approve deployment. It is going to be confirmed that approval is "
+            "not required.",
+            "Please approve deployment. It is about to be confirmed that approval is "
+            "not required.",
+            "Please approve deployment. It is to be confirmed that approval is not "
+            "required.",
+            "Please approve deployment. It has yet to be confirmed that approval is not "
+            "required.",
+            "Please approve deployment. It is getting confirmed that approval is not "
+            "required.",
+            "Please approve deployment. It'll be confirmed that approval is not "
+            "required.",
+            "Please approve deployment. It may've been confirmed that approval is not "
+            "required.",
+            "Please approve deployment. It must've been confirmed that approval is not "
+            "required.",
+            "Please approve deployment. We can confirm tomorrow that approval is not "
+            "required.",
+            "Please approve deployment. We can confirm next week that approval is not "
+            "required.",
+            "Please approve deployment. It can've been confirmed that approval is not "
+            "required.",
+            "Please approve deployment. We can confirm next year that approval is not "
+            "required.",
+            "Please approve deployment. We can confirm the following week that approval "
+            "is not required.",
+            "Please approve deployment. We can not only fail to confirm that approval "
+            "is not required.",
+            "Please approve deployment. We can not only inspect and we did not confirm "
+            "that approval is not required.",
+            "Please approve deployment. If Alice confirmed that approval is not "
+            "required, we can revisit the plan.",
+            "Please approve deployment. We are unsure whether Alice confirmed that "
+            "approval is not required.",
+            "Please approve deployment. We can confirm after all checks pass that "
+            "approval is not required.",
+            "Please approve deployment. We can confirm after all validations finish "
+            "that approval is not required.",
+            "Please approve deployment. We can confirm if needed that approval is not "
+            "required.",
+            "Please approve deployment. We did confirm if asked that approval is not "
+            "required.",
+            "Please approve deployment. We can confirm whether needed that approval is "
+            "not required.",
+        )
+        for message in completed_messages:
+            with self.subTest(kind="completed", message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("completed", "text_explicitly_resolved"),
+                )
+        for message in guarded_messages:
+            with self.subTest(kind="guarded", message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("waiting", "text_required_action"),
+                )
+
+    def test_confirmation_token_events_apply_ordered_suffix_reversals(self):
+        guarded_messages = (
+            "Please approve deployment. We confirmed that approval is not required, "
+            "but approval is actually required.",
+            "Please approve deployment. We confirmed that approval is not required, "
+            "but the confirmation was wrong.",
+            "Please approve deployment. We confirmed that approval is not required, "
+            "but the confirmation was later denied.",
+            "Please approve deployment. We confirmed that approval is not required. "
+            "But the confirmation was wrong.",
+            "Please approve deployment. We confirmed that approval is not required; "
+            "but the confirmation was later denied.",
+            "Please approve deployment. We confirmed that approval is not required. "
+            "However, the confirmation was wrong.",
+            "Please approve deployment. We confirmed that approval is not required. "
+            "However, approval is actually required.",
+            "Please approve deployment. We confirmed that approval is not required. "
+            "The confirmation was wrong.",
+            "Please approve deployment. We confirmed that approval is not required. We "
+            "might retry, but approval is actually required.",
+            "Please approve deployment. We confirmed that approval is not required. If "
+            "tests fail, investigate, but approval is actually required.",
+            "Please approve deployment. We confirmed that approval is not required. "
+            "Perhaps tests failed, but the confirmation was wrong.",
+        )
+        completed_messages = (
+            "Please approve deployment. We confirmed that approval is not required, "
+            "but the confirmation was wrong; Alice later confirmed again that approval "
+            "is not required.",
+            "Please approve deployment. We confirmed that approval is not required, "
+            "but the confirmation was later denied. However, the release manager later "
+            "confirmed with certainty that approval is not required.",
+            "Please approve deployment. We confirmed that approval is not required. "
+            "But the confirmation was wrong. Alice later confirmed again that approval "
+            "is not required.",
+            "Please approve deployment. We confirmed that approval is not required. "
+            "The confirmation was not wrong.",
+            "Please approve deployment. We confirmed that approval is not required. "
+            "The confirmation was never denied.",
+            "Please approve deployment. We confirmed that approval is not required. "
+            "The docs say approval is not required.",
+            "Please approve deployment. We confirmed that approval is not required. "
+            "The confirmation was not, in fact, wrong.",
+            "Please approve deployment. We confirmed that approval is not required. "
+            "Approval is not, in fact, required.",
+            "Please approve deployment. We confirmed that approval is not required. If "
+            "the confirmation was wrong, we would revisit.",
+            "Please approve deployment. We confirmed that approval is not required. We "
+            "checked whether the confirmation was wrong.",
+            "Please approve deployment. We confirmed that approval is not required. "
+            "The docs say \"the confirmation was wrong\".",
+        )
+        for message in guarded_messages:
+            with self.subTest(kind="guarded", message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("waiting", "text_required_action"),
+                )
+        for message in completed_messages:
+            with self.subTest(kind="completed", message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("completed", "text_explicitly_resolved"),
                 )
 
     def test_bounded_security_ownership_requests_require_action(self):

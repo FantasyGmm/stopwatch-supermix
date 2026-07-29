@@ -334,44 +334,137 @@ _RESOLUTION_RE = re.compile(
     r"\bno action remains\b)",
     re.IGNORECASE,
 )
-_NON_PUNCTUATION_WORD_TOKEN_PATTERN = r"[A-Za-z]+(?:[-'’][A-Za-z]+)*"
-_CONFIRMATION_MAIN_SUBJECT_PATTERN = (
-    r"(?:I|we|you|they|he|she|it|approval|authorization|verification|"
-    r"(?:(?:the|our|your|their|this|that)[ \t]+"
-    r"(?:[A-Za-z-]+[ \t]+){0,2}[A-Za-z-]+))"
+_CONFIRMATION_TOKEN_RE = re.compile(
+    r"[A-Za-z]+(?:['’][A-Za-z]+)?|[,():;.!?。！？；：]"
 )
-_STRICT_CONFIRMATION_SUBJECT_PATTERN = (
-    r"(?:I|we|you|they|he|she|it|approval|authorization|verification|"
-    r"the[ \t]+team|the[ \t]+incident[ \t]+report)"
+_CONFIRMATION_CLAUSE_BOUNDARY_RE = re.compile(r"[:：;；\r\n。！？.!?؟]+")
+_CONFIRMATION_SEARCH_TOKEN_LIMIT = 24
+_CONFIRMATION_CONTEXT_CHAR_LIMIT = 320
+_CONFIRMATION_FORMS = frozenset({"confirm", "confirms", "confirmed", "confirming"})
+_CONFIRMATION_DENIAL_FORMS = frozenset({"deny", "denies", "denied", "denying"})
+_CONFIRMATION_MODAL_TOKENS = frozenset(
+    {
+        "could",
+        "may",
+        "might",
+        "must",
+        "shall",
+        "should",
+        "will",
+        "would",
+    }
 )
-_STRICT_OCCURRED_CONFIRMATION_PREDICATE_PATTERN = (
-    r"(?:confirm(?:s|ed)|did[ \t]+confirm|"
-    r"(?:has|have|had)[ \t]+(?:been[ \t]+)?confirmed|"
-    r"(?:is|was)[ \t]+confirmed)"
+_CONFIRMATION_NEGATIVE_TOKENS = frozenset(
+    {
+        "cannot",
+        "never",
+        "no",
+        "not",
+    }
 )
-_STRICT_CONFIRMATION_PREDICATE_PATTERN = (
-    rf"(?:{_STRICT_OCCURRED_CONFIRMATION_PREDICATE_PATTERN}|can[ \t]+confirm)"
+_CONFIRMATION_FUTURE_TOKENS = frozenset(
+    {"after", "once", "soon", "tomorrow", "tonight", "until", "when"}
 )
-_CONFIRMATION_OCCURRED_ADVERB_PATTERN = (
-    r"(?:later|subsequently|finally|eventually|explicitly)"
+_CONFIRMATION_FUTURE_QUALIFIERS = frozenset({"following", "next"})
+_CONFIRMATION_FUTURE_PREPOSITIONS = frozenset({"by", "in", "on", "within"})
+_CONFIRMATION_FUTURE_RELATIONS = (
+    _CONFIRMATION_FUTURE_QUALIFIERS | _CONFIRMATION_FUTURE_PREPOSITIONS
 )
-_STRICT_POSITIVE_CONFIRMATION_EVENT_PATTERN = (
-    rf"(?:{_STRICT_CONFIRMATION_SUBJECT_PATTERN}[ \t]+"
-    rf"(?:can[ \t]+not[ \t]+only[ \t]+confirm|"
-    rf"{_STRICT_CONFIRMATION_PREDICATE_PATTERN})|"
-    rf"(?:{_CONFIRMATION_OCCURRED_ADVERB_PATTERN}[ \t]+){{1,2}}"
-    rf"{_STRICT_CONFIRMATION_SUBJECT_PATTERN}[ \t]+"
-    rf"{_STRICT_OCCURRED_CONFIRMATION_PREDICATE_PATTERN}|"
-    rf"(?:{_CONFIRMATION_OCCURRED_ADVERB_PATTERN}[ \t]+){{0,2}}"
-    r"confirm(?:s|ed))"
+_CONFIRMATION_TIME_TOKENS = frozenset(
+    {
+        "day",
+        "friday",
+        "hour",
+        "minute",
+        "monday",
+        "month",
+        "saturday",
+        "sunday",
+        "thursday",
+        "tuesday",
+        "wednesday",
+        "week",
+        "year",
+    }
 )
-_NONPOSITIVE_CONFIRMATION_EVENT_PATTERN = (
-    rf"(?:{_NON_PUNCTUATION_WORD_TOKEN_PATTERN}"
-    rf"[^\r\n.!?;]{{1,120}}?)?"
-    r"\bconfirm(?:s|ed|ing)?[ \t]*,?[ \t]+that"
+_CONFIRMATION_REVERSAL_SCOPE_BREAKS = frozenset(
+    {
+        "!",
+        ".",
+        ":",
+        ";",
+        "?",
+        "and",
+        "but",
+        "however",
+        "then",
+        "yet",
+        "。",
+        "！",
+        "？",
+        "；",
+        "：",
+    }
 )
-_PREFIXED_CONFIRMATION_EVENT_PATTERN = (
-    r"[A-Za-z]+confirm(?:s|ed|ing)?[ \t]*,?[ \t]+that"
+_CONFIRMATION_SENTENCE_BREAK_TOKENS = frozenset(
+    {"!", ".", ":", ";", "?", "。", "！", "？", "；", "："}
+)
+_CONFIRMATION_UNCERTAIN_TOKENS = frozenset(
+    {
+        "allegedly",
+        "apparently",
+        "maybe",
+        "mistakenly",
+        "perhaps",
+        "possibly",
+        "probably",
+        "reportedly",
+        "supposedly",
+    }
+)
+_CONFIRMATION_NARRATIVE_TOKENS = frozenset(
+    {"eventually", "explicitly", "finally", "later", "subsequently"}
+)
+_CONFIRMATION_SUBJECT_SKIP_TOKENS = frozenset(
+    {
+        "a",
+        "again",
+        "already",
+        "am",
+        "an",
+        "and",
+        "are",
+        "be",
+        "been",
+        "being",
+        "but",
+        "by",
+        "can",
+        "certainty",
+        "clearly",
+        "did",
+        "do",
+        "does",
+        "eventually",
+        "explicitly",
+        "finally",
+        "had",
+        "has",
+        "have",
+        "however",
+        "in",
+        "is",
+        "later",
+        "not",
+        "only",
+        "subsequently",
+        "summary",
+        "the",
+        "then",
+        "was",
+        "were",
+        "with",
+    }
 )
 _EXPECTATION_RESOLUTION_PREFIX_RE = re.compile(
     r"\b(?:expect(?:ed|ing|s)?|anticipat(?:e|ed|es|ing)|"
@@ -419,60 +512,6 @@ _LEADING_RESOLUTION_REVERSAL_RE = re.compile(
     re.IGNORECASE,
 )
 _CORRELATIVE_NOT_ONLY_RE = re.compile(r"\bnot[ \t]+only\b", re.IGNORECASE)
-_CONFIRMATION_POLARITY_RE = re.compile(
-    rf"\b(?:"
-    rf"(?P<positive>{_STRICT_POSITIVE_CONFIRMATION_EVENT_PATTERN}"
-    rf"[ \t]*,?[ \t]+that)|"
-    rf"(?P<nonpositive>{_NONPOSITIVE_CONFIRMATION_EVENT_PATTERN}|"
-    rf"{_PREFIXED_CONFIRMATION_EVENT_PATTERN}|"
-    r"(?:(?:has|have|had)[ \t]+)?den(?:y|ies|ied)[ \t]+that))\b",
-    re.IGNORECASE | re.VERBOSE,
-)
-_CONFIRMATION_OCCURRED_POSITIVE_PREDICATE_PATTERN = (
-    _STRICT_OCCURRED_CONFIRMATION_PREDICATE_PATTERN
-)
-_CONFIRMATION_BREAK_ADVERB_SPAN_PATTERN = (
-    rf"(?:(?:{_CONFIRMATION_OCCURRED_ADVERB_PATTERN})[ \t]+){{0,2}}"
-)
-_CONFIRMATION_REQUIRED_BREAK_ADVERB_SPAN_PATTERN = (
-    rf"(?:(?:{_CONFIRMATION_OCCURRED_ADVERB_PATTERN})[ \t]+){{1,2}}"
-)
-_CONFIRMATION_EXPLICIT_SUBJECT_POSITIVE_PATTERN = (
-    rf"[ \t]+{_CONFIRMATION_BREAK_ADVERB_SPAN_PATTERN}"
-    rf"{_STRICT_CONFIRMATION_SUBJECT_PATTERN}[ \t]+"
-    rf"{_CONFIRMATION_OCCURRED_POSITIVE_PREDICATE_PATTERN}"
-)
-_CONFIRMATION_EXPLICIT_SUBJECT_BREAK_RE = re.compile(
-    rf"(?:,[ \t]*(?:but|then)\b|\bbut\b|,[ \t]*however[ \t]*,)"
-    rf"{_CONFIRMATION_EXPLICIT_SUBJECT_POSITIVE_PATTERN}\b",
-    re.IGNORECASE,
-)
-_CONFIRMATION_INHERITED_SUBJECT_BREAK_RE = re.compile(
-    rf"(?:,[ \t]*(?:but|then)\b[ \t]+"
-    rf"{_CONFIRMATION_BREAK_ADVERB_SPAN_PATTERN}|"
-    rf",[ \t]*however[ \t]*,[ \t]+"
-    rf"{_CONFIRMATION_REQUIRED_BREAK_ADVERB_SPAN_PATTERN})"
-    rf"{_CONFIRMATION_OCCURRED_POSITIVE_PREDICATE_PATTERN}\b",
-    re.IGNORECASE,
-)
-_CONFIRMATION_CONTRASTIVE_DIRECT_BREAK_RE = re.compile(
-    r",[ \t]*(?:but[ \t]+|however[ \t]*,[ \t]*)"
-    r"(?:approval|authorization|verification)\b",
-    re.IGNORECASE,
-)
-_CONFIRMATION_LIST_TAIL_RE = re.compile(
-    r",[ \t]*and[ \t]+(?:approval|authorization|verification)\b",
-    re.IGNORECASE,
-)
-_CONFIRMATION_PRIOR_RESOLUTION_COORDINATED_BREAK_RE = re.compile(
-    rf"(?:,[ \t]*and\b(?:{_CONFIRMATION_EXPLICIT_SUBJECT_POSITIVE_PATTERN}|"
-    rf"[ \t]+{_CONFIRMATION_BREAK_ADVERB_SPAN_PATTERN}"
-    rf"{_CONFIRMATION_OCCURRED_POSITIVE_PREDICATE_PATTERN})|"
-    rf",[ \t]*however[ \t]*,"
-    rf"[ \t]*{_CONFIRMATION_BREAK_ADVERB_SPAN_PATTERN}"
-    rf"{_CONFIRMATION_OCCURRED_POSITIVE_PREDICATE_PATTERN})\b",
-    re.IGNORECASE,
-)
 _ASSISTANT_CONTINUATION_SUFFIX_RE = re.compile(
     r"^\s*[，,;；]?\s*(?:(?:afterward|afterwards|later|then)\s+)?"
     r"I(?:'ll|\s+will)\b|"
@@ -531,6 +570,11 @@ class _EvidenceScope(enum.Enum):
     EXECUTION = "execution"
 
 
+class _ConfirmationPolarity(enum.Enum):
+    POSITIVE = "positive"
+    NONPOSITIVE = "nonpositive"
+
+
 _REPLY_RESOLUTION_SCOPES = frozenset(
     {
         _EvidenceScope.REPLY,
@@ -581,6 +625,26 @@ class _Clause:
     question_action_ends: Tuple[int, ...] = ()
     question_action_referents: Tuple[str | None, ...] = ()
     question_complement_range: Tuple[int, int] | None = None
+
+
+@dataclasses.dataclass(frozen=True)
+class _ConfirmationToken:
+    text: str
+    start: int
+    end: int
+
+
+@dataclasses.dataclass(frozen=True)
+class _ConfirmationEvent:
+    polarity: _ConfirmationPolarity
+    that_end: int
+
+
+@dataclasses.dataclass(frozen=True)
+class _ConfirmationClauseEvents:
+    end: int
+    events: Tuple[_ConfirmationEvent, ...]
+    that_ends: Tuple[int, ...]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1220,28 +1284,386 @@ def _resolution_scopes(match: re.Match[str]) -> FrozenSet[_EvidenceScope]:
     return _ALL_SCOPES
 
 
-def _has_confirmation_complement_break(context: str) -> bool:
-    if re.search(r"[;；]", context) is not None:
+def _confirmation_tokens(
+    prose: str, start: int, end: int
+) -> Tuple[_ConfirmationToken, ...]:
+    return tuple(
+        _ConfirmationToken(
+            match.group().casefold().replace("’", "'"),
+            match.start(),
+            match.end(),
+        )
+        for match in _CONFIRMATION_TOKEN_RE.finditer(prose, start, end)
+    )
+
+
+def _is_confirmation_candidate(token: str) -> bool:
+    if token in _CONFIRMATION_FORMS or token in _CONFIRMATION_DENIAL_FORMS:
         return True
-    if _CONFIRMATION_EXPLICIT_SUBJECT_BREAK_RE.search(context) is not None:
+    return any(token.endswith(form) for form in _CONFIRMATION_FORMS)
+
+
+def _confirmation_subject_start(
+    tokens: Sequence[_ConfirmationToken], candidate_index: int
+) -> int | None:
+    lower_bound = max(0, candidate_index - _CONFIRMATION_SEARCH_TOKEN_LIMIT)
+    for token in reversed(tokens[lower_bound:candidate_index]):
+        if token.text == "that" or _is_confirmation_candidate(token.text):
+            break
+        if token.text == "," or token.text in _CONFIRMATION_SUBJECT_SKIP_TOKENS:
+            continue
+        return token.start
+    return None
+
+
+def _confirmation_context_start_index(
+    prose: str,
+    tokens: Sequence[_ConfirmationToken],
+    candidate_index: int,
+    subject_start: int | None,
+) -> int:
+    lower_bound = max(0, candidate_index - _CONFIRMATION_SEARCH_TOKEN_LIMIT)
+    for index in range(candidate_index - 1, lower_bound - 1, -1):
+        boundary = tokens[index]
+        if boundary.text not in {"but", "however", "then"}:
+            continue
+        comma_before = prose[
+            max(0, boundary.start - 16) : boundary.start
+        ].rstrip().endswith(",")
+        subject_after = subject_start is not None and subject_start >= boundary.end
+        narrative_after = any(
+            token.text in _CONFIRMATION_NARRATIVE_TOKENS
+            for token in tokens[index + 1 : candidate_index]
+        )
+        if boundary.text in {"but", "then"} and (
+            comma_before or subject_after
+        ):
+            return index + 1
+        if boundary.text == "however" and (
+            subject_after or (comma_before and narrative_after)
+        ):
+            return index + 1
+    return lower_bound
+
+
+def _is_confirmation_negative_token(token: str) -> bool:
+    return token in _CONFIRMATION_NEGATIVE_TOKENS or token.endswith("n't")
+
+
+def _is_confirmation_modal_token(token: str) -> bool:
+    if token in _CONFIRMATION_MODAL_TOKENS or token.endswith("'ll"):
         return True
-    if _CONFIRMATION_INHERITED_SUBJECT_BREAK_RE.search(context) is not None:
+    return token.endswith("'ve") and (
+        token[:-3] == "can" or token[:-3] in _CONFIRMATION_MODAL_TOKENS
+    )
+
+
+def _confirmation_context_is_nonoccurred(context: Sequence[str]) -> bool:
+    if "getting" in context:
         return True
-    direct_break = _CONFIRMATION_CONTRASTIVE_DIRECT_BREAK_RE.search(context)
-    if direct_break is not None:
-        has_list_tail = _CONFIRMATION_LIST_TAIL_RE.search(
-            context, direct_break.end()
-        ) is not None
-        has_prior_resolution = _RESOLUTION_RE.search(
-            context[: direct_break.start()]
-        ) is not None
-        if not has_list_tail or not has_prior_resolution:
+    return any(
+        context[index : index + 2]
+        in (["about", "to"], ["going", "to"], ["to", "be"])
+        for index in range(len(context) - 1)
+    )
+
+
+def _confirmation_context_has_future_marker(context: Sequence[str]) -> bool:
+    for index, token in enumerate(context):
+        if token in _CONFIRMATION_FUTURE_TOKENS:
+            idiom = (
+                token == "after"
+                and context[index + 1 : index + 2] == ["all"]
+                and (
+                    context[index + 2 : index + 3] == [","]
+                    or all(item in {",", ")"} for item in context[index + 2 :])
+                )
+            ) or (
+                token == "once"
+                and context[index + 1 : index + 2] == ["again"]
+                and (
+                    context[index + 2 : index + 3] == [","]
+                    or all(item in {",", ")"} for item in context[index + 2 :])
+                )
+            ) or (
+                token == "once"
+                and context[index + 1 : index + 4] == ["and", "for", "all"]
+                and (
+                    context[index + 4 : index + 5] == [","]
+                    or all(item in {",", ")"} for item in context[index + 4 :])
+                )
+            )
+            if not idiom:
+                return True
+        if token not in _CONFIRMATION_FUTURE_RELATIONS:
+            continue
+        if any(
+            item in _CONFIRMATION_TIME_TOKENS
+            for item in context[index + 1 : index + 4]
+        ):
             return True
-    for qualified_break in _CONFIRMATION_PRIOR_RESOLUTION_COORDINATED_BREAK_RE.finditer(
-        context
+    return False
+
+
+def _confirmation_reversal_is_asserted(
+    tokens: Sequence[_ConfirmationToken],
+    anchor_index: int,
+    target_index: int,
+    quoted_spans: Sequence[Tuple[int, int]],
+) -> bool:
+    anchor = tokens[anchor_index]
+    target = tokens[target_index]
+    if any(
+        start <= anchor.start < end or start < target.end <= end
+        for start, end in quoted_spans
     ):
-        if _RESOLUTION_RE.search(context[: qualified_break.start()]) is not None:
-            return True
+        return False
+    clause_start = 0
+    for index in range(anchor_index - 1, -1, -1):
+        if tokens[index].text in _CONFIRMATION_REVERSAL_SCOPE_BREAKS:
+            clause_start = index + 1
+            break
+    context = [token.text for token in tokens[clause_start:target_index]]
+    if any(token in {"if", "whether"} for token in context):
+        return False
+    if any(_is_confirmation_modal_token(token) for token in context):
+        return False
+    if any(token in _CONFIRMATION_UNCERTAIN_TOKENS for token in context):
+        return False
+    for token in tokens[target_index + 1 :]:
+        if token.text in _CONFIRMATION_SENTENCE_BREAK_TOKENS:
+            return token.text not in {"?", "？"}
+    return True
+
+
+def _confirmation_event_polarity(
+    tokens: Sequence[_ConfirmationToken],
+    context_start_index: int,
+    candidate_index: int,
+    that_index: int,
+) -> _ConfirmationPolarity:
+    candidate = tokens[candidate_index].text
+    context = [token.text for token in tokens[context_start_index:that_index]]
+    if candidate in _CONFIRMATION_DENIAL_FORMS:
+        return _ConfirmationPolarity.NONPOSITIVE
+    if candidate not in _CONFIRMATION_FORMS:
+        return _ConfirmationPolarity.NONPOSITIVE
+
+    focused_not_index = None
+    if candidate == "confirm" and candidate_index >= 3:
+        if [token.text for token in tokens[candidate_index - 3 : candidate_index]] == [
+            "can",
+            "not",
+            "only",
+        ]:
+            focused_not_index = candidate_index - 2
+    negative = any(
+        _is_confirmation_negative_token(tokens[index].text)
+        and index != focused_not_index
+        for index in range(context_start_index, that_index)
+    )
+    uncertain = any(token in _CONFIRMATION_UNCERTAIN_TOKENS for token in context)
+    uncertain = uncertain or any(
+        token.startswith(("anticipat", "expect", "suggest")) for token in context
+    )
+    uncertain = uncertain or any(
+        token in {"if", "unless", "unsure", "whether"}
+        for token in context
+    )
+    attributed = bool(
+        set(context)
+        & {"docs", "documentation", "examples", "logs", "report"}
+    ) and bool(
+        set(context)
+        & {
+            "indicate",
+            "indicated",
+            "indicates",
+            "say",
+            "said",
+            "says",
+            "show",
+            "showed",
+            "shows",
+            "state",
+            "stated",
+            "states",
+        }
+    )
+    uncertain = uncertain or attributed
+    if negative or uncertain:
+        return _ConfirmationPolarity.NONPOSITIVE
+    if any(_is_confirmation_modal_token(token) for token in context):
+        return _ConfirmationPolarity.NONPOSITIVE
+    if _confirmation_context_is_nonoccurred(context):
+        return _ConfirmationPolarity.NONPOSITIVE
+    if candidate != "confirm" and "can" in context:
+        return _ConfirmationPolarity.NONPOSITIVE
+    if candidate == "confirming" or "being" in context:
+        return _ConfirmationPolarity.NONPOSITIVE
+    if candidate in {"confirmed", "confirms"}:
+        return _ConfirmationPolarity.POSITIVE
+    if candidate == "confirm":
+        if "did" in context:
+            return _ConfirmationPolarity.POSITIVE
+        future = _confirmation_context_has_future_marker(context)
+        narrative = any(
+            token in _CONFIRMATION_NARRATIVE_TOKENS for token in context
+        )
+        if "can" in context and not future and not narrative:
+            return _ConfirmationPolarity.POSITIVE
+    return _ConfirmationPolarity.NONPOSITIVE
+
+
+def _confirmation_events(prose: str) -> Tuple[_ConfirmationClauseEvents, ...]:
+    clauses = []
+    clause_start = 0
+    boundaries = list(_CONFIRMATION_CLAUSE_BOUNDARY_RE.finditer(prose))
+    for boundary in boundaries + [None]:
+        clause_end = boundary.start() if boundary is not None else len(prose)
+        tokens = _confirmation_tokens(prose, clause_start, clause_end)
+        events = []
+        for that_index, token in enumerate(tokens):
+            if token.text != "that":
+                continue
+            candidate_index = None
+            lower_bound = max(0, that_index - _CONFIRMATION_SEARCH_TOKEN_LIMIT)
+            for index in range(that_index - 1, lower_bound - 1, -1):
+                if tokens[index].text == "that":
+                    break
+                if _is_confirmation_candidate(tokens[index].text):
+                    candidate_index = index
+                    break
+            if candidate_index is None:
+                continue
+            subject_start = _confirmation_subject_start(tokens, candidate_index)
+            context_start_index = _confirmation_context_start_index(
+                prose, tokens, candidate_index, subject_start
+            )
+            events.append(
+                _ConfirmationEvent(
+                    polarity=_confirmation_event_polarity(
+                        tokens,
+                        context_start_index,
+                        candidate_index,
+                        that_index,
+                    ),
+                    that_end=token.end,
+                )
+            )
+        clauses.append(
+            _ConfirmationClauseEvents(
+                clause_end,
+                tuple(events),
+                tuple(event.that_end for event in events),
+            )
+        )
+        if boundary is not None:
+            clause_start = boundary.end()
+    return tuple(clauses)
+
+
+def _confirmation_direct_break(
+    prose: str,
+    event: _ConfirmationEvent,
+    resolution_start: int,
+) -> bool:
+    context_start = max(
+        event.that_end,
+        resolution_start - _CONFIRMATION_CONTEXT_CHAR_LIMIT,
+    )
+    context = prose[context_start:resolution_start]
+    tokens = _confirmation_tokens(context, 0, len(context))
+    boundaries = [
+        token for token in tokens if token.text in {"but", "however", "then"}
+    ]
+    if not boundaries:
+        return False
+    boundary = boundaries[-1]
+    before = context[: boundary.start]
+    after = context[boundary.end :]
+    after_tokens = _confirmation_tokens(after, 0, len(after))
+    if any(
+        token.text in {"if", "whether"}
+        for token in after_tokens
+    ):
+        return False
+    coordinated_tail = "," in after and any(
+        token.text == "and" for token in after_tokens
+    )
+    return not (
+        coordinated_tail and _RESOLUTION_RE.search(before) is not None
+    )
+
+
+def _confirmation_event_for_resolution(
+    prose: str,
+    clause: _ConfirmationClauseEvents,
+    resolution_start: int,
+) -> _ConfirmationEvent | None:
+    event_index = bisect.bisect_right(clause.that_ends, resolution_start) - 1
+    if event_index < 0:
+        return None
+    event = clause.events[event_index]
+    if (
+        event.polarity is _ConfirmationPolarity.NONPOSITIVE
+        and _confirmation_direct_break(prose, event, resolution_start)
+    ):
+        return None
+    return event
+
+
+def _confirmation_reversed_after_resolution(
+    prose: str,
+    match: re.Match[str],
+) -> bool:
+    suffix = prose[
+        match.end() : min(
+            len(prose),
+            match.end() + _CONFIRMATION_CONTEXT_CHAR_LIMIT,
+        )
+    ]
+    tokens = _confirmation_tokens(suffix, 0, len(suffix))
+    quoted_spans = [
+        (quoted.start(), quoted.end()) for quoted in _QUOTED_TEXT_RE.finditer(suffix)
+    ]
+    scope_words = {
+        "approval": {"approval"},
+        "authorization": {"authorization"},
+        "verification": {"verification"},
+        "security_list": {"approval", "authorization", "verification"},
+    }.get(match.lastgroup or "", set())
+    for anchor_index, token in enumerate(tokens):
+        targets = (
+            {"denied", "wrong"}
+            if token.text == "confirmation"
+            else {"required"}
+            if token.text in scope_words
+            else set()
+        )
+        for target_index in range(
+            anchor_index + 1,
+            min(len(tokens), anchor_index + 9),
+        ):
+            if tokens[target_index].text not in targets:
+                continue
+            if not _confirmation_reversal_is_asserted(
+                tokens,
+                anchor_index,
+                target_index,
+                quoted_spans,
+            ):
+                continue
+            negation_start = anchor_index + 1
+            for index in range(anchor_index + 1, target_index):
+                if tokens[index].text in _CONFIRMATION_REVERSAL_SCOPE_BREAKS:
+                    negation_start = index + 1
+            negated = any(
+                _is_confirmation_negative_token(item.text)
+                for item in tokens[negation_start:target_index]
+            )
+            if not negated:
+                return True
     return False
 
 
@@ -1250,8 +1672,10 @@ def _valid_resolution_matches(
     clauses: Sequence[_Clause],
 ) -> List[re.Match[str]]:
     quoted_spans = [(match.start(), match.end()) for match in _QUOTED_TEXT_RE.finditer(prose)]
+    confirmation_clauses = _confirmation_events(prose)
     matches = []
     clause_index = 0
+    confirmation_clause_index = 0
     quote_index = 0
     for match in _RESOLUTION_RE.finditer(prose):
         while quote_index < len(quoted_spans) and quoted_spans[quote_index][1] <= match.start():
@@ -1265,6 +1689,18 @@ def _valid_resolution_matches(
             clause_index += 1
         clause_start = clauses[clause_index].start if clauses else 0
         clause_end = clauses[clause_index].end if clauses else len(prose)
+        while (
+            confirmation_clause_index + 1 < len(confirmation_clauses)
+            and match.start() >= confirmation_clauses[confirmation_clause_index].end
+        ):
+            confirmation_clause_index += 1
+        confirmation_clause = confirmation_clauses[confirmation_clause_index]
+        confirmation_event = _confirmation_event_for_resolution(
+            prose, confirmation_clause, match.start()
+        )
+        confirmation_polarity = (
+            confirmation_event.polarity if confirmation_event is not None else None
+        )
         prefix = prose[max(clause_start, match.start() - 120) : match.start()]
         reversal = _LEADING_RESOLUTION_REVERSAL_RE.match(prefix)
         if reversal is not None:
@@ -1293,64 +1729,34 @@ def _valid_resolution_matches(
                 )
                 is None
             )
-            preceding_confirmations = list(
-                _CONFIRMATION_POLARITY_RE.finditer(preceding_context)
-            )
-            context_break_in_confirmation_complement = any(
-                confirmation.lastgroup != "positive"
-                and confirmation.group().rstrip().casefold().endswith("that")
-                and not _has_confirmation_complement_break(
-                    prefix[confirmation.end() :] + match.group()
-                )
-                for confirmation in preceding_confirmations
-            )
-            if (
-                coordinated_expectation
-                or correlative_expectation
-                or context_break_in_confirmation_complement
-            ):
+            if coordinated_expectation or correlative_expectation:
                 continue
             prefix = prefix[context_break.end() :]
             break
         suffix = prose[match.end() : min(clause_end, match.end() + 120)]
-        invalid_suffix = _INVALID_RESOLUTION_SUFFIX_RE.search(suffix) is not None
+        invalid_suffix = (
+            _INVALID_RESOLUTION_SUFFIX_RE.search(suffix) is not None
+            or (
+                confirmation_polarity is _ConfirmationPolarity.POSITIVE
+                and _confirmation_reversed_after_resolution(
+                    prose, match
+                )
+            )
+        )
         assistant_continuation = (
             _ASSISTANT_CONTINUATION_SUFFIX_RE.search(suffix) is not None
         )
-        confirmation_polarities = list(_CONFIRMATION_POLARITY_RE.finditer(prefix))
-        latest_confirmation = (
-            confirmation_polarities[-1] if confirmation_polarities else None
-        )
-        outer_nonpositive_dominates = False
-        if latest_confirmation is not None:
-            for confirmation in confirmation_polarities[:-1]:
-                complement_context = prefix[
-                    confirmation.end() : latest_confirmation.start()
-                ]
-                if (
-                    confirmation.lastgroup != "positive"
-                    and confirmation.group().rstrip().casefold().endswith("that")
-                    and not _has_confirmation_complement_break(
-                        complement_context + latest_confirmation.group()
-                    )
-                ):
-                    outer_nonpositive_dominates = True
-                    break
         invalid_prefix_context = prefix
-        if (
-            latest_confirmation is not None
-            and latest_confirmation.lastgroup == "positive"
-            and not outer_nonpositive_dominates
-        ):
-            invalid_prefix_context = prefix[latest_confirmation.end() :]
+        if confirmation_polarity is _ConfirmationPolarity.POSITIVE:
+            invalid_prefix_context = prose[
+                max(
+                    confirmation_event.that_end,
+                    match.start() - _CONFIRMATION_CONTEXT_CHAR_LIMIT,
+                ) : match.start()
+            ]
         invalid_prefix = (
-            outer_nonpositive_dominates
-            or (
-                latest_confirmation is not None
-                and latest_confirmation.lastgroup != "positive"
-            )
-        ) or (
-            _INVALID_RESOLUTION_PREFIX_RE.search(invalid_prefix_context) is not None
+            confirmation_polarity is _ConfirmationPolarity.NONPOSITIVE
+            or _INVALID_RESOLUTION_PREFIX_RE.search(invalid_prefix_context) is not None
             or _EXPECTATION_RESOLUTION_PREFIX_RE.search(invalid_prefix_context)
             is not None
         )
