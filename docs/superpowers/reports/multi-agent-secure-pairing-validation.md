@@ -10,28 +10,35 @@ Date: 2026-07-30
 
 ## Automated Evidence
 
-The implementation through commit `49ea9d6c4fb158f78cb4586ec6c40c5816b3a9bd`
+The implementation through commit `67a7d4da6252a43b2d5306e6d6523be2aa0a7664`
 passed the complete offline validation without a compiled voice key:
 
 | Evidence | Result |
 |---|---:|
-| Python tests | 766 passed |
+| Python tests | 786 passed |
 | Unified validation stages | 53/53 passed |
 | ESP-IDF target | ESP32-S3 |
-| Application bytes | 6,270,144 |
+| Application bytes | 6,275,552 |
 | Application partition bytes | 14,417,920 |
-| Application headroom | 8,147,776 bytes (56.51%) |
-| Application SHA256 | `4db452138a78888177af472f5286693b75b5e1c0ecb27151eeb1ce410f5bbf37` |
+| Application headroom | 8,142,368 bytes (56.47%) |
+| Application SHA256 | `8c91fadc04fb20a870159bfeced1cd164e006694d17f7e73ec786dd77afccf97` |
 | Assets bytes | 291,198 |
 | Assets SHA256 | `93b87d059d1c2a31f1dd65bbdfa4d5b7275774f6f12e82eb84a1737acad3723f` |
 | Static DIRAM | 191,999 bytes |
 | Capacity gate | Passed |
 
 The test suite covers P-256 ECDH pairing, six-digit SAS derivation,
-physical-approval state transitions, signed authentication and renaming,
+physical-approval state transitions, a persistent watch signing identity
+pinned during SAS, signed mutual authentication and renaming, rekey-envelope
+binding to the signed challenge,
 credential persistence, eight-Agent registry capacity, active/pending BLE
 routing, master-key epochs, removal rotation, online and offline rekeying,
-old-epoch rejection, watch Agent switching, and Mac menu behavior.
+old-epoch rejection, interrupted-enrollment recovery, stale local credential
+removal, watch Agent switching, and Mac menu behavior. It also covers pending
+connection expiry, 32-bit timer wraparound, signed enrollment identity claims,
+active in-place rekey recovery, cross-connection transaction isolation,
+disconnect retry races, and production subscription denial before Agent
+authorization.
 
 Production CMake and the offline build no longer generate or include
 `voice_input_device_key.h`, and they do not read `STOPWATCH_VOICE_KEY_FILE`.
@@ -44,13 +51,16 @@ it cannot create, import, or print a key.
 `~/Applications/StopWatch Codex Agent.app`. `codesign --verify --deep --strict`
 passed, and the executable is a universal Mach-O containing `x86_64` and
 `arm64`. The bundle includes the Agent identity, watch credential, secure
-pairing protocol, wire codec, cryptography, and pairing client modules.
+pairing protocol, wire codec, cryptography, and pairing client modules. Direct
+comparisons confirmed that the packaged pairing, credential, runtime, and
+voice-session sources match the validated repository sources.
 
-The Agent was launched. Its Bluetooth privacy decision was reset for bundle
-identifier `com.stopwatch.codex-agent` after a prior denial. macOS reports the
-Bluetooth controller as on, but CoreBluetooth still reports unavailable until
-the user grants the fresh Bluetooth prompt. No `StopWatch-Codex` advertisement
-was observed.
+The newly installed Agent was launched successfully. Process sampling shows
+that macOS is currently holding the main thread in `SecItemCopyMatching` while
+waiting for the user to approve access to its existing Keychain item. The new
+process has therefore not reached CoreBluetooth scanning yet. Before the
+restart, the prior Agent process repeatedly scanned normally but observed no
+`StopWatch-Codex` advertisement.
 
 ## Physical Acceptance Status
 
