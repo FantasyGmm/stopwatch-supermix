@@ -396,11 +396,11 @@ _CONFIRMATION_POLARITY_RE = re.compile(
                     |(?:hasn|haven|hadn)['’]t[ \t]+been
                     |(?:is|are|was|were)[ \t]+not
                     |(?:isn|aren|wasn|weren)['’]t
-                    |(?:cannot|can['’]t)[ \t]+(?:be|have)
+                    |(?:cannot|can['’]t)[ \t]+(?:be|have(?:[ \t]+been)?)
                     |(?:may|might|must|will|would|can|could|should)
                         [ \t]+not[ \t]+(?:be|have(?:[ \t]+been)?)
                     |(?:mightn|mustn|won|wouldn|couldn|shouldn)['’]t
-                        [ \t]+have(?:[ \t]+been)?)
+                        [ \t]+(?:be|have(?:[ \t]+been)?))
                     [ \t]+confirmed[ \t]*,?[ \t]+that)
                 |
                 (?:
@@ -433,10 +433,11 @@ _CONFIRMATION_POLARITY_RE = re.compile(
                 (?:[ \t]+(?:later|explicitly|eventually|first)){0,2}
                 [ \t]+confirm
             |can[ \t]+(?:later|eventually)[ \t]+confirm
-            |(?:may|might|must|should|would|will|could)
-                [ \t]+have[ \t]+confirmed
-            |(?:may|might|must|should|would|will|could)
-                [ \t]+have[ \t]+been[ \t]+confirmed
+            |(?:may|might|must|should|would|will|can|could)
+                (?:[ \t]+(?:already|possibly|probably|eventually|later|perhaps)){0,2}
+                [ \t]+have[ \t]+(?:been[ \t]+)?confirmed
+            |(?:may|might|must|should|would|will|can|could)
+                [ \t]+be[ \t]+confirmed
             |(?:may|might|must|should|would|will|could)['’]ve
                 [ \t]+(?:been[ \t]+)?confirmed
             |(?:has|have|had)[ \t]+yet[ \t]+to[ \t]+confirm)
@@ -444,7 +445,7 @@ _CONFIRMATION_POLARITY_RE = re.compile(
         )
         |
         (?P<positive>
-            (?:(?:has|have|had)[ \t]+confirmed
+            (?:(?:has|have|had)[ \t]+(?:been[ \t]+)?confirmed
             |(?:do|does|did|can)[ \t]+confirm
             |confirm(?:s|ed))
             [ \t]*,?[ \t]+that
@@ -458,10 +459,21 @@ _CONFIRMATION_MAIN_SUBJECT_PATTERN = (
     r"(?:(?:the|our|your|their|this|that)[ \t]+"
     r"(?:[A-Za-z-]+[ \t]+){0,2}[A-Za-z-]+))"
 )
-_CONFIRMATION_COMPLEMENT_BREAK_RE = re.compile(
-    rf"[;；]|,[ \t]*(?:(?:and|but|then)[ \t]+"
-    rf"{_CONFIRMATION_MAIN_SUBJECT_PATTERN}\b|however[ \t]*,[ \t]*"
-    rf"{_CONFIRMATION_MAIN_SUBJECT_PATTERN}\b)",
+_CONFIRMATION_POSITIVE_VERB_PATTERN = (
+    r"(?:(?:has|have|had)[ \t]+(?:been[ \t]+)?confirmed|"
+    r"(?:do|does|did|can)[ \t]+confirm|confirm(?:s|ed))"
+)
+_CONFIRMATION_NEW_SUBJECT_BREAK_RE = re.compile(
+    rf"[;；]|(?:,[ \t]*)?(?:and|but|then)[ \t]+"
+    rf"{_CONFIRMATION_MAIN_SUBJECT_PATTERN}\b|"
+    rf",[ \t]*however[ \t]*,[ \t]*"
+    rf"{_CONFIRMATION_MAIN_SUBJECT_PATTERN}\b",
+    re.IGNORECASE,
+)
+_CONFIRMATION_INHERITED_POSITIVE_BREAK_RE = re.compile(
+    rf",[ \t]*(?:(?:and|but|then)[ \t]+|however[ \t]*,[ \t]*)"
+    rf"(?:(?:later|eventually|explicitly|finally|subsequently)[ \t]+){{0,2}}"
+    rf"{_CONFIRMATION_POSITIVE_VERB_PATTERN}\b",
     re.IGNORECASE,
 )
 _ASSISTANT_CONTINUATION_SUFFIX_RE = re.compile(
@@ -1211,6 +1223,21 @@ def _resolution_scopes(match: re.Match[str]) -> FrozenSet[_EvidenceScope]:
     return _ALL_SCOPES
 
 
+def _has_confirmation_complement_break(context: str) -> bool:
+    new_subject_break = _CONFIRMATION_NEW_SUBJECT_BREAK_RE.search(context)
+    if new_subject_break is not None:
+        if new_subject_break.group().startswith((";", "；")):
+            return True
+        if _RESOLUTION_RE.search(context[: new_subject_break.start()]) is not None:
+            return True
+    for inherited_break in _CONFIRMATION_INHERITED_POSITIVE_BREAK_RE.finditer(
+        context
+    ):
+        if _RESOLUTION_RE.search(context[: inherited_break.start()]) is not None:
+            return True
+    return False
+
+
 def _valid_resolution_matches(
     prose: str,
     clauses: Sequence[_Clause],
@@ -1265,10 +1292,9 @@ def _valid_resolution_matches(
             context_break_in_confirmation_complement = any(
                 confirmation.lastgroup != "positive"
                 and confirmation.group().rstrip().casefold().endswith("that")
-                and _CONFIRMATION_COMPLEMENT_BREAK_RE.search(
+                and not _has_confirmation_complement_break(
                     prefix[confirmation.end() :] + match.group()
                 )
-                is None
                 for confirmation in preceding_confirmations
             )
             if (
@@ -1297,10 +1323,9 @@ def _valid_resolution_matches(
                 if (
                     confirmation.lastgroup != "positive"
                     and confirmation.group().rstrip().casefold().endswith("that")
-                    and _CONFIRMATION_COMPLEMENT_BREAK_RE.search(
-                        complement_context
+                    and not _has_confirmation_complement_break(
+                        complement_context + latest_confirmation.group()
                     )
-                    is None
                 ):
                     outer_nonpositive_dominates = True
                     break

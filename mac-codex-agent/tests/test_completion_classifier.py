@@ -2280,6 +2280,8 @@ class CompletionClassifierTests(unittest.TestCase):
             "Please approve deployment. We have confirmed that approval is not "
             "required.",
             "Please approve deployment. We can confirm that approval is not required.",
+            "Please approve deployment. We expected and it has been confirmed that "
+            "approval is not required.",
             "Please approve deployment. We expected but did not confirm, then "
             "confirmed that approval is not required.",
             "Please approve deployment. It is not true that we confirmed authorization "
@@ -2297,6 +2299,12 @@ class CompletionClassifierTests(unittest.TestCase):
             "required, but approval is not required.",
             "Please approve deployment. We cannot confirm that authorization is not "
             "required, but the team confirmed that approval is not required.",
+            "Please approve deployment. We cannot confirm that authorization is not "
+            "required but we confirmed that approval is not required.",
+            "Please approve deployment. We denied that authorization is not required, "
+            "then confirmed that approval is not required.",
+            "Please approve deployment. We cannot confirm that authorization is not "
+            "required, but later confirmed that approval is not required.",
         )
         for message in resolved_messages:
             with self.subTest(kind="resolved", message=message):
@@ -2510,6 +2518,32 @@ class CompletionClassifierTests(unittest.TestCase):
             "required.",
             "Please approve deployment. We can eventually confirm that approval is "
             "not required.",
+            "Please approve deployment. It won't be confirmed that approval is not "
+            "required.",
+            "Please approve deployment. It shouldn't be confirmed that approval is "
+            "not required.",
+            "Please approve deployment. It couldn't be confirmed that approval is not "
+            "required.",
+            "Please approve deployment. It can't have been confirmed that approval is "
+            "not required.",
+            "Please approve deployment. It cannot have been confirmed that approval is "
+            "not required.",
+            "Please approve deployment. It can have been confirmed that approval is "
+            "not required.",
+            "Please approve deployment. It may be confirmed that approval is not "
+            "required.",
+            "Please approve deployment. It might have confirmed that approval is not "
+            "required.",
+            "Please approve deployment. It will have been confirmed that approval is "
+            "not required.",
+            "Please approve deployment. It would be confirmed that approval is not "
+            "required.",
+            "Please approve deployment. It could have been confirmed that approval is "
+            "not required.",
+            "Please approve deployment. It should not have been confirmed that approval "
+            "is not required.",
+            "Please approve deployment. It may already have been confirmed that approval "
+            "is not required.",
             "Please approve deployment. It wasn't confirmed that approval is not "
             "required.",
             "Please approve deployment. It has never been confirmed that approval is "
@@ -2523,6 +2557,8 @@ class CompletionClassifierTests(unittest.TestCase):
             "Please approve deployment. We cannot confirm that the team discussed it "
             "but later confirmed that approval is not required.",
             "Please approve deployment. We cannot confirm that the team, however, "
+            "confirmed that approval is not required.",
+            "Please approve deployment. We cannot confirm that Alice and the team "
             "confirmed that approval is not required.",
             "Please approve deployment. We expected, but did not confirm, that "
             "authorization is not required, and approval is not required.",
