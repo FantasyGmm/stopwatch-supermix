@@ -51,6 +51,16 @@ _QUOTED_QUESTION_RE = re.compile(
     r")"
 )
 _NON_PROSE_LINE_RE = re.compile(r"^\s*(?:#{1,6}\s+|>)")
+_QUESTION_MARK_RE = re.compile(r"[?？؟¿]")
+_ANSWER_CUE_RE = re.compile(
+    r"(?:原因(?:是|在于)|答案(?:是|为)|"
+    r"\bbecause\b|\bthe answer is\b)",
+    re.IGNORECASE,
+)
+_SECOND_PERSON_RE = re.compile(
+    r"(?:你|您|\byou\b|\byour\b)",
+    re.IGNORECASE,
+)
 _OPTION_RE = re.compile(
     r"^\s*(?:[-*]\s*)?([A-Z]|[1-9])\s*[.、:：)）]\s*\S+",
     re.MULTILINE,
@@ -85,12 +95,25 @@ def _paragraphs(message: str) -> List[str]:
     return paragraphs
 
 
-def _has_prose_question(paragraph: str) -> bool:
+def _prose(paragraph: str) -> str:
     prose = "\n".join(
         line for line in paragraph.splitlines() if not _NON_PROSE_LINE_RE.match(line)
     )
-    prose = _QUOTED_QUESTION_RE.sub("", prose)
-    return "?" in prose or "？" in prose
+    return _QUOTED_QUESTION_RE.sub("", prose)
+
+
+def _has_unresolved_prose_question(paragraphs: List[str]) -> bool:
+    for paragraph in paragraphs:
+        prose = _prose(paragraph)
+        for question in _QUESTION_MARK_RE.finditer(prose):
+            suffix = prose[question.end() :]
+            self_answered = (
+                _ANSWER_CUE_RE.search(suffix) is not None
+                and _SECOND_PERSON_RE.search(prose) is None
+            )
+            if not self_answered:
+                return True
+    return False
 
 
 def _has_choice_handoff(message: str, final: str) -> bool:
@@ -130,10 +153,8 @@ def classify_completion(
         return CompletionClassification("completed", "completion_only")
 
     final = paragraphs[-1]
-    if _has_prose_question(final):
-        return CompletionClassification("waiting", "text_question")
-    if len(paragraphs) >= 2 and _has_prose_question(paragraphs[-2]):
-        return CompletionClassification("waiting", "text_question_before_epilogue")
+    if _has_unresolved_prose_question(paragraphs):
+        return CompletionClassification("waiting", "text_direct_question")
     if _has_choice_handoff("\n\n".join(paragraphs), final):
         return CompletionClassification("waiting", "text_choice")
 

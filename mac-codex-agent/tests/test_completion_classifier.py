@@ -35,7 +35,7 @@ class CompletionClassifierTests(unittest.TestCase):
         )
 
         self.assertEqual(result.outcome, "waiting")
-        self.assertEqual(result.reason, "text_question")
+        self.assertEqual(result.reason, "text_direct_question")
 
     def test_confirmation_question_before_trailing_guidance_is_waiting(self):
         result = classify_completion(
@@ -46,7 +46,44 @@ class CompletionClassifierTests(unittest.TestCase):
         )
 
         self.assertEqual(result.outcome, "waiting")
-        self.assertEqual(result.reason, "text_question_before_epilogue")
+        self.assertEqual(result.reason, "text_direct_question")
+
+    def test_question_before_options_and_recommendation_is_waiting(self):
+        result = classify_completion(
+            "可以共享一个手表主密钥，但仍需独立识别 Agent。\n\n"
+            "首次添加新 Agent 时，你希望如何确认？\n\n"
+            "1. 手表和 Mac 显示相同验证码。\n"
+            "2. 手表开放六十秒配对窗口。\n"
+            "3. 只依赖系统蓝牙配对。\n\n"
+            "我推荐第 1 种，安全性和可理解性最好。"
+        )
+        self.assertEqual(
+            (result.outcome, result.reason),
+            ("waiting", "text_direct_question"),
+        )
+
+    def test_arabic_question_punctuation_is_waiting(self):
+        result = classify_completion("هل تريد المتابعة؟\n\nRecommendation follows.")
+
+        self.assertEqual(result.outcome, "waiting")
+        self.assertEqual(result.reason, "text_direct_question")
+
+    def test_self_answered_explanation_is_completed(self):
+        result = classify_completion(
+            "为什么构建失败？原因是缓存中的 Pillow 只有 arm64 架构。\n\n"
+            "修复和测试已经完成。"
+        )
+
+        self.assertEqual(result.outcome, "completed")
+        self.assertEqual(result.reason, "completion_only")
+
+    def test_directed_question_is_not_mistaken_for_self_answer(self):
+        result = classify_completion(
+            "你希望为什么选择方案 1？原因可以在确认后补充。"
+        )
+
+        self.assertEqual(result.outcome, "waiting")
+        self.assertEqual(result.reason, "text_direct_question")
 
     def test_question_mark_in_markdown_heading_is_not_waiting(self):
         result = classify_completion(
