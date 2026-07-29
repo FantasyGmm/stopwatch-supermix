@@ -2,8 +2,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BUILD_DIR="$ROOT/build-unified"
-SDKCONFIG="$ROOT/sdkconfig.unified"
+BUILD_DIR="${STOPWATCH_BUILD_DIR:-$ROOT/build-unified}"
+SDKCONFIG="${STOPWATCH_SDKCONFIG:-$ROOT/sdkconfig.unified}"
 DEFAULTS="$ROOT/sdkconfig.defaults;$ROOT/sdkconfig.unified.defaults"
 IDF_PY="${IDF_PY:-idf.py}"
 

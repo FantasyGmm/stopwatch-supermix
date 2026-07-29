@@ -13,6 +13,7 @@ from app_state import (
     TraeSnapshot,
     present,
 )
+from voice_session import VoiceState
 
 
 class AppStateTests(unittest.TestCase):
@@ -51,6 +52,34 @@ class AppStateTests(unittest.TestCase):
             with self.subTest(state=state):
                 view = present(AgentSnapshot(state, state is not ConnectionState.DISABLED))
                 self.assertEqual(view.bluetooth_text, expected)
+
+    def test_every_voice_state_has_an_exact_label_and_detail(self):
+        labels = {
+            VoiceState.DRIVER_REQUIRED: "Voice Input: Driver Required",
+            VoiceState.RESTART_REQUIRED: "Voice Input: Restart Required",
+            VoiceState.ACCESSIBILITY_REQUIRED: "Voice Input: Accessibility Required",
+            VoiceState.TYPELESS_NOT_RUNNING: "Voice Input: Typeless Not Running",
+            VoiceState.READY: "Voice Input: Ready",
+            VoiceState.RECORDING: "Voice Input: Recording",
+            VoiceState.ERROR: "Voice Input: Error",
+        }
+
+        for state, expected in labels.items():
+            with self.subTest(state=state):
+                view = present(
+                    AgentSnapshot(
+                        ConnectionState.CONNECTED,
+                        True,
+                        voice_state=state,
+                        voice_detail="exact detail",
+                    )
+                )
+                self.assertIs(view.voice_state, state)
+                self.assertEqual(
+                    view.voice_text,
+                    "{} - exact detail".format(expected),
+                )
+                self.assertEqual(view.voice_detail, "exact detail")
 
     def test_connection_preference_round_trips(self):
         preferences = MemoryPreferences()

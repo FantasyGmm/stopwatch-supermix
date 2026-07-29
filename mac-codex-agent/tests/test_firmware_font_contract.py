@@ -120,11 +120,8 @@ class FirmwareFontContractTests(unittest.TestCase):
             "constexpr uint32_t kCodexBlue = kBeaconViolet;",
             app,
         )
-        self.assertIn(
-            "lv_obj_set_style_text_color("
-            "_status_label, lv_color_hex(kCodexBlue), 0);",
-            app,
-        )
+        self.assertIn("resolve_codex_status(", app)
+        self.assertIn("set_status(live_status, kCodexBlue);", app)
         self.assertRegex(
             app,
             r"set_status\s*\(\s*"

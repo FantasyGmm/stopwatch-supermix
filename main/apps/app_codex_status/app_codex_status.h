@@ -8,6 +8,8 @@
 #include <mooncake.h>
 #include <lvgl.h>
 #include <memory>
+#include <atomic>
+#include <mutex>
 #include <cstdint>
 #include <string>
 #include <esp_event_base.h>
@@ -19,9 +21,11 @@
 #include "trae_status_model.h"
 #include "trae_task_carousel.h"
 #include "trae_status_page.h"
+#include "voice_input_controller.h"
 #include "runtime/services/shared_wifi_service.h"
 
 class CodexBleTransport;
+class BleVoiceProbeController;
 struct esp_websocket_event_data;
 typedef struct esp_websocket_client* esp_websocket_client_handle_t;
 
@@ -64,6 +68,8 @@ private:
     lv_timer_t* _pet_timer       = nullptr;
     esp_websocket_client_handle_t _ws_client = nullptr;
     std::unique_ptr<CodexBleTransport> _ble_transport;
+    std::unique_ptr<BleVoiceProbeController> _voice_probe;
+    std::unique_ptr<VoiceInputController> _voice_input;
     WifiStaLease _wifi_lease;
     std::string _server_host;
     std::string _transport_mode;
@@ -89,6 +95,16 @@ private:
     TraeTaskCarousel _trae_carousel;
     StatusPageSwipeLogic _page_swipe;
     TraeCardTapLogic _trae_card_tap;
+    VoiceButtonDispatcher _voice_button_dispatcher;
+    bool _production_voice_ready = false;
+    bool _production_voice_link_usable = false;
+    uint16_t _production_voice_mtu = 23;
+    uint32_t _production_voice_connection_epoch = 0;
+    std::mutex _status_mutex;
+    std::string _base_status = "START";
+    uint32_t _base_status_color = 0;
+    bool _base_status_is_error = false;
+    std::atomic<VoiceInputUiState> _voice_status{VoiceInputUiState::Off};
 
     void create_view();
     void destroy_view();
@@ -98,6 +114,7 @@ private:
     void start_websocket();
     void stop_websocket();
     void set_status(const char* status, uint32_t color);
+    void render_status();
     void set_host_text(const char* prefix);
     bool handle_status_json(const char* data, int length, const char* live_status = "LIVE");
     void set_percent(lv_obj_t* label, lv_obj_t* bar, int value);

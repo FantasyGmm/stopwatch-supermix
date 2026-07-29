@@ -1,4 +1,7 @@
 bleak>=0.22,<2
 certifi>=2025.1.31
 Pillow>=11,<12
+cryptography>=45,<47
+pyobjc-framework-ApplicationServices>=11.1,<12
 pyobjc-framework-Cocoa>=11.1,<12
+pyobjc-framework-Quartz>=11.1,<12

@@ -1,22 +1,41 @@
+import hashlib
 import pathlib
+import signal
+import subprocess
 import sys
+import tempfile
+import threading
+import time
 import unittest
 
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
-from AppKit import NSApplication, NSColor, NSControlStateValueOn
+from AppKit import (
+    NSAlertFirstButtonReturn,
+    NSApplication,
+    NSColor,
+    NSControlStateValueOn,
+)
 
 from app_state import AgentSnapshot, CodexSnapshot, ConnectionState, TraeSnapshot
-from menu_app import MenuBarApplication
+from menu_app import MenuBarApplication, confirm_voice_setup
+from voice_driver import BlackHoleInstaller, DriverInstallError, DriverState
+from voice_session import VoiceState
 
 
 class FakeController:
-    def __init__(self):
+    def __init__(self, voice_state=VoiceState.READY):
         self.started = False
         self.stopped = False
         self.connection_values = []
         self.reconnect_count = 0
+        self.voice_refresh_count = 0
+        self.voice_state = voice_state
+        self.voice_detail = ""
+        self.voice_setup_failures = []
+        self.voice_setup_results = []
+        self.voice_revision = 0
 
     def start(self):
         self.started = True
@@ -25,6 +44,8 @@ class FakeController:
         return AgentSnapshot(
             ConnectionState.CONNECTED,
             True,
+            voice_state=self.voice_state,
+            voice_detail=self.voice_detail,
             codex=CodexSnapshot.from_status(
                 {
                     "codex_model": "gpt-5.3",
@@ -84,12 +105,438 @@ class FakeController:
     def reconnect(self):
         self.reconnect_count += 1
 
+    def refresh_voice_readiness(self):
+        self.voice_refresh_count += 1
+
+    def begin_voice_setup(self):
+        return (
+            self.voice_revision
+            if self.voice_state is VoiceState.DRIVER_REQUIRED
+            else None
+        )
+
+    def report_voice_setup_failure(self, token, detail):
+        if (
+            token != self.voice_revision
+            or self.voice_state is not VoiceState.DRIVER_REQUIRED
+        ):
+            return False
+        self.voice_setup_failures.append(detail)
+        self.voice_revision += 1
+        self.voice_state = VoiceState.DRIVER_REQUIRED
+        self.voice_detail = detail
+        return True
+
+    def report_voice_setup_result(self, token, state):
+        if (
+            token != self.voice_revision
+            or self.voice_state is not VoiceState.DRIVER_REQUIRED
+        ):
+            return False
+        self.voice_setup_results.append(state)
+        self.voice_revision += 1
+        self.voice_state = {
+            DriverState.READY: VoiceState.READY,
+            DriverState.RESTART_REQUIRED: VoiceState.RESTART_REQUIRED,
+        }[state]
+        self.voice_detail = ""
+        return True
+
     def stop(self, timeout=5.0):
         self.stopped = True
         return True
 
 
 class MenuBarApplicationTests(unittest.TestCase):
+    def test_confirmation_explains_authorization_and_possible_restart(self):
+        class Alert:
+            def __init__(self):
+                self.message = ""
+                self.informative = ""
+                self.buttons = []
+
+            def setMessageText_(self, value):
+                self.message = value
+
+            def setInformativeText_(self, value):
+                self.informative = value
+
+            def addButtonWithTitle_(self, value):
+                self.buttons.append(value)
+
+            def runModal(self):
+                return NSAlertFirstButtonReturn
+
+        alert = Alert()
+
+        confirmed = confirm_voice_setup(alert_factory=lambda: alert)
+
+        self.assertTrue(confirmed)
+        self.assertIn("administrator authorization", alert.informative)
+        self.assertIn("restart", alert.informative.lower())
+        self.assertEqual(alert.buttons, ["Install", "Cancel"])
+
+    def test_setup_confirmation_cancel_does_not_start_worker(self):
+        NSApplication.sharedApplication()
+        controller = FakeController(VoiceState.DRIVER_REQUIRED)
+        delegate = MenuBarApplication.alloc().initWithController_(controller)
+        delegate.applicationDidFinishLaunching_(None)
+        self.addCleanup(delegate._shutdown)
+        confirmations = []
+        workers = []
+        delegate.voice_setup_confirmer = lambda: confirmations.append(True) or False
+        delegate.voice_worker_factory = lambda target: workers.append(target)
+
+        delegate.setupVoice_(None)
+
+        self.assertEqual(confirmations, [True])
+        self.assertEqual(workers, [])
+        self.assertIs(controller.voice_state, VoiceState.DRIVER_REQUIRED)
+        self.assertFalse(delegate._installing_voice)
+        self.assertTrue(delegate.setup_voice_item.isEnabled())
+
+    def test_install_failure_is_published_as_visible_voice_error(self):
+        class Installer:
+            def install(self, _package):
+                raise DriverInstallError("Driver package verification failed")
+
+        class Worker:
+            def __init__(self, target):
+                self.target = target
+
+            def start(self):
+                pass
+
+            def is_alive(self):
+                return False
+
+        NSApplication.sharedApplication()
+        controller = FakeController(VoiceState.DRIVER_REQUIRED)
+        delegate = MenuBarApplication.alloc().initWithController_(controller)
+        delegate.applicationDidFinishLaunching_(None)
+        self.addCleanup(delegate._shutdown)
+        workers = []
+        delegate.voice_installer = Installer()
+        delegate.voice_setup_confirmer = lambda: True
+        delegate.voice_worker_factory = lambda target: workers.append(
+            Worker(target)
+        ) or workers[-1]
+        delegate.call_after = lambda function, *args: function(*args)
+
+        delegate.setupVoice_(None)
+        with self.assertLogs("menu_app", level="ERROR"):
+            workers[0].target()
+
+        self.assertEqual(
+            controller.voice_setup_failures,
+            ["Driver package verification failed"],
+        )
+        self.assertIs(controller.voice_state, VoiceState.DRIVER_REQUIRED)
+        self.assertEqual(
+            delegate.voice_label.stringValue(),
+            "Voice Input: Driver Required - Driver package verification failed",
+        )
+        self.assertFalse(delegate.setup_voice_item.isHidden())
+        self.assertTrue(delegate.setup_voice_item.isEnabled())
+
+        delegate.setupVoice_(None)
+        self.assertEqual(len(workers), 2)
+
+    def test_shutdown_cancels_and_reaps_blocked_installer_without_late_callback(self):
+        temporary_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary_directory.cleanup)
+        package = pathlib.Path(temporary_directory.name) / "BlackHole2ch-0.7.1.pkg"
+        package.write_bytes(b"known package")
+        process_started = threading.Event()
+        process_released = threading.Event()
+        process_calls = []
+        group_signals = []
+        callbacks = []
+
+        class Process:
+            pid = 9876
+
+            def wait(self, timeout=None):
+                process_calls.append(("wait", timeout))
+                if timeout is None:
+                    process_released.wait(2)
+                elif not process_released.is_set():
+                    raise subprocess.TimeoutExpired("osascript", timeout)
+                return -signal.SIGKILL
+
+        def process_factory(_command, **kwargs):
+            process_calls.append(("start", kwargs))
+            process_started.set()
+            return Process()
+
+        def signal_process_group(_pid, signum):
+            group_signals.append(signum)
+            if signum == signal.SIGKILL:
+                process_released.set()
+
+        installer = BlackHoleInstaller(
+            expected_sha256=hashlib.sha256(b"known package").hexdigest(),
+            process_factory=process_factory,
+            signal_process_group=signal_process_group,
+            receipt_checker=lambda: True,
+            device_checker=lambda: True,
+        )
+        NSApplication.sharedApplication()
+        delegate = MenuBarApplication.alloc().initWithController_(
+            FakeController(VoiceState.DRIVER_REQUIRED)
+        )
+        delegate.applicationDidFinishLaunching_(None)
+        delegate.voice_installer = installer
+        delegate.voice_package_path = package
+        delegate.voice_setup_confirmer = lambda: True
+        delegate.call_after = lambda *args: callbacks.append(args)
+        self.addCleanup(process_released.set)
+
+        delegate.setupVoice_(None)
+        self.assertTrue(process_started.wait(1))
+        worker = delegate._voice_install_thread
+        started = time.monotonic()
+        delegate._shutdown()
+        elapsed = time.monotonic() - started
+
+        if worker.is_alive():
+            process_released.set()
+            worker.join(1)
+        self.assertLess(elapsed, 1.0)
+        self.assertTrue(worker.daemon)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(group_signals, [signal.SIGTERM, signal.SIGKILL])
+        self.assertGreaterEqual(
+            len([call for call in process_calls if call[0] == "wait"]), 3
+        )
+        self.assertEqual(callbacks, [])
+
+    def test_shutdown_rechecks_installer_after_worker_finishes_during_join(self):
+        class Installer:
+            def __init__(self):
+                self.close_calls = []
+
+            def close(self, timeout):
+                self.close_calls.append(timeout)
+                return len(self.close_calls) > 1
+
+        class Worker:
+            def __init__(self):
+                self.alive = True
+                self.join_calls = []
+
+            def is_alive(self):
+                return self.alive
+
+            def join(self, timeout):
+                self.join_calls.append(timeout)
+                self.alive = False
+
+        NSApplication.sharedApplication()
+        delegate = MenuBarApplication.alloc().initWithController_(
+            FakeController(VoiceState.DRIVER_REQUIRED)
+        )
+        delegate.applicationDidFinishLaunching_(None)
+        installer = Installer()
+        worker = Worker()
+        delegate.voice_installer = installer
+        delegate._voice_install_thread = worker
+
+        with self.assertLogs("menu_app", level="INFO") as logs:
+            delegate._shutdown()
+
+        self.assertEqual(len(installer.close_calls), 2)
+        self.assertEqual(installer.close_calls[1], 0.0)
+        self.assertEqual(len(worker.join_calls), 1)
+        self.assertIsNone(delegate._voice_install_thread)
+        self.assertFalse(
+            any(
+                "installer did not stop" in message
+                for message in logs.output
+            )
+        )
+
+    def test_install_completion_after_shutdown_does_not_refresh_runtime_or_menu(self):
+        NSApplication.sharedApplication()
+        controller = FakeController(VoiceState.DRIVER_REQUIRED)
+        delegate = MenuBarApplication.alloc().initWithController_(controller)
+        delegate.applicationDidFinishLaunching_(None)
+
+        delegate._shutdown()
+        delegate._finish_voice_setup(DriverState.READY)
+
+        self.assertEqual(controller.voice_refresh_count, 0)
+        self.assertFalse(delegate.setup_voice_item.isEnabled())
+        self.assertFalse(delegate.accessibility_item.isEnabled())
+
+    def test_voice_completion_post_precedes_shutdown_ownership(self):
+        NSApplication.sharedApplication()
+        delegate = MenuBarApplication.alloc().initWithController_(
+            FakeController(VoiceState.DRIVER_REQUIRED)
+        )
+        delegate.applicationDidFinishLaunching_(None)
+        post_started = threading.Event()
+        release_post = threading.Event()
+        callbacks = []
+
+        def call_after(*args):
+            post_started.set()
+            release_post.wait(1)
+            callbacks.append(args)
+
+        delegate.call_after = call_after
+        post_worker = threading.Thread(
+            target=lambda: delegate._schedule_voice_setup_completion(
+                DriverState.READY,
+                "",
+                7,
+            )
+        )
+        shutdown_worker = threading.Thread(target=delegate._shutdown)
+
+        post_worker.start()
+        self.assertTrue(post_started.wait(1))
+        shutdown_worker.start()
+        time.sleep(0.05)
+        self.assertFalse(delegate._stopping)
+        release_post.set()
+        post_worker.join(1)
+        shutdown_worker.join(1)
+
+        self.assertFalse(post_worker.is_alive())
+        self.assertFalse(shutdown_worker.is_alive())
+        self.assertTrue(delegate._stopping)
+        self.assertEqual(len(callbacks), 1)
+
+    def test_setup_runs_off_appkit_and_disables_action_until_completion(self):
+        class Installer:
+            def __init__(self):
+                self.packages = []
+
+            def install(self, package):
+                self.packages.append(package)
+                return DriverState.READY
+
+        class Worker:
+            def __init__(self, target):
+                self.target = target
+                self.started = False
+
+            def start(self):
+                self.started = True
+
+        NSApplication.sharedApplication()
+        controller = FakeController(VoiceState.DRIVER_REQUIRED)
+        delegate = MenuBarApplication.alloc().initWithController_(controller)
+        delegate.applicationDidFinishLaunching_(None)
+        self.addCleanup(delegate._shutdown)
+        installer = Installer()
+        workers = []
+        package = pathlib.Path("/private/test/BlackHole package.pkg")
+        delegate.voice_installer = installer
+        delegate.voice_package_path = package
+        delegate.voice_setup_confirmer = lambda: True
+        delegate.voice_worker_factory = lambda target: workers.append(
+            Worker(target)
+        ) or workers[-1]
+        delegate.call_after = lambda function, *args: function(*args)
+
+        delegate.setupVoice_(None)
+
+        self.assertEqual(installer.packages, [])
+        self.assertEqual(len(workers), 1)
+        self.assertTrue(workers[0].started)
+        self.assertFalse(delegate.setup_voice_item.isEnabled())
+        workers[0].target()
+        self.assertEqual(installer.packages, [package])
+        self.assertEqual(controller.voice_setup_results, [DriverState.READY])
+        self.assertEqual(controller.voice_refresh_count, 1)
+        self.assertTrue(delegate.setup_voice_item.isHidden())
+        self.assertFalse(delegate.setup_voice_item.isEnabled())
+
+        delegate.setupVoice_(None)
+        self.assertEqual(len(workers), 1)
+
+    def test_menu_shows_setup_only_when_driver_is_missing(self):
+        NSApplication.sharedApplication()
+        controller = FakeController(VoiceState.DRIVER_REQUIRED)
+        delegate = MenuBarApplication.alloc().initWithController_(controller)
+        delegate.applicationDidFinishLaunching_(None)
+        self.addCleanup(delegate._shutdown)
+
+        self.assertEqual(
+            delegate.voice_label.stringValue(), "Voice Input: Driver Required"
+        )
+        self.assertFalse(delegate.voice_item.isEnabled())
+        self.assertIsNone(delegate.voice_item.action())
+        self.assertFalse(delegate.setup_voice_item.isHidden())
+        self.assertTrue(delegate.accessibility_item.isHidden())
+        self.assertEqual(
+            delegate.menu.indexOfItem_(delegate.voice_item),
+            delegate.menu.indexOfItem_(delegate.device_item) + 1,
+        )
+
+    def test_menu_uses_exact_snapshot_voice_state_for_row_and_actions(self):
+        NSApplication.sharedApplication()
+        controller = FakeController()
+        delegate = MenuBarApplication.alloc().initWithController_(controller)
+        delegate.applicationDidFinishLaunching_(None)
+        self.addCleanup(delegate._shutdown)
+        cases = (
+            (VoiceState.DRIVER_REQUIRED, "Driver Required", False, True),
+            (VoiceState.RESTART_REQUIRED, "Restart Required", True, True),
+            (
+                VoiceState.ACCESSIBILITY_REQUIRED,
+                "Accessibility Required",
+                True,
+                False,
+            ),
+            (VoiceState.TYPELESS_NOT_RUNNING, "Typeless Not Running", True, True),
+            (VoiceState.READY, "Ready", True, True),
+            (VoiceState.RECORDING, "Recording", True, True),
+            (VoiceState.ERROR, "Error", True, True),
+        )
+
+        for state, label, setup_hidden, accessibility_hidden in cases:
+            with self.subTest(state=state):
+                controller.voice_state = state
+                delegate.refresh_(None)
+                self.assertEqual(
+                    delegate.voice_label.stringValue(),
+                    "Voice Input: {}".format(label),
+                )
+                self.assertEqual(delegate.setup_voice_item.isHidden(), setup_hidden)
+                self.assertEqual(
+                    delegate.accessibility_item.isHidden(), accessibility_hidden
+                )
+
+    def test_accessibility_action_opens_the_system_settings_url(self):
+        class Workspace:
+            def __init__(self):
+                self.urls = []
+
+            def openURL_(self, url):
+                self.urls.append(url.absoluteString())
+                return True
+
+        NSApplication.sharedApplication()
+        delegate = MenuBarApplication.alloc().initWithController_(
+            FakeController(VoiceState.ACCESSIBILITY_REQUIRED)
+        )
+        delegate.applicationDidFinishLaunching_(None)
+        self.addCleanup(delegate._shutdown)
+        workspace = Workspace()
+        delegate.workspace = workspace
+
+        delegate.openAccessibilitySettings_(None)
+
+        self.assertEqual(
+            workspace.urls,
+            [
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+            ],
+        )
+
     def test_menu_lifecycle_and_actions(self):
         NSApplication.sharedApplication()
         controller = FakeController()

@@ -2,10 +2,12 @@
 """Continuously deliver local Codex status to a StopWatch over BLE."""
 
 import asyncio
+import dataclasses
 import datetime
 import hashlib
 import json
 import math
+import threading
 import time
 from typing import Any, Callable, Mapping, Optional
 
@@ -15,6 +17,8 @@ from protocol import EVENT_MESSAGE, MAX_MESSAGE_SIZE, STATUS_MESSAGE, encode_mes
 DEVICE_NAME = "StopWatch-Codex"
 SERVICE_UUID = "7a230001-5474-4f50-5741-544348434f44"
 STATUS_RX_UUID = "7a230002-5474-4f50-5741-544348434f44"
+VOICE_CONTROL_UUID = "7a230003-5474-4f50-5741-544348434f44"
+VOICE_TX_UUID = "7a230004-5474-4f50-5741-544348434f44"
 STATUS_INTERVAL_SECONDS = 2.0
 SAFE_WRITE_SIZE = 20
 FRAME_BURST_SIZE = 8
@@ -39,6 +43,28 @@ _CODEX_STATUS_KEYS = (
     "codex_alert_revision",
     "codex_alerts",
 )
+VOICE_AUDIO_FRAME_MS = 20
+VOICE_STARTUP_BUFFER_MS = 10_000
+VOICE_NOTIFICATION_QUEUE_SIZE = (
+    VOICE_STARTUP_BUFFER_MS // VOICE_AUDIO_FRAME_MS + 2
+)
+GATT_OPERATION_TIMEOUT_SECONDS = 5.0
+
+
+@dataclasses.dataclass
+class _VoiceIngressGate:
+    lock: threading.Lock = dataclasses.field(default_factory=threading.Lock)
+    pending: int = 0
+    overflow: bool = False
+    enabled: bool = True
+
+
+@dataclasses.dataclass(frozen=True)
+class _VoiceGeneration:
+    queue: asyncio.Queue
+    failure: asyncio.Future
+    consumer: asyncio.Task
+    ingress: _VoiceIngressGate
 
 
 def _unix_time_ms() -> int:
@@ -271,10 +297,40 @@ class BleStatusTransport:
         self._client = None
         self._sequence = 0
         self._disconnected = asyncio.Event()
+        self._voice_generation = None
+        self._voice_notify_started = False
+        self._voice_disabled = False
 
     @property
     def connected(self) -> bool:
         return bool(self._client and self._client.is_connected)
+
+    @property
+    def voice_failure(self):
+        generation = self._voice_generation
+        return generation.failure if generation is not None else None
+
+    @property
+    def _voice_queue(self):
+        generation = self._voice_generation
+        return generation.queue if generation is not None else None
+
+    @property
+    def _voice_consumer(self):
+        generation = self._voice_generation
+        return generation.consumer if generation is not None else None
+
+    @property
+    def _voice_failure(self):
+        return self.voice_failure
+
+    @property
+    def _voice_ingress_pending(self):
+        generation = self._voice_generation
+        if generation is None:
+            return 0
+        with generation.ingress.lock:
+            return generation.ingress.pending
 
     async def connect(self, on_device_found: Optional[Callable[[], None]] = None) -> bool:
         try:
@@ -296,6 +352,7 @@ class BleStatusTransport:
             on_device_found()
 
         self._disconnected.clear()
+        self._voice_disabled = False
 
         def on_disconnect(_client) -> None:
             self._disconnected.set()
@@ -304,6 +361,204 @@ class BleStatusTransport:
         await client.connect()
         self._client = client
         return client.is_connected
+
+    async def enable_voice(self, ready_payload: bytes, handler) -> None:
+        if not self.connected:
+            raise ConnectionError("StopWatch BLE connection is not active")
+        if self._voice_generation is not None:
+            raise RuntimeError("voice notification generation is already active")
+        if self._voice_notify_started:
+            raise RuntimeError("voice notification cleanup is incomplete")
+        loop = asyncio.get_running_loop()
+        self._voice_disabled = False
+        queue = asyncio.Queue(maxsize=VOICE_NOTIFICATION_QUEUE_SIZE)
+        failure = loop.create_future()
+        consumer = asyncio.create_task(self._consume_voice(queue, handler))
+        generation = _VoiceGeneration(
+            queue, failure, consumer, _VoiceIngressGate()
+        )
+        self._voice_generation = generation
+        consumer.add_done_callback(
+            lambda task: self._voice_consumer_done(generation, task)
+        )
+
+        def on_notification(_sender, data) -> None:
+            payload = bytes(data)
+            callback = None
+            payload_admitted = False
+            with generation.ingress.lock:
+                if (
+                    not generation.ingress.enabled
+                    or generation.ingress.overflow
+                ):
+                    return
+                if generation.ingress.pending >= VOICE_NOTIFICATION_QUEUE_SIZE:
+                    generation.ingress.overflow = True
+                    callback = self._signal_voice_overflow
+                else:
+                    generation.ingress.pending += 1
+                    callback = self._deliver_voice_payload
+                    payload_admitted = True
+            try:
+                if payload_admitted:
+                    loop.call_soon_threadsafe(callback, generation, payload)
+                else:
+                    loop.call_soon_threadsafe(callback, generation)
+            except RuntimeError:
+                if payload_admitted:
+                    self._release_voice_ingress(generation)
+
+        self._voice_notify_started = True
+        try:
+            await asyncio.wait_for(
+                self._client.start_notify(VOICE_TX_UUID, on_notification),
+                timeout=GATT_OPERATION_TIMEOUT_SECONDS,
+            )
+            await asyncio.wait_for(
+                self._client.write_gatt_char(
+                    VOICE_CONTROL_UUID, ready_payload, response=True
+                ),
+                timeout=GATT_OPERATION_TIMEOUT_SECONDS,
+            )
+        except BaseException:
+            consumer = self._retire_voice_generation(generation)
+            try:
+                if self.connected and self._voice_notify_started:
+                    try:
+                        await asyncio.wait_for(
+                            self._client.stop_notify(VOICE_TX_UUID),
+                            timeout=GATT_OPERATION_TIMEOUT_SECONDS,
+                        )
+                    except Exception:
+                        pass
+                    else:
+                        self._voice_notify_started = False
+            finally:
+                if consumer is not None:
+                    try:
+                        await consumer
+                    except asyncio.CancelledError:
+                        pass
+                    except Exception:
+                        pass
+            raise
+
+    async def disable_voice(self, unavailable_payload: Optional[bytes]) -> None:
+        if self._voice_disabled:
+            return
+        consumer = self.retire_voice_generation()
+        failure = None
+        stop_failed = False
+        try:
+            if self.connected and unavailable_payload is not None:
+                try:
+                    await asyncio.wait_for(
+                        self._client.write_gatt_char(
+                            VOICE_CONTROL_UUID, unavailable_payload, response=True
+                        ),
+                        timeout=GATT_OPERATION_TIMEOUT_SECONDS,
+                    )
+                except Exception as error:
+                    failure = error
+            if self.connected and self._voice_notify_started:
+                try:
+                    await asyncio.wait_for(
+                        self._client.stop_notify(VOICE_TX_UUID),
+                        timeout=GATT_OPERATION_TIMEOUT_SECONDS,
+                    )
+                except Exception as error:
+                    stop_failed = True
+                    if failure is None:
+                        failure = error
+                else:
+                    self._voice_notify_started = False
+            if not stop_failed:
+                self._voice_disabled = True
+        finally:
+            if consumer is not None:
+                try:
+                    await consumer
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    pass
+        if failure is not None:
+            raise failure
+
+    def retire_voice_generation(self):
+        return self._retire_voice_generation()
+
+    def _retire_voice_generation(self, expected=None):
+        generation = self._voice_generation
+        if generation is None or (
+            expected is not None and generation is not expected
+        ):
+            return None
+        with generation.ingress.lock:
+            generation.ingress.enabled = False
+        if self._voice_generation is generation:
+            self._voice_generation = None
+        if not generation.consumer.done():
+            generation.consumer.cancel()
+        return generation.consumer
+
+    def _enqueue_voice(
+        self, generation: _VoiceGeneration, payload: bytes
+    ) -> None:
+        if self._voice_generation is not generation:
+            return
+        try:
+            generation.queue.put_nowait(payload)
+        except asyncio.QueueFull:
+            if not generation.failure.done():
+                generation.failure.set_result(
+                    RuntimeError("voice notification queue overflow")
+                )
+            generation.consumer.cancel()
+
+    def _deliver_voice_payload(
+        self, generation: _VoiceGeneration, payload: bytes
+    ) -> None:
+        try:
+            with generation.ingress.lock:
+                enabled = generation.ingress.enabled
+            if enabled and self._voice_generation is generation:
+                self._enqueue_voice(generation, payload)
+        finally:
+            self._release_voice_ingress(generation)
+
+    @staticmethod
+    def _release_voice_ingress(generation: _VoiceGeneration) -> None:
+        with generation.ingress.lock:
+            if generation.ingress.pending:
+                generation.ingress.pending -= 1
+
+    def _signal_voice_overflow(self, generation: _VoiceGeneration) -> None:
+        with generation.ingress.lock:
+            enabled = generation.ingress.enabled
+        if not enabled or self._voice_generation is not generation:
+            return
+        if not generation.failure.done():
+            generation.failure.set_result(
+                RuntimeError("voice notification queue overflow")
+            )
+        generation.consumer.cancel()
+
+    @staticmethod
+    async def _consume_voice(queue: asyncio.Queue, handler) -> None:
+        while True:
+            payload = await queue.get()
+            await handler(payload)
+
+    @staticmethod
+    def _voice_consumer_done(
+        generation: _VoiceGeneration, task: asyncio.Task
+    ) -> None:
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error is not None and not generation.failure.done():
+            generation.failure.set_result(error)
 
     async def disconnect(self) -> None:
         client = self._client
@@ -323,8 +578,11 @@ class BleStatusTransport:
             max_write_size=SAFE_WRITE_SIZE,
         )
         for index, frame in enumerate(frames):
-            await self._client.write_gatt_char(
-                STATUS_RX_UUID, frame, response=True
+            await asyncio.wait_for(
+                self._client.write_gatt_char(
+                    STATUS_RX_UUID, frame, response=True
+                ),
+                timeout=GATT_OPERATION_TIMEOUT_SECONDS,
             )
             if (
                 (index + 1) % FRAME_BURST_SIZE == 0

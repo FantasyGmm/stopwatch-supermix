@@ -6,13 +6,16 @@
 #include <host/ble_hs.h>
 #include <host/ble_hs_id.h>
 #include <host/util/util.h>
+#include <hal/utils/settings/settings.h>
 #include <nimble/nimble_port.h>
 #include <nimble/nimble_port_freertos.h>
+#include <os/os_mbuf.h>
 #include <services/gap/ble_svc_gap.h>
 #include <services/gatt/ble_svc_gatt.h>
 #include <store/config/ble_store_config.h>
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 
 extern "C" void ble_store_config_init(void);
@@ -23,10 +26,25 @@ namespace {
 constexpr const char* kTag = "CodexBLE";
 constexpr size_t kMaxFrameSize = 256;
 constexpr size_t kFrameQueueDepth = 32;
+constexpr size_t kVoiceControlQueueDepth = 8;
+constexpr size_t kProductionVoiceControlQueueDepth = 8;
+constexpr size_t kMaxNotificationSize = 256;
+constexpr uint16_t kDefaultMtu = 23;
+constexpr size_t kMaxVoiceControlSize =
+    std::max(ble_voice_probe::kControlCommandSize, voice_input::kControlSize);
 
 struct QueuedFrame {
     uint16_t length = 0;
     uint8_t data[kMaxFrameSize] = {};
+};
+
+struct QueuedVoiceControl {
+    uint16_t length = 0;
+    uint8_t data[ble_voice_probe::kControlCommandSize] = {};
+};
+
+struct QueuedProductionVoiceControl {
+    voice_input::VoiceControl control = {};
 };
 
 CodexBleTransport* g_transport = nullptr;
@@ -37,10 +55,51 @@ const ble_uuid128_t kServiceUuid = BLE_UUID128_INIT(
     0x44, 0x4f, 0x43, 0x48, 0x43, 0x54, 0x41, 0x57,
     0x50, 0x4f, 0x74, 0x54, 0x01, 0x00, 0x23, 0x7a
 );
+const ble_uuid128_t kVoiceServiceUuid = BLE_UUID128_INIT(
+    0x44, 0x4f, 0x43, 0x48, 0x43, 0x54, 0x41, 0x57,
+    0x50, 0x4f, 0x74, 0x54, 0x05, 0x00, 0x23, 0x7a
+);
 const ble_uuid128_t kStatusRxUuid = BLE_UUID128_INIT(
     0x44, 0x4f, 0x43, 0x48, 0x43, 0x54, 0x41, 0x57,
     0x50, 0x4f, 0x74, 0x54, 0x02, 0x00, 0x23, 0x7a
 );
+const ble_uuid128_t kVoiceControlUuid = BLE_UUID128_INIT(
+    0x44, 0x4f, 0x43, 0x48, 0x43, 0x54, 0x41, 0x57,
+    0x50, 0x4f, 0x74, 0x54, 0x03, 0x00, 0x23, 0x7a
+);
+const ble_uuid128_t kVoiceTxUuid = BLE_UUID128_INIT(
+    0x44, 0x4f, 0x43, 0x48, 0x43, 0x54, 0x41, 0x57,
+    0x50, 0x4f, 0x74, 0x54, 0x04, 0x00, 0x23, 0x7a
+);
+uint16_t g_voice_tx_value_handle = 0;
+
+bool configure_identity_address()
+{
+    Settings settings("codex_ble", true);
+    std::array<uint8_t, 6> address = {};
+    size_t length = address.size();
+    if (settings.GetBlob("identity", address.data(), &length) != ESP_OK ||
+        length != address.size()) {
+        ble_addr_t generated = {};
+        const int generate_result = ble_hs_id_gen_rnd(0, &generated);
+        if (generate_result != 0) {
+            ESP_LOGE(kTag, "failed to generate BLE identity: %d", generate_result);
+            return false;
+        }
+        std::copy(std::begin(generated.val), std::end(generated.val), address.begin());
+        if (settings.SetBlob("identity", address.data(), address.size()) != ESP_OK) {
+            ESP_LOGE(kTag, "failed to persist BLE identity");
+            return false;
+        }
+    }
+
+    const int set_result = ble_hs_id_set_rnd(address.data());
+    if (set_result != 0) {
+        ESP_LOGE(kTag, "failed to set BLE identity: %d", set_result);
+        return false;
+    }
+    return true;
+}
 
 int gatt_access(
     uint16_t,
@@ -69,15 +128,76 @@ int gatt_access(
                : BLE_ATT_ERR_INSUFFICIENT_RES;
 }
 
-const ble_gatt_chr_def kCharacteristics[] = {
+int voice_control_access(
+    uint16_t,
+    uint16_t,
+    ble_gatt_access_ctxt* context,
+    void*
+)
+{
+    if (g_transport == nullptr || context == nullptr ||
+        context->op != BLE_GATT_ACCESS_OP_WRITE_CHR) {
+        return BLE_ATT_ERR_UNLIKELY;
+    }
+
+    const uint16_t length = OS_MBUF_PKTLEN(context->om);
+    if (length == 0 || length > kMaxVoiceControlSize) {
+        return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+    }
+
+    uint8_t bytes[kMaxVoiceControlSize] = {};
+    uint16_t copied = 0;
+    if (ble_hs_mbuf_to_flat(context->om, bytes, sizeof(bytes), &copied) != 0 || copied != length) {
+        return BLE_ATT_ERR_UNLIKELY;
+    }
+    return g_transport->enqueue_voice_control_from_ble(bytes, copied)
+               ? 0
+               : BLE_ATT_ERR_INSUFFICIENT_RES;
+}
+
+int voice_tx_access(
+    uint16_t,
+    uint16_t,
+    ble_gatt_access_ctxt*,
+    void*
+)
+{
+    return BLE_ATT_ERR_REQ_NOT_SUPPORTED;
+}
+
+const ble_gatt_chr_def kStatusCharacteristics[] = {
     {
         &kStatusRxUuid.u,
         gatt_access,
         nullptr,
         nullptr,
-        BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP | BLE_GATT_CHR_F_WRITE_ENC,
+        BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP,
         0,
         nullptr,
+        nullptr,
+    },
+    {},
+};
+
+const ble_gatt_chr_def kVoiceCharacteristics[] = {
+    {
+        &kVoiceControlUuid.u,
+        voice_control_access,
+        nullptr,
+        nullptr,
+        BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP,
+        0,
+        nullptr,
+        nullptr,
+    },
+    {
+        &kVoiceTxUuid.u,
+        voice_tx_access,
+        nullptr,
+        nullptr,
+        BLE_GATT_CHR_F_NOTIFY,
+        0,
+        &g_voice_tx_value_handle,
         nullptr,
     },
     {},
@@ -88,7 +208,13 @@ const ble_gatt_svc_def kServices[] = {
         BLE_GATT_SVC_TYPE_PRIMARY,
         &kServiceUuid.u,
         nullptr,
-        kCharacteristics,
+        kStatusCharacteristics,
+    },
+    {
+        BLE_GATT_SVC_TYPE_PRIMARY,
+        &kVoiceServiceUuid.u,
+        nullptr,
+        kVoiceCharacteristics,
     },
     {},
 };
@@ -105,8 +231,7 @@ int gap_event(ble_gap_event* event, void*)
         case BLE_GAP_EVENT_CONNECT:
             if (event->connect.status == 0) {
                 g_transport->handle_gap_connected(event->connect.conn_handle);
-                const int security_result = ble_gap_security_initiate(event->connect.conn_handle);
-                ESP_LOGI(kTag, "connected, security=%d", security_result);
+                ESP_LOGI(kTag, "connected, transport-only voice probe");
             } else if (!g_transport->stopping()) {
                 start_advertising();
             }
@@ -116,6 +241,28 @@ int gap_event(ble_gap_event* event, void*)
             if (!g_transport->stopping()) {
                 start_advertising();
             }
+            return 0;
+        case BLE_GAP_EVENT_SUBSCRIBE:
+            g_transport->handle_voice_subscription(
+                event->subscribe.attr_handle,
+                event->subscribe.cur_notify != 0);
+            return 0;
+        case BLE_GAP_EVENT_MTU:
+            g_transport->handle_mtu_update(event->mtu.conn_handle, event->mtu.value);
+            return 0;
+        case BLE_GAP_EVENT_ENC_CHANGE:
+            ESP_LOGI(
+                kTag,
+                "encryption change, conn=%u status=%d",
+                event->enc_change.conn_handle,
+                event->enc_change.status);
+            return 0;
+        case BLE_GAP_EVENT_PASSKEY_ACTION:
+            ESP_LOGI(
+                kTag,
+                "passkey action, conn=%u action=%u",
+                event->passkey.conn_handle,
+                event->passkey.params.action);
             return 0;
         case BLE_GAP_EVENT_ADV_COMPLETE:
             if (!g_transport->stopping()) {
@@ -138,7 +285,7 @@ int start_advertising()
 {
     ble_hs_adv_fields advertising = {};
     advertising.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
-    advertising.uuids128 = const_cast<ble_uuid128_t*>(&kServiceUuid);
+    advertising.uuids128 = const_cast<ble_uuid128_t*>(&kVoiceServiceUuid);
     advertising.num_uuids128 = 1;
     advertising.uuids128_is_complete = 1;
     int result = ble_gap_adv_set_fields(&advertising);
@@ -181,15 +328,7 @@ void on_reset(int reason)
 
 void on_sync()
 {
-    uint8_t identity_address[6] = {};
-    if (ble_hs_id_copy_addr(BLE_ADDR_PUBLIC, identity_address, nullptr) != 0) {
-        ESP_LOGE(kTag, "failed to read public BLE identity address");
-        return;
-    }
-
-    identity_address[0] ^= 0xa5;
-    identity_address[5] = static_cast<uint8_t>((identity_address[5] & 0x3f) | 0xc0);
-    if (ble_hs_id_set_rnd(identity_address) != 0 ||
+    if (!configure_identity_address() ||
         ble_hs_util_ensure_addr(1) != 0 ||
         ble_hs_id_infer_auto(0, &g_own_address_type) != 0) {
         ESP_LOGE(kTag, "failed to select BLE identity address");
@@ -217,17 +356,43 @@ bool CodexBleTransport::start(const std::string& device_name)
     if (_frame_queue == nullptr) {
         return false;
     }
+    _voice_control_queue = xQueueCreate(kVoiceControlQueueDepth, sizeof(QueuedVoiceControl));
+    if (_voice_control_queue == nullptr) {
+        vQueueDelete(static_cast<QueueHandle_t>(_frame_queue));
+        _frame_queue = nullptr;
+        return false;
+    }
+    _production_voice_control_queue = xQueueCreate(
+        kProductionVoiceControlQueueDepth,
+        sizeof(QueuedProductionVoiceControl));
+    if (_production_voice_control_queue == nullptr) {
+        vQueueDelete(static_cast<QueueHandle_t>(_frame_queue));
+        _frame_queue = nullptr;
+        vQueueDelete(static_cast<QueueHandle_t>(_voice_control_queue));
+        _voice_control_queue = nullptr;
+        return false;
+    }
 
     g_transport = this;
     g_device_name = device_name.empty() ? "StopWatch-Codex" : device_name;
     _stopping = false;
     _connected = false;
+    _connection_handle = BLE_HS_CONN_HANDLE_NONE;
+    _connection_epoch = 0;
+    _voice_subscribed = false;
+    _negotiated_mtu = kDefaultMtu;
+    _production_control_guard.reset();
+    g_voice_tx_value_handle = 0;
 
     const esp_err_t init_result = nimble_port_init();
     if (init_result != ESP_OK) {
         ESP_LOGE(kTag, "nimble_port_init failed: %s", esp_err_to_name(init_result));
         vQueueDelete(static_cast<QueueHandle_t>(_frame_queue));
         _frame_queue = nullptr;
+        vQueueDelete(static_cast<QueueHandle_t>(_voice_control_queue));
+        _voice_control_queue = nullptr;
+        vQueueDelete(static_cast<QueueHandle_t>(_production_voice_control_queue));
+        _production_voice_control_queue = nullptr;
         g_transport = nullptr;
         return false;
     }
@@ -236,14 +401,15 @@ bool CodexBleTransport::start(const std::string& device_name)
     ble_hs_cfg.sync_cb = on_sync;
     ble_hs_cfg.store_status_cb = ble_store_util_status_rr;
     ble_hs_cfg.sm_io_cap = BLE_HS_IO_NO_INPUT_OUTPUT;
-    ble_hs_cfg.sm_bonding = 1;
+    ble_hs_cfg.sm_bonding = 0;
     ble_hs_cfg.sm_mitm = 0;
     ble_hs_cfg.sm_sc = 1;
-    ble_hs_cfg.sm_our_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
-    ble_hs_cfg.sm_their_key_dist = BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID;
+    ble_hs_cfg.sm_our_key_dist = 0;
+    ble_hs_cfg.sm_their_key_dist = 0;
 
     ble_svc_gap_init();
     ble_svc_gatt_init();
+    g_voice_tx_value_handle = 0;
     int result = ble_gatts_count_cfg(kServices);
     if (result == 0) {
         result = ble_gatts_add_svcs(kServices);
@@ -256,6 +422,11 @@ bool CodexBleTransport::start(const std::string& device_name)
         nimble_port_deinit();
         vQueueDelete(static_cast<QueueHandle_t>(_frame_queue));
         _frame_queue = nullptr;
+        vQueueDelete(static_cast<QueueHandle_t>(_voice_control_queue));
+        _voice_control_queue = nullptr;
+        vQueueDelete(static_cast<QueueHandle_t>(_production_voice_control_queue));
+        _production_voice_control_queue = nullptr;
+        g_voice_tx_value_handle = 0;
         g_transport = nullptr;
         return false;
     }
@@ -269,24 +440,22 @@ bool CodexBleTransport::start(const std::string& device_name)
 
 void CodexBleTransport::stop()
 {
-    if (!_initialized) {
-        return;
-    }
-
-    _stopping = true;
-    ble_gap_adv_stop();
-    const uint16_t connection_handle = _connection_handle.load();
-    if (connection_handle != BLE_HS_CONN_HANDLE_NONE) {
-        ble_gap_terminate(connection_handle, BLE_ERR_REM_USER_CONN_TERM);
-    }
-    const int stop_result = nimble_port_stop();
-    if (stop_result == 0) {
-        const esp_err_t deinit_result = nimble_port_deinit();
-        if (deinit_result != ESP_OK) {
-            ESP_LOGE(kTag, "nimble_port_deinit failed: %s", esp_err_to_name(deinit_result));
+    if (_initialized) {
+        _stopping = true;
+        ble_gap_adv_stop();
+        const uint16_t connection_handle = _connection_handle.load();
+        if (connection_handle != BLE_HS_CONN_HANDLE_NONE) {
+            ble_gap_terminate(connection_handle, BLE_ERR_REM_USER_CONN_TERM);
         }
-    } else {
-        ESP_LOGE(kTag, "nimble_port_stop failed: %d", stop_result);
+        const int stop_result = nimble_port_stop();
+        if (stop_result == 0) {
+            const esp_err_t deinit_result = nimble_port_deinit();
+            if (deinit_result != ESP_OK) {
+                ESP_LOGE(kTag, "nimble_port_deinit failed: %s", esp_err_to_name(deinit_result));
+            }
+        } else {
+            ESP_LOGE(kTag, "nimble_port_stop failed: %d", stop_result);
+        }
     }
 
     g_transport = nullptr;
@@ -294,10 +463,22 @@ void CodexBleTransport::stop()
         vQueueDelete(static_cast<QueueHandle_t>(_frame_queue));
         _frame_queue = nullptr;
     }
+    if (_voice_control_queue != nullptr) {
+        vQueueDelete(static_cast<QueueHandle_t>(_voice_control_queue));
+        _voice_control_queue = nullptr;
+    }
+    if (_production_voice_control_queue != nullptr) {
+        vQueueDelete(static_cast<QueueHandle_t>(_production_voice_control_queue));
+        _production_voice_control_queue = nullptr;
+    }
     _messages.clear();
     _reassembler.reset();
     _connection_handle = BLE_HS_CONN_HANDLE_NONE;
     _connected = false;
+    _voice_subscribed = false;
+    _negotiated_mtu = kDefaultMtu;
+    _production_control_guard.reset();
+    g_voice_tx_value_handle = 0;
     _initialized = false;
 }
 
@@ -323,6 +504,12 @@ bool CodexBleTransport::connected() const
 }
 
 
+uint32_t CodexBleTransport::connection_epoch() const
+{
+    return _connection_epoch.load();
+}
+
+
 bool CodexBleTransport::take_message(CodexBleMessage& message)
 {
     if (_messages.empty()) {
@@ -331,6 +518,93 @@ bool CodexBleTransport::take_message(CodexBleMessage& message)
     message = std::move(_messages.front());
     _messages.pop_front();
     return true;
+}
+
+
+bool CodexBleTransport::take_voice_control(CodexBleVoiceControl& control)
+{
+    if (_voice_control_queue == nullptr) {
+        return false;
+    }
+    QueuedVoiceControl queued;
+    if (xQueueReceive(static_cast<QueueHandle_t>(_voice_control_queue), &queued, 0) != pdTRUE) {
+        return false;
+    }
+    control.length = queued.length;
+    std::copy(queued.data, queued.data + ble_voice_probe::kControlCommandSize,
+              control.data.begin());
+    return true;
+}
+
+
+bool CodexBleTransport::take_production_voice_control(
+    CodexProductionVoiceControl& control)
+{
+    if (_production_voice_control_queue == nullptr) {
+        return false;
+    }
+    QueuedProductionVoiceControl queued = {};
+    if (xQueueReceive(
+            static_cast<QueueHandle_t>(_production_voice_control_queue),
+            &queued,
+            0) != pdTRUE) {
+        return false;
+    }
+    control.control = queued.control;
+    return true;
+}
+
+
+bool CodexBleTransport::voice_subscribed() const
+{
+    return _voice_subscribed.load();
+}
+
+
+uint16_t CodexBleTransport::negotiated_mtu() const
+{
+    return _negotiated_mtu.load();
+}
+
+
+size_t CodexBleTransport::voice_notification_limit() const
+{
+    const uint16_t negotiated_mtu = _negotiated_mtu.load();
+    if (negotiated_mtu <= 3) {
+        return 0;
+    }
+    return std::min(kMaxNotificationSize, static_cast<size_t>(negotiated_mtu - 3));
+}
+
+
+CodexBleNotifyResult CodexBleTransport::notify_voice(const uint8_t* data, size_t length)
+{
+    if (data == nullptr || length == 0 || length > voice_notification_limit()) {
+        return CodexBleNotifyResult::InvalidSize;
+    }
+    if (!_connected.load() || !_voice_subscribed.load() || g_voice_tx_value_handle == 0) {
+        return CodexBleNotifyResult::NotReady;
+    }
+
+    os_mbuf* mbuf = os_msys_get_pkthdr(static_cast<uint16_t>(length), 0);
+    if (mbuf == nullptr) {
+        return CodexBleNotifyResult::Congested;
+    }
+    if (os_mbuf_append(mbuf, data, static_cast<uint16_t>(length)) != 0) {
+        os_mbuf_free_chain(mbuf);
+        return CodexBleNotifyResult::Congested;
+    }
+
+    // NimBLE consumes mbuf for every notify_custom result.
+    const int result = ble_gatts_notify_custom(
+        _connection_handle.load(), g_voice_tx_value_handle, mbuf);
+    if (result == 0) {
+        return CodexBleNotifyResult::Accepted;
+    }
+    if (result == BLE_HS_ENOMEM || result == BLE_HS_EBUSY) {
+        return CodexBleNotifyResult::Congested;
+    }
+    return CodexBleNotifyResult::NotReady;
 }
 
 
@@ -346,17 +620,82 @@ bool CodexBleTransport::enqueue_frame_from_ble(const uint8_t* data, size_t lengt
 }
 
 
+bool CodexBleTransport::enqueue_voice_control_from_ble(const uint8_t* data, size_t length)
+{
+    if (data == nullptr || length == 0) {
+        return false;
+    }
+    if (data[0] == voice_input::kProtocolVersion) {
+        if (_production_voice_control_queue == nullptr ||
+            length != voice_input::kControlSize) {
+            return false;
+        }
+        QueuedProductionVoiceControl production = {};
+        if (!_production_control_guard.decode_once(
+                data,
+                length,
+                voice_input::crypto::device_context(),
+                production.control)) {
+            return false;
+        }
+        return xQueueSend(
+                   static_cast<QueueHandle_t>(_production_voice_control_queue),
+                   &production,
+                   0) == pdTRUE;
+    }
+    if (_voice_control_queue == nullptr ||
+        length > ble_voice_probe::kControlCommandSize ||
+        data[0] != ble_voice_probe::kProtocolVersion) {
+        return false;
+    }
+    QueuedVoiceControl control;
+    control.length = static_cast<uint16_t>(length);
+    std::memcpy(control.data, data, length);
+    return xQueueSend(static_cast<QueueHandle_t>(_voice_control_queue), &control, 0) == pdTRUE;
+}
+
+
 void CodexBleTransport::handle_gap_connected(uint16_t connection_handle)
 {
+    _connection_epoch.fetch_add(1);
     _connection_handle = connection_handle;
     _connected = true;
+    _voice_subscribed = false;
+    _negotiated_mtu = kDefaultMtu;
+    _production_control_guard.reset();
 }
 
 
 void CodexBleTransport::handle_gap_disconnected()
 {
+    _connection_epoch.fetch_add(1);
     _connection_handle = BLE_HS_CONN_HANDLE_NONE;
     _connected = false;
+    _voice_subscribed = false;
+    _negotiated_mtu = kDefaultMtu;
+    _production_control_guard.reset();
+    if (_voice_control_queue != nullptr) {
+        xQueueReset(static_cast<QueueHandle_t>(_voice_control_queue));
+    }
+    if (_production_voice_control_queue != nullptr) {
+        xQueueReset(static_cast<QueueHandle_t>(_production_voice_control_queue));
+    }
+}
+
+
+void CodexBleTransport::handle_voice_subscription(uint16_t attr_handle, bool enabled)
+{
+    if (attr_handle == g_voice_tx_value_handle) {
+        _voice_subscribed = enabled;
+    }
+}
+
+
+void CodexBleTransport::handle_mtu_update(uint16_t connection_handle, uint16_t mtu)
+{
+    if (_connected.load() && connection_handle == _connection_handle.load()) {
+        _negotiated_mtu = mtu;
+    }
 }
 
 

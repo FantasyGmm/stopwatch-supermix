@@ -1,0 +1,229 @@
+#include "main/apps/app_codex_status/voice_probe_crypto.h"
+
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <cassert>
+#include <cstdint>
+#include <string_view>
+#include <thread>
+#include <vector>
+
+namespace {
+
+template <size_t Size>
+std::array<uint8_t, Size> from_hex(std::string_view hex)
+{
+    assert(hex.size() == Size * 2);
+    std::array<uint8_t, Size> result = {};
+    auto nibble = [](char value) -> uint8_t {
+        if (value >= '0' && value <= '9') {
+            return static_cast<uint8_t>(value - '0');
+        }
+        return static_cast<uint8_t>(value - 'a' + 10);
+    };
+    for (size_t index = 0; index < Size; ++index) {
+        result[index] = static_cast<uint8_t>(
+            (nibble(hex[index * 2]) << 4U) | nibble(hex[index * 2 + 1]));
+    }
+    return result;
+}
+
+}  // namespace
+
+int main()
+{
+    using namespace ble_voice_probe::crypto;
+
+    const Nonce expected_nonce =
+        from_hex<kNonceSize>("101112131415161718191a1b1c");
+    const std::array<uint8_t, 14> aad =
+        from_hex<14>("020207000100000064000000ac00");
+    const Plaintext plaintext = {};
+    const Ciphertext expected_ciphertext = from_hex<kCiphertextSize>(
+        "7ce17041b85ceed4bb5948912f076c812ad355797f979e2a3d4d1ad38eb885430"
+        "57a9fde2190a49a3f6ca33e9f7b96618c9ce5c51bb7600d9fe2d79627c3f70f5"
+        "c917ad213e94d2ac87c80d85b1770ad8b0d56b6e1cfd63186c90a740972c30e1"
+        "f964ef8857931bae5f4d3b9e01eb7fc4437636d71976153bdb1c63f16c8fd5c5"
+        "3720cdfa86184af620540f33fe593b122581362678afe9a5c27fd20cafc3fd03a"
+        "3a2f12f2ba40f8e73af636");
+
+    Nonce nonce = {};
+    assert(derive_nonce(0x1413, 0x18171615, 0x1c1b1a19, nonce));
+    assert(nonce == expected_nonce);
+    assert(!derive_nonce(0, 1, 1, nonce));
+
+    Ciphertext ciphertext = {};
+    uint32_t elapsed_us = 0;
+    assert(encrypt(
+        aad.data(),
+        aad.size(),
+        plaintext.data(),
+        plaintext.size(),
+        expected_nonce,
+        ciphertext,
+        elapsed_us));
+    assert(ciphertext == expected_ciphertext);
+    assert(key_schedule_initializations() == 1);
+
+    assert(encrypt(
+        aad.data(),
+        aad.size(),
+        plaintext.data(),
+        plaintext.size(),
+        expected_nonce,
+        ciphertext,
+        elapsed_us));
+    assert(key_schedule_initializations() == 1);
+
+    std::atomic<bool> start_concurrent_encrypts{false};
+    std::vector<std::thread> encrypt_threads;
+    for (size_t index = 0; index < 4; ++index) {
+        encrypt_threads.emplace_back([&] {
+            while (!start_concurrent_encrypts.load(std::memory_order_acquire)) {
+            }
+            for (size_t iteration = 0; iteration < 200; ++iteration) {
+                Ciphertext concurrent_ciphertext = {};
+                uint32_t concurrent_elapsed_us = 0;
+                assert(encrypt(
+                    aad.data(),
+                    aad.size(),
+                    plaintext.data(),
+                    plaintext.size(),
+                    expected_nonce,
+                    concurrent_ciphertext,
+                    concurrent_elapsed_us));
+                assert(concurrent_ciphertext == expected_ciphertext);
+            }
+        });
+    }
+    start_concurrent_encrypts.store(true, std::memory_order_release);
+    for (auto& thread : encrypt_threads) {
+        thread.join();
+    }
+    assert(max_concurrent_operations() == 1);
+
+    Plaintext decrypted = {};
+    assert(decrypt(
+        aad.data(),
+        aad.size(),
+        ciphertext.data(),
+        ciphertext.size(),
+        expected_nonce,
+        decrypted));
+    assert(decrypted == plaintext);
+
+    auto tampered_ciphertext = ciphertext;
+    tampered_ciphertext[0] ^= 0x01;
+    assert(!decrypt(
+        aad.data(),
+        aad.size(),
+        tampered_ciphertext.data(),
+        tampered_ciphertext.size(),
+        expected_nonce,
+        decrypted));
+
+    auto tampered_tag = ciphertext;
+    tampered_tag.back() ^= 0x01;
+    assert(!decrypt(
+        aad.data(),
+        aad.size(),
+        tampered_tag.data(),
+        tampered_tag.size(),
+        expected_nonce,
+        decrypted));
+
+    auto tampered_nonce = expected_nonce;
+    tampered_nonce.back() ^= 0x01;
+    assert(!decrypt(
+        aad.data(),
+        aad.size(),
+        ciphertext.data(),
+        ciphertext.size(),
+        tampered_nonce,
+        decrypted));
+
+    auto tampered_aad = aad;
+    tampered_aad.back() ^= 0x01;
+    assert(!decrypt(
+        tampered_aad.data(),
+        tampered_aad.size(),
+        ciphertext.data(),
+        ciphertext.size(),
+        expected_nonce,
+        decrypted));
+
+    const Nonce zero_nonce = {};
+    assert(!encrypt(
+        aad.data(),
+        aad.size(),
+        plaintext.data(),
+        plaintext.size(),
+        zero_nonce,
+        ciphertext,
+        elapsed_us));
+    assert(!encrypt(
+        aad.data(),
+        aad.size(),
+        plaintext.data(),
+        plaintext.size() - 1,
+        expected_nonce,
+        ciphertext,
+        elapsed_us));
+    assert(!decrypt(
+        aad.data(),
+        aad.size(),
+        ciphertext.data(),
+        ciphertext.size() - 1,
+        expected_nonce,
+        decrypted));
+
+    constexpr size_t kSyntheticPlaintextSize = 231;
+    std::array<uint8_t, kSyntheticPlaintextSize> synthetic_plaintext = {};
+    for (size_t index = 0; index < synthetic_plaintext.size(); ++index) {
+        synthetic_plaintext[index] = static_cast<uint8_t>((index + 7U) & 0xffU);
+    }
+    std::array<uint8_t, kSyntheticPlaintextSize + kTagSize>
+        synthetic_ciphertext = {};
+    size_t synthetic_ciphertext_len = 0;
+    elapsed_us = 0;
+    const auto synthetic_aad =
+        from_hex<kAadSize>("020207000100000064000000ef00");
+    assert(encrypt_synthetic(
+        synthetic_aad.data(),
+        synthetic_aad.size(),
+        synthetic_plaintext.data(),
+        synthetic_plaintext.size(),
+        expected_nonce,
+        synthetic_ciphertext.data(),
+        synthetic_ciphertext.size(),
+        synthetic_ciphertext_len,
+        elapsed_us));
+    assert(synthetic_ciphertext_len == synthetic_plaintext.size() + kTagSize);
+    assert(kAadSize + synthetic_ciphertext_len == 253);
+
+    std::array<uint8_t, kSyntheticPlaintextSize> synthetic_decrypted = {};
+    size_t synthetic_decrypted_len = 0;
+    assert(decrypt_synthetic(
+        synthetic_aad.data(),
+        synthetic_aad.size(),
+        synthetic_ciphertext.data(),
+        synthetic_ciphertext_len,
+        expected_nonce,
+        synthetic_decrypted.data(),
+        synthetic_decrypted.size(),
+        synthetic_decrypted_len));
+    assert(synthetic_decrypted_len == synthetic_plaintext.size());
+    assert(synthetic_decrypted == synthetic_plaintext);
+
+    synthetic_ciphertext.back() ^= 0x01;
+    assert(!decrypt_synthetic(
+        synthetic_aad.data(),
+        synthetic_aad.size(),
+        synthetic_ciphertext.data(),
+        synthetic_ciphertext_len,
+        expected_nonce,
+        synthetic_decrypted.data(),
+        synthetic_decrypted.size(),
+        synthetic_decrypted_len));
+}

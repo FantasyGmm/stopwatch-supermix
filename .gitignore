@@ -68,3 +68,9 @@ sdkconfig.old
 /sdkconfig.unified
 /backups/
 /.worktrees/
+
+mac-codex-agent/.driver-cache/
+mac-codex-agent/.native/
+*.pkg
+libstopwatch_voice_audio.dylib
+voice_input_device_key.h
