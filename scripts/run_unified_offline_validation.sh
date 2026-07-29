@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CXX="${CXX:-c++}"
 PYTHON="${PYTHON:-$ROOT/mac-codex-agent/.venv/bin/python}"
-TOTAL_STAGES=47
+TOTAL_STAGES=48
 STAGE_INDEX=0
 CONTRACT_ONLY=0
 HOST_TESTS_ONLY=0
@@ -379,6 +379,21 @@ run_host_test voice_probe_crypto_test \
     -I"$MBEDTLS_SOURCE/include" \
     tests/voice_probe_crypto_test.cpp \
     main/apps/app_codex_status/voice_probe_crypto.cpp \
+    "$MBEDTLS_BUILD/library/libmbedcrypto.a"
+
+stage "Secure Agent pairing protocol and crypto host tests"
+run_host_test secure_pairing_crypto_test \
+    -std=c++17 -Wall -Wextra -Werror -DSTOPWATCH_HOST_TEST -I. \
+    -I"$MBEDTLS_SOURCE/include" \
+    tests/secure_pairing_crypto_test.cpp \
+    main/apps/app_codex_status/secure_pairing_crypto.cpp \
+    "$MBEDTLS_BUILD/library/libmbedcrypto.a"
+run_host_test secure_pairing_protocol_test \
+    -std=c++17 -Wall -Wextra -Werror -DSTOPWATCH_HOST_TEST -I. \
+    -I"$MBEDTLS_SOURCE/include" \
+    tests/secure_pairing_protocol_test.cpp \
+    main/apps/app_codex_status/secure_pairing_protocol.cpp \
+    main/apps/app_codex_status/secure_pairing_crypto.cpp \
     "$MBEDTLS_BUILD/library/libmbedcrypto.a"
 
 stage "Production voice crypto host test"

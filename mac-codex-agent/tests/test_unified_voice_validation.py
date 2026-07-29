@@ -55,6 +55,8 @@ EXPECTED_HOST_TESTS = (
     "trae_status_ui_layout_test",
     "ble_voice_probe_protocol_test",
     "voice_probe_crypto_test",
+    "secure_pairing_crypto_test",
+    "secure_pairing_protocol_test",
     "voice_input_crypto_test",
     "voice_input_protocol_test",
     "voice_input_session_test",
@@ -193,7 +195,7 @@ output.chmod(0o700)
 
         self.assertGreater(len(stages), 0)
         total = stages[0][1]
-        self.assertEqual(total, 47)
+        self.assertEqual(total, 48)
         self.assertEqual(len(stages), total)
         self.assertEqual([stage[0] for stage in stages], list(range(1, total + 1)))
         self.assertEqual({stage[1] for stage in stages}, {total})
@@ -220,6 +222,15 @@ output.chmod(0o700)
             "voice_probe_crypto_test": {
                 "tests/voice_probe_crypto_test.cpp",
                 "main/apps/app_codex_status/voice_probe_crypto.cpp",
+            },
+            "secure_pairing_crypto_test": {
+                "tests/secure_pairing_crypto_test.cpp",
+                "main/apps/app_codex_status/secure_pairing_crypto.cpp",
+            },
+            "secure_pairing_protocol_test": {
+                "tests/secure_pairing_protocol_test.cpp",
+                "main/apps/app_codex_status/secure_pairing_protocol.cpp",
+                "main/apps/app_codex_status/secure_pairing_crypto.cpp",
             },
             "voice_input_crypto_test": {
                 "tests/voice_input_crypto_test.cpp",
