@@ -1497,6 +1497,176 @@ class CompletionClassifierTests(unittest.TestCase):
                     ("completed", "text_explicitly_resolved"),
                 )
 
+    def test_security_question_referents_match_scoped_resolutions(self):
+        completed = classify_completion(
+            "Can you approve production? No approval is required for production."
+        )
+        self.assertEqual(
+            (completed.outcome, completed.reason),
+            ("completed", "text_explicitly_resolved"),
+        )
+
+        different_target = classify_completion(
+            "Can you approve production? No approval is required for staging."
+        )
+        self.assertEqual(
+            (different_target.outcome, different_target.reason),
+            ("waiting", "text_direct_question"),
+        )
+
+    def test_multi_scope_questions_share_a_trailing_referent(self):
+        messages = (
+            "Can you approve or authorize production? "
+            "No approval is required for production. "
+            "No authorization is required for production.",
+            "你能批准并授权部署吗？部署无需批准。部署无需授权。",
+        )
+        for message in messages:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("completed", "text_explicitly_resolved"),
+                )
+
+    def test_repeated_question_scopes_keep_distinct_action_referents(self):
+        messages = (
+            "Can you approve production and approve staging? "
+            "No approval is required for production.",
+            "你能批准生产并批准预发吗？生产无需批准。",
+        )
+        for message in messages:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("waiting", "text_direct_question"),
+                )
+
+    def test_question_complement_and_chinese_particles_normalize_referents(self):
+        messages = (
+            "Can you verify whether approval is required for production? "
+            "No verification is required for production.",
+            "你能验证批准状态吗？无需验证批准状态。",
+        )
+        for message in messages:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("completed", "text_explicitly_resolved"),
+                )
+
+    def test_conditional_if_does_not_end_question_action_coordination(self):
+        result = classify_completion(
+            "Can you approve staging if tests pass and authorize production? "
+            "No approval is required."
+        )
+        self.assertEqual(
+            (result.outcome, result.reason),
+            ("waiting", "text_direct_question"),
+        )
+
+    def test_chinese_question_object_actions_only_coordinate_at_boundaries(self):
+        result = classify_completion("你能验证批准状态并授权发布吗？无需验证。")
+        self.assertEqual(
+            (result.outcome, result.reason),
+            ("waiting", "text_direct_question"),
+        )
+
+    def test_additional_chinese_security_coordination_marks_independent_scopes(self):
+        messages = (
+            "请批准，授权部署。无需批准。",
+            "请批准及授权部署。无需批准。",
+        )
+        for message in messages:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("waiting", "text_required_action"),
+                )
+
+    def test_security_question_governing_forms_share_resolution_scopes(self):
+        messages = (
+            "Do you approve deployment? No approval is required.",
+            "你能否批准部署？无需批准。",
+        )
+        for message in messages:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("completed", "text_explicitly_resolved"),
+                )
+
+    def test_or_coordinated_security_questions_keep_each_scope(self):
+        messages = (
+            "Can you approve or authorize deployment? No approval is required.",
+            "你能批准或授权部署吗？无需批准。",
+        )
+        for message in messages:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("waiting", "text_direct_question"),
+                )
+
+    def test_security_question_complement_clauses_do_not_add_scopes(self):
+        completed = classify_completion(
+            "Can you verify whether approval is required? "
+            "No verification is required."
+        )
+        self.assertEqual(
+            (completed.outcome, completed.reason),
+            ("completed", "text_explicitly_resolved"),
+        )
+
+        unresolved = classify_completion(
+            "Can you verify whether approval is required? No approval is required."
+        )
+        self.assertEqual(
+            (unresolved.outcome, unresolved.reason),
+            ("waiting", "text_direct_question"),
+        )
+
+    def test_attribution_scope_reopens_after_then_explicit_action(self):
+        result = classify_completion(
+            "The docs say approval is required in the old workflow, "
+            "then please review the diff."
+        )
+        self.assertEqual(
+            (result.outcome, result.reason),
+            ("waiting", "text_required_action"),
+        )
+
+    def test_chinese_security_resolutions_accept_symmetric_grammar(self):
+        messages = (
+            "生产部署需要您的批准。生产部署无需批准即可继续了。",
+            "生产部署需要您的批准。生产部署不需要您的批准。",
+        )
+        for message in messages:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("completed", "text_explicitly_resolved"),
+                )
+
+    def test_results_terminal_status_allows_unpunctuated_test_summary(self):
+        report = classify_completion("Results: review passed all tests")
+        self.assertEqual(
+            (report.outcome, report.reason),
+            ("completed", "completion_only"),
+        )
+
+        command = classify_completion("review passed all tests")
+        self.assertEqual(
+            (command.outcome, command.reason),
+            ("waiting", "text_required_action"),
+        )
+
     def test_security_requirement_referents_normalize_for_symmetrically(self):
         messages = (
             "Approval is required for production. "
