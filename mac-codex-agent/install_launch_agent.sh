@@ -184,7 +184,7 @@ validate_no_key_material() {
         return 1
     fi
     if grep -R -I -q -E \
-        '(^|[^0-9A-Fa-f])[0-9A-Fa-f]{32}([^0-9A-Fa-f]|$)' \
+        '(^|[^0-9A-Za-z+/])[0-9A-Fa-f]{32}([^0-9A-Za-z+/]|$)' \
         "$app_path/Contents/Resources" \
         "$app_path/Contents/MacOS" \
         "$app_path/Contents/Info.plist"; then
@@ -585,6 +585,17 @@ main() {
     python3 -m venv "$BUILD_VENV"
     "$BUILD_VENV/bin/python" -m pip install --upgrade pip
     "$BUILD_VENV/bin/python" -m pip install -r "$ROOT_DIR/requirements.txt"
+    PILLOW_VERSION="$(
+        "$BUILD_VENV/bin/python" -c \
+            'import importlib.metadata; print(importlib.metadata.version("Pillow"))'
+    )"
+    ARCHFLAGS="-arch arm64 -arch x86_64" \
+        "$BUILD_VENV/bin/python" -m pip install \
+        --force-reinstall \
+        --no-cache-dir \
+        --no-deps \
+        --no-binary=Pillow \
+        "Pillow==$PILLOW_VERSION"
     CFFI_VERSION="$(
         "$BUILD_VENV/bin/python" -c \
             'import importlib.metadata; print(importlib.metadata.version("cffi"))'

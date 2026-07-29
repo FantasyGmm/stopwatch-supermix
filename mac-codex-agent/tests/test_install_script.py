@@ -136,6 +136,18 @@ class InstallScriptTests(unittest.TestCase):
         self.assertIn('validate_universal_macho_tree "$app_path" || return', script)
         self.assertIn('lipo -archs "$macho_path"', script)
 
+    def test_installer_rebuilds_pillow_as_universal2(self):
+        script = self.read_script()
+
+        self.assertIn(
+            '\'import importlib.metadata; '
+            'print(importlib.metadata.version("Pillow"))\'',
+            script,
+        )
+        self.assertIn('ARCHFLAGS="-arch arm64 -arch x86_64"', script)
+        self.assertIn("--no-binary=Pillow", script)
+        self.assertIn('"Pillow==$PILLOW_VERSION"', script)
+
     def test_installer_caches_and_packages_the_pinned_driver_without_installing_it(self):
         script = self.read_script()
 
@@ -471,6 +483,35 @@ class InstallScriptTests(unittest.TestCase):
 
             (app / "Contents" / "Resources" / "app" / "bad.txt").write_text(
                 "-----BEGIN PRIVATE KEY-----\n",
+                encoding="utf-8",
+            )
+            rejected = self.run_installer_function(
+                f"validate_no_key_material {shlex.quote(str(app))}"
+            )
+            self.assertNotEqual(rejected.returncode, 0)
+
+    def test_key_scan_ignores_vendor_base64_and_url_hashes_but_rejects_hex_key(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            app = pathlib.Path(temporary) / "Agent.app"
+            resources = app / "Contents" / "Resources"
+            (resources / "app").mkdir(parents=True)
+            (app / "Contents" / "MacOS").mkdir(parents=True)
+            (app / "Contents" / "Info.plist").write_text(
+                "<plist></plist>", encoding="utf-8"
+            )
+            (resources / "vendor.py").write_text(
+                "embedded_font = 'YAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD/'\n"
+                "# https://gist.github.com/example/f51579ae8d93c8657a5564aefc2ffbca\n",
+                encoding="utf-8",
+            )
+
+            allowed = self.run_installer_function(
+                f"validate_no_key_material {shlex.quote(str(app))}"
+            )
+            self.assertEqual(allowed.returncode, 0, allowed.stderr)
+
+            (resources / "app" / "bad.txt").write_text(
+                "voice_key=00112233445566778899aabbccddeeff\n",
                 encoding="utf-8",
             )
             rejected = self.run_installer_function(
