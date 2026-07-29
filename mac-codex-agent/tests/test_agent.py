@@ -422,7 +422,7 @@ class BleStatusTransportVoiceTests(unittest.IsolatedAsyncioTestCase):
 
         with patch.object(loop, "call_soon_threadsafe", side_effect=delay):
             for index in range(VOICE_NOTIFICATION_QUEUE_SIZE + 1):
-                old_callback(None, bytes((index,)))
+                old_callback(None, index.to_bytes(2, "little"))
 
         await transport.disable_voice(None)
         new_handled = []
@@ -614,6 +614,53 @@ class BleStatusTransportVoiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(transport._voice_ingress_pending, 0)
         await transport.disable_voice(b"unavailable")
 
+    async def test_ten_second_startup_burst_is_buffered_in_order(self):
+        class Client:
+            is_connected = True
+
+            async def start_notify(self, _uuid, callback):
+                self.callback = callback
+
+            async def write_gatt_char(self, _uuid, _payload, response):
+                self.response = response
+
+            async def stop_notify(self, _uuid):
+                pass
+
+        client = Client()
+        transport = BleStatusTransport()
+        transport._client = client
+        startup_release = asyncio.Event()
+        handler_started = asyncio.Event()
+        all_handled = asyncio.Event()
+        startup_frames = [index.to_bytes(2, "little") for index in range(500)]
+        handled = []
+
+        async def handle(payload):
+            if payload == b"begin":
+                handler_started.set()
+                await startup_release.wait()
+            handled.append(payload)
+            if len(handled) == len(startup_frames) + 1:
+                all_handled.set()
+
+        await transport.enable_voice(b"ready", handle)
+        client.callback(None, b"begin")
+        await asyncio.wait_for(handler_started.wait(), 1)
+
+        thread = threading.Thread(
+            target=lambda: [client.callback(None, frame) for frame in startup_frames]
+        )
+        thread.start()
+        thread.join()
+        await asyncio.sleep(0)
+
+        self.assertFalse(transport.voice_failure.done())
+        startup_release.set()
+        await asyncio.wait_for(all_handled.wait(), 1)
+        self.assertEqual(handled, [b"begin", *startup_frames])
+        await transport.disable_voice(b"unavailable")
+
     async def test_notification_queue_overflow_fails_closed(self):
         class Client:
             is_connected = True
@@ -642,7 +689,7 @@ class BleStatusTransportVoiceTests(unittest.IsolatedAsyncioTestCase):
         failure = transport.voice_failure
 
         for index in range(VOICE_NOTIFICATION_QUEUE_SIZE + 1):
-            client.callback(None, bytes((index,)))
+            client.callback(None, index.to_bytes(2, "little"))
         error = await asyncio.wait_for(failure, 1)
 
         self.assertIsInstance(error, RuntimeError)
