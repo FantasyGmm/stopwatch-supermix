@@ -186,6 +186,51 @@ class CompletionClassifierTests(unittest.TestCase):
             ("waiting", "text_choice_handoff"),
         )
 
+    def test_later_choice_handoff_after_resolution_is_waiting(self):
+        result = classify_completion(
+            "A. one\n"
+            "B. two\n\n"
+            "I recommend A.\n\n"
+            "No choice is required.\n\n"
+            "1. alpha\n"
+            "2. beta\n\n"
+            "I recommend 1."
+        )
+
+        self.assertEqual(
+            (result.outcome, result.reason),
+            ("waiting", "text_choice_handoff"),
+        )
+
+    def test_separate_singleton_procedure_labels_are_not_choice_options(self):
+        result = classify_completion(
+            "1. Download dependencies.\n\n"
+            "The installation then configures the workspace.\n\n"
+            "2. Run tests.\n\n"
+            "Choose the defaults for future installations."
+        )
+
+        self.assertEqual(
+            (result.outcome, result.reason),
+            ("completed", "completion_only"),
+        )
+
+    def test_self_answered_question_with_decision_context_is_waiting(self):
+        result = classify_completion("为什么失败？原因是缓存过期。方案稍后再定。")
+
+        self.assertEqual(
+            (result.outcome, result.reason),
+            ("waiting", "text_direct_question"),
+        )
+
+    def test_self_answered_question_with_required_action_is_waiting(self):
+        result = classify_completion("为什么失败？原因是缓存过期。请确认后继续。")
+
+        self.assertEqual(
+            (result.outcome, result.reason),
+            ("waiting", "text_required_action"),
+        )
+
     def test_numbered_procedure_is_not_a_choice_handoff(self):
         result = classify_completion(
             "安装步骤：\n\n"

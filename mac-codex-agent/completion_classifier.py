@@ -142,6 +142,8 @@ def _question_evidence(block: _Block, prose: str) -> List[_Evidence]:
         self_answered = (
             _ANSWER_CUE_RE.search(suffix) is not None
             and _SECOND_PERSON_RE.search(prose) is None
+            and _REQUIRED_ACTION_RE.search(prose) is None
+            and _DECISION_CUE_RE.search(prose) is None
         )
         if not self_answered:
             evidence.append(
@@ -159,18 +161,16 @@ def _choice_evidence(
     prose_blocks: Sequence[str],
     questions: Sequence[Tuple[int, _Evidence]],
 ) -> List[_Evidence]:
-    labels = []
-    label_blocks = set()
+    evidence = []
     for index, prose in enumerate(prose_blocks):
+        labels = []
         for match in _OPTION_LINE_RE.finditer(prose):
             label = match.group(1).upper()
             if label not in labels:
                 labels.append(label)
-            label_blocks.add(index)
-    if len(labels) < 2:
-        return []
+        if len(labels) < 2:
+            continue
 
-    for index in sorted(label_blocks):
         nearby = range(max(0, index - 1), min(len(blocks), index + 2))
         question = next((item for item in questions if item[0] in nearby), None)
         cue = next(
@@ -191,32 +191,32 @@ def _choice_evidence(
             None,
         )
         if question is not None:
-            return [
+            evidence.append(
                 _Evidence(
                     question[1].offset,
                     "text_choice_handoff",
                     _TEXT_STRENGTH["text_choice_handoff"],
                 )
-            ]
-        if recommendation is not None:
+            )
+        elif recommendation is not None:
             nearby_index, match = recommendation
-            return [
+            evidence.append(
                 _Evidence(
                     blocks[nearby_index].offset + match.start(),
                     "text_choice_handoff",
                     _TEXT_STRENGTH["text_choice_handoff"],
                 )
-            ]
-        if cue is not None:
+            )
+        elif cue is not None:
             nearby_index, match = cue
-            return [
+            evidence.append(
                 _Evidence(
                     blocks[nearby_index].offset + match.start(),
                     "text_choice_handoff",
                     _TEXT_STRENGTH["text_choice_handoff"],
                 )
-            ]
-    return []
+            )
+    return evidence
 
 
 def _text_evidence(blocks: Sequence[_Block]) -> List[_Evidence]:
