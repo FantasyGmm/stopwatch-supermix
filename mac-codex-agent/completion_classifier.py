@@ -390,6 +390,17 @@ _CONFIRMATION_POLARITY_RE = re.compile(
     \b(?:
         (?P<negative>
             (?:
+                (?:(?:(?:has|have|had)[ \t]+(?:not|never)[ \t]+been
+                    |(?:hasn|haven|hadn)['’]t[ \t]+been
+                    |(?:was|were)[ \t]+not
+                    |(?:wasn|weren)['’]t
+                    |(?:cannot|can['’]t)[ \t]+be
+                    |(?:may|might|must|will|would|can|could|should)
+                        [ \t]+not[ \t]+have
+                    |(?:mightn|mustn|won|wouldn|couldn|shouldn)['’]t
+                        [ \t]+have)
+                    [ \t]+confirmed[ \t]*,?[ \t]+that)
+                |
                 (?:
                     (?:(?:is[ \t]+not|isn't|was[ \t]+not|wasn't|not)
                         [ \t]+(?:true|the[ \t]+case)[ \t]+that
@@ -399,7 +410,7 @@ _CONFIRMATION_POLARITY_RE = re.compile(
                 )
                 |
                 (?:
-                    (?:(?:(?:do|does|did|has|have|had|will|would|can|could|may|
+                (?:(?:(?:do|does|did|has|have|had|will|would|can|could|may|
                             might|must|should)
                             [ \t]+not
                         |(?:don|doesn|didn|hasn|haven|hadn|won|wouldn|couldn|shouldn)
@@ -410,22 +421,37 @@ _CONFIRMATION_POLARITY_RE = re.compile(
                     |(?:not|never)[ \t]+confirmed?)
                     [ \t]*,?[ \t]+that
                 )
+                |
+                (?:(?:has|have|had)[ \t]+)?den(?:y|ies|ied)[ \t]+that
             )
         )
         |
         (?P<nonpositive>
-            (?:may|might|must|will)
-            (?:[ \t]+(?:later|explicitly|eventually|first)){0,2}
-            [ \t]+confirm[ \t]*,?[ \t]+that
+            (?:(?:may|might|must|will|should|would)
+                (?:[ \t]+(?:later|explicitly|eventually|first)){0,2}
+                [ \t]+confirm
+            |(?:may|might|must|should|would|will|could)
+                [ \t]+have[ \t]+confirmed
+            |(?:may|might|must|should|would|will|could)['’]ve
+                [ \t]+confirmed
+            |(?:has|have|had)[ \t]+yet[ \t]+to[ \t]+confirm)
+            [ \t]*,?[ \t]+that
         )
         |
         (?P<positive>
-            (?:(?:has|have|had)[ \t]+confirmed|confirm(?:s|ed))
+            (?:(?:has|have|had)[ \t]+confirmed
+            |(?:do|does|did|can)[ \t]+confirm
+            |confirm(?:s|ed))
             [ \t]*,?[ \t]+that
         )
     )\b
     """,
     re.IGNORECASE | re.VERBOSE,
+)
+_CONFIRMATION_COMPLEMENT_BREAK_RE = re.compile(
+    r"\b(?:but|however|then|yet)\b|[;；]|"
+    r"(?:,[ \t]*|\band[ \t]+)(?:I|we|you|they|he|she|it)\b",
+    re.IGNORECASE,
 )
 _ASSISTANT_CONTINUATION_SUFFIX_RE = re.compile(
     r"^\s*[，,;；]?\s*(?:(?:afterward|afterwards|later|then)\s+)?"
@@ -1235,15 +1261,35 @@ def _valid_resolution_matches(
         latest_confirmation = (
             confirmation_polarities[-1] if confirmation_polarities else None
         )
+        outer_nonpositive_dominates = False
+        if latest_confirmation is not None:
+            for confirmation in confirmation_polarities[:-1]:
+                complement_context = prefix[
+                    confirmation.end() : latest_confirmation.start()
+                ]
+                if (
+                    confirmation.lastgroup != "positive"
+                    and confirmation.group().rstrip().casefold().endswith("that")
+                    and _CONFIRMATION_COMPLEMENT_BREAK_RE.search(
+                        complement_context
+                    )
+                    is None
+                ):
+                    outer_nonpositive_dominates = True
+                    break
         invalid_prefix_context = prefix
         if (
             latest_confirmation is not None
             and latest_confirmation.lastgroup == "positive"
+            and not outer_nonpositive_dominates
         ):
             invalid_prefix_context = prefix[latest_confirmation.end() :]
         invalid_prefix = (
-            latest_confirmation is not None
-            and latest_confirmation.lastgroup != "positive"
+            outer_nonpositive_dominates
+            or (
+                latest_confirmation is not None
+                and latest_confirmation.lastgroup != "positive"
+            )
         ) or (
             _INVALID_RESOLUTION_PREFIX_RE.search(invalid_prefix_context) is not None
             or _EXPECTATION_RESOLUTION_PREFIX_RE.search(invalid_prefix_context)
