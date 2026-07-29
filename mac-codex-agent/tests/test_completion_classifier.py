@@ -59,7 +59,7 @@ class CompletionClassifierTests(unittest.TestCase):
         )
         self.assertEqual(
             (result.outcome, result.reason),
-            ("waiting", "text_direct_question"),
+            ("waiting", "text_choice_handoff"),
         )
 
     def test_arabic_question_punctuation_is_waiting(self):
@@ -75,7 +75,7 @@ class CompletionClassifierTests(unittest.TestCase):
         )
 
         self.assertEqual(result.outcome, "completed")
-        self.assertEqual(result.reason, "completion_only")
+        self.assertEqual(result.reason, "text_explicitly_resolved")
 
     def test_inverted_question_punctuation_is_waiting(self):
         result = classify_completion("¿Desea continuar.")
@@ -126,7 +126,7 @@ class CompletionClassifierTests(unittest.TestCase):
         )
 
         self.assertEqual(result.outcome, "waiting")
-        self.assertEqual(result.reason, "text_choice")
+        self.assertEqual(result.reason, "text_choice_handoff")
 
     def test_english_numeric_choice_group_is_waiting(self):
         result = classify_completion(
@@ -137,7 +137,68 @@ class CompletionClassifierTests(unittest.TestCase):
         )
 
         self.assertEqual(result.outcome, "waiting")
-        self.assertEqual(result.reason, "text_choice")
+        self.assertEqual(result.reason, "text_choice_handoff")
+
+    def test_ordered_text_evidence_outcomes(self):
+        cases = (
+            ("请选择部署环境。", "waiting", "text_required_action"),
+            ("Please provide the missing token.", "waiting", "text_required_action"),
+            ("如需更多帮助请告诉我。", "completed", "completion_only"),
+            (
+                "Let me know if you would like more help.",
+                "completed",
+                "completion_only",
+            ),
+            ("需要我继续吗？", "waiting", "text_direct_question"),
+            (
+                "应该继续吗？原因是缓存仍然过期。无需你回复。",
+                "completed",
+                "text_explicitly_resolved",
+            ),
+            (
+                "无需回复，构建已经完成。\n\n你希望部署到哪个环境？",
+                "waiting",
+                "text_direct_question",
+            ),
+            (
+                "你希望使用 A 还是 B？\n\n已经按 A 实施，不需要再选择。",
+                "completed",
+                "text_explicitly_resolved",
+            ),
+        )
+
+        for message, outcome, reason in cases:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual((result.outcome, result.reason), (outcome, reason))
+
+    def test_contextual_choice_handoff_is_waiting(self):
+        result = classify_completion(
+            "可用方案：\n\n"
+            "A. 同码配对\n"
+            "B. 限时开放\n"
+            "C. 系统配对\n\n"
+            "我推荐 A。"
+        )
+
+        self.assertEqual(
+            (result.outcome, result.reason),
+            ("waiting", "text_choice_handoff"),
+        )
+
+    def test_numbered_procedure_is_not_a_choice_handoff(self):
+        result = classify_completion(
+            "安装步骤：\n\n"
+            "1. 下载依赖。\n"
+            "2. 运行测试。\n"
+            "3. 启动应用。\n\n"
+            "所有步骤已经执行完成。"
+        )
+
+        self.assertEqual(
+            (result.outcome, result.reason),
+            ("completed", "completion_only"),
+        )
 
     def test_url_query_string_is_not_a_question(self):
         result = classify_completion(
@@ -166,7 +227,7 @@ class CompletionClassifierTests(unittest.TestCase):
         )
 
         self.assertEqual(result.outcome, "completed")
-        self.assertEqual(result.reason, "completion_only")
+        self.assertEqual(result.reason, "text_explicitly_resolved")
 
     def test_trailing_codex_directive_is_ignored(self):
         result = classify_completion(

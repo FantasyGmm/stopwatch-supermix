@@ -4,36 +4,8 @@ from __future__ import annotations
 
 import dataclasses
 import re
-from typing import Any, List
+from typing import Any, List, Sequence, Tuple
 
-
-WAITING_PHRASES = (
-    "请确认",
-    "请回复",
-    "请提供",
-    "请选择",
-    "需要你",
-    "可以吗",
-    "请重新",
-    "请复核",
-    "告诉我",
-    "确认后继续",
-    "确认后我继续",
-    "确认后我会继续",
-    "等待你的",
-    "等待回复",
-    "等待确认",
-    "需要进一步指令",
-    "无法继续",
-    "let me know",
-    "please confirm",
-    "please reply",
-    "please provide",
-    "please choose",
-    "need your",
-    "waiting for your",
-    "cannot continue",
-)
 
 _MEMORY_CITATION_RE = re.compile(
     r"<oai-mem-citation>.*?</oai-mem-citation>", re.DOTALL | re.IGNORECASE
@@ -62,19 +34,69 @@ _SECOND_PERSON_RE = re.compile(
     r"(?:你|您|\b(?:you|your|yours|yourself|yourselves)\b)",
     re.IGNORECASE,
 )
-_OPTION_RE = re.compile(
-    r"^\s*(?:[-*]\s*)?([A-Z]|[1-9])\s*[.、:：)）]\s*\S+",
-    re.MULTILINE,
+_REQUIRED_ACTION_RE = re.compile(
+    r"(?:请(?:确认|选择|提供|回复|重新|复核)|"
+    r"确认后(?:继续|我继续|我会继续)|"
+    r"等待(?:你的)?(?:回复|确认)|"
+    r"需要(?:你|您)(?:确认|选择|提供|回复|操作)|"
+    r"需要进一步指令|无法继续|"
+    r"\bplease (?:confirm|choose|select|provide|reply|retry|review)\b|"
+    r"\bwaiting for your (?:reply|confirmation|choice|input)\b|"
+    r"\bneed your (?:confirmation|choice|input|reply)\b|"
+    r"\bcannot continue\b)",
+    re.IGNORECASE,
 )
-_ENGLISH_CHOICE_CUE_RE = re.compile(
-    r"\b(?:choose|select|pick|reply|respond)\b", re.IGNORECASE
+_COURTESY_RE = re.compile(
+    r"(?:如(?:果)?需(?:要)?更多帮助请告诉我|如果你愿意(?:，|,)?请告诉我|"
+    r"\blet me know if you (?:would like|want|need) more help\b|"
+    r"\bif you(?:'d| would) like(?:,)? let me know\b)",
+    re.IGNORECASE,
 )
+_RESOLUTION_RE = re.compile(
+    r"(?:无需(?:你|您)?(?:回复|确认|选择|操作)|"
+    r"不需要(?:你|您)?(?:回复|确认|选择|操作)|"
+    r"已经按.+?(?:实施|完成)，?不需要再选择|"
+    r"问题已经解决，?无需回复|"
+    r"\bno (?:reply|confirmation|choice|user action) is required\b|"
+    r"\bno action remains\b|"
+    r"\bthe (?:question|choice) (?:is|has been) resolved\b)",
+    re.IGNORECASE,
+)
+_DECISION_CUE_RE = re.compile(
+    r"(?:选(?:择|用)?|请选择|方案|选项|推荐|"
+    r"\b(?:choose|select|pick|reply|respond|option|recommend)\b)",
+    re.IGNORECASE,
+)
+_RECOMMEND_LABEL_RE = re.compile(
+    r"(?:推荐|recommend)\s*(?:第\s*)?([A-Z1-9])", re.IGNORECASE
+)
+_OPTION_LINE_RE = re.compile(
+    r"^\s*(?:[-*]\s*)?([A-Z]|[1-9])\s*[.、:：)）]\s*\S+", re.MULTILINE
+)
+_TEXT_STRENGTH = {
+    "text_direct_question": 1,
+    "text_choice_handoff": 2,
+    "text_required_action": 3,
+}
 
 
 @dataclasses.dataclass(frozen=True)
 class CompletionClassification:
     outcome: str
     reason: str
+
+
+@dataclasses.dataclass(frozen=True)
+class _Evidence:
+    offset: int
+    kind: str
+    strength: int
+
+
+@dataclasses.dataclass(frozen=True)
+class _Block:
+    text: str
+    offset: int
 
 
 def _strip_non_prose(message: str) -> str:
@@ -85,55 +107,146 @@ def _strip_non_prose(message: str) -> str:
     return _URL_RE.sub("", text)
 
 
-def _paragraphs(message: str) -> List[str]:
-    paragraphs = [
-        part.strip()
-        for part in _strip_non_prose(message).split("\n\n")
-        if part.strip()
-    ]
-    while paragraphs and paragraphs[-1].startswith("::"):
-        paragraphs.pop()
-    return paragraphs
+def _blocks(message: str) -> List[_Block]:
+    source = _strip_non_prose(message)
+    blocks = []
+    cursor = 0
+    for raw in source.split("\n\n"):
+        start = source.find(raw, cursor)
+        cursor = start + len(raw) + 2
+        text = raw.strip()
+        if text:
+            leading = len(raw) - len(raw.lstrip())
+            blocks.append(_Block(text, start + leading))
+    while blocks and blocks[-1].text.startswith("::"):
+        blocks.pop()
+    return blocks
 
 
-def _prose(paragraph: str) -> str:
+def _prose(block: _Block) -> str:
     prose = "\n".join(
-        line for line in paragraph.splitlines() if not _NON_PROSE_LINE_RE.match(line)
+        " " * len(line) if _NON_PROSE_LINE_RE.match(line) else line
+        for line in block.text.splitlines()
     )
-    return _QUOTED_QUESTION_RE.sub("", prose)
+    return _QUOTED_QUESTION_RE.sub(lambda match: " " * len(match.group()), prose)
 
 
-def _has_unresolved_prose_question(paragraphs: List[str]) -> bool:
-    for paragraph in paragraphs:
-        prose = _prose(paragraph)
-        for question in _QUESTION_MARK_RE.finditer(prose):
-            suffix = prose[question.end() :]
-            self_answered = (
-                _ANSWER_CUE_RE.search(suffix) is not None
-                and _SECOND_PERSON_RE.search(prose) is None
+def _overlaps(match: re.Match[str], spans: Sequence[Tuple[int, int]]) -> bool:
+    return any(match.start() < end and start < match.end() for start, end in spans)
+
+
+def _question_evidence(block: _Block, prose: str) -> List[_Evidence]:
+    evidence = []
+    for question in _QUESTION_MARK_RE.finditer(prose):
+        suffix = prose[question.end() :]
+        self_answered = (
+            _ANSWER_CUE_RE.search(suffix) is not None
+            and _SECOND_PERSON_RE.search(prose) is None
+        )
+        if not self_answered:
+            evidence.append(
+                _Evidence(
+                    block.offset + question.start(),
+                    "text_direct_question",
+                    _TEXT_STRENGTH["text_direct_question"],
+                )
             )
-            if not self_answered:
-                return True
-    return False
+    return evidence
 
 
-def _has_choice_handoff(message: str, final: str) -> bool:
+def _choice_evidence(
+    blocks: Sequence[_Block],
+    prose_blocks: Sequence[str],
+    questions: Sequence[Tuple[int, _Evidence]],
+) -> List[_Evidence]:
     labels = []
-    for match in _OPTION_RE.finditer(message):
-        label = match.group(1).upper()
-        if label not in labels:
-            labels.append(label)
+    label_blocks = set()
+    for index, prose in enumerate(prose_blocks):
+        for match in _OPTION_LINE_RE.finditer(prose):
+            label = match.group(1).upper()
+            if label not in labels:
+                labels.append(label)
+            label_blocks.add(index)
     if len(labels) < 2:
-        return False
+        return []
 
-    final_upper = final.upper()
-    mentioned = sum(
-        bool(re.search(r"(?<![A-Z0-9]){}(?![A-Z0-9])".format(re.escape(label)), final_upper))
-        for label in labels
-    )
-    if mentioned < 2:
-        return False
-    return "选" in final or bool(_ENGLISH_CHOICE_CUE_RE.search(final))
+    for index in sorted(label_blocks):
+        nearby = range(max(0, index - 1), min(len(blocks), index + 2))
+        question = next((item for item in questions if item[0] in nearby), None)
+        cue = next(
+            (
+                (nearby_index, match)
+                for nearby_index in nearby
+                for match in _DECISION_CUE_RE.finditer(prose_blocks[nearby_index])
+            ),
+            None,
+        )
+        recommendation = next(
+            (
+                (nearby_index, match)
+                for nearby_index in nearby
+                for match in _RECOMMEND_LABEL_RE.finditer(prose_blocks[nearby_index])
+                if match.group(1).upper() in labels
+            ),
+            None,
+        )
+        if question is not None:
+            return [
+                _Evidence(
+                    question[1].offset,
+                    "text_choice_handoff",
+                    _TEXT_STRENGTH["text_choice_handoff"],
+                )
+            ]
+        if recommendation is not None:
+            nearby_index, match = recommendation
+            return [
+                _Evidence(
+                    blocks[nearby_index].offset + match.start(),
+                    "text_choice_handoff",
+                    _TEXT_STRENGTH["text_choice_handoff"],
+                )
+            ]
+        if cue is not None:
+            nearby_index, match = cue
+            return [
+                _Evidence(
+                    blocks[nearby_index].offset + match.start(),
+                    "text_choice_handoff",
+                    _TEXT_STRENGTH["text_choice_handoff"],
+                )
+            ]
+    return []
+
+
+def _text_evidence(blocks: Sequence[_Block]) -> List[_Evidence]:
+    prose_blocks = [_prose(block) for block in blocks]
+    evidence = []
+    questions = []
+    for index, (block, prose) in enumerate(zip(blocks, prose_blocks)):
+        block_questions = _question_evidence(block, prose)
+        evidence.extend(block_questions)
+        questions.extend((index, item) for item in block_questions)
+
+        courtesy_spans = [(match.start(), match.end()) for match in _COURTESY_RE.finditer(prose)]
+        resolution_spans = [
+            (match.start(), match.end()) for match in _RESOLUTION_RE.finditer(prose)
+        ]
+        evidence.extend(
+            _Evidence(block.offset + start, "text_explicitly_resolved", 0)
+            for start, _ in resolution_spans
+        )
+        evidence.extend(
+            _Evidence(
+                block.offset + match.start(),
+                "text_required_action",
+                _TEXT_STRENGTH["text_required_action"],
+            )
+            for match in _REQUIRED_ACTION_RE.finditer(prose)
+            if not _overlaps(match, courtesy_spans + resolution_spans)
+        )
+    evidence.extend(_choice_evidence(blocks, prose_blocks, questions))
+    return sorted(evidence, key=lambda item: (item.offset, item.kind))
 
 
 def classify_completion(
@@ -149,17 +262,21 @@ def classify_completion(
     if not isinstance(message, str):
         return CompletionClassification("completed", "completion_only")
 
-    paragraphs = _paragraphs(message)
-    if not paragraphs:
+    blocks = _blocks(message)
+    if not blocks:
         return CompletionClassification("completed", "completion_only")
 
-    final = paragraphs[-1]
-    if _has_unresolved_prose_question(paragraphs):
-        return CompletionClassification("waiting", "text_direct_question")
-    if _has_choice_handoff("\n\n".join(paragraphs), final):
-        return CompletionClassification("waiting", "text_choice")
-
-    lowered = final.casefold()
-    if any(phrase in lowered for phrase in WAITING_PHRASES):
-        return CompletionClassification("waiting", "text_required_action")
+    unresolved = []
+    saw_resolution = False
+    for item in _text_evidence(blocks):
+        if item.kind == "text_explicitly_resolved":
+            unresolved.clear()
+            saw_resolution = True
+        else:
+            unresolved.append(item)
+    if unresolved:
+        strongest = max(unresolved, key=lambda item: item.strength)
+        return CompletionClassification("waiting", strongest.kind)
+    if saw_resolution:
+        return CompletionClassification("completed", "text_explicitly_resolved")
     return CompletionClassification("completed", "completion_only")
