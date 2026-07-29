@@ -69,7 +69,8 @@ _REQUIRED_ACTION_RE = re.compile(
     r"\bwaiting[ \t]+for[ \t]+your[ \t]+"
     r"(?:reply|confirmation|choice|input)\b|"
     r"\bneed[ \t]+your[ \t]+(?:confirmation|choice|input|reply)\b|"
-    r"\bcannot continue\b|\blet me know\b|告诉我)",
+    r"\bcannot[ \t]+continue\b|"
+    r"\blet[ \t]+me[ \t]+know\b|告诉我)",
     re.IGNORECASE,
 )
 _IMPERATIVE_ACTION_RE = re.compile(
@@ -79,14 +80,19 @@ _IMPERATIVE_ACTION_RE = re.compile(
 )
 _IMPERATIVE_BOUNDARY_RE = re.compile(r"[;；:：]|[ \t]+[—–-][ \t]+")
 _REPORT_NOUN_SUFFIX_RE = re.compile(
-    r"^\s*(?:[,，]|\b(?:is|are|was|were|has|have)\b|"
+    r"^\s*(?:[,，](?!\s*(?:(?:then[ \t]+)?"
+    r"(?:confirm|choose|select|provide|reply|retry|review)\b|"
+    r"(?:然后)?(?:确认|选择|提供|回复|重新|重试|复核)))|"
+    r"\bcomplete(?:d)?\b\s*[.!?。！？]|"
+    r"\b(?:is|are|was|were|has|have)\b|"
     r"\band\b(?![ \t]+(?:confirm|choose|select|provide|reply|retry|review)\b))",
     re.IGNORECASE,
 )
 _COORDINATED_ACTION_RE = re.compile(
     r"\b(?:and|then)\s+(?:also\s+)?"
     r"(?:confirm|choose|select|provide|reply|retry|review)\b|"
-    r"\band[ \t]+(?:confirmation|choice|input|reply)\b|"
+    r"(?:\band[ \t]+(?:also[ \t]+)?(?:your[ \t]+)?|,[ \t]*)"
+    r"(?:confirmation|choice|input|reply)\b|"
     r"(?:并且|并|然后)(?:[^\r\n。！？.!?؟]{0,20}?再)?(?:请)?"
     r"(?:确认|选择|提供|回复|重新|重试|复核)",
     re.IGNORECASE,
@@ -98,9 +104,10 @@ _COMMUNICATIVE_CHOICE_RE = re.compile(
     re.IGNORECASE,
 )
 _ALTERNATIVE_CHOICE_RE = re.compile(
-    r"\b[A-Z1-9]\b[^\r\n。！？.!?؟]{0,20}\bor\b"
-    r"[^\r\n。！？.!?؟]{0,20}\b[A-Z1-9]\b|"
-    r"[A-Z1-9]\s*(?:或|还是)\s*[A-Z1-9]",
+    r"^\s*[A-Z1-9]\s*(?:or|或|还是)\s*[A-Z1-9]\s*[?？؟]?[.!。]?\s*$|"
+    r"\b(?:prefer|use|choose|select|pick)\b"
+    r"[^\r\n。！？.!?؟]{0,80}\bor\b|"
+    r"(?:使用|选择|选)[^\r\n。！？.!?؟]{0,80}(?:或|还是)",
     re.IGNORECASE,
 )
 _COURTESY_CLAUSE_RE = re.compile(
@@ -109,9 +116,10 @@ _COURTESY_CLAUSE_RE = re.compile(
     r"if you (?:want|need) (?:more|additional|further)\b|"
     r"如果你(?:愿意|想(?:要)?(?:了解)?更多)|"
     r"如(?:果)?需(?:要)?更多)"
-    r"|\blet me know if you(?:['’]d| would) like "
+    r"|\blet[ \t]+me[ \t]+know[ \t]+if[ \t]+"
+    r"you(?:['’]d| would) like "
     r"(?:more|additional|further)\b|"
-    r"\blet me know if you (?:want|need) "
+    r"\blet[ \t]+me[ \t]+know[ \t]+if[ \t]+you[ \t]+(?:want|need) "
     r"(?:more|additional|further)\b)",
     re.IGNORECASE,
 )
@@ -154,9 +162,11 @@ _INVALID_RESOLUTION_PREFIX_RE = re.compile(
     r"(?:say|says|state|states|said)\b|"
     r"\b(?:according[ \t]+to|per)[ \t]+"
     r"(?:(?:the|our|your|their|its)[ \t]+)?"
+    r"(?:[A-Za-z-]+[ \t]+){0,2}"
     r"(?:docs?|documentation|examples?|logs?)\b|"
     r"\b(?:after|once|when|if|until|then)\b|"
-    r"(?:并非|不是|文档(?:说|写道|指出)|根据文档|之后|以后|如果|待))",
+    r"(?:并非|不是|文档(?:说|写道|指出)|"
+    r"根据[\u4e00-\u9fff]{0,8}文档|之后|以后|如果|待))",
     re.IGNORECASE,
 )
 _INVALID_RESOLUTION_SUFFIX_RE = re.compile(
@@ -199,8 +209,9 @@ _OPTION_LINE_RE = re.compile(
     re.MULTILINE,
 )
 _OPTION_HEADING_RE = re.compile(
-    r"^(?:(?:[A-Za-z][A-Za-z -]{0,40}[ \t]+)?options[ \t]*:|"
-    r"[\u4e00-\u9fff]{0,8}(?:选项|方案)[ \t]*[：:])\s*$",
+    r"^(?:(?:[A-Za-z0-9][A-Za-z0-9 -]{0,40}[ \t]+)?options"
+    r"(?:[ \t]+(?:are|available))?[ \t]*:|"
+    r"[\u4e00-\u9fff0-9０-９ \t]{0,20}(?:选项|方案)[ \t]*[：:])\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
 
@@ -356,7 +367,7 @@ def _courtesy_spans(clauses: Sequence[_Clause]) -> List[Tuple[int, int]]:
 
 def _question_scope(prose: str) -> _EvidenceScope:
     if _ALTERNATIVE_CHOICE_RE.search(prose) is not None or re.search(
-        r"(?:还是|哪(?:个|种)|如何|怎么|\bwhich\b|\bwhat option\b)",
+        r"(?:哪(?:个|种)|如何|怎么|\bwhich\b|\bwhat option\b)",
         prose,
         re.IGNORECASE,
     ):
