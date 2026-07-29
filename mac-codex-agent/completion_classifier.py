@@ -59,17 +59,20 @@ _SECOND_PERSON_RE = re.compile(
     re.IGNORECASE,
 )
 _REQUIRED_ACTION_RE = re.compile(
-    r"(?:请(?:确认|选择|提供|回复|重新|复核)|"
+    r"(?:请(?:确认|选择|提供|回复|重新|复核|批准|授权|验证)|"
     r"确认后(?:继续|我继续|我会继续)|"
     r"等待(?:你的)?(?:回复|确认)|"
-    r"需要(?:你|您)(?:确认|选择|提供|回复|操作)|"
+    r"需要(?:你|您)(?:确认|选择|提供|回复|操作|批准|授权|验证)|"
     r"需要进一步指令|无法继续|"
     r"\bplease[ \t]+(?:confirm|choose|select|provide|reply|retry|review)\b|"
     r"\bplease[ \t]+(?:approve|authorize|verify)\b|"
     r"\bcan[ \t]+you[ \t]+(?:confirm|choose|select|provide|reply|retry|review)\b|"
     r"\bwaiting[ \t]+for[ \t]+your[ \t]+"
     r"(?:reply|confirmation|choice|input|approval|authorization|verification)\b|"
-    r"\bneed[ \t]+your[ \t]+(?:confirmation|choice|input|reply)\b|"
+    r"\bneed[ \t]+your[ \t]+"
+    r"(?:confirmation|choice|input|reply|approval|authorization|verification)\b|"
+    r"\bneed[ \t]+you[ \t]+to[ \t]+"
+    r"(?:approve|authorize|confirm|choose|select|provide|reply|retry|review|verify)\b|"
     r"\b(?:[A-Za-z-]+[ \t]+){0,3}"
     r"(?:approval|authorization|verification)[ \t]+"
     r"(?:is|remains)[ \t]+(?:still[ \t]+)?required\b|"
@@ -80,6 +83,23 @@ _REQUIRED_ACTION_RE = re.compile(
     r"\bcannot[ \t]+continue\b|"
     r"\blet[ \t]+me[ \t]+know\b|告诉我)",
     re.IGNORECASE,
+)
+_ATTRIBUTED_ACTION_PREFIX_RE = re.compile(
+    r"(?:\b(?:docs?|documentation|examples?|logs?)\b"
+    r"[^\r\n。！？.!?؟]{0,40}\b(?:say|says|state|states|said)\b|"
+    r"\b(?:according[ \t]+to|per)[ \t]+"
+    r"(?:(?:the|our|your|their|its)[ \t]+)?"
+    r"(?:[A-Za-z-]+[ \t]+){0,2}"
+    r"(?:docs?|documentation|examples?|logs?)\b)",
+    re.IGNORECASE,
+)
+_ATTRIBUTION_SCOPE_BREAK_RE = re.compile(
+    r"\b(?:but|however|yet)\b|"
+    r"(?:[,;][ \t]*|\band[ \t]+)(?:I|we|you)\b",
+    re.IGNORECASE,
+)
+_NEGATED_ACTION_PREFIX_RE = re.compile(
+    r"\b(?:no|not)[ \t]+(?:[A-Za-z-]+[ \t]+){0,4}$", re.IGNORECASE
 )
 _IMPERATIVE_ACTION_RE = re.compile(
     r"\b(?:confirm|choose|select|provide|reply(?:\s+with)?|retry|review)\b|"
@@ -112,8 +132,7 @@ _REPORT_CONTINUATION_RE = re.compile(
     r"(?:(?:is|are|was|were)[ \t]+"
     r"(?:successful|complete(?:d)?|finished|pending|failed)|"
     r"(?:passed|succeeded|failed|completed|finished))\b|"
-    r"^[ \t]+(?:successful|finished|complete|passed)\b|"
-    r"^[ \t]+(?:pending|completed?|failed)\b"
+    r"^[ \t]+(?:successful|finished|complete(?:d)?|passed|pending|failed)\b"
     r"(?:[ \t]+(?:internally|automatically|successfully))?"
     r"[ \t]*[.!?]|"
     r"^[ \t]+(?:(?:the|an?|this|that|these|those|your|our)[ \t]+)?"
@@ -174,6 +193,8 @@ _ALTERNATIVE_CHOICE_RE = re.compile(
     r"(?:生产|预发|开发|测试)\s*[？?]?[。.]?\s*$|"
     r"^\s*(?:继续|停止)[ \t]*还是[ \t]*"
     r"(?:继续|停止)\s*[？?]?[。.]?\s*$|"
+    r"^\s*(?:上线|回滚|开启|关闭|保留|删除)[ \t]*还是[ \t]*"
+    r"(?:上线|回滚|开启|关闭|保留|删除)\s*[？?]?[。.]?\s*$|"
     r"^\s*[\u3400-\u9fff][ \t]*还是[ \t]*"
     r"[\u3400-\u9fff]\s*[？?]?[。.]?\s*$|"
     r"^\s*(?![\u3400-\u9fff]{0,12}(?:使用|采用|报告))"
@@ -222,6 +243,9 @@ _RESOLUTION_RE = re.compile(
     r"\bno (?:choice|selection) is required\b|"
     r"\bthe choice (?:is|has been) resolved\b|"
     r"\bthe previously offered choice has already been applied\b)"
+    r"|(?P<approval>\bno approval is required\b)"
+    r"|(?P<authorization>\bno authorization is required\b)"
+    r"|(?P<verification>\bno verification is required\b)"
     r"|(?P<all>"
     r"(?:无需|不需要)(?:你|您)?操作|"
     r"\bno (?:user )?action is required\b|"
@@ -301,6 +325,9 @@ class _EvidenceScope(enum.Enum):
     REPLY = "reply"
     CONFIRMATION = "confirmation"
     CHOICE = "choice"
+    APPROVAL = "approval"
+    AUTHORIZATION = "authorization"
+    VERIFICATION = "verification"
     EXECUTION = "execution"
 
 
@@ -548,8 +575,19 @@ def _action_scopes(match: re.Match[str], clause: _Clause) -> FrozenSet[_Evidence
     ):
         return frozenset({_EvidenceScope.CHOICE})
     if re.search(
-        r"(?:确认|\bconfirm(?:ation)?\b|"
-        r"\b(?:approve|approval|authorize|authorization|verify|verification)\b)",
+        r"(?:批准|\b(?:approve|approval)\b)", action, re.IGNORECASE
+    ):
+        return frozenset({_EvidenceScope.APPROVAL})
+    if re.search(
+        r"(?:授权|\b(?:authorize|authorization)\b)", action, re.IGNORECASE
+    ):
+        return frozenset({_EvidenceScope.AUTHORIZATION})
+    if re.search(
+        r"(?:验证|\b(?:verify|verification)\b)", action, re.IGNORECASE
+    ):
+        return frozenset({_EvidenceScope.VERIFICATION})
+    if re.search(
+        r"(?:确认|\bconfirm(?:ation)?\b)",
         action,
         re.IGNORECASE,
     ):
@@ -584,6 +622,12 @@ def _resolution_scopes(match: re.Match[str]) -> FrozenSet[_EvidenceScope]:
         return frozenset({_EvidenceScope.CONFIRMATION})
     if match.lastgroup == "choice":
         return frozenset({_EvidenceScope.CHOICE})
+    if match.lastgroup == "approval":
+        return frozenset({_EvidenceScope.APPROVAL})
+    if match.lastgroup == "authorization":
+        return frozenset({_EvidenceScope.AUTHORIZATION})
+    if match.lastgroup == "verification":
+        return frozenset({_EvidenceScope.VERIFICATION})
     return _ALL_SCOPES
 
 
@@ -935,10 +979,21 @@ def _required_action_evidence(
     excluded_spans: Sequence[Tuple[int, int]],
     clauses: Sequence[_Clause],
 ) -> List[_Evidence]:
+    excluded = sorted(excluded_spans)
+    excluded_starts = [start for start, _ in excluded]
+
+    def is_excluded(start: int, end: int) -> bool:
+        index = bisect.bisect_right(excluded_starts, start) - 1
+        return (index >= 0 and excluded[index][1] > start) or (
+            index + 1 < len(excluded) and excluded[index + 1][0] < end
+        )
+
     primary_matches = list(_REQUIRED_ACTION_RE.finditer(prose))
     clause_index = 0
     covered_primary_index = 0
     for match in _IMPERATIVE_ACTION_RE.finditer(prose):
+        if is_excluded(match.start(), match.end()):
+            continue
         while (
             covered_primary_index < len(primary_matches)
             and primary_matches[covered_primary_index].end() <= match.start()
@@ -1031,7 +1086,6 @@ def _required_action_evidence(
 
     evidence = []
     clause_index = 0
-    excluded = sorted(excluded_spans)
     excluded_index = 0
     for match in sorted(action_matches, key=lambda item: item.start()):
         while excluded_index < len(excluded) and excluded[excluded_index][1] <= match.start():
@@ -1050,6 +1104,25 @@ def _required_action_evidence(
             _question_scope(prose),
             _COMMUNICATIVE_CHOICE_RE.search(prose) is not None,
         )
+        relative_start = match.start() - clause.start
+        relative_end = match.end() - clause.start
+        context_start = max(0, relative_end - 120)
+        action_prefix = clause.text[max(0, relative_start - 120) : relative_start]
+        action_context = clause.text[context_start:relative_end]
+        attribution = _ATTRIBUTED_ACTION_PREFIX_RE.search(action_context)
+        attribution_tail = (
+            action_context[attribution.end() : max(0, relative_start - context_start)]
+            if attribution is not None
+            else ""
+        )
+        if (
+            (
+                attribution is not None
+                and _ATTRIBUTION_SCOPE_BREAK_RE.search(attribution_tail) is None
+            )
+            or _NEGATED_ACTION_PREFIX_RE.search(action_prefix) is not None
+        ):
+            continue
         evidence.append(
             _Evidence(
                 block.offset + match.start(),
@@ -1080,6 +1153,9 @@ def _text_evidence(blocks: Sequence[_Block]) -> List[_Evidence]:
         zip(blocks, prose_blocks, clauses_by_block, option_indexes)
     ):
         courtesy_spans = _courtesy_spans(clauses)
+        quoted_spans = [
+            (match.start(), match.end()) for match in _QUOTED_TEXT_RE.finditer(prose)
+        ]
         resolution_matches = _valid_resolution_matches(prose, clauses)
         resolution_spans = [(match.start(), match.end()) for match in resolution_matches]
         block_resolutions = []
@@ -1111,7 +1187,10 @@ def _text_evidence(blocks: Sequence[_Block]) -> List[_Evidence]:
         actions = _required_action_evidence(
             block,
             prose,
-            courtesy_spans + list(option_index.body_spans) + resolution_spans,
+            courtesy_spans
+            + quoted_spans
+            + list(option_index.body_spans)
+            + resolution_spans,
             clauses,
         )
         evidence.extend(actions)

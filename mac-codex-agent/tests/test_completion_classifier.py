@@ -837,6 +837,21 @@ class CompletionClassifierTests(unittest.TestCase):
                     ("completed", "text_explicitly_resolved"),
                 )
 
+    def test_common_mutually_exclusive_chinese_actions_are_choice_scope(self):
+        messages = (
+            "上线还是回滚？已经决定，无需选择。",
+            "开启还是关闭？已经决定，无需选择。",
+            "保留还是删除？已经决定，无需选择。",
+        )
+
+        for message in messages:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("completed", "text_explicitly_resolved"),
+                )
+
     def test_compact_chinese_state_questions_are_not_choice_scope(self):
         messages = (
             "系统还是失败？无需选择。",
@@ -1084,6 +1099,21 @@ class CompletionClassifierTests(unittest.TestCase):
                     ("completed", "completion_only"),
                 )
 
+    def test_report_status_words_can_modify_imperative_objects(self):
+        messages = (
+            "The build is ready: review finished work.",
+            "The build is ready: review successful deployments.",
+            "The build is ready: review passed tests.",
+        )
+
+        for message in messages:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("waiting", "text_required_action"),
+                )
+
     def test_direct_action_patterns_accept_horizontal_whitespace(self):
         messages = (
             "Can\tyou confirm deployment.",
@@ -1108,6 +1138,50 @@ class CompletionClassifierTests(unittest.TestCase):
             "Please authorize the deployment.",
             "You must review the diff.",
             "You need to provide the token.",
+        )
+
+        for message in messages:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("waiting", "text_required_action"),
+                )
+
+    def test_approval_requests_resolutions_and_attribution_are_distinct(self):
+        waiting_messages = (
+            "I need your approval before I continue.",
+            "We need your authorization.",
+            "I need you to verify the device.",
+            "请批准部署。",
+            "According to the docs, verification is required, "
+            "but I need your approval.",
+        )
+        completed_messages = (
+            ("No approval is required.", "text_explicitly_resolved"),
+            (
+                "The docs say device verification is still required.",
+                "completion_only",
+            ),
+        )
+
+        for message in waiting_messages:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("waiting", "text_required_action"),
+                )
+        for message, reason in completed_messages:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual((result.outcome, result.reason), ("completed", reason))
+
+    def test_approval_and_verification_are_not_confirmation_scope(self):
+        messages = (
+            "Waiting for your approval. No confirmation is required.",
+            "Device verification is still required. "
+            "No confirmation is required.",
         )
 
         for message in messages:
