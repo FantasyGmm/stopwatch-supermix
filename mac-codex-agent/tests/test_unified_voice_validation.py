@@ -59,6 +59,7 @@ EXPECTED_HOST_TESTS = (
     "secure_pairing_protocol_test",
     "agent_registry_test",
     "secure_pairing_session_test",
+    "agent_connection_router_test",
     "voice_input_crypto_test",
     "voice_input_protocol_test",
     "voice_input_session_test",
@@ -197,7 +198,7 @@ output.chmod(0o700)
 
         self.assertGreater(len(stages), 0)
         total = stages[0][1]
-        self.assertEqual(total, 50)
+        self.assertEqual(total, 51)
         self.assertEqual(len(stages), total)
         self.assertEqual([stage[0] for stage in stages], list(range(1, total + 1)))
         self.assertEqual({stage[1] for stage in stages}, {total})
@@ -247,6 +248,10 @@ output.chmod(0o700)
                 "main/apps/app_codex_status/secure_pairing_crypto.cpp",
                 "main/apps/app_codex_status/agent_registry.cpp",
                 "main/apps/app_codex_status/agent_registry_store.cpp",
+            },
+            "agent_connection_router_test": {
+                "tests/agent_connection_router_test.cpp",
+                "main/apps/app_codex_status/agent_connection_router.cpp",
             },
             "voice_input_crypto_test": {
                 "tests/voice_input_crypto_test.cpp",

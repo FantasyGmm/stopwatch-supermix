@@ -84,7 +84,8 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         self.assertIn("_production_voice_connection_epoch", app_header)
         disconnect = source.split("void CodexBleTransport::handle_gap_disconnected", 1)[1]
         self.assertIn("_production_control_guard.reset()", disconnect)
-        self.assertIn("_connection_epoch.fetch_add", disconnect)
+        self.assertIn("_connection_router.disconnected", disconnect)
+        self.assertIn("active_generation", source)
 
     def test_production_voice_uses_runtime_key_and_strict_epoch(self):
         transport_header = (
