@@ -315,6 +315,7 @@ class UnifiedFlashToolsTest(unittest.TestCase):
             "mixed-50-cycles",
             "full-flash-recovery",
             "final-product-smoke",
+            "secure-multi-agent-acceptance",
         ):
             self.assertIn(f"HARDWARE STEP {stage}", result.stdout)
         self.assertIn("--cycles 10", result.stdout)
@@ -326,6 +327,22 @@ class UnifiedFlashToolsTest(unittest.TestCase):
             if "--cycles 10" in line
         )
         self.assertIn("--warmup", ten_cycle_line)
+        self.assertIn("secure-pairing-acceptance.md", result.stdout)
+        for check in (
+            "two-agent-enrollment",
+            "non-interrupting-pairing",
+            "active-agent-switch",
+            "signed-agent-rename",
+            "online-rekey",
+            "offline-rekey",
+            "old-epoch-rejection",
+            "eight-agent-limit",
+            "reset-all-agents",
+            "mandarin-voice-input",
+            "assistant-recovery",
+            "ble-memory-stability",
+        ):
+            self.assertIn(check, result.stdout)
 
     def test_hardware_campaign_propagates_build_python_to_every_flash_step(self):
         fake_python = self.root / "idf python"
