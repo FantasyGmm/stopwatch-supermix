@@ -1667,6 +1667,11 @@ class CompletionClassifierTests(unittest.TestCase):
             "with details? No confirmation is required.",
             "Can you confirm whether I should review and then provide input? "
             "No confirmation is required.",
+            "你能确认我是否完成复核并提供输入了吗？无需确认。",
+            "你能确认他是否完成复核并提供输入了吗？无需确认。",
+            "你能确认团队是否完成复核并提供输入了吗？无需确认。",
+            "Can you confirm whether deployment is ready and review is complete? "
+            "No confirmation is required.",
         )
         for message in inner_messages:
             with self.subTest(kind="inner", message=message):
@@ -1692,6 +1697,10 @@ class CompletionClassifierTests(unittest.TestCase):
             "你能确认构建是否通过并提供输入吗？无需确认。",
             "你能确认是否需要批准，并且请授权发布吗？无需确认。",
             "你能确认是否需要批准，并且你能验证发布吗？无需确认。",
+            "Can you confirm whether tests pass and also provide input? "
+            "No confirmation is required.",
+            "你能确认构建是否通过并提供输入了吗？无需确认。",
+            "你能确认构建是否通过并提供输入过吗？无需确认。",
         )
         for message in outer_messages:
             with self.subTest(kind="outer", message=message):
@@ -2183,6 +2192,48 @@ class CompletionClassifierTests(unittest.TestCase):
         )
         for message in negative_neighbors:
             with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("waiting", "text_required_action"),
+                )
+
+    def test_plural_no_longer_resolutions_and_context_guards(self):
+        resolved_messages = (
+            "Please approve and authorize deployment. Approval and authorization "
+            "are no longer required.",
+            "请批准并授权部署。批准和授权不再需要。",
+        )
+        for message in resolved_messages:
+            with self.subTest(kind="resolved", message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("completed", "text_explicitly_resolved"),
+                )
+
+        guarded_messages = (
+            "Please approve and authorize deployment. It is expected that approval "
+            "and authorization are not required.",
+            "Please approve and authorize deployment. We do not expect that approval "
+            "and authorization are not required.",
+            "Please approve and authorize deployment. We don't expect that approval "
+            "and authorization are not required.",
+            "Please approve and authorize deployment. It isn't expected that approval "
+            "and authorization are not required.",
+            "Please approve and authorize deployment. Approval and authorization "
+            "are not required according to the logs.",
+            "Please approve and authorize deployment. Approval and authorization "
+            "are not required per the incident report.",
+            "Please approve and authorize deployment. Approval and authorization "
+            "are not required according to the docs.",
+            "Please approve and authorize deployment. Approval and authorization "
+            "are not required according to the latest logs.",
+            "Please approve and authorize deployment. Approval and authorization "
+            "are no longer required per the latest incident report.",
+        )
+        for message in guarded_messages:
+            with self.subTest(kind="guarded", message=message):
                 result = classify_completion(message)
                 self.assertEqual(
                     (result.outcome, result.reason),

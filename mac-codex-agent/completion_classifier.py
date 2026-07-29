@@ -298,7 +298,10 @@ _RESOLUTION_RE = re.compile(
     r"\b(?:approval|authorization|verification)"
     r"(?:(?:,[ \t]*(?:(?:and|or)[ \t]+)?|[ \t]+(?:and|or)[ \t]+)"
     r"(?:approval|authorization|verification))+"
-    r"[ \t]+are[ \t]+not[ \t]+required\b|"
+    r"[ \t]+are[ \t]+(?:no[ \t]+longer|not)[ \t]+required\b|"
+    r"(?:批准|授权|验证)"
+    r"(?:(?:[、，,][ \t]*(?:或|及|和|并|与|以及)?|"
+    r"(?:或|及|和|并|与|以及))(?:批准|授权|验证))+不再需要|"
     r"(?:无需|不需要)(?:(?:你|您)的?)?"
     r"(?:批准|授权|验证)"
     r"(?:(?:[、，,][ \t]*(?:或|及|和|并|与|以及)?|"
@@ -332,7 +335,10 @@ _INVALID_RESOLUTION_PREFIX_RE = re.compile(
     r"(?:(?:the|our|your|their|its)[ \t]+)?"
     r"(?:[A-Za-z-]+[ \t]+){0,2}"
     r"(?:docs?|documentation|examples?|logs?|incident[ \t]+report)\b|"
-    r"\b(?:I|we|they)[ \t]+(?:expect|expects|anticipate|anticipates)\b|"
+    r"\b(?:it[ \t]+(?:is(?:[ \t]+not)?|isn['’]t)[ \t]+expected[ \t]+that|"
+    r"(?:I|we|they)[ \t]+(?:(?:(?:do|does)[ \t]+not|"
+    r"(?:don|doesn)['’]t)[ \t]+)?"
+    r"(?:expect|expects|anticipate|anticipates)(?:[ \t]+that)?)\b|"
     r"\b(?:after|once|when|if|until|then)\b|"
     r"(?:并非|不是|文档(?:说|写道|指出)|"
     r"根据[\u4e00-\u9fff]{0,8}文档|之后|以后|如果|待))",
@@ -341,7 +347,10 @@ _INVALID_RESOLUTION_PREFIX_RE = re.compile(
 _INVALID_RESOLUTION_SUFFIX_RE = re.compile(
     r"(?:\b(?:after|once|when|if|until)\b|"
     r"\bto[ \t]+be\b|"
-    r"\baccording to (?:the )?(?:docs?|documentation|examples?)\b|"
+    r"\b(?:according[ \t]+to|per)[ \t]+"
+    r"(?:(?:the|our|your|their|its)[ \t]+)?"
+    r"(?:[A-Za-z-]+[ \t]+){0,2}"
+    r"(?:docs?|documentation|examples?|logs?|incident[ \t]+report)\b|"
     r"(?:之后|以后|如果|待))",
     re.IGNORECASE,
 )
@@ -585,15 +594,21 @@ _QUESTION_COMPLEMENT_PREDICATE_RE = re.compile(
     r"successful|verified)\b|"
     r"\b(?:the[ \t]+)?[A-Za-z0-9][A-Za-z0-9_-]*"
     r"(?:[ \t]+[A-Za-z0-9][A-Za-z0-9_-]*){0,3}[ \t]+"
-    r"(?:completed|failed|finished|passed|succeeded)\b|"
+    r"(?:complete|completed|fail|failed|finish|finished|pass|passed|"
+    r"succeed|succeeded)\b|"
     r"(?:是否)?(?:需要|需)(?:批准|授权|确认|验证)|"
     r"(?:通过|完成|就绪|成功|失败)",
     re.IGNORECASE,
 )
 _QUESTION_COMPLETED_OUTER_ACTION_RE = re.compile(
-    rf"(?:,[ \t]*)?(?:and|then)[ \t]+(?:please[ \t]+)?"
+    rf"(?:,[ \t]*)?(?:and|then)[ \t]+(?:also[ \t]+)?(?:please[ \t]+)?"
     rf"(?={_QUESTION_ACTION_PATTERN}\b)|"
     rf"(?:，)?(?:并且|并|然后)(?:请)?(?={_CHINESE_QUESTION_ACTION_PATTERN})",
+    re.IGNORECASE,
+)
+_QUESTION_ACTION_STATE_SUBJECT_RE = re.compile(
+    rf"{_QUESTION_ACTION_PATTERN}\b[ \t]+"
+    r"(?:is|are|was|were|remains?)\b",
     re.IGNORECASE,
 )
 
@@ -623,15 +638,44 @@ def _question_complement_range(
         and clause_text[governing_end : complement.start()].strip()
     ):
         return None
-    restart = _question_complement_restart(clause_text, complement.end())
+    inner_subject = _has_inner_complement_subject(
+        clause_text,
+        governing_end,
+        complement.start(),
+    )
+    restart = _question_complement_restart(
+        clause_text,
+        complement.end(),
+        allow_completed=not inner_subject,
+    )
     return (
         complement.start(),
         restart.start() if restart is not None else len(clause_text),
     )
 
 
+def _has_inner_complement_subject(
+    clause_text: str,
+    subject_start: int,
+    complement_start: int,
+) -> bool:
+    subject = clause_text[subject_start:complement_start]
+    return (
+        re.search(
+            r"(?:我|我们|你|你们|您|他|她|他们|她们|"
+            r"[\u4e00-\u9fff]{0,8}(?:团队|小组|人员|成员|用户|客户|"
+            r"同事|工程师|审核员|负责人))[ \t]*$",
+            subject,
+        )
+        is not None
+    )
+
+
 def _question_complement_restart(
-    clause_text: str, complement_end: int
+    clause_text: str,
+    complement_end: int,
+    *,
+    allow_completed: bool = True,
 ) -> re.Match[str] | None:
     explicit = _QUESTION_EXPLICIT_OUTER_ACTION_RE.search(
         clause_text, complement_end
@@ -639,13 +683,16 @@ def _question_complement_restart(
     predicate = _QUESTION_COMPLEMENT_PREDICATE_RE.search(
         clause_text, complement_end
     )
-    completed = (
-        _QUESTION_COMPLETED_OUTER_ACTION_RE.search(
+    completed = None
+    if predicate is not None and allow_completed:
+        for candidate in _QUESTION_COMPLETED_OUTER_ACTION_RE.finditer(
             clause_text, predicate.end()
-        )
-        if predicate is not None
-        else None
-    )
+        ):
+            if _QUESTION_ACTION_STATE_SUBJECT_RE.match(
+                clause_text, candidate.end()
+            ) is None:
+                completed = candidate
+                break
     if explicit is None:
         return completed
     if completed is None or explicit.start() < completed.start():
@@ -675,8 +722,15 @@ def _governing_question_actions(
             complement = None
         if complement is not None:
             complement_end = cursor + complement.end()
+            inner_subject = _has_inner_complement_subject(
+                action_prose,
+                cursor,
+                cursor + complement.start(),
+            )
             restart = _question_complement_restart(
-                action_prose, complement_end
+                action_prose,
+                complement_end,
+                allow_completed=not inner_subject,
             )
             if restart is None or coordinated.start() < restart.start():
                 break
