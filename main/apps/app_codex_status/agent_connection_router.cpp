@@ -173,6 +173,15 @@ uint16_t AgentConnectionRouter::mtu(uint16_t handle) const
     return connection == nullptr ? kDefaultAgentMtu : connection->mtu;
 }
 
+AgentFingerprint AgentConnectionRouter::fingerprint(uint16_t handle) const
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    const AgentConnection* connection = find_locked(handle);
+    return connection == nullptr
+               ? AgentFingerprint{}
+               : connection->fingerprint;
+}
+
 bool AgentConnectionRouter::voice_subscribed(uint16_t handle) const
 {
     std::lock_guard<std::mutex> lock(_mutex);

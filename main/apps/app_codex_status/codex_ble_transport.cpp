@@ -902,9 +902,31 @@ bool CodexBleTransport::reject_pending(uint16_t connection_handle)
     return true;
 }
 
+bool CodexBleTransport::request_active_disconnect()
+{
+    const uint16_t handle = _connection_router.active_handle();
+    return _initialized &&
+           handle != secure_pairing::kNoAgentConnection &&
+           ble_gap_terminate(
+               handle, BLE_ERR_REM_USER_CONN_TERM) == 0;
+}
+
 uint16_t CodexBleTransport::pending_handle() const
 {
     return _connection_router.pending_handle();
+}
+
+secure_pairing::AgentFingerprint
+CodexBleTransport::active_fingerprint() const
+{
+    return _connection_router.active_fingerprint();
+}
+
+secure_pairing::AgentFingerprint
+CodexBleTransport::pending_fingerprint() const
+{
+    const uint16_t handle = _connection_router.pending_handle();
+    return _connection_router.fingerprint(handle);
 }
 
 bool CodexBleTransport::enqueue_frame_from_ble(

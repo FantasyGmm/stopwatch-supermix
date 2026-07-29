@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cinttypes>
 #include <cstdio>
 #include <cstring>
 
@@ -266,7 +267,7 @@ bool verification_code(
         (static_cast<uint32_t>(digest[1]) << 16U) |
         (static_cast<uint32_t>(digest[2]) << 8U) | digest[3];
     const int written = std::snprintf(
-        output.data(), output.size(), "%06u", prefix % 1000000U);
+        output.data(), output.size(), "%06" PRIu32, prefix % UINT32_C(1000000));
     return written == 6;
 }
 

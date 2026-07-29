@@ -58,6 +58,7 @@ public:
     uint16_t active_handle() const;
     uint16_t pending_handle() const;
     uint16_t mtu(uint16_t handle) const;
+    AgentFingerprint fingerprint(uint16_t handle) const;
     bool voice_subscribed(uint16_t handle) const;
     bool pairing_subscribed(uint16_t handle) const;
     uint16_t active_mtu() const;

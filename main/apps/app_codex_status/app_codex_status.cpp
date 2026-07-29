@@ -21,6 +21,7 @@
 #include <runtime/display/global_display_protection_service.h>
 #include <wifi_manager.h>
 #include <esp_websocket_client.h>
+#include <esp_random.h>
 #include <mooncake_log.h>
 #include <algorithm>
 #include <array>
@@ -51,6 +52,20 @@ constexpr uint32_t kTraeStatusStaleMs    = 15000;
 constexpr uint32_t kScreenOffHoldMs      = 2000;
 constexpr int kPageWidth                 = 466;
 constexpr int kPageCount                 = 2;
+constexpr int kAgentPanelHiddenY         = -430;
+constexpr int kAgentPanelVisibleY        = 0;
+constexpr int kAgentPanelRowHeight       = 40;
+
+bool fill_agent_entropy(void*, uint8_t* output, size_t size)
+{
+    if (output == nullptr || size == 0) {
+        return false;
+    }
+    esp_fill_random(output, size);
+    return std::any_of(output, output + size, [](uint8_t byte) {
+        return byte != 0;
+    });
+}
 
 bool is_ascii_text(const char* text)
 {
@@ -299,8 +314,17 @@ void AppCodexStatus::onOpen()
     _trae_carousel.reset();
     _page_swipe.cancel();
     _trae_card_tap.cancel();
+    _agent_panel_model = {};
+    _agent_panel_dirty = false;
+    _agent_switch_pending = false;
+    _agent_switch_target = {};
+    {
+        std::lock_guard<std::mutex> decision_lock(_agent_decision_mutex);
+        _pending_agent_decision = {};
+    }
     _current_page = 0;
     _last_page_touch_state = LV_INDEV_STATE_REL;
+    _last_agent_touch_state = LV_INDEV_STATE_REL;
     _server_host     = Settings("codex_status").GetString("host", kDefaultServerHost);
     _transport_mode  = Settings("codex_status").GetString("transport", "auto");
     _ble_name        = Settings("codex_status").GetString("ble_name", kDefaultBleName);
@@ -308,6 +332,30 @@ void AppCodexStatus::onOpen()
         _transport_mode = "auto";
     }
     _ble_wait_started_ms = now;
+
+    _agent_registry_ready = false;
+    _agent_registry_backend =
+        std::make_unique<secure_pairing::NvsRegistryStorageBackend>();
+    if (_agent_registry_backend->ready()) {
+        _agent_registry_store =
+            std::make_unique<secure_pairing::AgentRegistryStore>(
+                *_agent_registry_backend);
+        const secure_pairing::StoreResult loaded =
+            _agent_registry_store->load(_agent_registry);
+        if (loaded == secure_pairing::StoreResult::Ok) {
+            _agent_registry_ready = true;
+        } else if (loaded == secure_pairing::StoreResult::NotFound &&
+                   secure_pairing::AgentRegistry::initialize(
+                       fill_agent_entropy,
+                       nullptr,
+                       _agent_registry) ==
+                       secure_pairing::RegistryResult::Ok &&
+                   _agent_registry_store->save(_agent_registry) ==
+                       secure_pairing::StoreResult::Ok) {
+            _agent_registry_ready = true;
+        }
+    }
+    sync_agent_panel_registry();
 
     {
         LvglLockGuard lock;
@@ -323,6 +371,14 @@ void AppCodexStatus::onOpen()
             }
             _voice_input = std::make_unique<VoiceInputController>();
             (void)_voice_input->initialize();
+            if (_agent_registry_ready) {
+                (void)_ble_transport->set_voice_credential(
+                    _agent_registry.master_key(),
+                    _agent_registry.key_epoch());
+                (void)_voice_input->set_credential(
+                    _agent_registry.master_key(),
+                    _agent_registry.key_epoch());
+            }
             set_status("BLE PAIR", kTextDim);
             set_host_text(_ble_name.c_str());
         } else {
@@ -379,7 +435,18 @@ void AppCodexStatus::onRunning()
     {
         LvglLockGuard lock;
         sync_display_protection_presentation();
-        update_page_swipe(now);
+        if (_agent_panel_dirty) {
+            render_agent_panel();
+            _agent_panel_dirty = false;
+        }
+        update_agent_panel_touch(now);
+        if (_agent_panel_model.owns_touch()) {
+            _page_swipe.cancel();
+            _trae_card_tap.cancel();
+            _last_page_touch_state = LV_INDEV_STATE_REL;
+        } else {
+            update_page_swipe(now);
+        }
         bool alert_changed = false;
         if (_current_page == 0 && key_event == input::KeyEvent::GoPrevious) {
             alert_changed = _alert_carousel.step(-1, now);
@@ -401,6 +468,12 @@ void AppCodexStatus::onRunning()
             render_trae_status();
         }
     }
+    AgentPanelDecision agent_decision = {};
+    while (take_agent_panel_decision(agent_decision)) {
+        dispatch_agent_panel_decision(agent_decision, now);
+    }
+    complete_agent_switch_if_ready();
+
     bool ble_connected = _ble_transport && _ble_transport->connected();
     if (_ble_transport) {
         _ble_transport->poll(now);
@@ -414,6 +487,8 @@ void AppCodexStatus::onRunning()
                 _production_voice_link_usable = false;
                 _production_voice_mtu = 23;
                 _voice_input->handle_connection_epoch(connection_epoch);
+                sync_agent_panel_registry();
+                _agent_panel_dirty = true;
             }
             CodexProductionVoiceControl production_control;
             while (_ble_transport->take_production_voice_control(production_control)) {
@@ -558,6 +633,11 @@ void AppCodexStatus::onClose()
         _ble_transport->stop();
         _ble_transport.reset();
     }
+    _agent_registry_store.reset();
+    _agent_registry_backend.reset();
+    _agent_registry_ready = false;
+    _agent_switch_pending = false;
+    _agent_switch_target = {};
 
     LvglLockGuard lock;
     destroy_view();
@@ -785,6 +865,24 @@ void AppCodexStatus::create_view()
     lv_obj_set_style_text_align(_battery_label, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(_battery_label, LV_ALIGN_TOP_MID, 0, kBatteryY);
     update_battery();
+
+    _agent_panel_root = lv_obj_create(_panel);
+    lv_obj_set_size(_agent_panel_root, 466, 466);
+    lv_obj_set_pos(
+        _agent_panel_root,
+        0,
+        _agent_panel_model.snapshot().visible
+            ? kAgentPanelVisibleY
+            : kAgentPanelHiddenY);
+    lv_obj_set_style_radius(_agent_panel_root, 0, 0);
+    lv_obj_set_style_border_width(_agent_panel_root, 0, 0);
+    lv_obj_set_style_pad_all(_agent_panel_root, 0, 0);
+    lv_obj_set_style_bg_color(
+        _agent_panel_root, lv_color_hex(kPanelGraphite), 0);
+    lv_obj_set_style_bg_opa(_agent_panel_root, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(_agent_panel_root, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_move_foreground(_agent_panel_root);
+    render_agent_panel();
 }
 
 void AppCodexStatus::destroy_view()
@@ -833,6 +931,15 @@ void AppCodexStatus::destroy_view()
     _status_label   = nullptr;
     _host_label     = nullptr;
     _pet_image      = nullptr;
+    _agent_panel_root = nullptr;
+    _agent_row_buttons = {};
+    _agent_delete_buttons = {};
+    _agent_allow_button = nullptr;
+    _agent_allow_switch_button = nullptr;
+    _agent_reject_button = nullptr;
+    _agent_reset_button = nullptr;
+    _agent_confirm_button = nullptr;
+    _agent_cancel_button = nullptr;
     _pet_frame      = 0;
 }
 
@@ -1171,6 +1278,473 @@ void AppCodexStatus::render_trae_status()
         _trae_stale,
         bluetooth_connected
     );
+}
+
+void AppCodexStatus::render_agent_panel()
+{
+    if (_agent_panel_root == nullptr) {
+        return;
+    }
+    const AgentPanelSnapshot snapshot = _agent_panel_model.snapshot();
+    lv_obj_set_y(
+        _agent_panel_root,
+        snapshot.visible ? kAgentPanelVisibleY : kAgentPanelHiddenY);
+    lv_obj_clean(_agent_panel_root);
+    _agent_row_buttons = {};
+    _agent_delete_buttons = {};
+    _agent_allow_button = nullptr;
+    _agent_allow_switch_button = nullptr;
+    _agent_reject_button = nullptr;
+    _agent_reset_button = nullptr;
+    _agent_confirm_button = nullptr;
+    _agent_cancel_button = nullptr;
+
+    make_center_label(
+        _agent_panel_root,
+        "AGENTS",
+        10,
+        &lv_font_montserrat_18,
+        kSignalWhite);
+
+    auto make_button = [this](
+                           const char* text,
+                           int x,
+                           int y,
+                           int width,
+                           int height,
+                           uint32_t color) {
+        lv_obj_t* button = lv_button_create(_agent_panel_root);
+        lv_obj_set_size(button, width, height);
+        lv_obj_set_pos(button, x, y);
+        lv_obj_set_style_radius(button, 8, 0);
+        lv_obj_set_style_border_width(button, 0, 0);
+        lv_obj_set_style_bg_color(button, lv_color_hex(color), 0);
+        lv_obj_set_style_bg_opa(button, LV_OPA_COVER, 0);
+        lv_obj_t* label = lv_label_create(button);
+        lv_label_set_text(label, text);
+        lv_obj_set_style_text_font(label, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(
+            label, lv_color_hex(kSignalWhite), 0);
+        lv_obj_center(label);
+        lv_obj_add_event_cb(
+            button,
+            AppCodexStatus::agent_panel_event_cb,
+            LV_EVENT_CLICKED,
+            this);
+        return button;
+    };
+
+    if (snapshot.confirmation != AgentPanelConfirmation::None) {
+        const char* title =
+            snapshot.confirmation == AgentPanelConfirmation::DeleteAgent
+                ? "Delete Agent?"
+                : "Reset All Agents?";
+        make_center_label(
+            _agent_panel_root,
+            title,
+            150,
+            &lv_font_montserrat_22,
+            kSignalWhite);
+        _agent_confirm_button = make_button(
+            "Confirm", 62, 230, 160, 54, kAlertVermilion);
+        _agent_cancel_button = make_button(
+            "Cancel", 244, 230, 160, 54, kEtchedGray);
+    } else if (snapshot.request.present) {
+        make_center_label(
+            _agent_panel_root,
+            snapshot.request.display_name.data(),
+            75,
+            &lv_font_montserrat_18,
+            kSignalWhite);
+        make_center_label(
+            _agent_panel_root,
+            snapshot.request.verification_code.data(),
+            120,
+            &lv_font_montserrat_28,
+            kBeaconViolet);
+        _agent_allow_button = make_button(
+            "Allow", 30, 200, 126, 52, kHandledGreen);
+        _agent_allow_switch_button = make_button(
+            "Allow + Switch", 170, 200, 190, 52, kBeaconViolet);
+        _agent_reject_button = make_button(
+            "Reject", 374, 200, 76, 52, kAlertVermilion);
+    } else {
+        for (size_t index = 0; index < snapshot.count; ++index) {
+            const AgentPanelRow& row = snapshot.rows[index];
+            const int y =
+                46 + static_cast<int>(index) * kAgentPanelRowHeight;
+            uint32_t row_color = 0x303238;
+            const char* state = "Offline";
+            uint32_t state_color = kEtchedGray;
+            if (row.state == AgentPanelRowState::Connected) {
+                state = "Connected";
+                state_color = kHandledGreen;
+                row_color = 0x26382F;
+            } else if (row.state == AgentPanelRowState::Requesting) {
+                state = "Requesting";
+                state_color = kBeaconViolet;
+                row_color = 0x302B43;
+            }
+            lv_obj_t* row_button = lv_button_create(_agent_panel_root);
+            _agent_row_buttons[index] = row_button;
+            lv_obj_set_size(row_button, 382, 34);
+            lv_obj_set_pos(row_button, 12, y);
+            lv_obj_set_style_radius(row_button, 6, 0);
+            lv_obj_set_style_border_width(row_button, 0, 0);
+            lv_obj_set_style_bg_color(
+                row_button, lv_color_hex(row_color), 0);
+            lv_obj_add_event_cb(
+                row_button,
+                AppCodexStatus::agent_panel_event_cb,
+                LV_EVENT_CLICKED,
+                this);
+            lv_obj_t* name = make_label(
+                row_button,
+                row.display_name.data(),
+                8,
+                4,
+                &lv_font_montserrat_14,
+                kSignalWhite);
+            lv_obj_set_width(name, 225);
+            lv_label_set_long_mode(name, LV_LABEL_LONG_MODE_DOTS);
+            lv_obj_t* state_label = make_label(
+                row_button,
+                state,
+                242,
+                4,
+                &lv_font_montserrat_14,
+                state_color);
+            lv_obj_set_width(state_label, 120);
+            lv_obj_set_style_text_align(
+                state_label, LV_TEXT_ALIGN_RIGHT, 0);
+            _agent_delete_buttons[index] = make_button(
+                "×", 402, y, 50, 34, kAlertVermilion);
+        }
+        if (snapshot.count == 0) {
+            make_center_label(
+                _agent_panel_root,
+                "No paired Agents",
+                175,
+                &lv_font_montserrat_18,
+                kEtchedGray);
+        }
+        _agent_reset_button = make_button(
+            "Reset", 176, 386, 114, 40, kAlertVermilion);
+    }
+
+    make_center_label(
+        _agent_panel_root,
+        "AGENTS  \xE2\x86\x91",
+        438,
+        &lv_font_montserrat_14,
+        kEtchedGray);
+    lv_obj_move_foreground(_agent_panel_root);
+}
+
+void AppCodexStatus::update_agent_panel_touch(uint32_t now_ms)
+{
+    (void)now_ms;
+    lv_indev_t* indev = GetHAL().lvTouchpad;
+    if (indev == nullptr || _screen_off ||
+        GetGlobalDisplayProtectionService().touchInputSuppressed()) {
+        _agent_panel_model.cancel_touch();
+        _last_agent_touch_state = LV_INDEV_STATE_REL;
+        return;
+    }
+    auto& controls = GetGlobalEdgeControlService();
+    if (controls.ownsTouch() || controls.lastReleaseConsumed()) {
+        _agent_panel_model.cancel_touch();
+        _last_agent_touch_state = LV_INDEV_STATE_REL;
+        return;
+    }
+    const lv_indev_state_t state = lv_indev_get_state(indev);
+    lv_point_t point = {};
+    lv_indev_get_point(indev, &point);
+    if (state == LV_INDEV_STATE_PR) {
+        if (_last_agent_touch_state == LV_INDEV_STATE_REL) {
+            _agent_panel_model.touch_press(point.x, point.y);
+        } else {
+            _agent_panel_model.touch_move(point.x, point.y);
+        }
+    } else if (_last_agent_touch_state == LV_INDEV_STATE_PR) {
+        _agent_panel_model.touch_move(point.x, point.y);
+        const AgentPanelAction action =
+            _agent_panel_model.touch_release();
+        if (action == AgentPanelAction::Open ||
+            action == AgentPanelAction::Close) {
+            render_agent_panel();
+        }
+    }
+    _last_agent_touch_state = state;
+}
+
+void AppCodexStatus::agent_panel_event_cb(lv_event_t* event)
+{
+    auto* self =
+        static_cast<AppCodexStatus*>(lv_event_get_user_data(event));
+    if (self == nullptr) {
+        return;
+    }
+    lv_obj_t* target =
+        static_cast<lv_obj_t*>(lv_event_get_target(event));
+    const AgentPanelSnapshot snapshot =
+        self->_agent_panel_model.snapshot();
+    for (size_t index = 0; index < snapshot.count; ++index) {
+        if (target == self->_agent_row_buttons[index]) {
+            self->queue_agent_panel_decision(
+                AgentPanelDecision{
+                    AgentPanelAction::SwitchAgent,
+                    snapshot.rows[index].fingerprint});
+            return;
+        }
+        if (target == self->_agent_delete_buttons[index]) {
+            self->queue_agent_panel_decision(
+                AgentPanelDecision{
+                    AgentPanelAction::Delete,
+                    snapshot.rows[index].fingerprint});
+            return;
+        }
+    }
+    if (target == self->_agent_allow_button) {
+        self->queue_agent_panel_decision(
+            self->_agent_panel_model.allow_pairing(false));
+    } else if (target == self->_agent_allow_switch_button) {
+        self->queue_agent_panel_decision(
+            self->_agent_panel_model.allow_pairing(true));
+    } else if (target == self->_agent_reject_button) {
+        self->queue_agent_panel_decision(
+            self->_agent_panel_model.reject_pairing());
+    } else if (target == self->_agent_reset_button) {
+        self->queue_agent_panel_decision(
+            self->_agent_panel_model.request_reset());
+    } else if (target == self->_agent_confirm_button) {
+        self->queue_agent_panel_decision(
+            self->_agent_panel_model.confirm_destructive(true));
+    } else if (target == self->_agent_cancel_button) {
+        self->queue_agent_panel_decision(
+            self->_agent_panel_model.confirm_destructive(false));
+    }
+}
+
+void AppCodexStatus::queue_agent_panel_decision(
+    const AgentPanelDecision& decision)
+{
+    if (decision.action == AgentPanelAction::None) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(_agent_decision_mutex);
+    if (_pending_agent_decision.action == AgentPanelAction::None) {
+        _pending_agent_decision = decision;
+    }
+}
+
+bool AppCodexStatus::take_agent_panel_decision(
+    AgentPanelDecision& decision)
+{
+    std::lock_guard<std::mutex> lock(_agent_decision_mutex);
+    if (_pending_agent_decision.action == AgentPanelAction::None) {
+        return false;
+    }
+    decision = _pending_agent_decision;
+    _pending_agent_decision = {};
+    return true;
+}
+
+void AppCodexStatus::dispatch_agent_panel_decision(
+    const AgentPanelDecision& decision,
+    uint32_t now_ms)
+{
+    if (decision.action == AgentPanelAction::Delete) {
+        (void)_agent_panel_model.request_delete(decision.fingerprint);
+        _agent_panel_dirty = true;
+        return;
+    }
+    if (decision.action == AgentPanelAction::ResetAll) {
+        (void)_agent_panel_model.request_reset();
+        _agent_panel_dirty = true;
+        return;
+    }
+    if (decision.action == AgentPanelAction::Reject) {
+        if (_ble_transport) {
+            const uint16_t handle = _ble_transport->pending_handle();
+            if (handle != secure_pairing::kNoAgentConnection) {
+                (void)_ble_transport->reject_pending(handle);
+            }
+        }
+        _agent_panel_model.clear_pairing_request();
+        _agent_panel_dirty = true;
+        return;
+    }
+    if (decision.action == AgentPanelAction::AllowPairing ||
+        decision.action == AgentPanelAction::AllowAndSwitch) {
+        set_status("PAIRING", kBeaconViolet);
+        return;
+    }
+    if (decision.action == AgentPanelAction::ConfirmDelete &&
+        _agent_registry_ready) {
+        const auto before = _agent_registry.snapshot();
+        if (_agent_registry.remove_and_rotate(
+                decision.fingerprint,
+                fill_agent_entropy,
+                nullptr) == secure_pairing::RegistryResult::Ok &&
+            save_agent_registry()) {
+            if (_ble_transport) {
+                (void)_ble_transport->set_voice_credential(
+                    _agent_registry.master_key(),
+                    _agent_registry.key_epoch());
+                if (_ble_transport->active_fingerprint() ==
+                    decision.fingerprint) {
+                    (void)_ble_transport->request_active_disconnect();
+                }
+            }
+            if (_voice_input) {
+                (void)_voice_input->set_credential(
+                    _agent_registry.master_key(),
+                    _agent_registry.key_epoch());
+            }
+        } else {
+            (void)secure_pairing::AgentRegistry::restore(
+                before, _agent_registry);
+            set_status("AGENT ERR", kCodexRed);
+        }
+        sync_agent_panel_registry();
+        _agent_panel_dirty = true;
+        return;
+    }
+    if (decision.action == AgentPanelAction::ConfirmReset) {
+        const bool had_registry = _agent_registry_ready;
+        const auto before = _agent_registry.snapshot();
+        secure_pairing::RegistryResult reset_result =
+            secure_pairing::RegistryResult::InvalidRecord;
+        if (had_registry) {
+            reset_result = _agent_registry.reset_all(
+                fill_agent_entropy, nullptr);
+        } else {
+            reset_result = secure_pairing::AgentRegistry::initialize(
+                fill_agent_entropy, nullptr, _agent_registry);
+        }
+        if (reset_result == secure_pairing::RegistryResult::Ok &&
+            save_agent_registry()) {
+            _agent_registry_ready = true;
+            if (_voice_input) {
+                (void)_voice_input->set_credential(
+                    _agent_registry.master_key(),
+                    _agent_registry.key_epoch());
+            }
+            if (_ble_transport) {
+                (void)_ble_transport->set_voice_credential(
+                    _agent_registry.master_key(),
+                    _agent_registry.key_epoch());
+                (void)_ble_transport->request_active_disconnect();
+                const uint16_t pending = _ble_transport->pending_handle();
+                if (pending != secure_pairing::kNoAgentConnection) {
+                    (void)_ble_transport->reject_pending(pending);
+                }
+            }
+        } else {
+            if (had_registry) {
+                (void)secure_pairing::AgentRegistry::restore(
+                    before, _agent_registry);
+            }
+            set_status("AGENT ERR", kCodexRed);
+        }
+        sync_agent_panel_registry();
+        _agent_panel_dirty = true;
+        return;
+    }
+    if (decision.action != AgentPanelAction::SwitchAgent ||
+        !_agent_registry_ready) {
+        _agent_panel_dirty = true;
+        return;
+    }
+
+    AgentPanelDecision switch_decision =
+        _agent_panel_model.request_switch(
+            decision.fingerprint,
+            _voice_input != nullptr &&
+                _voice_input->ui_state() == VoiceInputUiState::Active);
+    if (_agent_panel_model.snapshot().switch_waiting_for_voice &&
+        _voice_input != nullptr) {
+        _voice_input->cancel_for_home(now_ms);
+        switch_decision =
+            _agent_panel_model.voice_cleanup_complete();
+    }
+    if (switch_decision.action != AgentPanelAction::SwitchAgent) {
+        return;
+    }
+    if (_agent_registry.select(
+            switch_decision.fingerprint,
+            static_cast<int64_t>(now_ms)) !=
+            secure_pairing::RegistryResult::Ok ||
+        !save_agent_registry()) {
+        set_status("AGENT ERR", kCodexRed);
+        return;
+    }
+    _agent_switch_target = switch_decision.fingerprint;
+    _agent_switch_pending = true;
+    if (_ble_transport) {
+        if (_ble_transport->active_fingerprint() ==
+            _agent_switch_target) {
+            _agent_switch_pending = false;
+        } else if (_ble_transport->connected()) {
+            (void)_ble_transport->request_active_disconnect();
+        }
+    }
+    complete_agent_switch_if_ready();
+    sync_agent_panel_registry();
+    _agent_panel_dirty = true;
+}
+
+void AppCodexStatus::complete_agent_switch_if_ready()
+{
+    if (!_agent_switch_pending || !_ble_transport ||
+        _ble_transport->connected()) {
+        return;
+    }
+    const uint16_t pending = _ble_transport->pending_handle();
+    if (pending == secure_pairing::kNoAgentConnection ||
+        _ble_transport->pending_fingerprint() != _agent_switch_target) {
+        return;
+    }
+    if (_ble_transport->promote_pending(pending)) {
+        _agent_switch_pending = false;
+        _agent_switch_target = {};
+        sync_agent_panel_registry();
+        _agent_panel_dirty = true;
+    }
+}
+
+void AppCodexStatus::sync_agent_panel_registry()
+{
+    const secure_pairing::AgentFingerprint active =
+        _ble_transport
+            ? _ble_transport->active_fingerprint()
+            : secure_pairing::AgentFingerprint{};
+    const secure_pairing::AgentFingerprint pending =
+        _ble_transport
+            ? _ble_transport->pending_fingerprint()
+            : secure_pairing::AgentFingerprint{};
+    const bool has_active = std::any_of(
+        active.begin(), active.end(), [](uint8_t byte) {
+            return byte != 0;
+        });
+    const bool has_pending = std::any_of(
+        pending.begin(), pending.end(), [](uint8_t byte) {
+            return byte != 0;
+        });
+    if (_agent_registry_ready) {
+        _agent_panel_model.sync_registry(
+            _agent_registry,
+            has_active ? &active : nullptr,
+            has_pending ? &pending : nullptr);
+    }
+}
+
+bool AppCodexStatus::save_agent_registry()
+{
+    return _agent_registry_store != nullptr &&
+           _agent_registry_store->save(_agent_registry) ==
+               secure_pairing::StoreResult::Ok;
 }
 
 void AppCodexStatus::update_page_swipe(uint32_t now_ms)

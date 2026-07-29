@@ -8,6 +8,7 @@
 #include <mooncake.h>
 #include <lvgl.h>
 #include <memory>
+#include <array>
 #include <atomic>
 #include <mutex>
 #include <cstdint>
@@ -15,6 +16,8 @@
 #include <esp_event_base.h>
 #include "codex_alert_carousel.h"
 #include "codex_pending_soft_glow.h"
+#include "agent_panel_model.h"
+#include "agent_registry_store.h"
 #include "status_message_router.h"
 #include "status_page_swipe_logic.h"
 #include "trae_card_tap_logic.h"
@@ -65,6 +68,15 @@ private:
     lv_obj_t* _status_label      = nullptr;
     lv_obj_t* _host_label        = nullptr;
     lv_obj_t* _pet_image         = nullptr;
+    lv_obj_t* _agent_panel_root  = nullptr;
+    std::array<lv_obj_t*, secure_pairing::kMaxAgents> _agent_row_buttons = {};
+    std::array<lv_obj_t*, secure_pairing::kMaxAgents> _agent_delete_buttons = {};
+    lv_obj_t* _agent_allow_button = nullptr;
+    lv_obj_t* _agent_allow_switch_button = nullptr;
+    lv_obj_t* _agent_reject_button = nullptr;
+    lv_obj_t* _agent_reset_button = nullptr;
+    lv_obj_t* _agent_confirm_button = nullptr;
+    lv_obj_t* _agent_cancel_button = nullptr;
     lv_timer_t* _pet_timer       = nullptr;
     esp_websocket_client_handle_t _ws_client = nullptr;
     std::unique_ptr<CodexBleTransport> _ble_transport;
@@ -89,6 +101,7 @@ private:
     bool _trae_stale             = false;
     int _current_page            = 0;
     lv_indev_state_t _last_page_touch_state = LV_INDEV_STATE_REL;
+    lv_indev_state_t _last_agent_touch_state = LV_INDEV_STATE_REL;
     bool _suppress_task_navigation = false;
     CodexAlertCarousel _alert_carousel;
     TraeStatusSnapshot _trae_snapshot;
@@ -96,6 +109,18 @@ private:
     StatusPageSwipeLogic _page_swipe;
     TraeCardTapLogic _trae_card_tap;
     VoiceButtonDispatcher _voice_button_dispatcher;
+    AgentPanelModel _agent_panel_model;
+    secure_pairing::AgentRegistry _agent_registry;
+    std::unique_ptr<secure_pairing::NvsRegistryStorageBackend>
+        _agent_registry_backend;
+    std::unique_ptr<secure_pairing::AgentRegistryStore>
+        _agent_registry_store;
+    bool _agent_registry_ready = false;
+    bool _agent_panel_dirty = false;
+    bool _agent_switch_pending = false;
+    secure_pairing::AgentFingerprint _agent_switch_target = {};
+    std::mutex _agent_decision_mutex;
+    AgentPanelDecision _pending_agent_decision = {};
     bool _production_voice_ready = false;
     bool _production_voice_link_usable = false;
     uint16_t _production_voice_mtu = 23;
@@ -122,6 +147,17 @@ private:
     void render_trae_status();
     void sync_pending_glow();
     void update_page_swipe(uint32_t now_ms);
+    void update_agent_panel_touch(uint32_t now_ms);
+    void render_agent_panel();
+    void queue_agent_panel_decision(const AgentPanelDecision& decision);
+    bool take_agent_panel_decision(AgentPanelDecision& decision);
+    void dispatch_agent_panel_decision(
+        const AgentPanelDecision& decision,
+        uint32_t now_ms);
+    void sync_agent_panel_registry();
+    void complete_agent_switch_if_ready();
+    bool save_agent_registry();
+    static void agent_panel_event_cb(lv_event_t* event);
     void set_page(int page, bool animate);
     void update_page_indicator();
     void sync_display_protection_presentation();

@@ -63,7 +63,10 @@ public:
         const secure_pairing::AgentFingerprint& fingerprint);
     bool promote_pending(uint16_t connection_handle);
     bool reject_pending(uint16_t connection_handle);
+    bool request_active_disconnect();
     uint16_t pending_handle() const;
+    secure_pairing::AgentFingerprint active_fingerprint() const;
+    secure_pairing::AgentFingerprint pending_fingerprint() const;
 
     bool enqueue_frame_from_ble(
         uint16_t connection_handle,
