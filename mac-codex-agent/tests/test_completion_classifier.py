@@ -2264,6 +2264,18 @@ class CompletionClassifierTests(unittest.TestCase):
             "approval is not required.",
             "Please approve deployment. We expected, but confirmed, that approval is "
             "not required.",
+            "Please approve deployment. We expected and confirmed that approval is "
+            "not required.",
+            "Please approve deployment. We expected, then confirmed that approval is "
+            "not required.",
+            "Please approve deployment. The incident report suggests and confirms "
+            "that approval is not required.",
+            "Please approve deployment. The team expected and has confirmed that "
+            "approval is not required.",
+            "Please approve deployment. We expected but did not confirm, then "
+            "confirmed that approval is not required.",
+            "Please approve deployment. It is not true that we confirmed authorization "
+            "is not required, and we later confirmed that approval is not required.",
         )
         for message in resolved_messages:
             with self.subTest(kind="resolved", message=message):
@@ -2366,6 +2378,49 @@ class CompletionClassifierTests(unittest.TestCase):
             "approval is not required.",
             "Please approve deployment. We expected, but didn't confirm, that "
             "approval is not required.",
+            "Please approve deployment. We expected but did not confirm that approval "
+            "is not required.",
+            "Please approve deployment. The incident report suggests, but does not "
+            "confirm, that approval is not required.",
+            "Please approve deployment. We expect but don't confirm that approval is "
+            "not required.",
+            "Please approve deployment. The incident report suggests but doesn't "
+            "confirm that approval is not required.",
+            "Please approve deployment. We expected but didn't confirm that approval "
+            "is not required.",
+            "Please approve deployment. We expected and confirmed, but did not "
+            "confirm that approval is not required.",
+            "Please approve deployment. It is not true that we confirmed that "
+            "approval is not required.",
+            "Please approve deployment. We did not actually confirm that approval is "
+            "not required.",
+            "Please approve deployment. We have not yet confirmed that approval is "
+            "not required.",
+            "Please approve deployment. We cannot confirm that approval is not "
+            "required.",
+            "Please approve deployment. We can not confirm that approval is not "
+            "required.",
+            "Please approve deployment. We may not confirm that approval is not "
+            "required.",
+            "Please approve deployment. We might not confirm that approval is not "
+            "required.",
+            "Please approve deployment. We must not confirm that approval is not "
+            "required.",
+            "Please approve deployment. We may confirm that approval is not required.",
+            "Please approve deployment. We might confirm that approval is not "
+            "required.",
+            "Please approve deployment. We must confirm that approval is not "
+            "required.",
+            "Please approve deployment. We will confirm that approval is not "
+            "required.",
+            "Please approve deployment. We might later confirm that approval is not "
+            "required.",
+            "Please approve deployment. We may explicitly confirm that approval is "
+            "not required.",
+            "Please approve deployment. We will eventually confirm that approval is "
+            "not required.",
+            "Please approve deployment. We must first confirm that approval is not "
+            "required.",
             "Please approve deployment. We expected, but did not confirm, that "
             "authorization is not required, and approval is not required.",
             "Please approve deployment. We expect authorization is not required, and "

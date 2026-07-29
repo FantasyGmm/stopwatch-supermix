@@ -385,12 +385,47 @@ _LEADING_RESOLUTION_REVERSAL_RE = re.compile(
     re.IGNORECASE,
 )
 _CORRELATIVE_NOT_ONLY_RE = re.compile(r"\bnot[ \t]+only\b", re.IGNORECASE)
-_EXPECTATION_INSERT_AFTER_BREAK_RE = re.compile(
-    r"^[ \t]+(?:(?:do|does|did|has|have|had|will|would|could|should)"
-    r"[ \t]+not|(?:don|doesn|didn|hasn|haven|hadn|won|wouldn|couldn|"
-    r"shouldn)['’]t)[ \t]+(?:confirm|verify)"
-    r"[ \t]*,[ \t]+that\b",
-    re.IGNORECASE,
+_CONFIRMATION_POLARITY_RE = re.compile(
+    r"""
+    \b(?:
+        (?P<negative>
+            (?:
+                (?:
+                    (?:(?:is[ \t]+not|isn't|was[ \t]+not|wasn't|not)
+                        [ \t]+(?:true|the[ \t]+case)[ \t]+that
+                    |(?:do[ \t]+not|don't)[ \t]+assume)
+                    [ \t]+(?:(?:I|we|you|they|he|she|it)[ \t]+)?
+                    (?:(?:has|have|had)[ \t]+)?confirm(?:s|ed)?
+                )
+                |
+                (?:
+                    (?:(?:(?:do|does|did|has|have|had|will|would|can|could|may|
+                            might|must|should)
+                            [ \t]+not
+                        |(?:don|doesn|didn|hasn|haven|hadn|won|wouldn|couldn|shouldn)
+                            ['’]t
+                        |cannot|can['’]t)
+                        (?:[ \t]+(?:actually|yet|ever|explicitly|independently|fully|
+                            formally|still)){0,2}[ \t]+confirm(?:ed)?
+                    |(?:not|never)[ \t]+confirmed?)
+                    [ \t]*,?[ \t]+that
+                )
+            )
+        )
+        |
+        (?P<nonpositive>
+            (?:may|might|must|will)
+            (?:[ \t]+(?:later|explicitly|eventually|first)){0,2}
+            [ \t]+confirm[ \t]*,?[ \t]+that
+        )
+        |
+        (?P<positive>
+            (?:(?:has|have|had)[ \t]+confirmed|confirm(?:s|ed))
+            [ \t]*,?[ \t]+that
+        )
+    )\b
+    """,
+    re.IGNORECASE | re.VERBOSE,
 )
 _ASSISTANT_CONTINUATION_SUFFIX_RE = re.compile(
     r"^\s*[，,;；]?\s*(?:(?:afterward|afterwards|later|then)\s+)?"
@@ -1187,20 +1222,7 @@ def _valid_resolution_matches(
                 )
                 is None
             )
-            expectation_insert = (
-                context_break.group(0).strip().lower() == "but"
-                and _EXPECTATION_RESOLUTION_PREFIX_RE.search(preceding_context)
-                is not None
-                and _EXPECTATION_INSERT_AFTER_BREAK_RE.match(
-                    prefix[context_break.end() :]
-                )
-                is not None
-            )
-            if (
-                coordinated_expectation
-                or correlative_expectation
-                or expectation_insert
-            ):
+            if coordinated_expectation or correlative_expectation:
                 continue
             prefix = prefix[context_break.end() :]
             break
@@ -1209,9 +1231,23 @@ def _valid_resolution_matches(
         assistant_continuation = (
             _ASSISTANT_CONTINUATION_SUFFIX_RE.search(suffix) is not None
         )
+        confirmation_polarities = list(_CONFIRMATION_POLARITY_RE.finditer(prefix))
+        latest_confirmation = (
+            confirmation_polarities[-1] if confirmation_polarities else None
+        )
+        invalid_prefix_context = prefix
+        if (
+            latest_confirmation is not None
+            and latest_confirmation.lastgroup == "positive"
+        ):
+            invalid_prefix_context = prefix[latest_confirmation.end() :]
         invalid_prefix = (
-            _INVALID_RESOLUTION_PREFIX_RE.search(prefix) is not None
-            or _EXPECTATION_RESOLUTION_PREFIX_RE.search(prefix) is not None
+            latest_confirmation is not None
+            and latest_confirmation.lastgroup != "positive"
+        ) or (
+            _INVALID_RESOLUTION_PREFIX_RE.search(invalid_prefix_context) is not None
+            or _EXPECTATION_RESOLUTION_PREFIX_RE.search(invalid_prefix_context)
+            is not None
         )
         if not invalid_prefix and (
             not invalid_suffix or assistant_continuation
