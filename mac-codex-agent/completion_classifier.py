@@ -105,6 +105,16 @@ _ATTRIBUTED_REQUIREMENT_HISTORY_SUFFIX_RE = re.compile(
     r"(?:old|previous|prior|historical)[ \t]+workflow\b",
     re.IGNORECASE,
 )
+_ATTRIBUTED_ACTION_SUFFIX_RE = re.compile(
+    r"\b(?:according[ \t]+to|per)[ \t]+"
+    r"(?:(?:the|our|your|their|its)[ \t]+)?"
+    r"(?:[A-Za-z0-9_-]+[ \t]+)*?"
+    r"(?:docs?|documentation|examples?|logs?|incident[ \t]+report)\b",
+    re.IGNORECASE,
+)
+_ATTRIBUTION_SOURCE_CONTRAST_RE = re.compile(
+    r"\b(?:rather[ \t]+than|instead[ \t]+of)\b", re.IGNORECASE
+)
 _ATTRIBUTION_SCOPE_BREAK_RE = re.compile(
     r"\b(?:but|however|then|yet)\b|"
     r"(?:[,;][ \t]*|\band[ \t]+)(?:I|we|you)\b|"
@@ -327,7 +337,12 @@ _RESOLUTION_RE = re.compile(
 _EXPECTATION_RESOLUTION_PREFIX_RE = re.compile(
     r"\b(?:expect(?:ed|ing|s)?|anticipat(?:e|ed|es|ing)|"
     r"(?:(?:the|our|my|your|their|its)[ \t]+)?expectations?[ \t]+"
-    r"(?:is|are|was|were)[ \t]+that)\b",
+    r"(?:(?:is|are|was|were)(?:[ \t]+not)?|"
+    r"(?:isn|aren|wasn|weren)['’]t|"
+    r"(?:has|have|had)(?:[ \t]+not)?[ \t]+been|"
+    r"(?:hasn|haven|hadn)['’]t[ \t]+been|"
+    r"(?:will|would)(?:[ \t]+not)?[ \t]+be|"
+    r"(?:won|wouldn)['’]t[ \t]+be)[ \t]+that)\b",
     re.IGNORECASE,
 )
 _INVALID_RESOLUTION_PREFIX_RE = re.compile(
@@ -370,6 +385,13 @@ _LEADING_RESOLUTION_REVERSAL_RE = re.compile(
     re.IGNORECASE,
 )
 _CORRELATIVE_NOT_ONLY_RE = re.compile(r"\bnot[ \t]+only\b", re.IGNORECASE)
+_EXPECTATION_INSERT_AFTER_BREAK_RE = re.compile(
+    r"^[ \t]+(?:(?:do|does|did|has|have|had|will|would|could|should)"
+    r"[ \t]+not|(?:don|doesn|didn|hasn|haven|hadn|won|wouldn|couldn|"
+    r"shouldn)['’]t)[ \t]+(?:confirm|verify)"
+    r"[ \t]*,[ \t]+that\b",
+    re.IGNORECASE,
+)
 _ASSISTANT_CONTINUATION_SUFFIX_RE = re.compile(
     r"^\s*[，,;；]?\s*(?:(?:afterward|afterwards|later|then)\s+)?"
     r"I(?:'ll|\s+will)\b|"
@@ -679,6 +701,12 @@ def _has_inner_complement_subject(
     subject_start: int,
     complement_start: int,
 ) -> bool:
+    if re.match(
+        r"whether[ \t]+(?:I|we)\b",
+        clause_text[complement_start : complement_start + 24],
+        re.IGNORECASE,
+    ):
+        return True
     subject = clause_text[subject_start:complement_start]
     return (
         re.search(
@@ -1159,7 +1187,20 @@ def _valid_resolution_matches(
                 )
                 is None
             )
-            if coordinated_expectation or correlative_expectation:
+            expectation_insert = (
+                context_break.group(0).strip().lower() == "but"
+                and _EXPECTATION_RESOLUTION_PREFIX_RE.search(preceding_context)
+                is not None
+                and _EXPECTATION_INSERT_AFTER_BREAK_RE.match(
+                    prefix[context_break.end() :]
+                )
+                is not None
+            )
+            if (
+                coordinated_expectation
+                or correlative_expectation
+                or expectation_insert
+            ):
                 continue
             prefix = prefix[context_break.end() :]
             break
@@ -1739,6 +1780,18 @@ def _required_action_evidence(
             if attribution is not None
             else ""
         )
+        postfixed_attribution = _ATTRIBUTED_ACTION_SUFFIX_RE.search(action_suffix)
+        postfixed_attribution_applies = (
+            postfixed_attribution is not None
+            and _ATTRIBUTION_SCOPE_BREAK_RE.search(
+                action_suffix[: postfixed_attribution.start()]
+            )
+            is None
+            and _ATTRIBUTION_SOURCE_CONTRAST_RE.search(
+                action_suffix[: postfixed_attribution.end()]
+            )
+            is None
+        )
         if (
             (
                 attribution is not None
@@ -1750,6 +1803,7 @@ def _required_action_evidence(
                     is not None
                 )
             )
+            or postfixed_attribution_applies
             or _NEGATED_ACTION_MATCH_RE.search(match.group()) is not None
             or _NEGATED_ACTION_PREFIX_RE.search(action_prefix) is not None
         ):
