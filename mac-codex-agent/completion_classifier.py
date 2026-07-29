@@ -335,32 +335,48 @@ _RESOLUTION_RE = re.compile(
     re.IGNORECASE,
 )
 _NON_PUNCTUATION_WORD_TOKEN_PATTERN = r"[A-Za-z]+(?:[-'’][A-Za-z]+)*"
-_NON_CLAUSE_WORD_TOKEN_PATTERN = (
-    rf"(?!(?:and|but|or|that|which|who)\b)"
-    rf"{_NON_PUNCTUATION_WORD_TOKEN_PATTERN}"
+_CONFIRMATION_MAIN_SUBJECT_PATTERN = (
+    r"(?:I|we|you|they|he|she|it|approval|authorization|verification|"
+    r"(?:(?:the|our|your|their|this|that)[ \t]+"
+    r"(?:[A-Za-z-]+[ \t]+){0,2}[A-Za-z-]+))"
 )
-_BOUNDED_NON_CLAUSE_TOKEN_SPAN_PATTERN = (
-    rf"(?:[ \t]+{_NON_CLAUSE_WORD_TOKEN_PATTERN}){{0,6}}"
+_STRICT_CONFIRMATION_SUBJECT_PATTERN = (
+    r"(?:I|we|you|they|he|she|it|approval|authorization|verification|"
+    r"the[ \t]+team|the[ \t]+incident[ \t]+report)"
 )
-_DEFERRED_CAN_MARKER_LOOKAHEAD_PATTERN = (
-    rf"(?=(?:[ \t]+{_NON_CLAUSE_WORD_TOKEN_PATTERN}){{0,5}}"
-    rf"[ \t]+(?:later|eventually)\b)"
+_STRICT_OCCURRED_CONFIRMATION_PREDICATE_PATTERN = (
+    r"(?:confirm(?:s|ed)|did[ \t]+confirm|"
+    r"(?:has|have|had)[ \t]+(?:been[ \t]+)?confirmed|"
+    r"(?:is|was)[ \t]+confirmed)"
 )
-_FOCUS_NEGATION_PARTICLE_PATTERN = r"(?:only|merely|just|simply)"
-_DIRECT_FOCUS_CONFIRMATION_PATTERN = (
-    rf"[ \t]+{_FOCUS_NEGATION_PARTICLE_PATTERN}"
-    rf"(?:[ \t]+[A-Za-z]+ly){{0,3}}[ \t]+"
-    rf"(?:(?:been[ \t]+)?confirmed|confirm)\b"
+_STRICT_CONFIRMATION_PREDICATE_PATTERN = (
+    rf"(?:{_STRICT_OCCURRED_CONFIRMATION_PREDICATE_PATTERN}|can[ \t]+confirm)"
 )
-_EXPECTATION_AUXILIARY_PATTERN = (
-    r"(?:is|are|was|were|has|have|had|will|would|"
-    r"(?:isn|aren|wasn|weren|hasn|haven|hadn|won|wouldn)['’]t)"
+_CONFIRMATION_OCCURRED_ADVERB_PATTERN = (
+    r"(?:later|subsequently|finally|eventually|explicitly)"
+)
+_STRICT_POSITIVE_CONFIRMATION_EVENT_PATTERN = (
+    rf"(?:{_STRICT_CONFIRMATION_SUBJECT_PATTERN}[ \t]+"
+    rf"(?:can[ \t]+not[ \t]+only[ \t]+confirm|"
+    rf"{_STRICT_CONFIRMATION_PREDICATE_PATTERN})|"
+    rf"(?:{_CONFIRMATION_OCCURRED_ADVERB_PATTERN}[ \t]+){{1,2}}"
+    rf"{_STRICT_CONFIRMATION_SUBJECT_PATTERN}[ \t]+"
+    rf"{_STRICT_OCCURRED_CONFIRMATION_PREDICATE_PATTERN}|"
+    rf"(?:{_CONFIRMATION_OCCURRED_ADVERB_PATTERN}[ \t]+){{0,2}}"
+    r"confirm(?:s|ed))"
+)
+_NONPOSITIVE_CONFIRMATION_EVENT_PATTERN = (
+    rf"(?:{_NON_PUNCTUATION_WORD_TOKEN_PATTERN}"
+    rf"[^\r\n.!?;]{{1,120}}?)?"
+    r"\bconfirm(?:s|ed|ing)?[ \t]*,?[ \t]+that"
+)
+_PREFIXED_CONFIRMATION_EVENT_PATTERN = (
+    r"[A-Za-z]+confirm(?:s|ed|ing)?[ \t]*,?[ \t]+that"
 )
 _EXPECTATION_RESOLUTION_PREFIX_RE = re.compile(
-    rf"\b(?:expect(?:ed|ing|s)?|anticipat(?:e|ed|es|ing)|"
-    rf"(?:(?:the|our|my|your|their|its)[ \t]+)?expectations?[ \t]+"
-    rf"{_EXPECTATION_AUXILIARY_PATTERN}"
-    rf"{_BOUNDED_NON_CLAUSE_TOKEN_SPAN_PATTERN}[ \t]+that)\b",
+    r"\b(?:expect(?:ed|ing|s)?|anticipat(?:e|ed|es|ing)|"
+    r"(?:(?:the|our|my|your|their|its)[ \t]+)?expectations?"
+    r"[^\r\n.!?;]{0,60}\bthat)\b",
     re.IGNORECASE,
 )
 _INVALID_RESOLUTION_PREFIX_RE = re.compile(
@@ -391,7 +407,7 @@ _INVALID_RESOLUTION_SUFFIX_RE = re.compile(
     re.IGNORECASE,
 )
 _RESOLUTION_CONTEXT_BREAK_RE = re.compile(
-    r"\bbut\b|[;；]|,[ \t]*(?:although|yet)\b|"
+    r"\bbut\b|[;；]|,[ \t]*(?:although|yet|then)\b|"
     r"\bhowever\b(?![ \t]*,[ \t]*that\b)|"
     r",[ \t]+(?:and|so)[ \t]*$",
     re.IGNORECASE,
@@ -404,97 +420,26 @@ _LEADING_RESOLUTION_REVERSAL_RE = re.compile(
 )
 _CORRELATIVE_NOT_ONLY_RE = re.compile(r"\bnot[ \t]+only\b", re.IGNORECASE)
 _CONFIRMATION_POLARITY_RE = re.compile(
-    rf"""
-    \b(?:
-        (?P<negative>
-            (?:
-                (?:(?:(?:(?:has|have|had|is|are|was|were)
-                            {_BOUNDED_NON_CLAUSE_TOKEN_SPAN_PATTERN}
-                            [ \t]+(?:not|never)
-                        |(?:hasn|haven|hadn|isn|aren|wasn|weren)['’]t)
-                        (?!{_DIRECT_FOCUS_CONFIRMATION_PATTERN})
-                    |(?:mightn|mustn|won|wouldn|couldn|shouldn)['’]t
-                    |cannot|can['’]t
-                    |(?:may|might|must|will|would|can|could|should)[ \t]+not)
-                    {_BOUNDED_NON_CLAUSE_TOKEN_SPAN_PATTERN}
-                    [ \t]+confirmed[ \t]*,?[ \t]+that)
-                |
-                (?:
-                    (?:(?:is[ \t]+not|isn't|was[ \t]+not|wasn't|not)
-                        [ \t]+(?:true|the[ \t]+case)[ \t]+that
-                    |(?:do[ \t]+not|don't)[ \t]+assume)
-                    [ \t]+(?:(?:I|we|you|they|he|she|it)[ \t]+)?
-                    (?:(?:has|have|had)[ \t]+)?confirm(?:s|ed)?
-                )
-                |
-                (?:
-                (?:(?:(?:(?:do|does|did|has|have|had)[ \t]+not
-                            |(?:don|doesn|didn|hasn|haven|hadn)['’]t)
-                            (?!{_DIRECT_FOCUS_CONFIRMATION_PATTERN})
-                        |(?:will|would|can|could|may|might|must|should)[ \t]+not
-                        |(?:mightn|mustn|won|wouldn|couldn|shouldn)['’]t
-                        |cannot|can['’]t)
-                        {_BOUNDED_NON_CLAUSE_TOKEN_SPAN_PATTERN}[ \t]+confirm(?:ed)?
-                    |(?:not|never)[ \t]+confirmed?)
-                    [ \t]*,?[ \t]+that
-                )
-                |
-                (?:(?:has|have|had)[ \t]+)?den(?:y|ies|ied)[ \t]+that
-            )
-        )
-        |
-        (?P<nonpositive>
-            (?:(?:may|might|must|should|would|will|could)
-                {_BOUNDED_NON_CLAUSE_TOKEN_SPAN_PATTERN}[ \t]+confirm(?:ed)?
-            |can{_DEFERRED_CAN_MARKER_LOOKAHEAD_PATTERN}
-                {_BOUNDED_NON_CLAUSE_TOKEN_SPAN_PATTERN}[ \t]+confirm
-            |can{_BOUNDED_NON_CLAUSE_TOKEN_SPAN_PATTERN}[ \t]+(?:be|have)
-                {_BOUNDED_NON_CLAUSE_TOKEN_SPAN_PATTERN}[ \t]+confirmed
-            |(?:may|might|must|should|would|will|could)['’]ve
-                {_BOUNDED_NON_CLAUSE_TOKEN_SPAN_PATTERN}[ \t]+confirm(?:ed)?
-            |(?:has|have|had)[ \t]+yet[ \t]+to[ \t]+confirm)
-            [ \t]*,?[ \t]+that
-        )
-        |
-        (?P<positive>
-            (?:(?:has|have|had)[ \t]+(?:been[ \t]+)?confirmed
-            |(?:do|does|did)[ \t]+confirm
-            |can{_BOUNDED_NON_CLAUSE_TOKEN_SPAN_PATTERN}[ \t]+confirm
-            |confirm(?:s|ed))
-            [ \t]*,?[ \t]+that
-        )
-    )\b
-    """,
+    rf"\b(?:"
+    rf"(?P<positive>{_STRICT_POSITIVE_CONFIRMATION_EVENT_PATTERN}"
+    rf"[ \t]*,?[ \t]+that)|"
+    rf"(?P<nonpositive>{_NONPOSITIVE_CONFIRMATION_EVENT_PATTERN}|"
+    rf"{_PREFIXED_CONFIRMATION_EVENT_PATTERN}|"
+    r"(?:(?:has|have|had)[ \t]+)?den(?:y|ies|ied)[ \t]+that))\b",
     re.IGNORECASE | re.VERBOSE,
 )
-_CONFIRMATION_MAIN_SUBJECT_PATTERN = (
-    r"(?:I|we|you|they|he|she|it|approval|authorization|verification|"
-    r"(?:(?:the|our|your|their|this|that)[ \t]+"
-    r"(?:[A-Za-z-]+[ \t]+){0,2}[A-Za-z-]+))"
-)
-_CONFIRMATION_BREAK_SAFE_WORD_TOKEN_PATTERN = (
-    rf"(?!(?:and|but|or|that|which|who|not|never|may|might|must|will|"
-    rf"would|can|could|should|is|are|am|be|been|being|going|to|do|does|"
-    rf"did|has|have|had|was|were)\b)"
-    rf"{_NON_PUNCTUATION_WORD_TOKEN_PATTERN}"
-)
-_CONFIRMATION_BREAK_SAFE_TOKEN_SPAN_PATTERN = (
-    rf"(?:[ \t]+{_CONFIRMATION_BREAK_SAFE_WORD_TOKEN_PATTERN}){{0,3}}"
-)
 _CONFIRMATION_OCCURRED_POSITIVE_PREDICATE_PATTERN = (
-    rf"(?:{_CONFIRMATION_BREAK_SAFE_TOKEN_SPAN_PATTERN}[ \t]+confirmed|"
-    rf"[ \t]+(?:is|are){_CONFIRMATION_BREAK_SAFE_TOKEN_SPAN_PATTERN}"
-    rf"[ \t]+confirmed|"
-    rf"[ \t]+(?:was|were){_CONFIRMATION_BREAK_SAFE_TOKEN_SPAN_PATTERN}"
-    rf"[ \t]+confirmed|"
-    rf"[ \t]+(?:has|have|had){_CONFIRMATION_BREAK_SAFE_TOKEN_SPAN_PATTERN}"
-    rf"(?:[ \t]+been{_CONFIRMATION_BREAK_SAFE_TOKEN_SPAN_PATTERN})?"
-    rf"[ \t]+confirmed|"
-    rf"[ \t]+did{_CONFIRMATION_BREAK_SAFE_TOKEN_SPAN_PATTERN}[ \t]+confirm)"
+    _STRICT_OCCURRED_CONFIRMATION_PREDICATE_PATTERN
+)
+_CONFIRMATION_BREAK_ADVERB_SPAN_PATTERN = (
+    rf"(?:(?:{_CONFIRMATION_OCCURRED_ADVERB_PATTERN})[ \t]+){{0,2}}"
+)
+_CONFIRMATION_REQUIRED_BREAK_ADVERB_SPAN_PATTERN = (
+    rf"(?:(?:{_CONFIRMATION_OCCURRED_ADVERB_PATTERN})[ \t]+){{1,2}}"
 )
 _CONFIRMATION_EXPLICIT_SUBJECT_POSITIVE_PATTERN = (
-    rf"{_CONFIRMATION_BREAK_SAFE_TOKEN_SPAN_PATTERN}[ \t]+"
-    rf"{_CONFIRMATION_MAIN_SUBJECT_PATTERN}"
+    rf"[ \t]+{_CONFIRMATION_BREAK_ADVERB_SPAN_PATTERN}"
+    rf"{_STRICT_CONFIRMATION_SUBJECT_PATTERN}[ \t]+"
     rf"{_CONFIRMATION_OCCURRED_POSITIVE_PREDICATE_PATTERN}"
 )
 _CONFIRMATION_EXPLICIT_SUBJECT_BREAK_RE = re.compile(
@@ -503,7 +448,10 @@ _CONFIRMATION_EXPLICIT_SUBJECT_BREAK_RE = re.compile(
     re.IGNORECASE,
 )
 _CONFIRMATION_INHERITED_SUBJECT_BREAK_RE = re.compile(
-    rf",[ \t]*(?:but|then)\b"
+    rf"(?:,[ \t]*(?:but|then)\b[ \t]+"
+    rf"{_CONFIRMATION_BREAK_ADVERB_SPAN_PATTERN}|"
+    rf",[ \t]*however[ \t]*,[ \t]+"
+    rf"{_CONFIRMATION_REQUIRED_BREAK_ADVERB_SPAN_PATTERN})"
     rf"{_CONFIRMATION_OCCURRED_POSITIVE_PREDICATE_PATTERN}\b",
     re.IGNORECASE,
 )
@@ -518,8 +466,10 @@ _CONFIRMATION_LIST_TAIL_RE = re.compile(
 )
 _CONFIRMATION_PRIOR_RESOLUTION_COORDINATED_BREAK_RE = re.compile(
     rf"(?:,[ \t]*and\b(?:{_CONFIRMATION_EXPLICIT_SUBJECT_POSITIVE_PATTERN}|"
+    rf"[ \t]+{_CONFIRMATION_BREAK_ADVERB_SPAN_PATTERN}"
     rf"{_CONFIRMATION_OCCURRED_POSITIVE_PREDICATE_PATTERN})|"
     rf",[ \t]*however[ \t]*,"
+    rf"[ \t]*{_CONFIRMATION_BREAK_ADVERB_SPAN_PATTERN}"
     rf"{_CONFIRMATION_OCCURRED_POSITIVE_PREDICATE_PATTERN})\b",
     re.IGNORECASE,
 )
