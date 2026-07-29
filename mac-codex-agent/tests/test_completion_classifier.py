@@ -822,6 +822,21 @@ class CompletionClassifierTests(unittest.TestCase):
                     ("completed", "text_explicitly_resolved"),
                 )
 
+    def test_bounded_compact_chinese_alternatives_are_choice_scope(self):
+        messages = (
+            "红色还是蓝色？无需选择。",
+            "生产还是预发？无需选择。",
+            "继续还是停止？无需选择。",
+        )
+
+        for message in messages:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("completed", "text_explicitly_resolved"),
+                )
+
     def test_direct_imperatives_and_chinese_coordination_require_action(self):
         messages = (
             "Choose production or staging.",
@@ -999,6 +1014,34 @@ class CompletionClassifierTests(unittest.TestCase):
                     ("waiting", "text_required_action"),
                 )
 
+    def test_bounded_imperatives_are_distinct_from_report_continuations(self):
+        action_messages = (
+            "The build is ready: review code.",
+            "The build is ready — retry build.",
+            "The build is ready: provide token.",
+            "The build is ready — confirm deployment.",
+            "构建完成：提供令牌。",
+        )
+        report_messages = (
+            "Results: review the diff was successful.",
+            "Report — review the code passed.",
+        )
+
+        for message in action_messages:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("waiting", "text_required_action"),
+                )
+        for message in report_messages:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("completed", "completion_only"),
+                )
+
     def test_direct_action_patterns_accept_horizontal_whitespace(self):
         messages = (
             "Can\tyou confirm deployment.",
@@ -1102,7 +1145,7 @@ class CompletionClassifierTests(unittest.TestCase):
 
         self.assertEqual(
             (result.outcome, result.reason),
-            ("waiting", "text_required_action"),
+            ("completed", "text_explicitly_resolved"),
         )
 
     def test_unqualified_no_reply_resolves_communicative_choices_only(self):
@@ -1111,10 +1154,12 @@ class CompletionClassifierTests(unittest.TestCase):
             "Which should I use? No reply is required.",
             "Options:\nA. Production\nB. Staging\n"
             "Which should I use? No reply is required.",
-        )
-        unresolved_messages = (
             "I need your confirmation, your choice, and your input. "
             "No confirmation is required. No reply is required.",
+            "I need your choice. No reply is required.",
+            "Waiting for your choice. No reply is required.",
+        )
+        unresolved_messages = (
             "No reply is required. Which should I use?",
             "Please reply with A or B. No reply is required for C or D.",
         )

@@ -93,10 +93,19 @@ _ACTION_LIST_PREFIX_RE = re.compile(
     r"actions?[ \t]+required)\s*$",
     re.IGNORECASE,
 )
-_CLEAR_IMPERATIVE_OBJECT_RE = re.compile(
-    r"^[ \t]+(?:the|an?|this|that|these|those|your|our)[ \t]+"
+_IMPERATIVE_OBJECT_RE = re.compile(
+    r"^[ \t]+(?:(?:the|an?|this|that|these|those|your|our)[ \t]+)?"
     r"[A-Za-z0-9][A-Za-z0-9_-]*\b|"
-    r"^(?:差异|代码|结果|部署|构建)",
+    r"^[\u3400-\u9fff]{1,16}",
+    re.IGNORECASE,
+)
+_REPORT_CONTINUATION_RE = re.compile(
+    r"^[ \t]+(?:successful|finished|pending|complete(?:d)?|passed|failed)\b|"
+    r"^[ \t]+(?:(?:the|an?|this|that|these|those|your|our)[ \t]+)?"
+    r"[A-Za-z0-9][A-Za-z0-9_-]*[ \t]+"
+    r"(?:(?:is|are|was|were|has|have|had)\b|"
+    r"(?:passed|succeeded|failed|completed|finished)\b)|"
+    r"^(?:成功|完成|通过|失败|待定|处理中)",
     re.IGNORECASE,
 )
 _REPORT_NOUN_SUFFIX_RE = re.compile(
@@ -146,6 +155,12 @@ _ALTERNATIVE_CHOICE_RE = re.compile(
     r"(?:你|您)[^\r\n。！？.!?؟]{0,12}"
     r"(?:要|希望|想|使用|选择|选)[^\r\n。！？.!?؟]{0,16}"
     r"还是[^\r\n。！？.!?؟]{1,16}|"
+    r"^\s*(?![\u3400-\u9fff]{0,12}(?:使用|采用|报告))"
+    r"(?![\u3400-\u9fff]{1,8}还是(?:没|未|不))"
+    r"(?![\u3400-\u9fff]{1,8}还是"
+    r"[\u3400-\u9fff]{0,8}(?:了)?吗\s*[？?])"
+    r"[\u3400-\u9fff]{1,8}[ \t]*还是[ \t]*"
+    r"[\u3400-\u9fff]{1,8}\s*[？?]?[。.]?\s*$|"
     r"^\s*[\u3400-\u9fff][ \t]*还是[ \t]*"
     r"[\u3400-\u9fff]\s*[？?]?[。.]?\s*$|"
     r"^\s*(?![\u3400-\u9fff]{0,12}(?:使用|采用|报告))"
@@ -273,7 +288,6 @@ class _EvidenceScope(enum.Enum):
     REPLY = "reply"
     CONFIRMATION = "confirmation"
     CHOICE = "choice"
-    REQUIREMENT_CHOICE = "requirement_choice"
     EXECUTION = "execution"
 
 
@@ -519,12 +533,6 @@ def _action_scopes(match: re.Match[str], clause: _Clause) -> FrozenSet[_Evidence
     if re.search(
         r"(?:选择|\bchoose\b|\bselect\b|\bchoice\b)", action, re.IGNORECASE
     ):
-        owned_requirement = (
-            _OWNED_REQUIREMENT_RE.search(action) is not None
-            or _COORDINATED_REQUIREMENT_NOUN_RE.fullmatch(action) is not None
-        )
-        if owned_requirement and re.search(r"\bchoice\b", action, re.IGNORECASE):
-            return frozenset({_EvidenceScope.REQUIREMENT_CHOICE})
         return frozenset({_EvidenceScope.CHOICE})
     if re.search(
         r"(?:确认|\bconfirm(?:ation)?\b)", action, re.IGNORECASE
@@ -559,9 +567,7 @@ def _resolution_scopes(match: re.Match[str]) -> FrozenSet[_EvidenceScope]:
     if match.lastgroup == "confirmation":
         return frozenset({_EvidenceScope.CONFIRMATION})
     if match.lastgroup == "choice":
-        return frozenset(
-            {_EvidenceScope.CHOICE, _EvidenceScope.REQUIREMENT_CHOICE}
-        )
+        return frozenset({_EvidenceScope.CHOICE})
     return _ALL_SCOPES
 
 
@@ -955,8 +961,12 @@ def _required_action_evidence(
             action_list = _ACTION_LIST_PREFIX_RE.search(boundary_context) is not None
             if boundary.group().strip() not in {";", "；"}:
                 suffix = prose[match.end() : match.end() + 80]
-                clear_object = _CLEAR_IMPERATIVE_OBJECT_RE.search(suffix) is not None
-                if not action_list and not clear_object:
+                has_object = _IMPERATIVE_OBJECT_RE.search(suffix) is not None
+                report_continuation = (
+                    _REPORT_CONTINUATION_RE.search(suffix) is not None
+                    or _REPORT_NOUN_SUFFIX_RE.search(suffix) is not None
+                )
+                if not action_list and (not has_object or report_continuation):
                     continue
             else:
                 suffix = prose[match.end() : match.end() + 80]
