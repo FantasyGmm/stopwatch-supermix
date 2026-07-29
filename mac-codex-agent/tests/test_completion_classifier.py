@@ -582,6 +582,23 @@ class CompletionClassifierTests(unittest.TestCase):
                     ("waiting", "text_required_action"),
                 )
 
+    def test_flexible_attribution_does_not_resolve_live_requests(self):
+        reported_resolutions = (
+            "According to our docs, no confirmation is required.",
+            "The docs clearly say no confirmation is required.",
+            "According  to the docs, no confirmation is required.",
+        )
+
+        for reported_resolution in reported_resolutions:
+            with self.subTest(reported_resolution=reported_resolution):
+                result = classify_completion(
+                    f"Please confirm production. {reported_resolution}"
+                )
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("waiting", "text_required_action"),
+                )
+
     def test_future_marker_on_assistant_continuation_does_not_void_resolution(self):
         result = classify_completion("需要我继续吗？无需回复，之后我会继续。")
 
@@ -678,6 +695,27 @@ class CompletionClassifierTests(unittest.TestCase):
                     ("completed", "text_explicitly_resolved"),
                 )
 
+    def test_referent_normalization_strips_preposition_and_article(self):
+        result = classify_completion(
+            "Should I deploy to the staging environment? "
+            "No confirmation is required for the staging environment."
+        )
+
+        self.assertEqual(
+            (result.outcome, result.reason),
+            ("completed", "text_explicitly_resolved"),
+        )
+
+    def test_plain_conjunction_question_is_not_choice_scope(self):
+        result = classify_completion(
+            "Does the report cover A and B? No choice is required."
+        )
+
+        self.assertEqual(
+            (result.outcome, result.reason),
+            ("waiting", "text_direct_question"),
+        )
+
     def test_direct_imperatives_and_chinese_coordination_require_action(self):
         messages = (
             "Choose production or staging.",
@@ -728,12 +766,57 @@ class CompletionClassifierTests(unittest.TestCase):
                     ("waiting", "text_required_action"),
                 )
 
+    def test_report_nouns_after_boundaries_are_not_imperatives(self):
+        messages = (
+            "Completed phases: review, test, deploy.",
+            "The report contains two sections: review and deployment.",
+            "The build lifecycle has two phases; review is handled automatically.",
+        )
+
+        for message in messages:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("completed", "completion_only"),
+                )
+
+    def test_direct_action_patterns_accept_horizontal_whitespace(self):
+        messages = (
+            "Can\tyou confirm deployment.",
+            "Need\tyour confirmation.",
+            "Waiting\tfor your reply.",
+        )
+
+        for message in messages:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("waiting", "text_required_action"),
+                )
+
     def test_bounded_coordinated_actions_survive_confirmation_resolution(self):
         messages = (
             "Please confirm deployment and also provide token. "
             "No confirmation is required.",
             "请确认部署并在准备好后再提供缺失令牌。无需确认。",
             "请确认部署然后再提供缺失令牌。无需确认。",
+        )
+
+        for message in messages:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("waiting", "text_required_action"),
+                )
+
+    def test_coordinated_noun_requirements_emit_independent_evidence(self):
+        messages = (
+            "I need your confirmation and input. No confirmation is required.",
+            "Waiting for your confirmation and input. "
+            "No confirmation is required.",
         )
 
         for message in messages:
@@ -844,6 +927,22 @@ class CompletionClassifierTests(unittest.TestCase):
                     ("waiting", "text_choice_handoff"),
                 )
 
+    def test_flexible_option_headings_activate_their_group(self):
+        headings = (
+            "Here are the options:",
+            "Two options:",
+            "可选方案：",
+            "以下是方案：",
+        )
+
+        for heading in headings:
+            with self.subTest(heading=heading):
+                result = classify_completion(f"{heading}\nA. one\nB. two")
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("waiting", "text_choice_handoff"),
+                )
+
     def test_next_block_choice_question_anchors_preceding_option_group(self):
         result = classify_completion(
             "A. Production\n"
@@ -913,6 +1012,14 @@ class CompletionClassifierTests(unittest.TestCase):
             with self.subTest(message=message):
                 result = classify_completion(message)
                 self.assertEqual((result.outcome, result.reason), (outcome, reason))
+
+    def test_typographic_courtesy_contraction_is_optional(self):
+        result = classify_completion("Let me know if you’d like more help.")
+
+        self.assertEqual(
+            (result.outcome, result.reason),
+            ("completed", "completion_only"),
+        )
 
     def test_historical_quote_context_applies_to_one_adjacent_span(self):
         cases = (

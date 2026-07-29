@@ -65,9 +65,10 @@ _REQUIRED_ACTION_RE = re.compile(
     r"需要(?:你|您)(?:确认|选择|提供|回复|操作)|"
     r"需要进一步指令|无法继续|"
     r"\bplease[ \t]+(?:confirm|choose|select|provide|reply|retry|review)\b|"
-    r"\bcan you (?:confirm|choose|select|provide|reply|retry|review)\b|"
-    r"\bwaiting for your (?:reply|confirmation|choice|input)\b|"
-    r"\bneed your (?:confirmation|choice|input|reply)\b|"
+    r"\bcan[ \t]+you[ \t]+(?:confirm|choose|select|provide|reply|retry|review)\b|"
+    r"\bwaiting[ \t]+for[ \t]+your[ \t]+"
+    r"(?:reply|confirmation|choice|input)\b|"
+    r"\bneed[ \t]+your[ \t]+(?:confirmation|choice|input|reply)\b|"
     r"\bcannot continue\b|\blet me know\b|告诉我)",
     re.IGNORECASE,
 )
@@ -77,9 +78,15 @@ _IMPERATIVE_ACTION_RE = re.compile(
     re.IGNORECASE,
 )
 _IMPERATIVE_BOUNDARY_RE = re.compile(r"[;；:：]|[ \t]+[—–-][ \t]+")
+_REPORT_NOUN_SUFFIX_RE = re.compile(
+    r"^\s*(?:[,，]|\b(?:is|are|was|were|has|have)\b|"
+    r"\band\b(?![ \t]+(?:confirm|choose|select|provide|reply|retry|review)\b))",
+    re.IGNORECASE,
+)
 _COORDINATED_ACTION_RE = re.compile(
     r"\b(?:and|then)\s+(?:also\s+)?"
     r"(?:confirm|choose|select|provide|reply|retry|review)\b|"
+    r"\band[ \t]+(?:confirmation|choice|input|reply)\b|"
     r"(?:并且|并|然后)(?:[^\r\n。！？.!?؟]{0,20}?再)?(?:请)?"
     r"(?:确认|选择|提供|回复|重新|重试|复核)",
     re.IGNORECASE,
@@ -90,13 +97,19 @@ _COMMUNICATIVE_CHOICE_RE = re.compile(
     r"[A-Z1-9]\s*[、，,或]\s*[A-Z1-9]",
     re.IGNORECASE,
 )
+_ALTERNATIVE_CHOICE_RE = re.compile(
+    r"\b[A-Z1-9]\b[^\r\n。！？.!?؟]{0,20}\bor\b"
+    r"[^\r\n。！？.!?؟]{0,20}\b[A-Z1-9]\b|"
+    r"[A-Z1-9]\s*(?:或|还是)\s*[A-Z1-9]",
+    re.IGNORECASE,
+)
 _COURTESY_CLAUSE_RE = re.compile(
     r"(?:^\s*(?:[-*]\s*)?(?:"
-    r"if you(?:'d| would) like\b|"
+    r"if you(?:['’]d| would) like\b|"
     r"if you (?:want|need) (?:more|additional|further)\b|"
     r"如果你(?:愿意|想(?:要)?(?:了解)?更多)|"
     r"如(?:果)?需(?:要)?更多)"
-    r"|\blet me know if you(?:'d| would) like "
+    r"|\blet me know if you(?:['’]d| would) like "
     r"(?:more|additional|further)\b|"
     r"\blet me know if you (?:want|need) "
     r"(?:more|additional|further)\b)",
@@ -136,9 +149,11 @@ _RESOLUTION_RE = re.compile(
 _INVALID_RESOLUTION_PREFIX_RE = re.compile(
     r"(?:\b(?:is not|isn't|was not|wasn't|not) (?:true|the case) that\b|"
     r"\b(?:do not|don't) assume\b|"
-    r"\b(?:docs?|documentation|examples?|logs?) "
+    r"\b(?:docs?|documentation|examples?|logs?)\b"
+    r"(?:[ \t]+[A-Za-z-]+){0,2}[ \t]+"
     r"(?:say|says|state|states|said)\b|"
-    r"\b(?:according to|per) (?:the )?"
+    r"\b(?:according[ \t]+to|per)[ \t]+"
+    r"(?:(?:the|our|your|their|its)[ \t]+)?"
     r"(?:docs?|documentation|examples?|logs?)\b|"
     r"\b(?:after|once|when|if|until|then)\b|"
     r"(?:并非|不是|文档(?:说|写道|指出)|根据文档|之后|以后|如果|待))",
@@ -184,7 +199,8 @@ _OPTION_LINE_RE = re.compile(
     re.MULTILINE,
 )
 _OPTION_HEADING_RE = re.compile(
-    r"^(?:(?:Deployment|Available) options:|Options:|可用方案：|选项：|方案：)\s*$",
+    r"^(?:(?:[A-Za-z][A-Za-z -]{0,40}[ \t]+)?options[ \t]*:|"
+    r"[\u4e00-\u9fff]{0,8}(?:选项|方案)[ \t]*[：:])\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
 
@@ -339,7 +355,7 @@ def _courtesy_spans(clauses: Sequence[_Clause]) -> List[Tuple[int, int]]:
 
 
 def _question_scope(prose: str) -> _EvidenceScope:
-    if _COMMUNICATIVE_CHOICE_RE.search(prose) is not None or re.search(
+    if _ALTERNATIVE_CHOICE_RE.search(prose) is not None or re.search(
         r"(?:还是|哪(?:个|种)|如何|怎么|\bwhich\b|\bwhat option\b)",
         prose,
         re.IGNORECASE,
@@ -372,8 +388,8 @@ def _clauses(prose: str) -> List[_Clause]:
 
 def _normalize_referent(text: str) -> str | None:
     referent = re.sub(r"\s+", " ", text).strip().casefold()
-    referent = re.sub(r"^(?:the|a|an)\s+", "", referent)
     referent = re.sub(r"^(?:to|into|onto|on|in|with)\s+", "", referent)
+    referent = re.sub(r"^(?:the|a|an)\s+", "", referent)
     return referent or None
 
 
@@ -463,8 +479,9 @@ def _action_scopes(match: re.Match[str], clause: _Clause) -> FrozenSet[_Evidence
     ):
         return frozenset({_EvidenceScope.CHOICE})
     if re.search(
-        r"(?:提供|回复|告诉我|需要进一步指令|"
-        r"\b(?:provide|reply|let me know|waiting for|need your)\b)",
+        r"(?:提供|回复|告诉我|需要进一步指令|\binput\b|"
+        r"\b(?:provide|reply|let[ \t]+me[ \t]+know|"
+        r"waiting[ \t]+for|need[ \t]+your)\b)",
         action,
         re.IGNORECASE,
     ):
@@ -867,6 +884,9 @@ def _required_action_evidence(
         prefix = prose[prefix_start : match.start()]
         boundaries = list(_IMPERATIVE_BOUNDARY_RE.finditer(prefix))
         if boundaries:
+            suffix = prose[match.end() : match.end() + 80]
+            if _REPORT_NOUN_SUFFIX_RE.search(suffix) is not None:
+                continue
             prefix = prefix[boundaries[-1].end() :]
         elif prefix_start > clause_start:
             continue
