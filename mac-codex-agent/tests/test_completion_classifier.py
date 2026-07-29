@@ -68,6 +68,21 @@ class CompletionClassifierTests(unittest.TestCase):
         self.assertEqual(result.outcome, "waiting")
         self.assertEqual(result.reason, "text_direct_question")
 
+    def test_quoted_arabic_historical_question_is_completed(self):
+        result = classify_completion(
+            "The earlier log asked “هل تريد المتابعة؟”.\n\n"
+            "The repair is complete and no action remains."
+        )
+
+        self.assertEqual(result.outcome, "completed")
+        self.assertEqual(result.reason, "completion_only")
+
+    def test_inverted_question_punctuation_is_waiting(self):
+        result = classify_completion("¿Desea continuar.")
+
+        self.assertEqual(result.outcome, "waiting")
+        self.assertEqual(result.reason, "text_direct_question")
+
     def test_self_answered_explanation_is_completed(self):
         result = classify_completion(
             "为什么构建失败？原因是缓存中的 Pillow 只有 arm64 架构。\n\n"
@@ -80,6 +95,14 @@ class CompletionClassifierTests(unittest.TestCase):
     def test_directed_question_is_not_mistaken_for_self_answer(self):
         result = classify_completion(
             "你希望为什么选择方案 1？原因可以在确认后补充。"
+        )
+
+        self.assertEqual(result.outcome, "waiting")
+        self.assertEqual(result.reason, "text_direct_question")
+
+    def test_possessive_self_answer_cue_is_not_mistaken_for_directed_question(self):
+        result = classify_completion(
+            "Which deployment should run? The answer is yours."
         )
 
         self.assertEqual(result.outcome, "waiting")

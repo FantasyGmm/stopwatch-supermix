@@ -42,23 +42,24 @@ _FENCED_CODE_RE = re.compile(r"```.*?```", re.DOTALL)
 _INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
 _MARKDOWN_LINK_TARGET_RE = re.compile(r"\]\([^)\n]*\)")
 _URL_RE = re.compile(r"https?://\S+")
+_QUESTION_MARK_CHARS = r"?？؟¿"
+_QUESTION_MARK_RE = re.compile(rf"[{_QUESTION_MARK_CHARS}]")
 _QUOTED_QUESTION_RE = re.compile(
     r"(?:"
-    r"“[^”\n]*[?？][^”\n]*”|"
-    r"‘[^’\n]*[?？][^’\n]*’|"
-    r"\"[^\"\n]*[?？][^\"\n]*\"|"
-    r"'[^'\n]*[?？][^'\n]*'"
+    rf"“[^”\n]*[{_QUESTION_MARK_CHARS}][^”\n]*”|"
+    rf"‘[^’\n]*[{_QUESTION_MARK_CHARS}][^’\n]*’|"
+    rf"\"[^\"\n]*[{_QUESTION_MARK_CHARS}][^\"\n]*\"|"
+    rf"'[^'\n]*[{_QUESTION_MARK_CHARS}][^'\n]*'"
     r")"
 )
 _NON_PROSE_LINE_RE = re.compile(r"^\s*(?:#{1,6}\s+|>)")
-_QUESTION_MARK_RE = re.compile(r"[?？؟¿]")
 _ANSWER_CUE_RE = re.compile(
     r"(?:原因(?:是|在于)|答案(?:是|为)|"
     r"\bbecause\b|\bthe answer is\b)",
     re.IGNORECASE,
 )
 _SECOND_PERSON_RE = re.compile(
-    r"(?:你|您|\byou\b|\byour\b)",
+    r"(?:你|您|\b(?:you|your|yours|yourself|yourselves)\b)",
     re.IGNORECASE,
 )
 _OPTION_RE = re.compile(
