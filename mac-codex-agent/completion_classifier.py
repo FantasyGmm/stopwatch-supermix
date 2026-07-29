@@ -64,7 +64,7 @@ _REQUIRED_ACTION_RE = re.compile(
     r"等待(?:你的)?(?:回复|确认)|"
     r"需要(?:你|您)(?:确认|选择|提供|回复|操作)|"
     r"需要进一步指令|无法继续|"
-    r"\bplease (?:confirm|choose|select|provide|reply|retry|review)\b|"
+    r"\bplease[ \t]+(?:confirm|choose|select|provide|reply|retry|review)\b|"
     r"\bcan you (?:confirm|choose|select|provide|reply|retry|review)\b|"
     r"\bwaiting for your (?:reply|confirmation|choice|input)\b|"
     r"\bneed your (?:confirmation|choice|input|reply)\b|"
@@ -76,6 +76,7 @@ _IMPERATIVE_ACTION_RE = re.compile(
     r"(?:确认|选择|提供|回复|重新|重试|复核)",
     re.IGNORECASE,
 )
+_IMPERATIVE_BOUNDARY_RE = re.compile(r"[;；:：]|[ \t]+[—–-][ \t]+")
 _COORDINATED_ACTION_RE = re.compile(
     r"\b(?:and|then)\s+(?:also\s+)?"
     r"(?:confirm|choose|select|provide|reply|retry|review)\b|"
@@ -95,7 +96,9 @@ _COURTESY_CLAUSE_RE = re.compile(
     r"if you (?:want|need) (?:more|additional|further)\b|"
     r"如果你(?:愿意|想(?:要)?(?:了解)?更多)|"
     r"如(?:果)?需(?:要)?更多)"
-    r"|\blet me know if you (?:would like|want|need) "
+    r"|\blet me know if you(?:'d| would) like "
+    r"(?:more|additional|further)\b|"
+    r"\blet me know if you (?:want|need) "
     r"(?:more|additional|further)\b)",
     re.IGNORECASE,
 )
@@ -135,8 +138,10 @@ _INVALID_RESOLUTION_PREFIX_RE = re.compile(
     r"\b(?:do not|don't) assume\b|"
     r"\b(?:docs?|documentation|examples?|logs?) "
     r"(?:say|says|state|states|said)\b|"
+    r"\b(?:according to|per) (?:the )?"
+    r"(?:docs?|documentation|examples?|logs?)\b|"
     r"\b(?:after|once|when|if|until|then)\b|"
-    r"(?:并非|不是|文档(?:说|写道|指出)|之后|以后|如果|待))",
+    r"(?:并非|不是|文档(?:说|写道|指出)|根据文档|之后|以后|如果|待))",
     re.IGNORECASE,
 )
 _INVALID_RESOLUTION_SUFFIX_RE = re.compile(
@@ -178,7 +183,10 @@ _OPTION_LINE_RE = re.compile(
     r"^[ \t]*(?:[-*][ \t]*)?([A-Z]|[1-9])\s*[.、:：)）][ \t]*\S+",
     re.MULTILINE,
 )
-_OPTION_HEADING_RE = re.compile(r"^(?:Options:|可用方案：)\s*$", re.MULTILINE)
+_OPTION_HEADING_RE = re.compile(
+    r"^(?:(?:Deployment|Available) options:|Options:|可用方案：|选项：|方案：)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
 
 
 class _EvidenceKind(enum.Enum):
@@ -240,6 +248,13 @@ class _Clause:
     end: int
     question_scope: _EvidenceScope
     communicative_choice: bool
+
+
+@dataclasses.dataclass(frozen=True)
+class _OptionIndex:
+    matches: Tuple[re.Match[str], ...]
+    line_spans: Tuple[Tuple[int, int], ...]
+    body_spans: Tuple[Tuple[int, int], ...]
 
 
 def _strip_non_prose(message: str) -> str:
@@ -324,7 +339,7 @@ def _courtesy_spans(clauses: Sequence[_Clause]) -> List[Tuple[int, int]]:
 
 
 def _question_scope(prose: str) -> _EvidenceScope:
-    if re.search(
+    if _COMMUNICATIVE_CHOICE_RE.search(prose) is not None or re.search(
         r"(?:还是|哪(?:个|种)|如何|怎么|\bwhich\b|\bwhat option\b)",
         prose,
         re.IGNORECASE,
@@ -358,6 +373,7 @@ def _clauses(prose: str) -> List[_Clause]:
 def _normalize_referent(text: str) -> str | None:
     referent = re.sub(r"\s+", " ", text).strip().casefold()
     referent = re.sub(r"^(?:the|a|an)\s+", "", referent)
+    referent = re.sub(r"^(?:to|into|onto|on|in|with)\s+", "", referent)
     return referent or None
 
 
@@ -426,9 +442,13 @@ def _action_scopes(match: re.Match[str], clause: _Clause) -> FrozenSet[_Evidence
         r"(?:重新|重试|复核|操作|\b(?:retry|review)\b)", action, re.IGNORECASE
     ):
         return frozenset({_EvidenceScope.EXECUTION})
-    if re.search(r"(?:选择|\bchoose\b|\bselect\b)", action, re.IGNORECASE):
+    if re.search(
+        r"(?:选择|\bchoose\b|\bselect\b|\bchoice\b)", action, re.IGNORECASE
+    ):
         return frozenset({_EvidenceScope.CHOICE})
-    if re.search(r"(?:确认|\bconfirm\b)", action, re.IGNORECASE):
+    if re.search(
+        r"(?:确认|\bconfirm(?:ation)?\b)", action, re.IGNORECASE
+    ):
         return frozenset({_EvidenceScope.CONFIRMATION})
     if re.search(r"\b(?:reply|respond)\b", action, re.IGNORECASE) and re.search(
         r"\b(?:reply|respond)\b[^\r\n。！？.!?؟]{0,24}"
@@ -558,24 +578,21 @@ def _question_evidence(
     return evidence
 
 
-def _option_line_spans(
-    prose: str, option_matches: Sequence[re.Match[str]]
-) -> List[Tuple[int, int]]:
-    spans = []
-    for match in option_matches:
+def _option_index(prose: str) -> _OptionIndex:
+    matches = tuple(_OPTION_LINE_RE.finditer(prose))
+    line_spans = []
+    body_spans = []
+    for index, match in enumerate(matches):
         line_end = prose.find("\n", match.start())
-        spans.append((match.start(), line_end if line_end >= 0 else len(prose)))
-    return spans
-
-
-def _option_body_spans(
-    prose: str, option_matches: Sequence[re.Match[str]]
-) -> List[Tuple[int, int]]:
-    spans = []
-    for start, line_end in _option_line_spans(prose, option_matches):
+        if line_end < 0:
+            line_end = len(prose)
+        line_spans.append((match.start(), line_end))
         body_end = line_end
         cursor = line_end + 1
-        while cursor < len(prose):
+        next_option_start = (
+            matches[index + 1].start() if index + 1 < len(matches) else len(prose)
+        )
+        while cursor < next_option_start:
             next_end = prose.find("\n", cursor)
             if next_end < 0:
                 next_end = len(prose)
@@ -584,13 +601,14 @@ def _option_body_spans(
                 break
             body_end = next_end
             cursor = next_end + 1
-        spans.append((start, body_end))
-    return spans
+        body_spans.append((match.start(), body_end))
+    return _OptionIndex(matches, tuple(line_spans), tuple(body_spans))
 
 
 def _choice_evidence(
     blocks: Sequence[_Block],
     prose_blocks: Sequence[str],
+    option_indexes: Sequence[_OptionIndex],
     resolutions: Sequence[_Evidence],
     questions_by_block: Sequence[Sequence[_Evidence]],
 ) -> List[_Evidence]:
@@ -618,13 +636,8 @@ def _choice_evidence(
     recommendation_starts_by_block = [
         [match.start() for match in matches] for matches in recommendations_by_block
     ]
-    option_matches_by_block = [
-        list(_OPTION_LINE_RE.finditer(prose)) for prose in prose_blocks
-    ]
-    option_body_spans_by_block = [
-        _option_body_spans(prose, matches)
-        for prose, matches in zip(prose_blocks, option_matches_by_block)
-    ]
+    option_matches_by_block = [index.matches for index in option_indexes]
+    option_body_spans_by_block = [index.body_spans for index in option_indexes]
     option_body_starts_by_block = [
         [start for start, _ in spans] for spans in option_body_spans_by_block
     ]
@@ -643,7 +656,7 @@ def _choice_evidence(
         option_matches = option_matches_by_block[index]
         if not option_matches:
             continue
-        option_line_spans = _option_line_spans(prose, option_matches)
+        option_line_spans = option_indexes[index].line_spans
         option_line_starts = [start for start, _ in option_line_spans]
 
         groups = []
@@ -704,6 +717,12 @@ def _choice_evidence(
                     question.offset
                     for question in questions_by_block[index - 1]
                     if question.offset < group_offset
+                )
+            if index + 1 < len(blocks) and group_index + 1 == len(valid_groups):
+                anchors.extend(
+                    question.offset
+                    for question in questions_by_block[index + 1]
+                    if _EvidenceScope.CHOICE in question.scopes
                 )
             current_questions = questions_by_block[index]
             current_question_offsets = question_offsets_by_block[index]
@@ -844,7 +863,14 @@ def _required_action_evidence(
         )
         if is_choose is not None and not has_alternatives:
             continue
-        if re.fullmatch(r"\s*(?:[-*]\s*)?", prose[clause_start : match.start()]):
+        prefix_start = max(clause_start, match.start() - 160)
+        prefix = prose[prefix_start : match.start()]
+        boundaries = list(_IMPERATIVE_BOUNDARY_RE.finditer(prefix))
+        if boundaries:
+            prefix = prefix[boundaries[-1].end() :]
+        elif prefix_start > clause_start:
+            continue
+        if re.fullmatch(r"\s*(?:[-*]\s*)?", prefix):
             primary_matches.append(match)
     primary_matches.sort(key=lambda item: item.start())
     primary_starts = [match.start() for match in primary_matches]
@@ -908,15 +934,14 @@ def _text_evidence(blocks: Sequence[_Block]) -> List[_Evidence]:
         )
         prose_blocks.append(_prose(block, inherited_historical_report=inherited_report))
     clauses_by_block = [_clauses(prose) for prose in prose_blocks]
+    option_indexes = [_option_index(prose) for prose in prose_blocks]
     evidence = []
     resolutions = []
     questions_by_block = [[] for _ in blocks]
-    for block_index, (block, prose, clauses) in enumerate(
-        zip(blocks, prose_blocks, clauses_by_block)
+    for block_index, (block, prose, clauses, option_index) in enumerate(
+        zip(blocks, prose_blocks, clauses_by_block, option_indexes)
     ):
         courtesy_spans = _courtesy_spans(clauses)
-        option_matches = list(_OPTION_LINE_RE.finditer(prose))
-        option_body_spans = _option_body_spans(prose, option_matches)
         resolution_matches = _valid_resolution_matches(prose, clauses)
         resolution_spans = [(match.start(), match.end()) for match in resolution_matches]
         block_resolutions = []
@@ -948,14 +973,20 @@ def _text_evidence(blocks: Sequence[_Block]) -> List[_Evidence]:
         actions = _required_action_evidence(
             block,
             prose,
-            courtesy_spans + option_body_spans + resolution_spans,
+            courtesy_spans + list(option_index.body_spans) + resolution_spans,
             clauses,
         )
         evidence.extend(actions)
         block_questions = _question_evidence(block, prose, actions, clauses)
         evidence.extend(block_questions)
         questions_by_block[block_index].extend(block_questions)
-    choices = _choice_evidence(blocks, prose_blocks, resolutions, questions_by_block)
+    choices = _choice_evidence(
+        blocks,
+        prose_blocks,
+        option_indexes,
+        resolutions,
+        questions_by_block,
+    )
     if choices:
         choice_anchor_offsets = {choice.offset for choice in choices}
         evidence = [
