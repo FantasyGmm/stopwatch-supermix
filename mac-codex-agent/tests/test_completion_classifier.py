@@ -2276,12 +2276,27 @@ class CompletionClassifierTests(unittest.TestCase):
             "not required.",
             "Please approve deployment. We expected and can confirm that approval is "
             "not required.",
+            "Please approve deployment. We did confirm that approval is not required.",
+            "Please approve deployment. We have confirmed that approval is not "
+            "required.",
+            "Please approve deployment. We can confirm that approval is not required.",
             "Please approve deployment. We expected but did not confirm, then "
             "confirmed that approval is not required.",
             "Please approve deployment. It is not true that we confirmed authorization "
             "is not required, and we later confirmed that approval is not required.",
             "Please approve deployment. We did not confirm that authorization is not "
             "required, but we confirmed that approval is not required.",
+            "Please approve deployment. We cannot confirm that the team confirmed that "
+            "approval is not required. We later confirmed that approval is not "
+            "required.",
+            "Please approve deployment. We cannot confirm that authorization is not "
+            "required; we confirmed that approval is not required.",
+            "Please approve deployment. We cannot confirm that authorization is not "
+            "required, then we confirmed that approval is not required.",
+            "Please approve deployment. We cannot confirm that authorization is not "
+            "required, but approval is not required.",
+            "Please approve deployment. We cannot confirm that authorization is not "
+            "required, but the team confirmed that approval is not required.",
         )
         for message in resolved_messages:
             with self.subTest(kind="resolved", message=message):
@@ -2471,6 +2486,30 @@ class CompletionClassifierTests(unittest.TestCase):
             "required.",
             "Please approve deployment. We must have confirmed that approval is not "
             "required.",
+            "Please approve deployment. It isn't confirmed that approval is not "
+            "required.",
+            "Please approve deployment. It can't have confirmed that approval is not "
+            "required.",
+            "Please approve deployment. It cannot have confirmed that approval is not "
+            "required.",
+            "Please approve deployment. It has not yet been confirmed that approval is "
+            "not required.",
+            "Please approve deployment. It may not be confirmed that approval is not "
+            "required.",
+            "Please approve deployment. It will not be confirmed that approval is not "
+            "required.",
+            "Please approve deployment. It should not be confirmed that approval is "
+            "not required.",
+            "Please approve deployment. It may have been confirmed that approval is "
+            "not required.",
+            "Please approve deployment. It might've been confirmed that approval is "
+            "not required.",
+            "Please approve deployment. It mightn't have been confirmed that approval "
+            "is not required.",
+            "Please approve deployment. We can later confirm that approval is not "
+            "required.",
+            "Please approve deployment. We can eventually confirm that approval is "
+            "not required.",
             "Please approve deployment. It wasn't confirmed that approval is not "
             "required.",
             "Please approve deployment. It has never been confirmed that approval is "
@@ -2479,6 +2518,12 @@ class CompletionClassifierTests(unittest.TestCase):
             "approval is not required.",
             "Please approve deployment. We did not confirm that we confirmed that "
             "approval is not required.",
+            "Please approve deployment. We cannot confirm that the team then confirmed "
+            "that approval is not required.",
+            "Please approve deployment. We cannot confirm that the team discussed it "
+            "but later confirmed that approval is not required.",
+            "Please approve deployment. We cannot confirm that the team, however, "
+            "confirmed that approval is not required.",
             "Please approve deployment. We expected, but did not confirm, that "
             "authorization is not required, and approval is not required.",
             "Please approve deployment. We expect authorization is not required, and "

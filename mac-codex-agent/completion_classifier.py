@@ -390,15 +390,17 @@ _CONFIRMATION_POLARITY_RE = re.compile(
     \b(?:
         (?P<negative>
             (?:
-                (?:(?:(?:has|have|had)[ \t]+(?:not|never)[ \t]+been
+                (?:(?:(?:has|have|had)[ \t]+(?:not|never)
+                        (?:[ \t]+(?:yet|ever|actually|explicitly|fully|formally|still))
+                        {0,2}[ \t]+been
                     |(?:hasn|haven|hadn)['’]t[ \t]+been
-                    |(?:was|were)[ \t]+not
-                    |(?:wasn|weren)['’]t
-                    |(?:cannot|can['’]t)[ \t]+be
+                    |(?:is|are|was|were)[ \t]+not
+                    |(?:isn|aren|wasn|weren)['’]t
+                    |(?:cannot|can['’]t)[ \t]+(?:be|have)
                     |(?:may|might|must|will|would|can|could|should)
-                        [ \t]+not[ \t]+have
+                        [ \t]+not[ \t]+(?:be|have(?:[ \t]+been)?)
                     |(?:mightn|mustn|won|wouldn|couldn|shouldn)['’]t
-                        [ \t]+have)
+                        [ \t]+have(?:[ \t]+been)?)
                     [ \t]+confirmed[ \t]*,?[ \t]+that)
                 |
                 (?:
@@ -430,10 +432,13 @@ _CONFIRMATION_POLARITY_RE = re.compile(
             (?:(?:may|might|must|will|should|would)
                 (?:[ \t]+(?:later|explicitly|eventually|first)){0,2}
                 [ \t]+confirm
+            |can[ \t]+(?:later|eventually)[ \t]+confirm
             |(?:may|might|must|should|would|will|could)
                 [ \t]+have[ \t]+confirmed
+            |(?:may|might|must|should|would|will|could)
+                [ \t]+have[ \t]+been[ \t]+confirmed
             |(?:may|might|must|should|would|will|could)['’]ve
-                [ \t]+confirmed
+                [ \t]+(?:been[ \t]+)?confirmed
             |(?:has|have|had)[ \t]+yet[ \t]+to[ \t]+confirm)
             [ \t]*,?[ \t]+that
         )
@@ -448,9 +453,15 @@ _CONFIRMATION_POLARITY_RE = re.compile(
     """,
     re.IGNORECASE | re.VERBOSE,
 )
+_CONFIRMATION_MAIN_SUBJECT_PATTERN = (
+    r"(?:I|we|you|they|he|she|it|approval|authorization|verification|"
+    r"(?:(?:the|our|your|their|this|that)[ \t]+"
+    r"(?:[A-Za-z-]+[ \t]+){0,2}[A-Za-z-]+))"
+)
 _CONFIRMATION_COMPLEMENT_BREAK_RE = re.compile(
-    r"\b(?:but|however|then|yet)\b|[;；]|"
-    r"(?:,[ \t]*|\band[ \t]+)(?:I|we|you|they|he|she|it)\b",
+    rf"[;；]|,[ \t]*(?:(?:and|but|then)[ \t]+"
+    rf"{_CONFIRMATION_MAIN_SUBJECT_PATTERN}\b|however[ \t]*,[ \t]*"
+    rf"{_CONFIRMATION_MAIN_SUBJECT_PATTERN}\b)",
     re.IGNORECASE,
 )
 _ASSISTANT_CONTINUATION_SUFFIX_RE = re.compile(
@@ -1248,7 +1259,23 @@ def _valid_resolution_matches(
                 )
                 is None
             )
-            if coordinated_expectation or correlative_expectation:
+            preceding_confirmations = list(
+                _CONFIRMATION_POLARITY_RE.finditer(preceding_context)
+            )
+            context_break_in_confirmation_complement = any(
+                confirmation.lastgroup != "positive"
+                and confirmation.group().rstrip().casefold().endswith("that")
+                and _CONFIRMATION_COMPLEMENT_BREAK_RE.search(
+                    prefix[confirmation.end() :] + match.group()
+                )
+                is None
+                for confirmation in preceding_confirmations
+            )
+            if (
+                coordinated_expectation
+                or correlative_expectation
+                or context_break_in_confirmation_complement
+            ):
                 continue
             prefix = prefix[context_break.end() :]
             break
