@@ -63,6 +63,7 @@ _REQUIRED_ACTION_RE = re.compile(
     r"确认后(?:继续|我继续|我会继续)|"
     r"等待(?:你的)?(?:回复|确认)|"
     r"需要(?:你|您)(?:确认|选择|提供|回复|操作|批准|授权|验证)|"
+    r"我需要(?:你|您)的?(?:批准|授权|验证)|"
     r"需要进一步指令|无法继续|"
     r"\bplease[ \t]+(?:confirm|choose|select|provide|reply|retry|review)\b|"
     r"\bplease[ \t]+(?:approve|authorize|verify)\b|"
@@ -73,7 +74,9 @@ _REQUIRED_ACTION_RE = re.compile(
     r"(?:confirmation|choice|input|reply|approval|authorization|verification)\b|"
     r"\bneed[ \t]+you[ \t]+to[ \t]+"
     r"(?:approve|authorize|confirm|choose|select|provide|reply|retry|review|verify)\b|"
-    r"\b(?:[A-Za-z-]+[ \t]+){0,3}"
+    r"\b(?:we[ \t]+require|awaiting)[ \t]+your[ \t]+"
+    r"(?:approval|authorization|verification)\b|"
+    r"\b(?:(?!(?:no|not|but)\b)[A-Za-z-]+[ \t]+){0,3}"
     r"(?:approval|authorization|verification)[ \t]+"
     r"(?:is|remains)[ \t]+(?:still[ \t]+)?required\b|"
     r"\bblocked[ \t]+pending[ \t]+(?:[A-Za-z-]+[ \t]+){0,2}"
@@ -85,7 +88,7 @@ _REQUIRED_ACTION_RE = re.compile(
     re.IGNORECASE,
 )
 _ATTRIBUTED_ACTION_PREFIX_RE = re.compile(
-    r"(?:\b(?:docs?|documentation|examples?|logs?)\b"
+    r"(?:\b(?:docs?|documentation|examples?|logs?|incident[ \t]+report)\b"
     r"[^\r\n。！？.!?؟]{0,40}\b(?:say|says|state|states|said)\b|"
     r"\b(?:according[ \t]+to|per)[ \t]+"
     r"(?:(?:the|our|your|their|its)[ \t]+)?"
@@ -101,8 +104,10 @@ _ATTRIBUTION_SCOPE_BREAK_RE = re.compile(
 _NEGATED_ACTION_PREFIX_RE = re.compile(
     r"\b(?:no|not)[ \t]+(?:[A-Za-z-]+[ \t]+){0,4}$", re.IGNORECASE
 )
+_NEGATED_ACTION_MATCH_RE = re.compile(r"\b(?:no|not)\b", re.IGNORECASE)
 _IMPERATIVE_ACTION_RE = re.compile(
-    r"\b(?:confirm|choose|select|provide|reply(?:\s+with)?|retry|review)\b|"
+    r"\b(?:approve|authorize|confirm|choose|select|provide|"
+    r"reply(?:\s+with)?|retry|review|verify)\b|"
     r"(?:确认|选择|提供|回复|重新|重试|复核)",
     re.IGNORECASE,
 )
@@ -134,6 +139,7 @@ _REPORT_CONTINUATION_RE = re.compile(
     r"(?:passed|succeeded|failed|completed|finished))\b|"
     r"^[ \t]+(?:successful|finished|complete(?:d)?|passed|pending|failed)\b"
     r"(?:[ \t]+(?:internally|automatically|successfully))?"
+    r"(?:[ \t]+without[ \t]+(?:issues?|errors?|problems?))?"
     r"[ \t]*[.!?]|"
     r"^[ \t]+(?:(?:the|an?|this|that|these|those|your|our)[ \t]+)?"
     r"[A-Za-z0-9][A-Za-z0-9_-]*[ \t]+"
@@ -153,7 +159,7 @@ _REPORT_NOUN_SUFFIX_RE = re.compile(
 )
 _COORDINATED_ACTION_RE = re.compile(
     r"\b(?:and|then)\s+(?:also\s+)?"
-    r"(?:confirm|choose|select|provide|reply|retry|review)\b|"
+    r"(?:approve|authorize|confirm|choose|select|provide|reply|retry|review|verify)\b|"
     r"(?:并且|并|然后)(?:[^\r\n。！？.!?؟]{0,20}?再)?(?:请)?"
     r"(?:确认|选择|提供|回复|重新|重试|复核)",
     re.IGNORECASE,
@@ -161,12 +167,13 @@ _COORDINATED_ACTION_RE = re.compile(
 _COORDINATED_REQUIREMENT_NOUN_RE = re.compile(
     r"(?:\band[ \t]+(?:also[ \t]+)?|,[ \t]*)"
     r"(?:your[ \t]+)?"
-    r"(?:confirmation|choice|input|reply)\b",
+    r"(?:approval|authorization|confirmation|choice|input|reply|verification)\b",
     re.IGNORECASE,
 )
 _OWNED_REQUIREMENT_RE = re.compile(
-    r"\b(?:waiting[ \t]+for[ \t]+your|need[ \t]+your)[ \t]+"
-    r"(?:confirmation|choice|input|reply)\b",
+    r"\b(?:waiting[ \t]+for[ \t]+your|awaiting[ \t]+your|"
+    r"need[ \t]+your|require[ \t]+your)[ \t]+"
+    r"(?:approval|authorization|confirmation|choice|input|reply|verification)\b",
     re.IGNORECASE,
 )
 _COMMUNICATIVE_CHOICE_RE = re.compile(
@@ -193,10 +200,12 @@ _ALTERNATIVE_CHOICE_RE = re.compile(
     r"(?:生产|预发|开发|测试)\s*[？?]?[。.]?\s*$|"
     r"^\s*(?:继续|停止)[ \t]*还是[ \t]*"
     r"(?:继续|停止)\s*[？?]?[。.]?\s*$|"
-    r"^\s*(?:上线|回滚|开启|关闭|保留|删除)[ \t]*还是[ \t]*"
-    r"(?:上线|回滚|开启|关闭|保留|删除)\s*[？?]?[。.]?\s*$|"
-    r"^\s*[\u3400-\u9fff][ \t]*还是[ \t]*"
-    r"[\u3400-\u9fff]\s*[？?]?[。.]?\s*$|"
+    r"^\s*(?:是[ \t]*)?"
+    r"(?:上线|回滚|开启|关闭|保留|删除|提交|撤回)[ \t]*还是[ \t]*"
+    r"(?:上线|回滚|开启|关闭|保留|删除|提交|撤回)"
+    r"\s*[？?]?[。.]?\s*$|"
+    r"^\s*(?:甲|乙)[ \t]*还是[ \t]*(?:甲|乙)"
+    r"\s*[？?]?[。.]?\s*$|"
     r"^\s*(?![\u3400-\u9fff]{0,12}(?:使用|采用|报告))"
     r"[\u3400-\u9fff]{1,12}(?:环境|方案|选项|版本|模式|版|色)"
     r"[ \t]*还是[ \t]*"
@@ -243,9 +252,15 @@ _RESOLUTION_RE = re.compile(
     r"\bno (?:choice|selection) is required\b|"
     r"\bthe choice (?:is|has been) resolved\b|"
     r"\bthe previously offered choice has already been applied\b)"
-    r"|(?P<approval>\bno approval is required\b)"
-    r"|(?P<authorization>\bno authorization is required\b)"
-    r"|(?P<verification>\bno verification is required\b)"
+    r"|(?P<approval>"
+    r"(?:无需|不需要)(?:你|您)?批准|"
+    r"\b(?:no approval is required|approval is no longer required)\b)"
+    r"|(?P<authorization>"
+    r"(?:无需|不需要)(?:你|您)?授权|"
+    r"\b(?:no authorization is required|authorization is no longer required)\b)"
+    r"|(?P<verification>"
+    r"(?:无需|不需要)(?:你|您)?验证|"
+    r"\b(?:no verification is required|verification is no longer required)\b)"
     r"|(?P<all>"
     r"(?:无需|不需要)(?:你|您)?操作|"
     r"\bno (?:user )?action is required\b|"
@@ -500,7 +515,7 @@ def _clauses(prose: str) -> List[_Clause]:
 
 def _normalize_referent(text: str) -> str | None:
     referent = re.sub(r"\s+", " ", text).strip().casefold()
-    referent = re.sub(r"^(?:to|into|onto|on|in|with)\s+", "", referent)
+    referent = re.sub(r"^(?:to|into|onto|on|in|with|for)\s+", "", referent)
     referent = re.sub(r"^(?:the|a|an)\s+", "", referent)
     return referent or None
 
@@ -509,8 +524,9 @@ _REFERENT_BREAK_RE = re.compile(
     r"[，,;；。.!?！？؟]|"
     r"\b(?:because|since|although|though|while|unless)\b|"
     r"\b(?:and|then)\s+(?:also\s+)?(?="
-    r"(?:confirm|choose|select|provide|reply|retry|review)\b)|"
-    r"\bplease\s+(?=(?:confirm|choose|select|provide|reply|retry|review)\b)|"
+    r"(?:approve|authorize|confirm|choose|select|provide|reply|retry|review|verify)\b)|"
+    r"\bplease\s+(?=(?:approve|authorize|confirm|choose|select|provide|"
+    r"reply|retry|review|verify)\b)|"
     r"(?:因为|由于|虽然|如果|除非)|"
     r"(?:并且|并|然后)(?:[^\r\n。！？.!?؟]{0,20}?再)?(?:请)?(?="
     r"(?:确认|选择|提供|回复|重新|重试|复核))",
@@ -1108,10 +1124,13 @@ def _required_action_evidence(
         relative_end = match.end() - clause.start
         context_start = max(0, relative_end - 120)
         action_prefix = clause.text[max(0, relative_start - 120) : relative_start]
+        scope_breaks = list(_ATTRIBUTION_SCOPE_BREAK_RE.finditer(action_prefix))
+        if scope_breaks:
+            action_prefix = action_prefix[scope_breaks[-1].end() :]
         action_context = clause.text[context_start:relative_end]
         attribution = _ATTRIBUTED_ACTION_PREFIX_RE.search(action_context)
         attribution_tail = (
-            action_context[attribution.end() : max(0, relative_start - context_start)]
+            action_context[attribution.end() :]
             if attribution is not None
             else ""
         )
@@ -1120,6 +1139,7 @@ def _required_action_evidence(
                 attribution is not None
                 and _ATTRIBUTION_SCOPE_BREAK_RE.search(attribution_tail) is None
             )
+            or _NEGATED_ACTION_MATCH_RE.search(match.group()) is not None
             or _NEGATED_ACTION_PREFIX_RE.search(action_prefix) is not None
         ):
             continue

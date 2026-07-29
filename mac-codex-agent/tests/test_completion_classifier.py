@@ -852,6 +852,26 @@ class CompletionClassifierTests(unittest.TestCase):
                     ("completed", "text_explicitly_resolved"),
                 )
 
+    def test_chinese_action_alternatives_allow_copula_and_commit_pairs(self):
+        completed_messages = (
+            "是上线还是回滚？已经决定，无需选择。",
+            "提交还是撤回？已经决定，无需选择。",
+        )
+
+        for message in completed_messages:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("completed", "text_explicitly_resolved"),
+                )
+
+        non_action_question = classify_completion("猫还是狗？无需选择。")
+        self.assertEqual(
+            (non_action_question.outcome, non_action_question.reason),
+            ("waiting", "text_direct_question"),
+        )
+
     def test_compact_chinese_state_questions_are_not_choice_scope(self):
         messages = (
             "系统还是失败？无需选择。",
@@ -1114,6 +1134,19 @@ class CompletionClassifierTests(unittest.TestCase):
                     ("waiting", "text_required_action"),
                 )
 
+    def test_report_status_predicates_allow_bounded_without_qualifiers(self):
+        report = classify_completion("Results: review finished without issues.")
+        self.assertEqual(
+            (report.outcome, report.reason),
+            ("completed", "completion_only"),
+        )
+
+        action = classify_completion("The build is ready: review finished work.")
+        self.assertEqual(
+            (action.outcome, action.reason),
+            ("waiting", "text_required_action"),
+        )
+
     def test_direct_action_patterns_accept_horizontal_whitespace(self):
         messages = (
             "Can\tyou confirm deployment.",
@@ -1177,11 +1210,117 @@ class CompletionClassifierTests(unittest.TestCase):
                 result = classify_completion(message)
                 self.assertEqual((result.outcome, result.reason), ("completed", reason))
 
+    def test_approval_polarity_and_attribution_are_bounded(self):
+        completed_messages = (
+            "No additional approval is required.",
+            "It is not true that approval is required.",
+            "Do not assume approval is required.",
+            "The incident report states approval is required in the old workflow.",
+        )
+
+        for message in completed_messages:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("completed", "completion_only"),
+                )
+
+        live_requirements = (
+            "The docs say approval is required, "
+            "but approval is required for this deployment.",
+            "Approval is not required but authorization is required.",
+            "No additional approval is required but "
+            "authorization is required now.",
+        )
+
+        for message in live_requirements:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("waiting", "text_required_action"),
+                )
+
     def test_approval_and_verification_are_not_confirmation_scope(self):
         messages = (
             "Waiting for your approval. No confirmation is required.",
             "Device verification is still required. "
             "No confirmation is required.",
+        )
+
+        for message in messages:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("waiting", "text_required_action"),
+                )
+
+    def test_security_requirement_referents_normalize_for_symmetrically(self):
+        messages = (
+            "Approval is required for production. "
+            "No approval is required for production.",
+            "Authorization is required for production. "
+            "No authorization is required for production.",
+            "Verification is required for production. "
+            "No verification is required for production.",
+        )
+
+        for message in messages:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("completed", "text_explicitly_resolved"),
+                )
+
+    def test_security_actions_emit_independent_evidence(self):
+        messages = (
+            "Required actions:\n- Approve deployment.",
+            "Please approve and authorize deployment. "
+            "No approval is required.",
+            "Waiting for your approval and authorization. "
+            "No approval is required.",
+        )
+
+        for message in messages:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("waiting", "text_required_action"),
+                )
+
+    def test_security_resolutions_are_symmetric_in_english_and_chinese(self):
+        messages = (
+            "请批准部署。无需批准。",
+            "请授权部署。无需授权。",
+            "请验证部署。无需验证。",
+            "Please approve deployment. Approval is no longer required.",
+            "Please authorize deployment. Authorization is no longer required.",
+            "Please verify deployment. Verification is no longer required.",
+        )
+
+        for message in messages:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("completed", "text_explicitly_resolved"),
+                )
+
+    def test_bounded_security_ownership_requests_require_action(self):
+        messages = (
+            "我需要你的批准才能继续。",
+            "我需要你的授权才能继续。",
+            "我需要你的验证才能继续。",
+            "We require your approval before proceeding.",
+            "We require your authorization before proceeding.",
+            "We require your verification before proceeding.",
+            "Awaiting your approval.",
+            "Awaiting your authorization.",
+            "Awaiting your verification.",
         )
 
         for message in messages:
