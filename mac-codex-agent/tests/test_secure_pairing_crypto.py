@@ -15,8 +15,10 @@ from secure_pairing_crypto import (
     wrap_credential,
 )
 from secure_pairing_protocol import (
+    PairingIdentityClaim,
     PairingTranscript,
     decode_pairing_transcript,
+    encode_pairing_identity_claim,
     encode_pairing_transcript,
 )
 
@@ -44,6 +46,13 @@ EXPECTED_TRANSCRIPT_HEX = (
     "0010ffeeddccbbaa99887766554433221100"
     "0021" + WATCH_PUBLIC_HEX +
     "0021" + IDENTITY_PUBLIC_HEX +
+    "0021" + AGENT_PUBLIC_HEX +
+    "0021" + IDENTITY_PUBLIC_HEX +
+    "000a53747564696f204d6163"
+)
+EXPECTED_IDENTITY_CLAIM_HEX = (
+    "535750434c4d0101020304"
+    "0010ffeeddccbbaa99887766554433221100"
     "0021" + AGENT_PUBLIC_HEX +
     "0021" + IDENTITY_PUBLIC_HEX +
     "000a53747564696f204d6163"
@@ -85,6 +94,19 @@ def fixture() -> PairingTranscript:
 
 
 class SecurePairingCryptoTests(unittest.TestCase):
+    def test_identity_claim_vector_is_byte_identical(self):
+        claim = PairingIdentityClaim(
+            transaction_id=0x01020304,
+            agent_nonce=bytes.fromhex("ffeeddccbbaa99887766554433221100"),
+            agent_ephemeral_public=bytes.fromhex(AGENT_PUBLIC_HEX),
+            agent_identity_public=bytes.fromhex(IDENTITY_PUBLIC_HEX),
+            agent_name="Studio Mac",
+        )
+        self.assertEqual(
+            encode_pairing_identity_claim(claim).hex(),
+            EXPECTED_IDENTITY_CLAIM_HEX,
+        )
+
     def test_pairing_vector_is_byte_identical(self):
         transcript = encode_pairing_transcript(fixture())
         self.assertEqual(transcript.hex(), EXPECTED_TRANSCRIPT_HEX)

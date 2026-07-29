@@ -60,6 +60,8 @@ struct PairingRequest {
     crypto::PublicKey agent_identity_public = {};
     std::array<char, kMaxAgentNameBytes> agent_name = {};
     size_t agent_name_size = 0;
+    std::array<uint8_t, crypto::kMaxSignatureSize> identity_signature = {};
+    size_t identity_signature_size = 0;
 };
 
 struct AuthenticationRequest {

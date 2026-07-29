@@ -150,12 +150,18 @@ def encode_pairing_request(request: BeginPairingRequest) -> bytes:
     name = request.display_name.encode("utf-8")
     if not name or len(name) > MAX_AGENT_NAME_BYTES:
         raise PairingWireError("Agent name has invalid size")
+    if not request.identity_signature or len(request.identity_signature) > 80:
+        raise PairingWireError("Agent identity signature has invalid size")
     payload = _PAIRING_REQUEST.pack(
         _bytes(request.agent_nonce, 16, "Agent nonce"),
         _bytes(request.agent_ephemeral_public, 33, "Agent ephemeral key"),
         _bytes(request.agent_identity_public, 33, "Agent identity key"),
         len(name),
-    ) + name
+    ) + name + _LENGTH_PREFIX.pack(len(request.identity_signature)) + _bytes(
+        request.identity_signature,
+        len(request.identity_signature),
+        "Agent identity signature",
+    )
     return encode_frame(WireMessageType.PAIRING_REQUEST, request.transaction_id, payload)
 
 
@@ -166,9 +172,18 @@ def decode_pairing_request(
     if len(payload) < _PAIRING_REQUEST.size:
         raise PairingWireError("pairing request is truncated")
     nonce, ephemeral, identity, name_size = _PAIRING_REQUEST.unpack_from(payload)
-    name = payload[_PAIRING_REQUEST.size :]
-    if name_size != len(name) or not name or name_size > MAX_AGENT_NAME_BYTES:
+    name_end = _PAIRING_REQUEST.size + name_size
+    if (
+        not name_size
+        or name_size > MAX_AGENT_NAME_BYTES
+        or name_end + _LENGTH_PREFIX.size > len(payload)
+    ):
         raise PairingWireError("Agent name has invalid size")
+    name = payload[_PAIRING_REQUEST.size : name_end]
+    signature_size = _LENGTH_PREFIX.unpack_from(payload, name_end)[0]
+    signature = payload[name_end + _LENGTH_PREFIX.size :]
+    if signature_size != len(signature) or not signature or signature_size > 80:
+        raise PairingWireError("Agent identity signature has invalid size")
     try:
         display_name = name.decode("utf-8")
     except UnicodeDecodeError:
@@ -179,6 +194,7 @@ def decode_pairing_request(
         _bytes(ephemeral, 33, "Agent ephemeral key"),
         _bytes(identity, 33, "Agent identity key"),
         display_name,
+        signature,
     )
 
 

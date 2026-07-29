@@ -94,6 +94,24 @@ secure_pairing::PairingRequest request(
     constexpr char kName[] = "Studio Mac";
     value.agent_name_size = sizeof(kName) - 1;
     std::copy_n(kName, value.agent_name_size, value.agent_name.begin());
+    secure_pairing::PairingIdentityClaim claim = {};
+    claim.transaction_id = value.transaction_id;
+    claim.agent_nonce = value.agent_nonce;
+    claim.agent_ephemeral_public = value.agent_ephemeral_public;
+    claim.agent_identity_public = value.agent_identity_public;
+    claim.agent_name = value.agent_name;
+    claim.agent_name_size = value.agent_name_size;
+    std::array<uint8_t, secure_pairing::kMaxIdentityClaimSize> encoded = {};
+    size_t encoded_size = 0;
+    assert(secure_pairing::encode_pairing_identity_claim(
+        claim, encoded.data(), encoded.size(), encoded_size));
+    assert(secure_pairing::crypto::sign_challenge(
+        identity_private,
+        encoded.data(),
+        encoded_size,
+        value.identity_signature.data(),
+        value.identity_signature.size(),
+        value.identity_signature_size));
     return value;
 }
 
@@ -200,6 +218,28 @@ int main()
     agent_identity_private.back() = 13;
     const PairingRequest pairing_request =
         request(agent_ephemeral_private, agent_identity_private);
+
+    PairingRequest forged_request = pairing_request;
+    forged_request.identity_signature[0] ^= 0x01U;
+    SecurePairingSession forged_session;
+    assert(
+        forged_session.request_pairing(
+            forged_request, registry, fill_entropy, &entropy, 999) ==
+        SessionResult::AuthenticationFailed);
+    assert(forged_session.failure_count() == 1);
+    assert(
+        forged_session.request_pairing(
+            forged_request, registry, fill_entropy, &entropy, 1000) ==
+        SessionResult::AuthenticationFailed);
+    assert(
+        forged_session.request_pairing(
+            forged_request, registry, fill_entropy, &entropy, 1001) ==
+        SessionResult::Cooldown);
+    assert(forged_session.state() == PairingState::Cooldown);
+    assert(
+        forged_session.request_pairing(
+            pairing_request, registry, fill_entropy, &entropy, 1002) ==
+        SessionResult::Cooldown);
 
     SecurePairingSession session;
     assert(
@@ -396,14 +436,14 @@ int main()
         SessionResult::Ok);
     assert(session.confirm_pairing(false, rotated, store, fill_entropy, &entropy, 5100) ==
            SessionResult::Rejected);
-    unknown.transaction_id = 51;
+    unknown = request(unknown_ephemeral, unknown_identity, 51);
     assert(
         session.request_pairing(
             unknown, rotated, fill_entropy, &entropy, 5200) ==
         SessionResult::Ok);
     assert(session.confirm_pairing(false, rotated, store, fill_entropy, &entropy, 5300) ==
            SessionResult::Rejected);
-    unknown.transaction_id = 52;
+    unknown = request(unknown_ephemeral, unknown_identity, 52);
     assert(
         session.request_pairing(
             unknown, rotated, fill_entropy, &entropy, 5400) ==
@@ -411,7 +451,7 @@ int main()
     assert(session.confirm_pairing(false, rotated, store, fill_entropy, &entropy, 5500) ==
            SessionResult::Cooldown);
     assert(session.state() == PairingState::Cooldown);
-    unknown.transaction_id = 53;
+    unknown = request(unknown_ephemeral, unknown_identity, 53);
     assert(
         session.request_pairing(
             unknown, rotated, fill_entropy, &entropy, 6000) ==
@@ -437,7 +477,7 @@ int main()
 
     SecurePairingSession commit_failure;
     AgentRegistry before_failure = rotated;
-    unknown.transaction_id = 60;
+    unknown = request(unknown_ephemeral, unknown_identity, 60);
     assert(
         commit_failure.request_pairing(
             unknown, rotated, fill_entropy, &entropy, 130000) ==
@@ -451,7 +491,7 @@ int main()
     assert(!commit_failure.presentation().credential_ready);
 
     SecurePairingSession wrap_session;
-    unknown.transaction_id = 61;
+    unknown = request(unknown_ephemeral, unknown_identity, 61);
     constexpr uint32_t near_wrap = UINT32_MAX - 1000U;
     assert(
         wrap_session.request_pairing(

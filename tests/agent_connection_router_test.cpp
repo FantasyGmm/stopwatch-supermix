@@ -20,12 +20,16 @@ int main()
     AgentFingerprint studio = {};
     studio[0] = 0x11;
     assert(router.authorize_pending(10, studio));
+    assert(router.update_pairing_subscription(10, true));
     assert(router.promote_pending(10));
+    const auto first_active = router.active_connection();
+    assert(first_active.handle == 10);
+    assert(first_active.generation == router.active_generation());
     assert(router.role(10) == AgentConnectionRole::Active);
     assert(router.active_handle() == 10);
     assert(router.pending_handle() == kNoAgentConnection);
     assert(router.can_access(10, AgentGattSurface::Production));
-    assert(!router.can_access(10, AgentGattSurface::Pairing));
+    assert(router.can_access(10, AgentGattSurface::Pairing));
     assert(router.active_fingerprint() == studio);
 
     assert(
@@ -46,6 +50,7 @@ int main()
     assert(!router.voice_subscribed(11));
     assert(router.active_mtu() == 256);
     assert(router.active_voice_subscribed());
+    assert(router.pairing_subscribed(10));
 
     AgentFingerprint travel = {};
     travel[0] = 0x22;
@@ -53,6 +58,9 @@ int main()
     assert(!router.promote_pending(11));
     const uint32_t active_generation = router.active_generation();
     assert(router.disconnected(10) == AgentConnectionRole::Active);
+    const auto disconnected = router.active_connection();
+    assert(disconnected.handle == kNoAgentConnection);
+    assert(disconnected.generation != first_active.generation);
     assert(router.active_generation() == active_generation + 1);
     assert(router.active_handle() == kNoAgentConnection);
     assert(router.pending_handle() == 11);
@@ -60,6 +68,9 @@ int main()
     assert(!router.can_access(11, AgentGattSurface::Production));
 
     assert(router.promote_pending(11));
+    const auto second_active = router.active_connection();
+    assert(second_active.handle == 11);
+    assert(second_active.generation != first_active.generation);
     assert(router.active_handle() == 11);
     assert(router.active_generation() == active_generation + 2);
     assert(router.active_mtu() == 128);
@@ -76,16 +87,56 @@ int main()
         router.connected(20, UINT32_MAX - 10U) ==
         AgentConnectionAdmission::Pending);
     assert(
-        router.expire_unauthorized_pending(5U, 20U) ==
+        router.expire_unauthorized_pending(5U, 20U, 40U) ==
         kNoAgentConnection);
     assert(router.pending_handle() == 20);
-    assert(router.expire_unauthorized_pending(10U, 20U) == 20);
+    assert(router.expire_unauthorized_pending(10U, 20U, 40U) == 20);
     assert(router.pending_handle() == kNoAgentConnection);
+    assert(router.disconnecting_handle() == 20);
+    assert(router.role(20) == AgentConnectionRole::Disconnecting);
+    assert(!router.can_access(20, AgentGattSurface::Pairing));
+    assert(
+        router.connected(21, 100U) ==
+        AgentConnectionAdmission::RejectedFull);
+    assert(router.disconnected(20) == AgentConnectionRole::Disconnecting);
 
     assert(router.connected(21, 100U) == AgentConnectionAdmission::Pending);
     assert(router.authorize_pending(21, studio));
     assert(
-        router.expire_unauthorized_pending(1000U, 20U) ==
+        router.expire_unauthorized_pending(119U, 20U, 40U) ==
         kNoAgentConnection);
     assert(router.pending_handle() == 21);
+    assert(router.expire_unauthorized_pending(140U, 20U, 40U) == 21);
+    assert(router.disconnecting_handle() == 21);
+    assert(router.disconnected(21) == AgentConnectionRole::Disconnecting);
+
+    assert(router.connected(22, 100U) == AgentConnectionAdmission::Pending);
+    assert(router.note_pending_activity(22, 115U));
+    assert(
+        router.expire_unauthorized_pending(125U, 20U, 40U) ==
+        kNoAgentConnection);
+    assert(router.pending_handle() == 22);
+    assert(router.expire_unauthorized_pending(140U, 20U, 40U) == 22);
+    assert(router.pending_handle() == kNoAgentConnection);
+    assert(router.disconnecting_handle() == 22);
+    assert(router.disconnected(22) == AgentConnectionRole::Disconnecting);
+
+    assert(router.connected(23, 200U) == AgentConnectionAdmission::Pending);
+    assert(!router.note_pending_activity(99, 210U));
+    assert(router.note_pending_activity(23, 219U));
+    assert(router.expire_unauthorized_pending(220U, 20U, 40U) ==
+           kNoAgentConnection);
+    assert(router.note_pending_activity(23, 239U));
+    assert(router.expire_unauthorized_pending(240U, 20U, 40U) == 23);
+    assert(router.pending_handle() == kNoAgentConnection);
+    assert(router.disconnecting_handle() == 23);
+    assert(router.disconnected(23) == AgentConnectionRole::Disconnecting);
+
+    assert(router.connected(24, 300U) == AgentConnectionAdmission::Pending);
+    assert(router.reject_pending(24));
+    assert(router.pending_handle() == kNoAgentConnection);
+    assert(router.disconnecting_handle() == 24);
+    assert(!router.can_access(24, AgentGattSurface::Pairing));
+    assert(router.disconnected(24) == AgentConnectionRole::Disconnecting);
+    assert(!router.has_connections());
 }

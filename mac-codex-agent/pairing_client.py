@@ -22,7 +22,9 @@ from secure_pairing_crypto import (
 )
 from secure_pairing_protocol import (
     PAIRING_VERSION,
+    PairingIdentityClaim,
     PairingTranscript,
+    encode_pairing_identity_claim,
     encode_pairing_transcript,
 )
 
@@ -54,6 +56,7 @@ class BeginPairingRequest:
     agent_ephemeral_public: bytes
     agent_identity_public: bytes
     display_name: str
+    identity_signature: bytes
 
 
 @dataclass(frozen=True)
@@ -308,12 +311,22 @@ class PairingClient:
             _RANDOM_BYTES,
             "Agent nonce",
         )
-        request = BeginPairingRequest(
+        claim = PairingIdentityClaim(
             transaction_id=transaction_id,
             agent_nonce=agent_nonce,
             agent_ephemeral_public=public_key_bytes(ephemeral.public_key()),
             agent_identity_public=identity_public,
-            display_name=display_name,
+            agent_name=display_name,
+        )
+        request = BeginPairingRequest(
+            transaction_id=claim.transaction_id,
+            agent_nonce=claim.agent_nonce,
+            agent_ephemeral_public=claim.agent_ephemeral_public,
+            agent_identity_public=claim.agent_identity_public,
+            display_name=claim.agent_name,
+            identity_signature=sign_challenge(
+                identity, encode_pairing_identity_claim(claim)
+            ),
         )
         offer = await transport.request_pairing(request)
         if (

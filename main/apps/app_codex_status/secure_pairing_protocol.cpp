@@ -8,6 +8,9 @@ namespace secure_pairing {
 namespace {
 
 constexpr std::array<uint8_t, 6> kMagic = {'S', 'W', 'P', 'A', 'I', 'R'};
+constexpr std::array<uint8_t, 6> kIdentityClaimMagic = {
+    'S', 'W', 'P', 'C', 'L', 'M',
+};
 
 bool nonzero(const RandomValue& value)
 {
@@ -76,6 +79,14 @@ bool valid(const PairingTranscript& value)
     return nonzero(value.watch_nonce) && nonzero(value.agent_nonce) &&
            crypto::valid_public_key(value.watch_ephemeral_public) &&
            crypto::valid_public_key(value.watch_identity_public) &&
+           crypto::valid_public_key(value.agent_ephemeral_public) &&
+           crypto::valid_public_key(value.agent_identity_public) &&
+           valid_utf8_name(value.agent_name, value.agent_name_size);
+}
+
+bool valid(const PairingIdentityClaim& value)
+{
+    return value.transaction_id != 0 && nonzero(value.agent_nonce) &&
            crypto::valid_public_key(value.agent_ephemeral_public) &&
            crypto::valid_public_key(value.agent_identity_public) &&
            valid_utf8_name(value.agent_name, value.agent_name_size);
@@ -317,6 +328,35 @@ bool decode_pairing_transcript(
         output = {};
         return false;
     }
+    return true;
+}
+
+bool encode_pairing_identity_claim(
+    const PairingIdentityClaim& value,
+    uint8_t* output,
+    size_t output_capacity,
+    size_t& output_size)
+{
+    output_size = 0;
+    if (output == nullptr || !valid(value)) {
+        return false;
+    }
+    Writer writer(output, output_capacity);
+    if (!writer.bytes(kIdentityClaimMagic.data(), kIdentityClaimMagic.size()) ||
+        !writer.byte(kPairingVersion) || !writer.u32(value.transaction_id) ||
+        !writer.field(value.agent_nonce.data(), value.agent_nonce.size()) ||
+        !writer.field(
+            value.agent_ephemeral_public.data(),
+            value.agent_ephemeral_public.size()) ||
+        !writer.field(
+            value.agent_identity_public.data(),
+            value.agent_identity_public.size()) ||
+        !writer.field(
+            reinterpret_cast<const uint8_t*>(value.agent_name.data()),
+            value.agent_name_size)) {
+        return false;
+    }
+    output_size = writer.size();
     return true;
 }
 

@@ -9,6 +9,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 
 PAIRING_VERSION = 1
 _MAGIC = b"SWPAIR"
+_IDENTITY_CLAIM_MAGIC = b"SWPCLM"
 _ID_BYTES = 16
 _NONCE_BYTES = 16
 _PUBLIC_KEY_BYTES = 33
@@ -23,6 +24,15 @@ class PairingTranscript:
     agent_nonce: bytes
     watch_ephemeral_public: bytes
     watch_identity_public: bytes
+    agent_ephemeral_public: bytes
+    agent_identity_public: bytes
+    agent_name: str
+
+
+@dataclass(frozen=True)
+class PairingIdentityClaim:
+    transaction_id: int
+    agent_nonce: bytes
     agent_ephemeral_public: bytes
     agent_identity_public: bytes
     agent_name: str
@@ -82,6 +92,28 @@ def encode_pairing_transcript(value: PairingTranscript) -> bytes:
     )
     return (
         _MAGIC
+        + bytes((PAIRING_VERSION,))
+        + struct.pack(">I", value.transaction_id)
+        + b"".join(_encode_field(field) for field in fields)
+    )
+
+
+def encode_pairing_identity_claim(value: PairingIdentityClaim) -> bytes:
+    if not 0 < value.transaction_id <= 0xFFFFFFFF:
+        raise ValueError("transaction identifier is out of range")
+    if len(value.agent_nonce) != _NONCE_BYTES or not any(value.agent_nonce):
+        raise ValueError("Agent nonce must be 16 nonzero bytes")
+    _validate_public_key(value.agent_ephemeral_public)
+    _validate_public_key(value.agent_identity_public)
+    name = _encode_name(value.agent_name)
+    fields = (
+        value.agent_nonce,
+        value.agent_ephemeral_public,
+        value.agent_identity_public,
+        name,
+    )
+    return (
+        _IDENTITY_CLAIM_MAGIC
         + bytes((PAIRING_VERSION,))
         + struct.pack(">I", value.transaction_id)
         + b"".join(_encode_field(field) for field in fields)

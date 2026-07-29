@@ -235,8 +235,32 @@ SessionResult SecurePairingSession::request_pairing(
         request.transaction_id == 0 ||
         !nonzero(request.agent_nonce.data(), request.agent_nonce.size()) ||
         !crypto::valid_public_key(request.agent_ephemeral_public) ||
-        !crypto::valid_public_key(request.agent_identity_public)) {
+        !crypto::valid_public_key(request.agent_identity_public) ||
+        request.identity_signature_size == 0 ||
+        request.identity_signature_size > crypto::kMaxSignatureSize) {
         return SessionResult::InvalidRequest;
+    }
+    PairingIdentityClaim identity_claim = {};
+    identity_claim.transaction_id = request.transaction_id;
+    identity_claim.agent_nonce = request.agent_nonce;
+    identity_claim.agent_ephemeral_public = request.agent_ephemeral_public;
+    identity_claim.agent_identity_public = request.agent_identity_public;
+    identity_claim.agent_name = request.agent_name;
+    identity_claim.agent_name_size = request.agent_name_size;
+    std::array<uint8_t, kMaxIdentityClaimSize> encoded_claim = {};
+    size_t encoded_claim_size = 0;
+    if (!encode_pairing_identity_claim(
+            identity_claim,
+            encoded_claim.data(),
+            encoded_claim.size(),
+            encoded_claim_size) ||
+        !crypto::verify_challenge(
+            request.agent_identity_public,
+            encoded_claim.data(),
+            encoded_claim_size,
+            request.identity_signature.data(),
+            request.identity_signature_size)) {
+        return fail_attempt(SessionResult::AuthenticationFailed, now_ms);
     }
     const bool existing_identity =
         find_public_key(registry, request.agent_identity_public) != nullptr;

@@ -182,8 +182,16 @@ bool decode_pairing_request(
         return false;
     }
     const size_t name_size = frame.payload[82];
+    const size_t signature_size_offset =
+        kPairingRequestFixedSize + name_size;
     if (name_size == 0 || name_size > kMaxAgentNameBytes ||
-        kPairingRequestFixedSize + name_size != frame.payload_size) {
+        signature_size_offset + 2 > frame.payload_size) {
+        return false;
+    }
+    const size_t signature_size =
+        read_u16(frame.payload + signature_size_offset);
+    if (signature_size == 0 || signature_size > crypto::kMaxSignatureSize ||
+        signature_size_offset + 2 + signature_size != frame.payload_size) {
         return false;
     }
     output.connection_handle = connection_handle;
@@ -198,13 +206,21 @@ bool decode_pairing_request(
         name_size,
         output.agent_name.begin());
     output.agent_name_size = name_size;
+    std::copy_n(
+        frame.payload + signature_size_offset + 2,
+        signature_size,
+        output.identity_signature.begin());
+    output.identity_signature_size = signature_size;
     return nonzero(output.agent_nonce.data(), output.agent_nonce.size()) &&
            nonzero(
                output.agent_ephemeral_public.data(),
                output.agent_ephemeral_public.size()) &&
            nonzero(
                output.agent_identity_public.data(),
-               output.agent_identity_public.size());
+               output.agent_identity_public.size()) &&
+           nonzero(
+               output.identity_signature.data(),
+               output.identity_signature_size);
 }
 
 bool encode_pairing_offer(

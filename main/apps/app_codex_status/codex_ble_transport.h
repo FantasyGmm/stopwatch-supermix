@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <mutex>
 #include <string>
 
 
@@ -61,9 +62,13 @@ public:
     bool authorize_pending(
         uint16_t connection_handle,
         const secure_pairing::AgentFingerprint& fingerprint);
+    bool note_pairing_activity(
+        uint16_t connection_handle,
+        uint32_t now_ms);
     bool promote_pending(uint16_t connection_handle);
     bool reject_pending(uint16_t connection_handle);
-    bool request_active_disconnect();
+    bool request_active_disconnect(bool revoke_production = false);
+    bool is_active_handle(uint16_t connection_handle) const;
     uint16_t pending_handle() const;
     secure_pairing::AgentFingerprint active_fingerprint() const;
     secure_pairing::AgentFingerprint pending_fingerprint() const;
@@ -97,6 +102,11 @@ private:
     voice_input::ControlReplayGuard _production_control_guard;
     voice_input::crypto::CcmContext _production_voice_crypto;
     std::atomic<uint32_t> _production_voice_key_epoch{0};
+    std::atomic<uint64_t> _active_disconnect_token{0};
+    std::atomic<uint64_t> _active_production_revoked_token{0};
+    mutable std::mutex _rejected_disconnect_mutex;
+    uint16_t _rejected_disconnect_handle =
+        secure_pairing::kNoAgentConnection;
     secure_pairing::AgentConnectionRouter _connection_router;
     CodexBleReassembler _reassembler;
     std::deque<CodexBleMessage> _messages;

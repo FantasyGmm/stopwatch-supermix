@@ -178,8 +178,7 @@ private:
         uint16_t connection_handle,
         PairingCompletion completion,
         uint32_t transaction_id,
-        bool allow_switch,
-        bool disconnect_if_not_selected);
+        bool allow_switch);
     void clear_pairing_runtime();
     void complete_agent_switch_if_ready();
     bool save_agent_registry();

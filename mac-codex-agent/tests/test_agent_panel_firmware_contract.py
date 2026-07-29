@@ -64,6 +64,30 @@ class AgentPanelFirmwareContractTests(unittest.TestCase):
         self.assertIn("request_active_disconnect", dispatch)
         self.assertNotIn("LvglLockGuard", dispatch)
 
+    def test_key_rotation_terminates_every_inflight_pairing_session(self):
+        source = (
+            ROOT / "main/apps/app_codex_status/app_codex_status.cpp"
+        ).read_text()
+        delete_flow = source.split(
+            "decision.action == AgentPanelAction::ConfirmDelete", 1
+        )[1].split(
+            "decision.action == AgentPanelAction::ConfirmReset", 1
+        )[0]
+        reset_flow = source.split(
+            "decision.action == AgentPanelAction::ConfirmReset", 1
+        )[1].split(
+            "decision.action != AgentPanelAction::SwitchAgent", 1
+        )[0]
+        self.assertIn("reject_pending(pending)", delete_flow)
+        self.assertIn("clear_pairing_runtime()", delete_flow)
+        self.assertNotIn("pending_fingerprint", delete_flow)
+        self.assertIn("removing_active", delete_flow)
+        self.assertIn("request_active_disconnect(", delete_flow)
+        self.assertIn("if (removing_active)", delete_flow)
+        self.assertIn("reject_pending(pending)", reset_flow)
+        self.assertIn("clear_pairing_runtime()", reset_flow)
+        self.assertIn("request_active_disconnect(true)", reset_flow)
+
     def test_pairing_gatt_frames_drive_session_and_physical_approval(self):
         header = (
             ROOT / "main/apps/app_codex_status/app_codex_status.h"
@@ -93,6 +117,23 @@ class AgentPanelFirmwareContractTests(unittest.TestCase):
         self.assertIn("AgentPanelAction::AllowPairing", dispatch)
         self.assertIn("AgentPanelAction::AllowAndSwitch", dispatch)
         self.assertIn("_secure_pairing_session.confirm_pairing", dispatch)
+
+    def test_completed_nonselected_pending_is_released_even_if_notify_fails(self):
+        source = (
+            ROOT / "main/apps/app_codex_status/app_codex_status.cpp"
+        ).read_text()
+        completion = source.split(
+            "void AppCodexStatus::complete_authenticated_pending", 1
+        )[1].split("void AppCodexStatus::process_secure_pairing", 1)[0]
+        self.assertNotIn("disconnect_if_not_selected", completion)
+        self.assertIn("reject_and_clear", completion)
+        self.assertIn("(void)send_pairing_empty", completion)
+
+        switch_completion = source.split(
+            "void AppCodexStatus::complete_agent_switch_if_ready", 1
+        )[1].split("void AppCodexStatus::sync_agent_panel_registry", 1)[0]
+        self.assertIn("clear_failed_switch", switch_completion)
+        self.assertIn("clear_failed_switch(pending)", switch_completion)
 
     def test_secure_pairing_enables_hkdf_in_all_firmware_builds(self):
         defaults = (ROOT / "sdkconfig.defaults").read_text(encoding="utf-8")

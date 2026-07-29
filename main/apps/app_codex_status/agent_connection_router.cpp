@@ -15,7 +15,8 @@ AgentConnectionAdmission AgentConnectionRouter::connected(
     if (find_locked(handle) != nullptr) {
         return AgentConnectionAdmission::Existing;
     }
-    if (role_locked(AgentConnectionRole::Pending) != nullptr) {
+    if (role_locked(AgentConnectionRole::Pending) != nullptr ||
+        role_locked(AgentConnectionRole::Disconnecting) != nullptr) {
         return AgentConnectionAdmission::RejectedFull;
     }
     AgentConnection* slot = empty_locked();
@@ -26,6 +27,7 @@ AgentConnectionAdmission AgentConnectionRouter::connected(
     slot->handle = handle;
     slot->role = AgentConnectionRole::Pending;
     slot->admitted_at_ms = now_ms;
+    slot->last_pairing_activity_ms = now_ms;
     return AgentConnectionAdmission::Pending;
 }
 
@@ -74,7 +76,6 @@ bool AgentConnectionRouter::promote_pending(uint16_t handle)
         return false;
     }
     connection->role = AgentConnectionRole::Active;
-    connection->pairing_subscribed = false;
     ++_active_generation;
     return true;
 }
@@ -87,13 +88,33 @@ bool AgentConnectionRouter::reject_pending(uint16_t handle)
         connection->role != AgentConnectionRole::Pending) {
         return false;
     }
-    *connection = {};
+    connection->role = AgentConnectionRole::Disconnecting;
+    connection->fingerprint = {};
+    connection->identity_authorized = false;
+    connection->voice_subscribed = false;
+    connection->pairing_subscribed = false;
+    return true;
+}
+
+bool AgentConnectionRouter::note_pending_activity(
+    uint16_t handle,
+    uint32_t now_ms)
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    AgentConnection* connection = find_locked(handle);
+    if (connection == nullptr ||
+        connection->role != AgentConnectionRole::Pending ||
+        connection->identity_authorized) {
+        return false;
+    }
+    connection->last_pairing_activity_ms = now_ms;
     return true;
 }
 
 uint16_t AgentConnectionRouter::expire_unauthorized_pending(
     uint32_t now_ms,
-    uint32_t timeout_ms)
+    uint32_t idle_timeout_ms,
+    uint32_t max_lifetime_ms)
 {
     std::lock_guard<std::mutex> lock(_mutex);
     const auto found = std::find_if(
@@ -104,14 +125,26 @@ uint16_t AgentConnectionRouter::expire_unauthorized_pending(
         });
     AgentConnection* connection =
         found == _connections.end() ? nullptr : &*found;
-    if (connection == nullptr || connection->identity_authorized ||
-        timeout_ms == 0 ||
-        static_cast<uint32_t>(now_ms - connection->admitted_at_ms) <
-            timeout_ms) {
+    if (connection == nullptr) {
+        return kNoAgentConnection;
+    }
+    const bool idle_expired = !connection->identity_authorized &&
+        idle_timeout_ms != 0 &&
+        static_cast<uint32_t>(
+            now_ms - connection->last_pairing_activity_ms) >=
+            idle_timeout_ms;
+    const bool lifetime_expired = max_lifetime_ms != 0 &&
+        static_cast<uint32_t>(now_ms - connection->admitted_at_ms) >=
+            max_lifetime_ms;
+    if (!idle_expired && !lifetime_expired) {
         return kNoAgentConnection;
     }
     const uint16_t handle = connection->handle;
-    *connection = {};
+    connection->role = AgentConnectionRole::Disconnecting;
+    connection->fingerprint = {};
+    connection->identity_authorized = false;
+    connection->voice_subscribed = false;
+    connection->pairing_subscribed = false;
     return handle;
 }
 
@@ -137,7 +170,9 @@ bool AgentConnectionRouter::can_access(
             connection->role == AgentConnectionRole::Active &&
             connection->identity_authorized) ||
            (surface == AgentGattSurface::Pairing &&
-            connection->role == AgentConnectionRole::Pending);
+            (connection->role == AgentConnectionRole::Pending ||
+             (connection->role == AgentConnectionRole::Active &&
+              connection->identity_authorized)));
 }
 
 bool AgentConnectionRouter::update_mtu(uint16_t handle, uint16_t mtu_value)
@@ -172,7 +207,10 @@ bool AgentConnectionRouter::update_pairing_subscription(
 {
     std::lock_guard<std::mutex> lock(_mutex);
     AgentConnection* connection = find_locked(handle);
-    if (connection == nullptr) {
+    if (connection == nullptr ||
+        (connection->role != AgentConnectionRole::Pending &&
+         (connection->role != AgentConnectionRole::Active ||
+          !connection->identity_authorized))) {
         return false;
     }
     connection->pairing_subscribed = enabled;
@@ -187,11 +225,29 @@ uint16_t AgentConnectionRouter::active_handle() const
     return connection == nullptr ? kNoAgentConnection : connection->handle;
 }
 
+AgentActiveConnection AgentConnectionRouter::active_connection() const
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    const AgentConnection* connection =
+        role_locked(AgentConnectionRole::Active);
+    return AgentActiveConnection{
+        connection == nullptr ? kNoAgentConnection : connection->handle,
+        _active_generation};
+}
+
 uint16_t AgentConnectionRouter::pending_handle() const
 {
     std::lock_guard<std::mutex> lock(_mutex);
     const AgentConnection* connection =
         role_locked(AgentConnectionRole::Pending);
+    return connection == nullptr ? kNoAgentConnection : connection->handle;
+}
+
+uint16_t AgentConnectionRouter::disconnecting_handle() const
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    const AgentConnection* connection =
+        role_locked(AgentConnectionRole::Disconnecting);
     return connection == nullptr ? kNoAgentConnection : connection->handle;
 }
 

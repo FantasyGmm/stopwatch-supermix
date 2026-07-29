@@ -494,8 +494,8 @@ void AppCodexStatus::onRunning()
 
     bool ble_connected = _ble_transport && _ble_transport->connected();
     if (_ble_transport) {
-        _ble_transport->poll(now);
         process_secure_pairing(now);
+        _ble_transport->poll(now);
         ble_connected = _ble_transport && _ble_transport->connected();
         if (_voice_input) {
             const uint32_t connection_epoch =
@@ -1657,9 +1657,19 @@ void AppCodexStatus::dispatch_agent_panel_decision(
                     _agent_registry.master_key(),
                     _agent_registry.key_epoch());
                 if (_ble_transport->connected()) {
-                    (void)_ble_transport->request_active_disconnect();
+                    const bool removing_active =
+                        _ble_transport->active_fingerprint() ==
+                        decision.fingerprint;
+                    if (removing_active) {
+                        (void)_ble_transport->request_active_disconnect(true);
+                    }
+                }
+                const uint16_t pending = _ble_transport->pending_handle();
+                if (pending != secure_pairing::kNoAgentConnection) {
+                    (void)_ble_transport->reject_pending(pending);
                 }
             }
+            clear_pairing_runtime();
             if (_voice_input) {
                 (void)_voice_input->set_credential(
                     _agent_registry.master_key(),
@@ -1698,12 +1708,13 @@ void AppCodexStatus::dispatch_agent_panel_decision(
                 (void)_ble_transport->set_voice_credential(
                     _agent_registry.master_key(),
                     _agent_registry.key_epoch());
-                (void)_ble_transport->request_active_disconnect();
+                (void)_ble_transport->request_active_disconnect(true);
                 const uint16_t pending = _ble_transport->pending_handle();
                 if (pending != secure_pairing::kNoAgentConnection) {
                     (void)_ble_transport->reject_pending(pending);
                 }
             }
+            clear_pairing_runtime();
         } else {
             if (had_registry) {
                 (void)secure_pairing::AgentRegistry::restore(
@@ -1816,26 +1827,48 @@ void AppCodexStatus::complete_authenticated_pending(
     uint16_t connection_handle,
     PairingCompletion completion,
     uint32_t transaction_id,
-    bool allow_switch,
-    bool disconnect_if_not_selected)
+    bool allow_switch)
 {
-    if (!_ble_transport ||
-        !_ble_transport->authorize_pending(
+    if (!_ble_transport) {
+        return;
+    }
+    const auto reject_and_clear = [this, connection_handle]() {
+        (void)_ble_transport->reject_pending(connection_handle);
+        clear_pairing_runtime();
+        sync_agent_panel_registry();
+        _agent_panel_dirty = true;
+    };
+    const secure_pairing::WireMessageType response =
+        completion == PairingCompletion::Authentication
+            ? secure_pairing::WireMessageType::AuthenticationOk
+            : secure_pairing::WireMessageType::CredentialAckOk;
+    if (_ble_transport->is_active_handle(connection_handle)) {
+        if (_ble_transport->active_fingerprint() !=
+                _secure_pairing_session.authenticated_fingerprint() ||
+            !send_pairing_empty(
+                connection_handle, response, transaction_id)) {
+            (void)send_pairing_empty(
+                connection_handle,
+                secure_pairing::WireMessageType::Error,
+                transaction_id);
+        }
+        clear_pairing_runtime();
+        sync_agent_panel_registry();
+        _agent_panel_dirty = true;
+        return;
+    }
+    if (!_ble_transport->authorize_pending(
             connection_handle,
             _secure_pairing_session.authenticated_fingerprint())) {
         (void)send_pairing_empty(
             connection_handle,
             secure_pairing::WireMessageType::Error,
             transaction_id);
+        reject_and_clear();
         return;
     }
     sync_agent_panel_registry();
     _agent_panel_dirty = true;
-    const secure_pairing::WireMessageType response =
-        completion == PairingCompletion::Authentication
-            ? secure_pairing::WireMessageType::AuthenticationOk
-            : secure_pairing::WireMessageType::CredentialAckOk;
-
     const auto select_and_save = [this](
                                      const secure_pairing::AgentFingerprint&
                                          fingerprint) {
@@ -1859,18 +1892,9 @@ void AppCodexStatus::complete_authenticated_pending(
             allow_switch || !_agent_registry.has_last_selected() ||
             _agent_registry.last_selected() == fingerprint;
         if (!is_selected) {
-            if (disconnect_if_not_selected) {
-                if (send_pairing_empty(
-                        connection_handle, response, transaction_id)) {
-                    (void)_ble_transport->reject_pending(connection_handle);
-                }
-                clear_pairing_runtime();
-            } else {
-                _pairing_completion = completion;
-                _pairing_completion_transaction = transaction_id;
-            }
-            sync_agent_panel_registry();
-            _agent_panel_dirty = true;
+            (void)send_pairing_empty(
+                connection_handle, response, transaction_id);
+            reject_and_clear();
             return;
         }
         if (!select_and_save(fingerprint)) {
@@ -1878,6 +1902,7 @@ void AppCodexStatus::complete_authenticated_pending(
                 connection_handle,
                 secure_pairing::WireMessageType::Error,
                 transaction_id);
+            reject_and_clear();
             return;
         }
         if (send_pairing_empty(connection_handle, response, transaction_id) &&
@@ -1885,6 +1910,8 @@ void AppCodexStatus::complete_authenticated_pending(
             clear_pairing_runtime();
             sync_agent_panel_registry();
             _agent_panel_dirty = true;
+        } else {
+            reject_and_clear();
         }
         return;
     }
@@ -1895,6 +1922,7 @@ void AppCodexStatus::complete_authenticated_pending(
                 connection_handle,
                 secure_pairing::WireMessageType::Error,
                 transaction_id);
+            reject_and_clear();
             return;
         }
         _pairing_completion = completion;
@@ -1906,18 +1934,8 @@ void AppCodexStatus::complete_authenticated_pending(
         return;
     }
 
-    if (disconnect_if_not_selected) {
-        if (send_pairing_empty(connection_handle, response, transaction_id)) {
-            (void)_ble_transport->reject_pending(connection_handle);
-        }
-        clear_pairing_runtime();
-        sync_agent_panel_registry();
-        _agent_panel_dirty = true;
-        return;
-    }
-
-    _pairing_completion = completion;
-    _pairing_completion_transaction = transaction_id;
+    (void)send_pairing_empty(connection_handle, response, transaction_id);
+    reject_and_clear();
 }
 
 void AppCodexStatus::process_secure_pairing(uint32_t now_ms)
@@ -1927,8 +1945,12 @@ void AppCodexStatus::process_secure_pairing(uint32_t now_ms)
     }
     const uint16_t session_connection =
         _secure_pairing_session.connection_handle();
+    const bool session_is_active =
+        session_connection != secure_pairing::kNoAgentConnection &&
+        _ble_transport->is_active_handle(session_connection);
     if (_secure_pairing_session.expire(now_ms)) {
-        if (session_connection != secure_pairing::kNoAgentConnection) {
+        if (session_connection != secure_pairing::kNoAgentConnection &&
+            !session_is_active) {
             (void)_ble_transport->reject_pending(session_connection);
         }
         clear_pairing_runtime();
@@ -1936,7 +1958,8 @@ void AppCodexStatus::process_secure_pairing(uint32_t now_ms)
         _agent_panel_dirty = true;
     } else if (
         session_connection != secure_pairing::kNoAgentConnection &&
-        _ble_transport->pending_handle() != session_connection) {
+        _ble_transport->pending_handle() != session_connection &&
+        !session_is_active) {
         clear_pairing_runtime();
         sync_agent_panel_registry();
         _agent_panel_dirty = true;
@@ -1972,24 +1995,46 @@ void AppCodexStatus::process_secure_pairing(uint32_t now_ms)
         }
 
         if (frame.type == secure_pairing::WireMessageType::PairingRequest) {
-            secure_pairing::PairingRequest request = {};
-            secure_pairing::AgentFingerprint fingerprint = {};
-            if (!secure_pairing::decode_pairing_request(
-                    frame, queued.connection_handle, request) ||
-                !agent_fingerprint(
-                    request.agent_identity_public, fingerprint) ||
-                _secure_pairing_session.request_pairing(
-                    request,
-                    _agent_registry,
-                    fill_agent_entropy,
-                    nullptr,
-                    now_ms) != secure_pairing::SessionResult::Ok) {
+            if (_ble_transport->is_active_handle(
+                    queued.connection_handle)) {
                 (void)send_pairing_empty(
                     queued.connection_handle,
                     secure_pairing::WireMessageType::Error,
                     frame.transaction_id);
                 continue;
             }
+            secure_pairing::PairingRequest request = {};
+            secure_pairing::AgentFingerprint fingerprint = {};
+            if (!secure_pairing::decode_pairing_request(
+                    frame, queued.connection_handle, request) ||
+                !agent_fingerprint(
+                    request.agent_identity_public, fingerprint)) {
+                (void)send_pairing_empty(
+                    queued.connection_handle,
+                    secure_pairing::WireMessageType::Error,
+                    frame.transaction_id);
+                continue;
+            }
+            const secure_pairing::SessionResult request_result =
+                _secure_pairing_session.request_pairing(
+                    request,
+                    _agent_registry,
+                    fill_agent_entropy,
+                    nullptr,
+                    now_ms);
+            if (request_result != secure_pairing::SessionResult::Ok) {
+                (void)send_pairing_empty(
+                    queued.connection_handle,
+                    secure_pairing::WireMessageType::Error,
+                    frame.transaction_id);
+                if (request_result == secure_pairing::SessionResult::Cooldown) {
+                    (void)_ble_transport->reject_pending(
+                        queued.connection_handle);
+                }
+                continue;
+            }
+            (void)_ble_transport->note_pairing_activity(
+                queued.connection_handle, now_ms);
             const auto& presentation =
                 _secure_pairing_session.presentation();
             secure_pairing::AgentName display_name = {};
@@ -2025,7 +2070,9 @@ void AppCodexStatus::process_secure_pairing(uint32_t now_ms)
 
         if (frame.type == secure_pairing::WireMessageType::PairingConfirm) {
             bool accepted = false;
-            if (!secure_pairing::decode_pairing_confirmation(frame, accepted) ||
+            if (queued.connection_handle !=
+                    _secure_pairing_session.connection_handle() ||
+                !secure_pairing::decode_pairing_confirmation(frame, accepted) ||
                 frame.transaction_id !=
                     _secure_pairing_session.presentation().transaction_id) {
                 (void)send_pairing_empty(
@@ -2057,19 +2104,33 @@ void AppCodexStatus::process_secure_pairing(uint32_t now_ms)
             secure_pairing::WireMessageType::AuthenticationRequest) {
             secure_pairing::AuthenticationRequest request = {};
             if (!secure_pairing::decode_authentication_request(
-                    frame, queued.connection_handle, request) ||
-                _secure_pairing_session.request_authentication(
-                    request,
-                    _agent_registry,
-                    fill_agent_entropy,
-                    nullptr,
-                    now_ms) != secure_pairing::SessionResult::Ok) {
+                    frame, queued.connection_handle, request)) {
                 (void)send_pairing_empty(
                     queued.connection_handle,
                     secure_pairing::WireMessageType::Error,
                     frame.transaction_id);
                 continue;
             }
+            const secure_pairing::SessionResult request_result =
+                _secure_pairing_session.request_authentication(
+                    request,
+                    _agent_registry,
+                    fill_agent_entropy,
+                    nullptr,
+                    now_ms);
+            if (request_result != secure_pairing::SessionResult::Ok) {
+                (void)send_pairing_empty(
+                    queued.connection_handle,
+                    secure_pairing::WireMessageType::Error,
+                    frame.transaction_id);
+                if (request_result == secure_pairing::SessionResult::Cooldown) {
+                    (void)_ble_transport->reject_pending(
+                        queued.connection_handle);
+                }
+                continue;
+            }
+            (void)_ble_transport->note_pairing_activity(
+                queued.connection_handle, now_ms);
             std::array<uint8_t, secure_pairing::kMaxPairingWireFrameSize>
                 response = {};
             size_t response_size = 0;
@@ -2092,7 +2153,11 @@ void AppCodexStatus::process_secure_pairing(uint32_t now_ms)
             secure_pairing::WireMessageType::AuthenticationProof) {
             const uint8_t* signature = nullptr;
             size_t signature_size = 0;
-            if (_agent_registry_store == nullptr ||
+            if (queued.connection_handle !=
+                    _secure_pairing_session.connection_handle() ||
+                frame.transaction_id !=
+                    _secure_pairing_session.presentation().transaction_id ||
+                _agent_registry_store == nullptr ||
                 !secure_pairing::decode_authentication_proof(
                     frame, signature, signature_size) ||
                 _secure_pairing_session.authenticate(
@@ -2119,7 +2184,6 @@ void AppCodexStatus::process_secure_pairing(uint32_t now_ms)
                     queued.connection_handle,
                     PairingCompletion::Authentication,
                     frame.transaction_id,
-                    false,
                     false);
             }
             continue;
@@ -2130,7 +2194,9 @@ void AppCodexStatus::process_secure_pairing(uint32_t now_ms)
             size_t proof_size = 0;
             const auto purpose =
                 _secure_pairing_session.presentation().credential.purpose;
-            if (!secure_pairing::decode_credential_ack_wire(
+            if (queued.connection_handle !=
+                    _secure_pairing_session.connection_handle() ||
+                !secure_pairing::decode_credential_ack_wire(
                     frame, proof, proof_size) ||
                 _secure_pairing_session.acknowledge_credential(
                     frame.transaction_id,
@@ -2149,8 +2215,7 @@ void AppCodexStatus::process_secure_pairing(uint32_t now_ms)
                 queued.connection_handle,
                 PairingCompletion::CredentialAck,
                 frame.transaction_id,
-                newly_paired && _pairing_allow_switch,
-                false);
+                newly_paired && _pairing_allow_switch);
         }
     }
 }
@@ -2161,9 +2226,20 @@ void AppCodexStatus::complete_agent_switch_if_ready()
         _ble_transport->connected()) {
         return;
     }
+    const auto clear_failed_switch = [this](uint16_t rejected_handle) {
+        if (rejected_handle != secure_pairing::kNoAgentConnection) {
+            (void)_ble_transport->reject_pending(rejected_handle);
+        }
+        _agent_switch_pending = false;
+        _agent_switch_target = {};
+        clear_pairing_runtime();
+        sync_agent_panel_registry();
+        _agent_panel_dirty = true;
+    };
     const uint16_t pending = _ble_transport->pending_handle();
     if (pending == secure_pairing::kNoAgentConnection ||
         _ble_transport->pending_fingerprint() != _agent_switch_target) {
+        clear_failed_switch(secure_pairing::kNoAgentConnection);
         return;
     }
     if (_pairing_completion != PairingCompletion::None &&
@@ -2174,6 +2250,7 @@ void AppCodexStatus::complete_agent_switch_if_ready()
                 : secure_pairing::WireMessageType::CredentialAckOk;
         if (!send_pairing_empty(
                 pending, response, _pairing_completion_transaction)) {
+            clear_failed_switch(pending);
             return;
         }
     }
@@ -2186,6 +2263,8 @@ void AppCodexStatus::complete_agent_switch_if_ready()
         _secure_pairing_session.reset();
         sync_agent_panel_registry();
         _agent_panel_dirty = true;
+    } else {
+        clear_failed_switch(pending);
     }
 }
 

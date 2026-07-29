@@ -39,6 +39,7 @@ class PairingWireTests(unittest.TestCase):
             agent_ephemeral_public=b"\x02" + b"E" * 32,
             agent_identity_public=b"\x03" + b"I" * 32,
             display_name="桌面 Agent",
+            identity_signature=b"S" * 70,
         )
 
         frame = encode_pairing_request(request)

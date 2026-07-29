@@ -51,6 +51,20 @@ secure_pairing::PairingTranscript fixture()
     return value;
 }
 
+secure_pairing::PairingIdentityClaim identity_claim_fixture()
+{
+    using namespace secure_pairing;
+    const PairingTranscript transcript = fixture();
+    PairingIdentityClaim value = {};
+    value.transaction_id = transcript.transaction_id;
+    value.agent_nonce = transcript.agent_nonce;
+    value.agent_ephemeral_public = transcript.agent_ephemeral_public;
+    value.agent_identity_public = transcript.agent_identity_public;
+    value.agent_name = transcript.agent_name;
+    value.agent_name_size = transcript.agent_name_size;
+    return value;
+}
+
 }  // namespace
 
 int main()
@@ -77,6 +91,27 @@ int main()
         fixture(), encoded.data(), encoded.size(), encoded_size));
     assert(encoded_size == expected.size());
     assert(std::equal(expected.begin(), expected.end(), encoded.begin()));
+
+    const auto expected_identity_claim = from_hex<111>(
+        "535750434c4d0101020304"
+        "0010ffeeddccbbaa99887766554433221100"
+        "002103d65a93977caa3d1b081852ff57a79e"
+        "465f1660577304baead505dd3a48589cf3"
+        "00210351a7580833898ea1b183cbd7350a40"
+        "99078c6ef1c1e18e970cd7683035f25e7d"
+        "000a53747564696f204d6163");
+    std::array<uint8_t, kMaxIdentityClaimSize> encoded_identity_claim = {};
+    size_t encoded_identity_claim_size = 0;
+    assert(encode_pairing_identity_claim(
+        identity_claim_fixture(),
+        encoded_identity_claim.data(),
+        encoded_identity_claim.size(),
+        encoded_identity_claim_size));
+    assert(encoded_identity_claim_size == expected_identity_claim.size());
+    assert(std::equal(
+        expected_identity_claim.begin(),
+        expected_identity_claim.end(),
+        encoded_identity_claim.begin()));
 
     PairingTranscript decoded = {};
     assert(decode_pairing_transcript(

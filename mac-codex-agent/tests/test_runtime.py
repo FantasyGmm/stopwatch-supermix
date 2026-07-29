@@ -276,6 +276,102 @@ async def wait_for_messages(transport, count):
 
 
 class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_keychain_load_failure_publishes_forgettable_pairing_error(self):
+        watch_id = bytes(range(16))
+        watch_identity_public = public_key_bytes(
+            ec.derive_private_key(23, ec.SECP256R1()).public_key()
+        )
+
+        class IdentityStore:
+            def load_or_create(self):
+                return type(
+                    "Identity",
+                    (),
+                    {
+                        "private_key": ec.derive_private_key(
+                            17, ec.SECP256R1()
+                        ),
+                        "display_name": "Desk Agent",
+                    },
+                )()
+
+        class CredentialStore:
+            def load(self, requested_watch_id):
+                self.requested_watch_id = requested_watch_id
+                raise ValueError("corrupt Keychain credential")
+
+        class Transport:
+            async def discover_watch(self):
+                return WatchDiscovery(watch_id, 3, watch_identity_public)
+
+        states = []
+        authorizer = SecureConnectionAuthorizer(
+            identity_store=IdentityStore(),
+            credential_store=CredentialStore(),
+        )
+
+        with self.assertRaisesRegex(ValueError, "corrupt Keychain"):
+            await authorizer.authorize(
+                Transport(), lambda *state: states.append(state)
+            )
+
+        self.assertEqual(
+            states[-1],
+            (PairingState.ERROR, "", "0E0F", "Desk Agent"),
+        )
+
+    async def test_watch_identity_mismatch_publishes_forgettable_pairing_error(self):
+        watch_id = bytes(range(16))
+        discovered_identity = public_key_bytes(
+            ec.derive_private_key(23, ec.SECP256R1()).public_key()
+        )
+        stored_identity = public_key_bytes(
+            ec.derive_private_key(29, ec.SECP256R1()).public_key()
+        )
+
+        class IdentityStore:
+            def load_or_create(self):
+                return type(
+                    "Identity",
+                    (),
+                    {
+                        "private_key": ec.derive_private_key(
+                            17, ec.SECP256R1()
+                        ),
+                        "display_name": "Desk Agent",
+                    },
+                )()
+
+        class CredentialStore:
+            def load(self, requested_watch_id):
+                return WatchCredential(
+                    requested_watch_id,
+                    b"K" * 16,
+                    3,
+                    b"F" * 16,
+                    stored_identity,
+                )
+
+        class Transport:
+            async def discover_watch(self):
+                return WatchDiscovery(watch_id, 3, discovered_identity)
+
+        states = []
+        authorizer = SecureConnectionAuthorizer(
+            identity_store=IdentityStore(),
+            credential_store=CredentialStore(),
+        )
+
+        with self.assertRaisesRegex(PermissionError, "does not match"):
+            await authorizer.authorize(
+                Transport(), lambda *state: states.append(state)
+            )
+
+        self.assertEqual(
+            states[-1],
+            (PairingState.ERROR, "", "0E0F", "Desk Agent"),
+        )
+
     async def test_unknown_watch_enrolls_and_publishes_verification_code(self):
         identity_key = ec.derive_private_key(17, ec.SECP256R1())
         identity_public = public_key_bytes(identity_key.public_key())
@@ -401,6 +497,87 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(states[0][0], PairingState.REKEYING)
         self.assertEqual(states[-1][0], PairingState.PAIRED)
 
+    async def test_active_watch_refreshes_rotated_credential_in_place(self):
+        identity_key = ec.derive_private_key(17, ec.SECP256R1())
+        watch_id = bytes(range(16))
+        watch_identity_public = public_key_bytes(
+            ec.derive_private_key(29, ec.SECP256R1()).public_key()
+        )
+        old = WatchCredential(
+            watch_id, b"A" * 16, 2, b"F" * 16, watch_identity_public
+        )
+        updated = WatchCredential(
+            watch_id, b"B" * 16, 5, b"F" * 16, watch_identity_public
+        )
+
+        class IdentityStore:
+            def load_or_create(self):
+                return type(
+                    "Identity",
+                    (),
+                    {
+                        "private_key": identity_key,
+                        "display_name": "Desk Agent",
+                    },
+                )()
+
+        class Client:
+            async def authenticate(
+                self, transport, identity, credential, display_name
+            ):
+                self.arguments = (
+                    transport,
+                    identity,
+                    credential,
+                    display_name,
+                )
+                return AuthenticationResult(True, True, updated)
+
+        class Transport:
+            async def discover_watch(self):
+                return WatchDiscovery(watch_id, 5, watch_identity_public)
+
+        client = Client()
+        states = []
+        authorizer = SecureConnectionAuthorizer(
+            identity_store=IdentityStore(), pairing_client=client
+        )
+
+        result = await authorizer.refresh_if_needed(
+            Transport(), old, lambda *state: states.append(state)
+        )
+
+        self.assertEqual(result, updated)
+        self.assertEqual(client.arguments[2], old)
+        self.assertEqual(states[0][0], PairingState.REKEYING)
+        self.assertEqual(states[-1][0], PairingState.PAIRED)
+
+    async def test_transient_active_epoch_check_keeps_existing_credential(self):
+        watch_identity_public = public_key_bytes(
+            ec.derive_private_key(29, ec.SECP256R1()).public_key()
+        )
+        credential = WatchCredential(
+            bytes(range(16)),
+            b"A" * 16,
+            2,
+            b"F" * 16,
+            watch_identity_public,
+        )
+
+        class Transport:
+            async def discover_watch(self):
+                raise asyncio.TimeoutError("temporary GATT timeout")
+
+        states = []
+        authorizer = SecureConnectionAuthorizer()
+
+        result = await authorizer.refresh_if_needed(
+            Transport(), credential, lambda *state: states.append(state)
+        )
+
+        self.assertEqual(result, credential)
+        self.assertEqual(states, [])
+
     async def test_runtime_does_not_open_production_surface_before_authorization(self):
         release = asyncio.Event()
         credential = WatchCredential(
@@ -443,7 +620,6 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
         release.set()
         result = await asyncio.wait_for(session, 1)
-
         self.assertEqual(result, "disconnected")
         self.assertEqual(
             [message_type for message_type, _ in factory.instances[0].messages],
@@ -451,6 +627,35 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(runtime.snapshot().agent_name, "Desk Agent")
         self.assertEqual(runtime.snapshot().watch_identity_suffix, "0E0F")
+
+    async def test_authorization_failure_exposes_pairing_recovery_actions(self):
+        class Authorizer:
+            async def authorize(self, transport, publish):
+                publish(
+                    PairingState.AUTHENTICATING,
+                    "",
+                    "0E0F",
+                    "Desk Agent",
+                )
+                raise PermissionError("Agent authentication was rejected")
+
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            transport_factory=FakeTransportFactory([{}]),
+            secure_authorizer=Authorizer(),
+            status_interval=0.01,
+            retry_delays=(1.0,),
+        )
+        task = asyncio.create_task(runtime.run())
+        for _ in range(100):
+            if runtime.snapshot().pairing_state is PairingState.ERROR:
+                break
+            await asyncio.sleep(0.01)
+
+        self.assertIs(runtime.snapshot().pairing_state, PairingState.ERROR)
+
+        runtime.submit(AgentCommand.STOP)
+        await asyncio.wait_for(task, 1)
 
     async def test_collects_trae_snapshot_independently(self):
         collector = FakeCollector(

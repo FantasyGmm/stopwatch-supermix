@@ -15,6 +15,7 @@ enum class AgentConnectionRole : uint8_t {
     None,
     Pending,
     Active,
+    Disconnecting,
 };
 
 enum class AgentConnectionAdmission : uint8_t {
@@ -37,6 +38,12 @@ struct AgentConnection {
     bool voice_subscribed = false;
     bool pairing_subscribed = false;
     uint32_t admitted_at_ms = 0;
+    uint32_t last_pairing_activity_ms = 0;
+};
+
+struct AgentActiveConnection {
+    uint16_t handle = kNoAgentConnection;
+    uint32_t generation = 0;
 };
 
 class AgentConnectionRouter {
@@ -49,9 +56,11 @@ public:
         const AgentFingerprint& fingerprint);
     bool promote_pending(uint16_t handle);
     bool reject_pending(uint16_t handle);
+    bool note_pending_activity(uint16_t handle, uint32_t now_ms);
     uint16_t expire_unauthorized_pending(
         uint32_t now_ms,
-        uint32_t timeout_ms);
+        uint32_t idle_timeout_ms,
+        uint32_t max_lifetime_ms);
 
     AgentConnectionRole role(uint16_t handle) const;
     bool can_access(uint16_t handle, AgentGattSurface surface) const;
@@ -60,7 +69,9 @@ public:
     bool update_pairing_subscription(uint16_t handle, bool enabled);
 
     uint16_t active_handle() const;
+    AgentActiveConnection active_connection() const;
     uint16_t pending_handle() const;
+    uint16_t disconnecting_handle() const;
     uint16_t mtu(uint16_t handle) const;
     AgentFingerprint fingerprint(uint16_t handle) const;
     bool voice_subscribed(uint16_t handle) const;

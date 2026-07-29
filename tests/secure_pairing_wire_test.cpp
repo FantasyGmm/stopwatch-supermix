@@ -35,11 +35,11 @@ std::array<uint8_t, N / 2> decode_hex(const char (&encoded)[N])
 void test_python_pairing_request_fixture_decodes_exactly()
 {
     const auto encoded = decode_hex(
-        "53575052010300000007005d"
+        "535750520103000000070063"
         "4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e4e"
         "024545454545454545454545454545454545454545454545454545454545454545"
         "034949494949494949494949494949494949494949494949494949494949494949"
-        "0a4465736b204167656e74");
+        "0a4465736b204167656e740004aabbccdd");
     WireFrameView frame = {};
     assert(decode_wire_frame(encoded.data(), encoded.size(), frame));
     assert(frame.type == WireMessageType::PairingRequest);
@@ -52,15 +52,24 @@ void test_python_pairing_request_fixture_decodes_exactly()
     assert(request.agent_identity_public[0] == 0x03);
     assert(request.agent_name_size == 10);
     assert(std::memcmp(request.agent_name.data(), "Desk Agent", 10) == 0);
+    assert(request.identity_signature_size == 4);
 
-    std::array<uint8_t, 12 + 83 + kMaxAgentNameBytes> max_name_frame = {};
+    std::array<uint8_t, 12 + 83 + kMaxAgentNameBytes + 2 + 4>
+        max_name_frame = {};
     std::copy_n(encoded.begin(), 12 + 83, max_name_frame.begin());
-    max_name_frame[11] = static_cast<uint8_t>(83 + kMaxAgentNameBytes);
+    max_name_frame[11] = static_cast<uint8_t>(
+        83 + kMaxAgentNameBytes + 2 + 4);
     max_name_frame[12 + 82] = static_cast<uint8_t>(kMaxAgentNameBytes);
     std::fill_n(
         max_name_frame.begin() + 12 + 83,
         kMaxAgentNameBytes,
         static_cast<uint8_t>('A'));
+    max_name_frame[12 + 83 + kMaxAgentNameBytes] = 0;
+    max_name_frame[12 + 83 + kMaxAgentNameBytes + 1] = 4;
+    std::fill_n(
+        max_name_frame.begin() + 12 + 83 + kMaxAgentNameBytes + 2,
+        4,
+        static_cast<uint8_t>('S'));
     WireFrameView max_name_view = {};
     assert(decode_wire_frame(
         max_name_frame.data(), max_name_frame.size(), max_name_view));

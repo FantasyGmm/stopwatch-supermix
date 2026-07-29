@@ -83,9 +83,14 @@ _VOICE_UNAVAILABLE_REASONS = {
 }
 
 
+class ActiveRekeyError(RuntimeError):
+    """The watch confirmed a new epoch but active rekey did not complete."""
+
+
 @dataclasses.dataclass
 class _BleSessionContext:
     transport: object
+    credential: Optional[WatchCredential] = None
     voice_key: Optional[bytes] = None
     voice_key_epoch: int = VOICE_KEY_EPOCH
     voice_service: Optional[object] = None
@@ -136,62 +141,73 @@ class SecureConnectionAuthorizer:
         with self._state_lock:
             self._current_watch_id = discovery.watch_id
         watch_suffix = discovery.watch_id.hex()[-4:].upper()
-        credential = await _run_in_daemon_thread(
-            lambda: self._credential_store.load(discovery.watch_id)
-        )
-        if credential is None:
+        try:
+            credential = await _run_in_daemon_thread(
+                lambda: self._credential_store.load(discovery.watch_id)
+            )
+            if credential is None:
+                publish(
+                    PairingState.REQUESTING,
+                    "",
+                    watch_suffix,
+                    identity.display_name,
+                )
+                presentation = await self._pairing_client.request_pairing(
+                    transport,
+                    identity.private_key,
+                    identity.display_name,
+                )
+                if presentation.watch_id != discovery.watch_id:
+                    raise ValueError("pairing response belongs to another watch")
+                publish(
+                    PairingState.AWAITING_CONFIRMATION,
+                    presentation.verification_code,
+                    watch_suffix,
+                    identity.display_name,
+                )
+                result = await self._pairing_client.confirm_pairing(True)
+                if not result.paired or result.credential is None:
+                    raise PermissionError("pairing was rejected on watch")
+                credential = result.credential
+            else:
+                if (
+                    credential.watch_identity_public
+                    != discovery.watch_identity_public
+                ):
+                    raise PermissionError(
+                        "watch identity does not match Keychain"
+                    )
+                state = (
+                    PairingState.REKEYING
+                    if credential.key_epoch != discovery.key_epoch
+                    else PairingState.AUTHENTICATING
+                )
+                publish(state, "", watch_suffix, identity.display_name)
+                result = await self._pairing_client.authenticate(
+                    transport,
+                    identity.private_key,
+                    credential,
+                    identity.display_name,
+                )
+                if not result.authenticated:
+                    raise PermissionError("Agent authentication was rejected")
+                credential = result.credential
+
+            if (
+                credential.watch_id != discovery.watch_id
+                or credential.key_epoch != discovery.key_epoch
+                or credential.watch_identity_public
+                != discovery.watch_identity_public
+            ):
+                raise ValueError("watch credential epoch is not current")
+        except Exception:
             publish(
-                PairingState.REQUESTING,
+                PairingState.ERROR,
                 "",
                 watch_suffix,
                 identity.display_name,
             )
-            presentation = await self._pairing_client.request_pairing(
-                transport,
-                identity.private_key,
-                identity.display_name,
-            )
-            if presentation.watch_id != discovery.watch_id:
-                raise ValueError("pairing response belongs to another watch")
-            publish(
-                PairingState.AWAITING_CONFIRMATION,
-                presentation.verification_code,
-                watch_suffix,
-                identity.display_name,
-            )
-            result = await self._pairing_client.confirm_pairing(True)
-            if not result.paired or result.credential is None:
-                raise PermissionError("pairing was rejected on watch")
-            credential = result.credential
-        else:
-            if (
-                credential.watch_identity_public
-                != discovery.watch_identity_public
-            ):
-                raise PermissionError("watch identity does not match Keychain")
-            state = (
-                PairingState.REKEYING
-                if credential.key_epoch != discovery.key_epoch
-                else PairingState.AUTHENTICATING
-            )
-            publish(state, "", watch_suffix, identity.display_name)
-            result = await self._pairing_client.authenticate(
-                transport,
-                identity.private_key,
-                credential,
-                identity.display_name,
-            )
-            if not result.authenticated:
-                raise PermissionError("Agent authentication was rejected")
-            credential = result.credential
-
-        if (
-            credential.watch_id != discovery.watch_id
-            or credential.key_epoch != discovery.key_epoch
-            or credential.watch_identity_public
-            != discovery.watch_identity_public
-        ):
-            raise ValueError("watch credential epoch is not current")
+            raise
         publish(
             PairingState.PAIRED,
             "",
@@ -199,6 +215,76 @@ class SecureConnectionAuthorizer:
             identity.display_name,
         )
         return credential
+
+    async def refresh_if_needed(
+        self,
+        transport,
+        credential: WatchCredential,
+        publish,
+    ) -> WatchCredential:
+        watch_suffix = credential.watch_id.hex()[-4:].upper()
+        try:
+            discovery = await transport.discover_watch()
+        except Exception as error:
+            LOGGER.warning("Active watch epoch check failed: %s", error)
+            return credential
+        identity = await _run_in_daemon_thread(
+            self._identity_store.load_or_create
+        )
+        try:
+            if (
+                not isinstance(discovery, WatchDiscovery)
+                or discovery.watch_id != credential.watch_id
+                or discovery.watch_identity_public
+                != credential.watch_identity_public
+                or not isinstance(discovery.key_epoch, int)
+                or isinstance(discovery.key_epoch, bool)
+                or discovery.key_epoch <= 0
+            ):
+                raise PermissionError(
+                    "active watch identity does not match Keychain"
+                )
+            if discovery.key_epoch == credential.key_epoch:
+                return credential
+            if discovery.key_epoch < credential.key_epoch:
+                raise PermissionError("watch credential epoch rolled back")
+            publish(
+                PairingState.REKEYING,
+                "",
+                watch_suffix,
+                identity.display_name,
+            )
+            result = await self._pairing_client.authenticate(
+                transport,
+                identity.private_key,
+                credential,
+                identity.display_name,
+            )
+            updated = result.credential
+            if (
+                not result.authenticated
+                or not result.rekeyed
+                or updated.watch_id != credential.watch_id
+                or updated.key_epoch != discovery.key_epoch
+                or updated.watch_identity_public
+                != credential.watch_identity_public
+            ):
+                raise PermissionError("active Agent rekey was rejected")
+            publish(
+                PairingState.PAIRED,
+                "",
+                watch_suffix,
+                identity.display_name,
+            )
+            return updated
+        except Exception as error:
+            publish(
+                PairingState.ERROR,
+                "",
+                watch_suffix,
+                identity.display_name,
+            )
+            raise ActiveRekeyError(str(error)) from error
 
     def forget_current_watch(self) -> bool:
         with self._state_lock:
@@ -523,6 +609,13 @@ class AgentRuntime:
                 except Exception as error:
                     state = _state_for_error(error)
                     self._transition(state, str(error))
+                    if self.snapshot().pairing_state in (
+                        PairingState.REQUESTING,
+                        PairingState.AWAITING_CONFIRMATION,
+                        PairingState.AUTHENTICATING,
+                        PairingState.REKEYING,
+                    ):
+                        self._transition_pairing(PairingState.ERROR)
                     LOGGER.exception("BLE session failed")
 
                 delay = self._retry_delays[min(retry_index, len(self._retry_delays) - 1)]
@@ -595,6 +688,7 @@ class AgentRuntime:
                 credential = await self._secure_authorizer.authorize(
                     transport, self._transition_pairing
                 )
+                context.credential = credential
                 context.voice_key = credential.master_key
                 context.voice_key_epoch = credential.key_epoch
             self._transition(ConnectionState.CONNECTED)
@@ -611,6 +705,7 @@ class AgentRuntime:
                 if failure is not None:
                     await self._isolate_voice_failure(context, failure)
                 await status_agent.tick(status=dict(self._latest_status))
+                await self._refresh_secure_credential(context)
                 failure = await self._wait_for_status_interval(
                     transport, ignore_voice_failure=context.voice_failed
                 )
@@ -622,6 +717,67 @@ class AgentRuntime:
                 self.snapshot().voice_state is VoiceState.RECORDING
             )
             await self._await_session_shutdown(context, voice_was_recording)
+
+    async def _refresh_secure_credential(
+        self, context: _BleSessionContext
+    ) -> None:
+        if self._secure_authorizer is None or context.credential is None:
+            return
+        refresh = getattr(self._secure_authorizer, "refresh_if_needed", None)
+        if refresh is None:
+            return
+        try:
+            updated = await refresh(
+                context.transport,
+                context.credential,
+                self._transition_pairing,
+            )
+        except ActiveRekeyError as error:
+            if not context.voice_failed:
+                await self._isolate_voice_failure(context, error)
+            LOGGER.exception("Active Agent rekey failed; status remains active")
+            return
+        except Exception as error:
+            LOGGER.warning(
+                "Active Agent epoch check deferred; existing voice remains active: %s",
+                error,
+            )
+            return
+        if updated == context.credential:
+            return
+        await self._replace_voice_credential(context, updated)
+
+    async def _replace_voice_credential(
+        self,
+        context: _BleSessionContext,
+        credential: WatchCredential,
+    ) -> None:
+        retired_consumer = self._retire_voice_generation(context.transport)
+        await self._disable_voice(context.transport, None)
+        if context.voice_service is not None:
+            cleaned = await self._cleanup_voice_service(
+                context.voice_service,
+                self._disconnect_timeout,
+                "Voice session rekey cleanup",
+            )
+            if not cleaned:
+                context.voice_failed = True
+                self._transition_voice(
+                    VoiceState.ERROR,
+                    "Voice session could not restart after rekey",
+                )
+                return
+            context.voice_service = None
+        if retired_consumer is not None:
+            await self._bounded_cleanup(
+                _await_voice_consumer(retired_consumer),
+                "Voice rekey consumer cleanup",
+            )
+        context.credential = credential
+        context.voice_key = credential.master_key
+        context.voice_key_epoch = credential.key_epoch
+        context.voice_failed = False
+        await self._prepare_voice(context)
 
     async def _prepare_voice(self, context: _BleSessionContext) -> None:
         key = context.voice_key

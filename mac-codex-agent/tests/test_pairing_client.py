@@ -25,7 +25,12 @@ from secure_pairing_crypto import (
     verify_challenge,
     wrap_credential,
 )
-from secure_pairing_protocol import PairingTranscript, encode_pairing_transcript
+from secure_pairing_protocol import (
+    PairingIdentityClaim,
+    PairingTranscript,
+    encode_pairing_identity_claim,
+    encode_pairing_transcript,
+)
 
 
 class CredentialStore:
@@ -64,6 +69,19 @@ class FakeWatch:
         self.tamper_rekey_public = False
 
     async def request_pairing(self, request):
+        claim = PairingIdentityClaim(
+            request.transaction_id,
+            request.agent_nonce,
+            request.agent_ephemeral_public,
+            request.agent_identity_public,
+            request.display_name,
+        )
+        if not verify_challenge(
+            request.agent_identity_public,
+            encode_pairing_identity_claim(claim),
+            request.identity_signature,
+        ):
+            raise ValueError("pairing identity signature rejected")
         self._pairing_request = request
         watch_private = ec.derive_private_key(31, ec.SECP256R1())
         self._watch_pairing_private = watch_private
