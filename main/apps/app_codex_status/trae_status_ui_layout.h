@@ -14,8 +14,6 @@ constexpr int kPageIndicatorY = 416;
 constexpr int kBatteryY = 438;
 
 constexpr uint32_t kBackground = 0x000000;
-constexpr uint32_t kCardBackground = 0x0B0D10;
-constexpr uint32_t kAccent = 0x7C9DFF;
 constexpr uint32_t kRunning = 0x49C9EE;
 constexpr uint32_t kPending = 0xFF6248;
 constexpr uint32_t kProcessLive = 0x1CE994;
@@ -23,10 +21,6 @@ constexpr uint32_t kPrimaryText = 0xF2F6F8;
 constexpr uint32_t kSecondaryText = 0xB8C2CC;
 constexpr uint32_t kDimText = 0x788391;
 constexpr uint32_t kProjectText = 0x99B1FF;
-constexpr uint32_t kCardTitleText = 0xD9E0E6;
-constexpr uint32_t kHintText = 0x64707D;
-constexpr uint32_t kPendingBorder = 0x7A3E35;
-constexpr uint32_t kRunningBorder = 0x285B6B;
 
 constexpr int kBrandIconX = 168;
 constexpr int kBrandIconY = 22;
@@ -69,32 +63,26 @@ constexpr int kDividerX = 82;
 constexpr int kDividerY = 223;
 constexpr int kDividerWidth = 302;
 
-constexpr int kSummaryY = 240;
-constexpr int kPendingSummaryX = 175;
-constexpr int kPendingCountX = 222;
-constexpr int kRunningSummaryX = 244;
-constexpr int kRunningCountX = 291;
+constexpr int kSummaryLabelY = 249;
+constexpr int kSummaryCountY = 266;
+constexpr int kPendingAnchorX = 110;
+constexpr int kRunningAnchorX = 284;
+constexpr int kSummaryAnchorWidth = 72;
 
-constexpr int kDeckX = 108;
-constexpr int kDeckY = 268;
-constexpr int kDeckWidth = 250;
-constexpr int kDeckHeight = 120;
-constexpr int kCardWidth = 250;
-constexpr int kCardHeight = 98;
-constexpr int kCardRadius = 15;
-constexpr int kBackCardOffset = 10;
-constexpr int kDeepCardOffset = 18;
-constexpr int kBackCardScale = 241;
-constexpr int kDeepCardScale = 225;
-constexpr int kCardTextX = 17;
-constexpr int kCardIndexX = 137;
-constexpr int kCardTextWidth = 216;
-constexpr int kCardIndexWidth = 96;
-constexpr int kCardStateY = 14;
-constexpr int kCardProjectY = 35;
-constexpr int kCardTitleY = 59;
-constexpr int kCardDetailY = 78;
-constexpr int kDeckHintY = 390;
+constexpr int kCurrentProjectX = 112;
+constexpr int kCurrentProjectY = 299;
+constexpr int kCurrentTaskX = 112;
+constexpr int kCurrentTaskY = 329;
+constexpr int kCurrentTextWidth = 242;
+constexpr int kNextCaptionX = 109;
+constexpr int kNextTaskX = 165;
+constexpr int kNextTaskY = 365;
+constexpr int kNextCaptionWidth = 56;
+constexpr int kNextTaskWidth = 192;
+constexpr int kTaskFocusX = 82;
+constexpr int kTaskFocusY = 241;
+constexpr int kTaskFocusWidth = 302;
+constexpr int kTaskFocusHeight = 165;
 
 constexpr uint32_t kRobotIdleDurationMs = 1300;
 constexpr uint32_t kRobotActionDurationMs = 320;
@@ -119,13 +107,6 @@ enum class EmptyState {
     StatusUnavailable,
     ProcessOff,
     NoActiveTasks,
-};
-
-
-struct DeckLayers {
-    bool deep;
-    bool back;
-    bool front;
 };
 
 
@@ -227,16 +208,6 @@ constexpr const char* empty_state_text(EmptyState state)
             return nullptr;
     }
     return nullptr;
-}
-
-
-constexpr DeckLayers resolve_deck_layers(size_t visible_task_count)
-{
-    return {
-        visible_task_count >= 3,
-        visible_task_count >= 2,
-        true,
-    };
 }
 
 

@@ -15,6 +15,7 @@ public:
     void reset();
 
     const TraeTask* current() const;
+    const TraeTask* next() const;
     TraeTaskState display_state() const;
     size_t task_count() const;
     bool manual_mode() const;

@@ -7,6 +7,7 @@ import datetime
 import hashlib
 import json
 import mmap
+import os
 import pathlib
 import re
 import sqlite3
@@ -27,6 +28,9 @@ _GLOBAL_MODEL_MAP_KEY = "lukeren_ai-chat:sessionRelation:globalModelMap"
 _MODEL_LIST_MAP_KEY = "lukeren_AI.agent.model.model_list_map"
 _SESSION_STORAGE_KEY = "memento/icube-ai-agent-storage"
 _TITLE_MARKER = b"generate_session_title_and_icon_cloud:"
+_TRAE_PROCESS_LOCK = (
+    pathlib.Path.home() / "Library" / "Application Support" / "Trae CN" / "code.lock"
+)
 _TITLE_RE = re.compile(
     r'generate_session_title_and_icon_cloud:\s*session_id:\s*"(?P<session>[^"]+)"'
     r',\s*title:\s*"(?P<title>(?:\\.|[^"\\])*)"'
@@ -59,15 +63,35 @@ DEFAULT_PATHS = _default_paths()
 
 
 def trae_process_is_running() -> Optional[bool]:
+    workspace_result = None
     try:
         from AppKit import NSWorkspace
 
-        return any(
+        if any(
             application.bundleIdentifier() == _TRAE_BUNDLE_ID
             for application in NSWorkspace.sharedWorkspace().runningApplications()
-        )
+        ):
+            return True
+        workspace_result = False
     except (ImportError, AttributeError, TypeError):
-        return None
+        pass
+
+    try:
+        process_id = int(
+            _TRAE_PROCESS_LOCK.read_text(encoding="utf-8").strip()
+        )
+        if process_id <= 0:
+            return workspace_result
+        os.kill(process_id, 0)
+        return True
+    except FileNotFoundError:
+        return False
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except (OSError, TypeError, ValueError):
+        return workspace_result
 
 
 def _clean_text(value: object, limit: int) -> str:

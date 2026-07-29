@@ -5,11 +5,12 @@ import sqlite3
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
-from trae_adapter import TraePaths, TraeStateCollector
+from trae_adapter import TraePaths, TraeStateCollector, trae_process_is_running
 from trae_tasks import TraeTask, TraeTaskSnapshot
 
 
@@ -83,6 +84,21 @@ class TraeStateCollectorTests(unittest.TestCase):
         path = root / "workspace.json"
         path.write_text(json.dumps({"folder": folder}), encoding="utf-8")
         return path
+
+    def test_process_probe_recognizes_live_pid_from_trae_lock_file(self):
+        workspace = mock.Mock()
+        workspace.runningApplications.return_value = []
+        appkit = mock.Mock()
+        appkit.NSWorkspace.sharedWorkspace.return_value = workspace
+        process_lock = self.root / "code.lock"
+        process_lock.write_text("59270", encoding="utf-8")
+
+        with mock.patch.dict(sys.modules, {"AppKit": appkit}):
+            with mock.patch(
+                "trae_adapter._TRAE_PROCESS_LOCK", process_lock, create=True
+            ):
+                with mock.patch("os.kill", side_effect=PermissionError):
+                    self.assertTrue(trae_process_is_running())
 
     def test_offline_state_does_not_touch_logs(self):
         self.write_log(

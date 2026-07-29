@@ -11,6 +11,7 @@
 
 
 LV_FONT_DECLARE(font_puhui_14_1)
+LV_FONT_DECLARE(NotoSansSCBold16Trae)
 
 namespace {
 
@@ -75,31 +76,6 @@ lv_obj_t* make_status_dot(
 }
 
 
-lv_obj_t* make_card(
-    lv_obj_t* parent,
-    int y_offset,
-    lv_opa_t opacity,
-    int scale
-)
-{
-    lv_obj_t* card = lv_obj_create(parent);
-    lv_obj_set_size(card, kCardWidth, kCardHeight);
-    lv_obj_set_pos(card, kDeckX, kDeckY + y_offset);
-    lv_obj_set_style_radius(card, kCardRadius, 0);
-    lv_obj_set_style_pad_all(card, 0, 0);
-    lv_obj_set_style_bg_color(card, lv_color_hex(kCardBackground), 0);
-    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(card, 1, 0);
-    lv_obj_set_style_border_color(card, lv_color_hex(kAccent), 0);
-    lv_obj_set_style_border_opa(card, opacity, 0);
-    lv_obj_set_style_opa(card, opacity, 0);
-    lv_obj_set_style_transform_scale(card, scale, 0);
-    lv_obj_clear_flag(card, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
-    return card;
-}
-
-
 const char* display_or_dash(const char* value)
 {
     return value != nullptr && value[0] != '\0' ? value : "--";
@@ -114,52 +90,6 @@ bool is_active_task(const TraeTask* task)
 }
 
 
-bool same_task_id(const TraeTask& left, const TraeTask& right)
-{
-    if (left.id[0] != '\0' && right.id[0] != '\0') {
-        return std::strncmp(
-                   left.id.data(),
-                   right.id.data(),
-                   left.id.size()
-               ) == 0;
-    }
-    return std::strncmp(
-               left.project.data(),
-               right.project.data(),
-               left.project.size()
-           ) == 0 &&
-           std::strncmp(
-               left.title.data(),
-               right.title.data(),
-               left.title.size()
-           ) == 0;
-}
-
-
-size_t active_ordinal(
-    const TraeStatusSnapshot& snapshot,
-    const TraeTask& task
-)
-{
-    size_t ordinal = 0;
-    const size_t task_count = std::min(
-        snapshot.task_count,
-        snapshot.tasks.size()
-    );
-    for (size_t index = 0; index < task_count; ++index) {
-        const TraeTask& candidate = snapshot.tasks[index];
-        if (!is_active_task(&candidate)) {
-            continue;
-        }
-        ++ordinal;
-        if (same_task_id(candidate, task)) {
-            return ordinal;
-        }
-    }
-    return 1;
-}
-
-
 void set_hidden(lv_obj_t* object, bool hidden)
 {
     if (object == nullptr) {
@@ -170,6 +100,12 @@ void set_hidden(lv_obj_t* object, bool hidden)
     } else {
         lv_obj_clear_flag(object, LV_OBJ_FLAG_HIDDEN);
     }
+}
+
+
+void style_summary_label(lv_obj_t* label, uint32_t color)
+{
+    lv_obj_set_style_text_color(label, lv_color_hex(color), 0);
 }
 
 }  // namespace
@@ -284,118 +220,87 @@ void TraeStatusPage::init(lv_obj_t* parent)
     );
 
     make_line(_root, kDividerX, kDividerY, kDividerWidth);
-    make_label(
+    _pending_label = make_label(
         _root,
         "待确认",
-        kPendingSummaryX,
-        kSummaryY,
-        58,
-        &font_puhui_14_1,
-        kPending
+        kPendingAnchorX,
+        kSummaryLabelY,
+        kSummaryAnchorWidth,
+        &NotoSansSCBold16Trae,
+        kDimText
     );
+    lv_obj_set_style_text_align(_pending_label, LV_TEXT_ALIGN_CENTER, 0);
+    style_summary_label(_pending_label, kDimText);
     _pending_count = make_label(
         _root,
         "0",
-        kPendingCountX,
-        kSummaryY,
-        32,
-        &lv_font_montserrat_14,
-        kPending
+        kPendingAnchorX,
+        kSummaryCountY,
+        kSummaryAnchorWidth,
+        &MontserratSemiBold26,
+        kDimText
     );
-    make_label(
+    lv_obj_set_style_text_align(_pending_count, LV_TEXT_ALIGN_CENTER, 0);
+    _running_label = make_label(
         _root,
         "运行中",
-        kRunningSummaryX,
-        kSummaryY,
-        58,
-        &font_puhui_14_1,
-        kRunning
+        kRunningAnchorX,
+        kSummaryLabelY,
+        kSummaryAnchorWidth,
+        &NotoSansSCBold16Trae,
+        kDimText
     );
+    lv_obj_set_style_text_align(_running_label, LV_TEXT_ALIGN_CENTER, 0);
+    style_summary_label(_running_label, kDimText);
     _running_count = make_label(
         _root,
         "0",
-        kRunningCountX,
-        kSummaryY,
-        32,
-        &lv_font_montserrat_14,
-        kRunning
+        kRunningAnchorX,
+        kSummaryCountY,
+        kSummaryAnchorWidth,
+        &MontserratSemiBold26,
+        kDimText
     );
+    lv_obj_set_style_text_align(_running_count, LV_TEXT_ALIGN_CENTER, 0);
 
-    _cards[0] = make_card(
+    _current_project = make_label(
         _root,
-        kDeepCardOffset,
-        LV_OPA_30,
-        kDeepCardScale
-    );
-    _cards[1] = make_card(
-        _root,
-        kBackCardOffset,
-        LV_OPA_60,
-        kBackCardScale
-    );
-    _cards[2] = make_card(_root, 0, LV_OPA_COVER, 256);
-    set_hidden(_cards[0], true);
-    set_hidden(_cards[1], true);
-
-    _card_state = make_label(
-        _cards[2],
-        "",
-        kCardTextX,
-        kCardStateY,
-        92,
-        &lv_font_montserrat_10,
-        kPending
-    );
-    lv_obj_set_style_text_letter_space(_card_state, 1, 0);
-    _card_index = make_label(
-        _cards[2],
-        "",
-        kCardIndexX,
-        kCardStateY,
-        kCardIndexWidth,
-        &lv_font_montserrat_10,
-        kPending
-    );
-    lv_obj_set_style_text_letter_space(_card_index, 1, 0);
-    lv_obj_set_style_text_align(_card_index, LV_TEXT_ALIGN_RIGHT, 0);
-    _card_project = make_label(
-        _cards[2],
         "--",
-        kCardTextX,
-        kCardProjectY,
-        kCardTextWidth,
-        &font_puhui_14_1,
+        kCurrentProjectX,
+        kCurrentProjectY,
+        kCurrentTextWidth,
+        &lv_font_montserrat_22,
         kProjectText
     );
-    _card_title = make_label(
-        _cards[2],
+    lv_obj_set_style_text_align(_current_project, LV_TEXT_ALIGN_CENTER, 0);
+    _current_task = make_label(
+        _root,
         "--",
-        kCardTextX,
-        kCardTitleY,
-        kCardTextWidth,
+        kCurrentTaskX,
+        kCurrentTaskY,
+        kCurrentTextWidth,
         &font_puhui_14_1,
-        kCardTitleText
+        kPrimaryText
     );
-    _card_detail = make_label(
-        _cards[2],
-        "",
-        kCardTextX,
-        kCardDetailY,
-        kCardTextWidth,
+    lv_obj_set_style_text_align(_current_task, LV_TEXT_ALIGN_CENTER, 0);
+    _next_caption = make_label(
+        _root,
+        "下一任务",
+        kNextCaptionX,
+        kNextTaskY,
+        kNextCaptionWidth,
+        &font_puhui_14_1,
+        kDimText
+    );
+    _next_task = make_label(
+        _root,
+        "--",
+        kNextTaskX,
+        kNextTaskY,
+        kNextTaskWidth,
         &font_puhui_14_1,
         kSecondaryText
     );
-
-    _deck_hint = make_label(
-        _root,
-        "点击最上层卡片切换 · Pending 始终优先",
-        0,
-        kDeckHintY,
-        kScreenSize,
-        &font_puhui_14_1,
-        kHintText
-    );
-    lv_obj_set_style_text_align(_deck_hint, LV_TEXT_ALIGN_CENTER, 0);
 
     _robot_timer = lv_timer_create(
         TraeStatusPage::robot_timer_cb,
@@ -409,9 +314,9 @@ void TraeStatusPage::init(lv_obj_t* parent)
 void TraeStatusPage::render(
     const TraeStatusSnapshot& snapshot,
     const TraeTask* task,
+    const TraeTask* next_task,
     bool stale,
-    bool bluetooth_connected,
-    size_t visible_task_count
+    bool bluetooth_connected
 )
 {
     if (_root == nullptr) {
@@ -476,6 +381,22 @@ void TraeStatusPage::render(
     );
     lv_label_set_text(_running_count, count_text);
 
+    const bool pending = active_task && task->state == TraeTaskState::Pending;
+    const uint32_t pending_color = pending ? kPending : kDimText;
+    const uint32_t running_color = active_task && !pending ? kRunning : kDimText;
+    style_summary_label(_pending_label, pending_color);
+    lv_obj_set_style_text_color(
+        _pending_count,
+        lv_color_hex(pending_color),
+        0
+    );
+    style_summary_label(_running_label, running_color);
+    lv_obj_set_style_text_color(
+        _running_count,
+        lv_color_hex(running_color),
+        0
+    );
+
     const char* empty_text = empty_state_text(resolve_empty_state(
         bluetooth_connected,
         stale,
@@ -486,79 +407,27 @@ void TraeStatusPage::render(
     ));
 
     if (empty_text != nullptr) {
-        set_hidden(_cards[0], true);
-        set_hidden(_cards[1], true);
-        set_hidden(_card_state, true);
-        set_hidden(_card_index, true);
-        set_hidden(_card_project, true);
-        set_hidden(_card_detail, true);
-        set_hidden(_card_title, false);
-        lv_label_set_text(_card_title, empty_text);
-        lv_obj_set_pos(_card_title, kCardTextX, 40);
-        lv_obj_set_style_text_align(_card_title, LV_TEXT_ALIGN_CENTER, 0);
+        set_hidden(_current_project, true);
+        set_hidden(_current_task, false);
+        set_hidden(_next_caption, true);
+        set_hidden(_next_task, true);
+        lv_label_set_text(_current_task, empty_text);
+        lv_obj_set_pos(_current_task, kCurrentTaskX, kCurrentTaskY);
+        lv_obj_set_style_text_align(_current_task, LV_TEXT_ALIGN_CENTER, 0);
         _last_task_id = {};
         return;
     }
 
-    set_hidden(_card_state, false);
-    set_hidden(_card_index, false);
-    set_hidden(_card_project, false);
-    set_hidden(_card_title, false);
-    set_hidden(_card_detail, false);
-    lv_obj_set_pos(_card_title, kCardTextX, kCardTitleY);
-    lv_obj_set_style_text_align(_card_title, LV_TEXT_ALIGN_LEFT, 0);
-
-    const DeckLayers layers = resolve_deck_layers(visible_task_count);
-    set_hidden(_cards[1], !layers.back);
-    set_hidden(_cards[0], !layers.deep);
-
-    const bool pending = task->state == TraeTaskState::Pending;
-    lv_label_set_text(_card_state, pending ? "PENDING" : "RUNNING");
-    lv_obj_set_style_text_color(
-        _card_state,
-        lv_color_hex(pending ? kPending : kRunning),
-        0
+    set_hidden(_current_project, false);
+    set_hidden(_current_task, false);
+    lv_obj_set_pos(
+        _current_project,
+        kCurrentProjectX,
+        kCurrentProjectY
     );
-    lv_obj_set_style_text_color(
-        _card_index,
-        lv_color_hex(pending ? kPending : kRunning),
-        0
-    );
-    lv_obj_set_style_border_color(
-        _cards[2],
-        lv_color_hex(pending ? kPendingBorder : kRunningBorder),
-        0
-    );
-
-    const size_t visible_count = std::max<size_t>(1, visible_task_count);
-    const size_t ordinal = active_ordinal(snapshot, *task);
-    const size_t aggregate_count =
-        static_cast<size_t>(snapshot.pending_count) +
-        static_cast<size_t>(snapshot.running_count);
-    const size_t overflow =
-        aggregate_count > visible_count ? aggregate_count - visible_count : 0;
-    char index_text[24];
-    if (overflow != 0) {
-        std::snprintf(
-            index_text,
-            sizeof(index_text),
-            "%zu/%zu +%zu",
-            ordinal,
-            visible_count,
-            overflow
-        );
-    } else {
-        std::snprintf(
-            index_text,
-            sizeof(index_text),
-            "%zu/%zu",
-            ordinal,
-            visible_count
-        );
-    }
-    lv_label_set_text(_card_index, index_text);
+    lv_obj_set_pos(_current_task, kCurrentTaskX, kCurrentTaskY);
     lv_label_set_text(
-        _card_project,
+        _current_project,
         display_or_dash(task->project.data())
     );
     const bool ascii_project = std::all_of(
@@ -570,12 +439,28 @@ void TraeStatusPage::render(
         }
     );
     lv_obj_set_style_text_font(
-        _card_project,
-        ascii_project ? &lv_font_montserrat_18 : &font_puhui_14_1,
+        _current_project,
+        ascii_project ? &lv_font_montserrat_22 : &font_puhui_14_1,
         0
     );
-    lv_label_set_text(_card_title, display_or_dash(task->title.data()));
-    lv_label_set_text(_card_detail, display_or_dash(task->detail.data()));
+    lv_label_set_text(_current_task, display_or_dash(task->title.data()));
+
+    if (is_active_task(next_task)) {
+        char next_text[128];
+        std::snprintf(
+            next_text,
+            sizeof(next_text),
+            "%s · %s",
+            display_or_dash(next_task->project.data()),
+            display_or_dash(next_task->title.data())
+        );
+        lv_label_set_text(_next_task, next_text);
+        set_hidden(_next_caption, false);
+        set_hidden(_next_task, false);
+    } else {
+        set_hidden(_next_caption, true);
+        set_hidden(_next_task, true);
+    }
 
     const bool task_changed = should_trigger_task_action(
         _active,
@@ -614,11 +499,11 @@ void TraeStatusPage::set_active(bool active)
 }
 
 
-bool TraeStatusPage::contains_deck_point(int x, int y) const
+bool TraeStatusPage::contains_task_point(int x, int y) const
 {
     return _root != nullptr &&
-           x >= kDeckX && x < kDeckX + kDeckWidth &&
-           y >= kDeckY && y < kDeckY + kDeckHeight;
+           x >= kTaskFocusX && x < kTaskFocusX + kTaskFocusWidth &&
+           y >= kTaskFocusY && y < kTaskFocusY + kTaskFocusHeight;
 }
 
 
@@ -670,15 +555,14 @@ void TraeStatusPage::shutdown()
     _robot = nullptr;
     _model = nullptr;
     _effort = nullptr;
+    _pending_label = nullptr;
     _pending_count = nullptr;
+    _running_label = nullptr;
     _running_count = nullptr;
-    _cards = {};
-    _card_state = nullptr;
-    _card_index = nullptr;
-    _card_project = nullptr;
-    _card_title = nullptr;
-    _card_detail = nullptr;
-    _deck_hint = nullptr;
+    _current_project = nullptr;
+    _current_task = nullptr;
+    _next_caption = nullptr;
+    _next_task = nullptr;
     _last_task_id = {};
     _active = false;
     _robot_action = false;

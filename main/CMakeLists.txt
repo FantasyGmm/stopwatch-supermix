@@ -28,6 +28,7 @@ set(MY_INCS
 
 set(CODEX_CJK_FONT
     "${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/font_puhui_14_1.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/NotoSansSCBold16Trae.c"
 )
 
 idf_component_register(

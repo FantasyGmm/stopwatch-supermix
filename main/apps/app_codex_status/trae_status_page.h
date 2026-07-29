@@ -5,7 +5,6 @@
 #include <lvgl.h>
 
 #include <array>
-#include <cstddef>
 
 
 class TraeStatusPage {
@@ -14,12 +13,12 @@ public:
     void render(
         const TraeStatusSnapshot& snapshot,
         const TraeTask* task,
+        const TraeTask* next_task,
         bool stale,
-        bool bluetooth_connected,
-        size_t visible_task_count
+        bool bluetooth_connected
     );
     void set_active(bool active);
-    bool contains_deck_point(int x, int y) const;
+    bool contains_task_point(int x, int y) const;
     void shutdown();
 
 private:
@@ -35,15 +34,14 @@ private:
     lv_obj_t* _robot = nullptr;
     lv_obj_t* _model = nullptr;
     lv_obj_t* _effort = nullptr;
+    lv_obj_t* _pending_label = nullptr;
     lv_obj_t* _pending_count = nullptr;
+    lv_obj_t* _running_label = nullptr;
     lv_obj_t* _running_count = nullptr;
-    std::array<lv_obj_t*, 3> _cards{};
-    lv_obj_t* _card_state = nullptr;
-    lv_obj_t* _card_index = nullptr;
-    lv_obj_t* _card_project = nullptr;
-    lv_obj_t* _card_title = nullptr;
-    lv_obj_t* _card_detail = nullptr;
-    lv_obj_t* _deck_hint = nullptr;
+    lv_obj_t* _current_project = nullptr;
+    lv_obj_t* _current_task = nullptr;
+    lv_obj_t* _next_caption = nullptr;
+    lv_obj_t* _next_task = nullptr;
     lv_timer_t* _robot_timer = nullptr;
     std::array<char, 33> _last_task_id{};
     bool _active = false;

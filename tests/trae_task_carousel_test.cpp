@@ -50,11 +50,15 @@ int main()
     assert(deck.apply(snapshot_with_pending_and_running(), 0));
     assert(deck.task_count() == 3);
     assert(std::string(deck.current()->id.data()) == "pending-a");
+    assert(deck.next() != nullptr);
+    assert(std::string(deck.next()->id.data()) == "pending-b");
     assert(deck.update(3000));
     assert(std::string(deck.current()->id.data()) == "pending-b");
+    assert(std::string(deck.next()->id.data()) == "running-a");
     assert(deck.manual_next(3200));
     assert(deck.manual_mode());
     assert(std::string(deck.current()->id.data()) == "running-a");
+    assert(std::string(deck.next()->id.data()) == "pending-a");
     assert(!deck.update(7000));
     assert(deck.update(8200));
     assert(!deck.manual_mode());
@@ -97,6 +101,7 @@ int main()
     terminal_only.tasks[0] = task("done", "Done", TraeTaskState::Completed);
     assert(deck.apply(terminal_only, 9000));
     assert(deck.current() == nullptr);
+    assert(deck.next() == nullptr);
     assert(deck.task_count() == 0);
     assert(!deck.update(12000));
     assert(!deck.manual_next(12000));
@@ -109,6 +114,7 @@ int main()
     assert(!deck.update(16000));
     assert(!deck.manual_next(16000));
     assert(std::string(deck.current()->id.data()) == "running-only");
+    assert(deck.next() == nullptr);
 
     TraeTaskCarousel constrained_manual_deck;
     assert(constrained_manual_deck.apply(snapshot_with_pending_and_running(), 0));

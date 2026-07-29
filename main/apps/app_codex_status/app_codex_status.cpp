@@ -1014,9 +1014,9 @@ void AppCodexStatus::render_trae_status()
     _trae_status_page->render(
         _trae_snapshot,
         _trae_carousel.current(),
+        _trae_carousel.next(),
         _trae_stale,
-        bluetooth_connected,
-        _trae_carousel.task_count()
+        bluetooth_connected
     );
 }
 
@@ -1052,15 +1052,15 @@ void AppCodexStatus::update_page_swipe(uint32_t now_ms)
     if (state == LV_INDEV_STATE_PR) {
         if (_last_page_touch_state == LV_INDEV_STATE_REL) {
             _page_swipe.press(point.x, point.y, now_ms);
-            const bool deck_candidate =
+            const bool task_candidate =
                 _current_page == 1 &&
                 _trae_status_page != nullptr &&
-                _trae_status_page->contains_deck_point(point.x, point.y);
+                _trae_status_page->contains_task_point(point.x, point.y);
             _trae_card_tap.press(
                 point.x,
                 point.y,
                 now_ms,
-                deck_candidate
+                task_candidate
             );
         } else {
             _page_swipe.move(point.x, point.y);

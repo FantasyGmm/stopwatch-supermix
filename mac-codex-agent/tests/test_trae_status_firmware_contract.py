@@ -52,7 +52,7 @@ class TraeStatusFirmwareContractTests(unittest.TestCase):
         strip_create = source.index("_page_strip = lv_obj_create(_panel)")
         self.assertGreater(battery_create, strip_create)
 
-    def test_app_integrates_trae_deck_touch_health_and_lifecycle(self):
+    def test_app_integrates_trae_task_touch_health_and_lifecycle(self):
         header = (self.app_root / "app_codex_status.h").read_text(encoding="utf-8")
         source = (self.app_root / "app_codex_status.cpp").read_text(
             encoding="utf-8"
@@ -61,7 +61,8 @@ class TraeStatusFirmwareContractTests(unittest.TestCase):
         for token in (
             "TraeCardTapLogic _trae_card_tap",
             "_trae_carousel.manual_next(now_ms)",
-            "_trae_status_page->contains_deck_point",
+            "_trae_status_page->contains_task_point",
+            "_trae_carousel.next()",
             "_trae_status_page->set_active(_current_page == 1 && !_screen_off)",
             "_ble_transport && _ble_transport->connected()",
         ):
@@ -82,7 +83,7 @@ class TraeStatusFirmwareContractTests(unittest.TestCase):
             "void init(lv_obj_t* parent)",
             "void render(",
             "void set_active(bool active)",
-            "bool contains_deck_point(int x, int y) const",
+            "bool contains_task_point(int x, int y) const",
             "void shutdown()",
             '"TRAE"',
             '"MODEL"',
@@ -106,7 +107,7 @@ class TraeStatusFirmwareContractTests(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, source)
 
-    def test_trae_page_renders_aggregate_deck_and_empty_states(self):
+    def test_trae_page_renders_y_layout_and_empty_states(self):
         source = (self.app_root / "trae_status_page.cpp").read_text(
             encoding="utf-8"
         )
@@ -126,13 +127,15 @@ class TraeStatusFirmwareContractTests(unittest.TestCase):
             "kBrandIconX",
             "kHealthX",
             "kRobotX",
-            "kSummaryY",
-            "kDeckX",
-            "kCardWidth",
+            "kSummaryLabelY",
+            "kSummaryCountY",
+            "kCurrentProjectY",
+            "kCurrentTaskY",
+            "kNextTaskY",
         ):
             self.assertIn(token, layout)
 
-    def test_trae_page_matches_approved_c_visual_contract(self):
+    def test_trae_page_matches_approved_y_visual_contract(self):
         header = (self.app_root / "trae_status_page.h").read_text(encoding="utf-8")
         source = (self.app_root / "trae_status_page.cpp").read_text(
             encoding="utf-8"
@@ -144,19 +147,51 @@ class TraeStatusFirmwareContractTests(unittest.TestCase):
 
         for token in (
             "lv_font_montserrat_10",
+            "NotoSansSCBold16Trae",
             "kBluetoothDotX",
             "kProcessDotX",
-            "kCardRadius",
-            "kBackCardScale",
-            "kDeepCardScale",
-            "kDeckHintY",
-            '"PENDING"',
-            '"RUNNING"',
-            '"点击最上层卡片切换 · Pending 始终优先"',
+            "kPendingAnchorX",
+            "kRunningAnchorX",
+            "kCurrentProjectX",
+            "kCurrentTaskX",
+            "kNextTaskX",
+            '"下一任务"',
+            "_next_task",
         ):
             self.assertIn(token, page_contract)
 
+        for forbidden in (
+            "make_card(",
+            "_cards",
+            "text_outline_stroke",
+            '"PENDING"',
+            '"RUNNING"',
+            "kCardRadius",
+            "kDeckHintY",
+        ):
+            self.assertNotIn(forbidden, page_contract)
+
         self.assertNotIn("_health_dot", page_contract)
+
+    def test_trae_summary_uses_a_real_subset_cjk_bold_font(self):
+        source = (self.app_root / "trae_status_page.cpp").read_text(
+            encoding="utf-8"
+        )
+        layout = (self.app_root / "trae_status_ui_layout.h").read_text(
+            encoding="utf-8"
+        )
+        font_path = ROOT / "main/assets/fonts/NotoSansSCBold16Trae.c"
+        cmake = (ROOT / "main/CMakeLists.txt").read_text(encoding="utf-8")
+
+        self.assertTrue(font_path.exists())
+        font = font_path.read_text(encoding="utf-8")
+        self.assertIn("NotoSansCJKsc-Bold.otf", font)
+        self.assertIn("--symbols 待确认运行中", font)
+        self.assertIn("assets/fonts/NotoSansSCBold16Trae.c", cmake)
+        self.assertIn("LV_FONT_DECLARE(NotoSansSCBold16Trae)", source)
+        self.assertIn("&NotoSansSCBold16Trae", source)
+        self.assertNotIn("kSummaryLabelOutlineWidth", layout)
+        self.assertNotIn("text_outline_stroke", source)
 
     def test_status_messages_route_to_independent_models_and_freshness(self):
         header = (self.app_root / "app_codex_status.h").read_text(encoding="utf-8")

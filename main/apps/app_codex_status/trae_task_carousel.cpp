@@ -133,6 +133,15 @@ const TraeTask* TraeTaskCarousel::current() const
 }
 
 
+const TraeTask* TraeTaskCarousel::next() const
+{
+    if (_task_count < 2) {
+        return nullptr;
+    }
+    return &_tasks[(_index + 1) % _task_count];
+}
+
+
 TraeTaskState TraeTaskCarousel::display_state() const
 {
     const TraeTask* task = current();

@@ -19,19 +19,18 @@ int main()
     assert(kRobotWidth == 77 && kRobotHeight == 86);
     assert(kTelemetryX == 214);
     assert(kDividerX == 82 && kDividerY == 223 && kDividerWidth == 302);
-    assert(kSummaryY == 240);
-    assert(kPendingSummaryX == 175 && kPendingCountX == 222);
-    assert(kRunningSummaryX == 244 && kRunningCountX == 291);
-    assert(kDeckX == 108 && kDeckY == 268);
-    assert(kDeckWidth == 250 && kDeckHeight == 120);
-    assert(kCardWidth == 250 && kCardHeight == 98);
-    assert(kCardRadius == 15);
-    assert(kBackCardScale == 241 && kDeepCardScale == 225);
-    assert(kCardTextX == 17 && kCardIndexX == 137);
-    assert(kCardStateY == 14 && kCardProjectY == 35);
-    assert(kCardTitleY == 59 && kCardDetailY == 78);
-    assert(kDeckHintY == 390);
-    assert(kDeckY + kDeckHeight < kPageIndicatorY);
+    assert(kSummaryLabelY == 249 && kSummaryCountY == 266);
+    assert(kPendingAnchorX == 110 && kRunningAnchorX == 284);
+    assert(kSummaryAnchorWidth == 72);
+    assert(kCurrentProjectX == 112 && kCurrentProjectY == 299);
+    assert(kCurrentTaskX == 112 && kCurrentTaskY == 329);
+    assert(kCurrentTextWidth == 242);
+    assert(kNextCaptionX == 109 && kNextTaskY == 365);
+    assert(kNextCaptionWidth == 56);
+    assert(kNextTaskX == 165 && kNextTaskWidth == 192);
+    assert(kTaskFocusX == 82 && kTaskFocusY == 241);
+    assert(kTaskFocusWidth == 302 && kTaskFocusHeight == 165);
+    assert(kNextTaskY + 18 < kPageIndicatorY);
     assert(kPageIndicatorY == 416 && kBatteryY == 438);
 
     assert(kBrandIconRenderY == 19);
@@ -181,13 +180,6 @@ int main()
         ) == EmptyState::None
     );
     assert(empty_state_text(EmptyState::None) == nullptr);
-
-    const DeckLayers one_card = resolve_deck_layers(1);
-    const DeckLayers two_cards = resolve_deck_layers(2);
-    const DeckLayers three_cards = resolve_deck_layers(3);
-    assert(!one_card.deep && !one_card.back && one_card.front);
-    assert(!two_cards.deep && two_cards.back && two_cards.front);
-    assert(three_cards.deep && three_cards.back && three_cards.front);
 
     const RobotActivation active = resolve_robot_activation(true);
     const RobotActivation inactive = resolve_robot_activation(false);
