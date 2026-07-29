@@ -1147,6 +1147,19 @@ class CompletionClassifierTests(unittest.TestCase):
                     ("waiting", "text_required_action"),
                 )
 
+    def test_results_terminal_status_needs_no_trailing_punctuation(self):
+        report = classify_completion("Results: review passed")
+        self.assertEqual(
+            (report.outcome, report.reason),
+            ("completed", "completion_only"),
+        )
+
+        command = classify_completion("review passed tests")
+        self.assertEqual(
+            (command.outcome, command.reason),
+            ("waiting", "text_required_action"),
+        )
+
     def test_report_status_predicates_allow_bounded_without_qualifiers(self):
         report = classify_completion("Results: review finished without issues.")
         self.assertEqual(
@@ -1316,6 +1329,50 @@ class CompletionClassifierTests(unittest.TestCase):
                 result = classify_completion(message)
                 self.assertEqual((result.outcome, result.reason), expected)
 
+    def test_attribution_covers_coordinated_security_nouns_until_an_action_break(self):
+        historical = classify_completion(
+            "The incident report says approval and authorization required "
+            "in the old workflow."
+        )
+        self.assertEqual(
+            (historical.outcome, historical.reason),
+            ("completed", "completion_only"),
+        )
+
+        natural_historical = classify_completion(
+            "The incident report says approval is required and authorization "
+            "is required in the old workflow."
+        )
+        self.assertEqual(
+            (natural_historical.outcome, natural_historical.reason),
+            ("completed", "completion_only"),
+        )
+
+        live_action = classify_completion(
+            "The incident report says approval and authorization required "
+            "in the old workflow; please verify deployment."
+        )
+        self.assertEqual(
+            (live_action.outcome, live_action.reason),
+            ("waiting", "text_required_action"),
+        )
+
+    def test_attribution_scope_reopens_for_general_explicit_actions(self):
+        messages = (
+            "The docs say confirmation is required in the old workflow; "
+            "please confirm deployment.",
+            "The docs say input is required in the old workflow; "
+            "please provide deployment input.",
+        )
+
+        for message in messages:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("waiting", "text_required_action"),
+                )
+
     def test_security_actions_restart_after_bounded_scope_breaks(self):
         messages = (
             "No approval is required and authorization is required.",
@@ -1338,6 +1395,25 @@ class CompletionClassifierTests(unittest.TestCase):
                     ("waiting", "text_required_action"),
                 )
 
+    def test_security_actions_restart_after_because_polarity_break(self):
+        result = classify_completion(
+            "No approval is required because authorization is required."
+        )
+        self.assertEqual(
+            (result.outcome, result.reason),
+            ("waiting", "text_required_action"),
+        )
+
+    def test_natural_not_only_security_requirement_keeps_each_scope(self):
+        result = classify_completion(
+            "Approval is not only required, but authorization is also required. "
+            "No authorization is required."
+        )
+        self.assertEqual(
+            (result.outcome, result.reason),
+            ("waiting", "text_required_action"),
+        )
+
     def test_approval_and_verification_are_not_confirmation_scope(self):
         messages = (
             "Waiting for your approval. No confirmation is required.",
@@ -1351,6 +1427,74 @@ class CompletionClassifierTests(unittest.TestCase):
                 self.assertEqual(
                     (result.outcome, result.reason),
                     ("waiting", "text_required_action"),
+                )
+
+    def test_security_questions_use_their_matching_resolution_scope(self):
+        cases = (
+            "Can you approve deployment? No approval is required.",
+            "Can you authorize deployment? No authorization is required.",
+            "Can you verify deployment? No verification is required.",
+        )
+
+        for message in cases:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("completed", "text_explicitly_resolved"),
+                )
+
+        coordinated = classify_completion(
+            "Can you approve and authorize deployment? No approval is required."
+        )
+        self.assertEqual(
+            (coordinated.outcome, coordinated.reason),
+            ("waiting", "text_direct_question"),
+        )
+
+    def test_security_question_coordination_allows_distinct_objects(self):
+        messages = (
+            "Can you approve deployment and authorize access? "
+            "No approval is required.",
+            "Could you verify the build and authorize release? "
+            "No verification is required.",
+            "你能验证构建并授权发布吗？无需验证。",
+        )
+        for message in messages:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("waiting", "text_direct_question"),
+                )
+
+    def test_security_nouns_do_not_override_the_question_action_scope(self):
+        messages = (
+            "Can you confirm the approval status? No confirmation is required.",
+            "Can you confirm that we should approve deployment? "
+            "No confirmation is required.",
+            'Can you confirm the phrase "review and authorize deployment"? '
+            "No confirmation is required.",
+        )
+        for message in messages:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("completed", "text_explicitly_resolved"),
+                )
+
+    def test_chinese_security_question_objects_do_not_add_action_scopes(self):
+        messages = (
+            "你能验证批准状态吗？无需验证。",
+            "你能批准授权请求吗？无需批准。",
+        )
+        for message in messages:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("completed", "text_explicitly_resolved"),
                 )
 
     def test_security_requirement_referents_normalize_for_symmetrically(self):
@@ -1400,6 +1544,31 @@ class CompletionClassifierTests(unittest.TestCase):
                 result = classify_completion(message)
                 self.assertEqual((result.outcome, result.reason), expected)
 
+    def test_chinese_resolution_referents_ignore_trailing_completion_grammar(self):
+        cases = (
+            (
+                "生产部署需要您的批准。生产部署无需批准即可继续。",
+                ("completed", "text_explicitly_resolved"),
+            ),
+            (
+                "生产部署需要您的批准。生产部署不需要批准了。",
+                ("completed", "text_explicitly_resolved"),
+            ),
+            (
+                "生产部署需要您的批准。无需批准生产部署即可继续。",
+                ("completed", "text_explicitly_resolved"),
+            ),
+            (
+                "生产部署需要您的批准。测试部署无需批准即可继续。",
+                ("waiting", "text_required_action"),
+            ),
+        )
+
+        for message, expected in cases:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual((result.outcome, result.reason), expected)
+
     def test_security_actions_emit_independent_evidence(self):
         messages = (
             "Required actions:\n- Approve deployment.",
@@ -1421,6 +1590,21 @@ class CompletionClassifierTests(unittest.TestCase):
         messages = (
             "Please approve deployment, authorize access. "
             "No approval is required.",
+            "请批准并授权部署。无需批准。",
+        )
+
+        for message in messages:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("waiting", "text_required_action"),
+                )
+
+    def test_chinese_conjunction_security_actions_emit_independent_evidence(self):
+        messages = (
+            "请批准和授权部署。无需批准。",
+            "请批准、授权部署。无需批准。",
             "请批准并授权部署。无需批准。",
         )
 
@@ -1510,6 +1694,29 @@ class CompletionClassifierTests(unittest.TestCase):
         self.assertEqual(
             (external_owner.outcome, external_owner.reason),
             ("waiting", "text_required_action"),
+        )
+
+    def test_non_user_ownership_exclusion_is_exact(self):
+        qualified_owners = (
+            "Authorization is required, but not from you alone.",
+            "Authorization is required, but not from you personally.",
+            "Authorization is required, but not from you right now.",
+            "Authorization is required, but not from you or your team.",
+        )
+        for message in qualified_owners:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("waiting", "text_required_action"),
+                )
+
+        exact_exclusion = classify_completion(
+            "Authorization is required, but not from you."
+        )
+        self.assertEqual(
+            (exact_exclusion.outcome, exact_exclusion.reason),
+            ("completed", "completion_only"),
         )
 
     def test_all_multiword_cues_accept_horizontal_whitespace(self):

@@ -75,9 +75,10 @@ _REQUIRED_ACTION_RE = re.compile(
     r"(?:approve|authorize|confirm|choose|select|provide|reply|retry|review|verify)\b|"
     r"\b(?:we[ \t]+require|awaiting)[ \t]+your[ \t]+"
     r"(?:approval|authorization|verification)\b|"
-    r"\b(?:(?!(?:and|although|no|not|but)\b)[A-Za-z-]+[ \t]+){0,3}"
+    r"\b(?:(?!(?:and|although|because|no|not|but)\b)[A-Za-z-]+[ \t]+){0,3}"
     r"(?:approval|authorization|verification)[ \t]+"
-    r"(?:is|remains)[ \t]+(?:(?:still|also)[ \t]+)?required\b|"
+    r"(?:is|remains)[ \t]+"
+    r"(?:(?:still|also|not[ \t]+only)[ \t]+)?required\b|"
     r"\bblocked[ \t]+pending[ \t]+(?:[A-Za-z-]+[ \t]+){0,2}"
     r"(?:approval|authorization|verification)\b|"
     r"\byou[ \t]+(?:must|need[ \t]+to)[ \t]+"
@@ -95,18 +96,25 @@ _ATTRIBUTED_ACTION_PREFIX_RE = re.compile(
     r"(?:docs?|documentation|examples?|logs?|incident[ \t]+report)\b)",
     re.IGNORECASE,
 )
+_ATTRIBUTED_REQUIREMENT_HISTORY_SUFFIX_RE = re.compile(
+    r"^[ \t]+in[ \t]+(?:the[ \t]+)?"
+    r"(?:old|previous|prior|historical)[ \t]+workflow\b",
+    re.IGNORECASE,
+)
 _ATTRIBUTION_SCOPE_BREAK_RE = re.compile(
     r"\b(?:but|however|yet)\b|"
     r"(?:[,;][ \t]*|\band[ \t]+)(?:I|we|you)\b|"
-    r"[;；][ \t]*(?=(?:please[ \t]+)?(?:approve|authorize|verify)\b)|"
-    r"\band[ \t]+(?=please[ \t]+(?:approve|authorize|verify)\b)|"
+    r"[;；][ \t]*(?=(?:please[ \t]+)?"
+    r"(?:approve|authorize|confirm|choose|select|provide|reply|retry|review|verify)\b)|"
+    r"\band[ \t]+(?=please[ \t]+"
+    r"(?:approve|authorize|confirm|choose|select|provide|reply|retry|review|verify)\b)|"
     r"(?:[;；]|\b(?:and|although)\b)[ \t]*(?="
     r"(?:approval|authorization|verification)[ \t]+"
     r"(?:is|remains)[ \t]+(?:(?:still|also)[ \t]+)?required\b)",
     re.IGNORECASE,
 )
 _POLARITY_SCOPE_BREAK_RE = re.compile(
-    r"\b(?:and|although|but|however|yet)\b|[;；]",
+    r"\b(?:and|although|because|but|however|yet)\b|[;；]",
     re.IGNORECASE,
 )
 _NEGATED_ACTION_PREFIX_RE = re.compile(
@@ -118,7 +126,8 @@ _NEGATED_ACTION_MATCH_RE = re.compile(
     r"\b(?:no|not(?![ \t]+only\b))\b", re.IGNORECASE
 )
 _NON_USER_OWNERSHIP_SUFFIX_RE = re.compile(
-    r"^\s*[,;]?\s*but[ \t]+not[ \t]+from[ \t]+you\b",
+    r"^\s*[,;]?\s*but[ \t]+not[ \t]+from[ \t]+you\b"
+    r"(?=[ \t]*(?:[.!?]|$))",
     re.IGNORECASE,
 )
 _IMPERATIVE_ACTION_RE = re.compile(
@@ -157,7 +166,7 @@ _REPORT_CONTINUATION_RE = re.compile(
     r"(?:[ \t]+(?:internally|automatically|successfully))?"
     r"(?:[ \t]+(?:without[ \t]+(?:issues?|errors?|problems?|warnings?)|"
     r"with[ \t]+no[ \t]+(?:issues?|errors?|problems?|warnings?)))?"
-    r"[ \t]*[.!?]|"
+    r"[ \t]*(?:[.!?]|$)|"
     r"^[ \t]+(?:(?:the|an?|this|that|these|those|your|our)[ \t]+)?"
     r"[A-Za-z0-9][A-Za-z0-9_-]*[ \t]+"
     r"(?:(?:is|are|was|were|has|have|had)\b|"
@@ -177,7 +186,7 @@ _REPORT_NOUN_SUFFIX_RE = re.compile(
 _COORDINATED_ACTION_RE = re.compile(
     r"(?:\b(?:and|then)\s+|,[ \t]+)(?:also\s+)?"
     r"(?:approve|authorize|confirm|choose|select|provide|reply|retry|review|verify)\b|"
-    r"(?:并且|并|然后)(?:[^\r\n。！？.!?؟]{0,20}?再)?(?:请)?"
+    r"(?:并且|并|然后|和|、)(?:[^\r\n。！？.!?؟]{0,20}?再)?(?:请)?"
     r"(?:确认|选择|提供|回复|重新|重试|复核|批准|授权|验证)",
     re.IGNORECASE,
 )
@@ -410,7 +419,7 @@ class _Clause:
     text: str
     start: int
     end: int
-    question_scope: _EvidenceScope
+    question_scopes: FrozenSet[_EvidenceScope]
     communicative_choice: bool
 
 
@@ -502,22 +511,72 @@ def _courtesy_spans(clauses: Sequence[_Clause]) -> List[Tuple[int, int]]:
     return spans
 
 
-def _question_scope(prose: str) -> _EvidenceScope:
+_QUESTION_GOVERNING_ACTION_RE = re.compile(
+    r"(?:\b(?:can|could|would|will|may|should)[ \t]+you[ \t]+"
+    r"(?:please[ \t]+)?|^\s*(?:please[ \t]+)?)"
+    r"(?P<english>approve|authorize|verify|confirm)\b|"
+    r"(?:(?:你|您)(?:能|可以)?(?:请)?|^\s*请)"
+    r"(?P<chinese>批准|授权|验证|确认)",
+    re.IGNORECASE,
+)
+_COORDINATED_QUESTION_ACTION_RE = re.compile(
+    r"(?:\b(?:and|then)[ \t]+|,[ \t]+)(?:also[ \t]+)?"
+    r"(?P<english>approve|authorize|verify|confirm)\b|"
+    r"(?:并且|并|和|、)(?:请)?"
+    r"(?P<chinese>批准|授权|验证|确认)",
+    re.IGNORECASE,
+)
+_QUESTION_ACTION_TOKEN_RE = re.compile(
+    r"\b(?:approve|authorize|verify|confirm)\b|(?:批准|授权|验证|确认)",
+    re.IGNORECASE,
+)
+
+
+def _question_action_scope(action: str) -> _EvidenceScope:
+    normalized = action.casefold()
+    if normalized in {"approve", "批准"}:
+        return _EvidenceScope.APPROVAL
+    if normalized in {"authorize", "授权"}:
+        return _EvidenceScope.AUTHORIZATION
+    if normalized in {"verify", "验证"}:
+        return _EvidenceScope.VERIFICATION
+    return _EvidenceScope.CONFIRMATION
+
+
+def _question_scopes(prose: str) -> FrozenSet[_EvidenceScope]:
     if _ALTERNATIVE_CHOICE_RE.search(prose) is not None or re.search(
         r"(?:哪(?:个|种)|如何|怎么|\bwhich\b|\bwhat option\b)",
         prose,
         re.IGNORECASE,
     ):
-        return _EvidenceScope.CHOICE
-    if re.search(r"(?:确认|\bconfirm)", prose, re.IGNORECASE):
-        return _EvidenceScope.CONFIRMATION
+        return frozenset({_EvidenceScope.CHOICE})
+    action_prose = _QUOTED_TEXT_RE.sub(
+        lambda match: " " * len(match.group()), prose
+    )
+    governing_action = _QUESTION_GOVERNING_ACTION_RE.search(action_prose)
+    if governing_action is not None:
+        action = governing_action.group("english") or governing_action.group("chinese")
+        action_scopes = {_question_action_scope(action)}
+        cursor = governing_action.end()
+        while coordinated := _COORDINATED_QUESTION_ACTION_RE.search(
+            action_prose[cursor:]
+        ):
+            intervening = action_prose[cursor : cursor + coordinated.start()]
+            if _QUESTION_ACTION_TOKEN_RE.search(intervening) is not None:
+                break
+            action = coordinated.group("english") or coordinated.group("chinese")
+            action_scopes.add(_question_action_scope(action))
+            cursor += coordinated.end()
+        return frozenset(action_scopes)
+    if re.search(r"(?:确认|\bconfirm)", action_prose, re.IGNORECASE):
+        return frozenset({_EvidenceScope.CONFIRMATION})
     if re.search(
         r"(?:\b(?:can|may|should|could) I\b|(?:可以|继续)吗)",
-        prose,
+        action_prose,
         re.IGNORECASE,
     ):
-        return _EvidenceScope.CONFIRMATION
-    return _EvidenceScope.REPLY
+        return frozenset({_EvidenceScope.CONFIRMATION})
+    return frozenset({_EvidenceScope.REPLY})
 
 
 def _clauses(prose: str) -> List[_Clause]:
@@ -526,7 +585,7 @@ def _clauses(prose: str) -> List[_Clause]:
             text=match.group(),
             start=match.start(),
             end=match.end(),
-            question_scope=_question_scope(match.group()),
+            question_scopes=_question_scopes(match.group()),
             communicative_choice=_COMMUNICATIVE_CHOICE_RE.search(match.group())
             is not None,
         )
@@ -549,7 +608,7 @@ _REFERENT_BREAK_RE = re.compile(
     r"\bplease\s+(?=(?:approve|authorize|confirm|choose|select|provide|"
     r"reply|retry|review|verify)\b)|"
     r"(?:因为|由于|虽然|如果|除非)|"
-    r"(?:并且|并|然后)(?:[^\r\n。！？.!?؟]{0,20}?再)?(?:请)?(?="
+    r"(?:并且|并|然后|和|、)(?:[^\r\n。！？.!?؟]{0,20}?再)?(?:请)?(?="
     r"(?:确认|选择|提供|回复|重新|重试|复核|批准|授权|验证))",
     re.IGNORECASE,
 )
@@ -606,7 +665,11 @@ def _resolution_referent(match: re.Match[str], clause: _Clause) -> str | None:
     if re.search(r"(?:批准|授权|验证)", match.group()) is not None:
         chinese_suffix = re.match(r"([^\s，,;；。.!?！？؟]{1,40})", suffix)
         if chinese_suffix is not None:
-            return _normalize_referent(chinese_suffix.group(1))
+            stripped_suffix = re.sub(
+                r"(?:即可继续|了)$", "", chinese_suffix.group(1)
+            )
+            if stripped_suffix:
+                return _normalize_referent(stripped_suffix)
     relative_start = match.start() - clause.start
     prefix = clause.text[max(0, relative_start - 80) : relative_start]
     chinese = re.search(r"([^\s，,;；。.!?！？؟]{1,40})\s*$", prefix)
@@ -762,17 +825,21 @@ def _question_evidence(
             and _SELF_ANSWER_DECISION_RE.search(decision_context) is None
         )
         if not self_answered:
-            evidence.append(
-                _Evidence(
-                    block.offset + question.start(),
-                    _EvidenceKind.DIRECT_QUESTION,
-                    _TEXT_STRENGTH[_EvidenceKind.DIRECT_QUESTION],
-                    frozenset(
-                        {clause.question_scope if clause else _EvidenceScope.REPLY}
-                    ),
-                    _question_referent(question, clause) if clause else None,
-                )
+            question_scopes = (
+                clause.question_scopes
+                if clause
+                else frozenset({_EvidenceScope.REPLY})
             )
+            for scope in question_scopes:
+                evidence.append(
+                    _Evidence(
+                        block.offset + question.start(),
+                        _EvidenceKind.DIRECT_QUESTION,
+                        _TEXT_STRENGTH[_EvidenceKind.DIRECT_QUESTION],
+                        frozenset({scope}),
+                        _question_referent(question, clause) if clause else None,
+                    )
+                )
     return evidence
 
 
@@ -1150,7 +1217,7 @@ def _required_action_evidence(
             prose,
             0,
             len(prose),
-            _question_scope(prose),
+            _question_scopes(prose),
             _COMMUNICATIVE_CHOICE_RE.search(prose) is not None,
         )
         relative_start = match.start() - clause.start
@@ -1178,7 +1245,13 @@ def _required_action_evidence(
         if (
             (
                 attribution is not None
-                and _ATTRIBUTION_SCOPE_BREAK_RE.search(attribution_tail) is None
+                and (
+                    _ATTRIBUTION_SCOPE_BREAK_RE.search(attribution_tail) is None
+                    or _ATTRIBUTED_REQUIREMENT_HISTORY_SUFFIX_RE.search(
+                        action_suffix
+                    )
+                    is not None
+                )
             )
             or _NEGATED_ACTION_MATCH_RE.search(match.group()) is not None
             or _NEGATED_ACTION_PREFIX_RE.search(action_prefix) is not None
@@ -1231,7 +1304,7 @@ def _text_evidence(blocks: Sequence[_Block]) -> List[_Evidence]:
                 prose,
                 0,
                 len(prose),
-                _question_scope(prose),
+                _question_scopes(prose),
                 _COMMUNICATIVE_CHOICE_RE.search(prose) is not None,
             )
             block_resolutions.append(
