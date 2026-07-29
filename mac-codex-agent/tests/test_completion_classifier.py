@@ -89,6 +89,43 @@ class CompletionClassifierTests(unittest.TestCase):
         self.assertLess(large_elapsed, 1.5)
         self.assertLess(large_elapsed, small_elapsed * 7 + 0.03)
 
+    def test_same_block_option_body_cues_scale_near_linearly(self):
+        def measure(count):
+            message = "\n".join(
+                f"A. Choose parser {index}\nB. Existing parser {index}"
+                for index in range(count)
+            )
+            started = time.monotonic()
+            result = classify_completion(message)
+            return time.monotonic() - started, result
+
+        small_elapsed, _ = measure(250)
+        large_elapsed, result = measure(4_000)
+
+        self.assertEqual(
+            (result.outcome, result.reason),
+            ("completed", "completion_only"),
+        )
+        self.assertLess(large_elapsed, 1.5)
+        self.assertLess(large_elapsed, small_elapsed * 24 + 0.05)
+
+    def test_unpunctuated_action_parsing_scales_near_linearly(self):
+        def measure(count):
+            message = "please provide token " * count
+            started = time.monotonic()
+            result = classify_completion(message)
+            return time.monotonic() - started, result
+
+        small_elapsed, _ = measure(100)
+        large_elapsed, result = measure(800)
+
+        self.assertEqual(
+            (result.outcome, result.reason),
+            ("waiting", "text_required_action"),
+        )
+        self.assertLess(large_elapsed, 1.0)
+        self.assertLess(large_elapsed, small_elapsed * 14 + 0.03)
+
     def test_unresolved_input_has_highest_priority(self):
         result = classify_completion(
             "The work is complete.",
@@ -507,6 +544,14 @@ class CompletionClassifierTests(unittest.TestCase):
             ("completed", "text_explicitly_resolved"),
         )
 
+    def test_future_marker_on_assistant_continuation_does_not_void_resolution(self):
+        result = classify_completion("需要我继续吗？无需回复，之后我会继续。")
+
+        self.assertEqual(
+            (result.outcome, result.reason),
+            ("completed", "text_explicitly_resolved"),
+        )
+
     def test_bounded_historical_modifier_can_resolve_a_question(self):
         for modifier in ("earlier", "previous", "prior"):
             with self.subTest(modifier=modifier):
@@ -542,6 +587,42 @@ class CompletionClassifierTests(unittest.TestCase):
                 result = classify_completion(message)
                 self.assertEqual((result.outcome, result.reason), (outcome, reason))
 
+    def test_confirmation_and_resolution_qualifiers_match_precisely(self):
+        cases = (
+            (
+                "Please reply yes or no. No confirmation is required.",
+                "completed",
+                "text_explicitly_resolved",
+            ),
+            (
+                "Should I deploy staging? No confirmation is required for staging.",
+                "completed",
+                "text_explicitly_resolved",
+            ),
+            (
+                "Please provide token A. "
+                "No reply is required for token A because I supplied it.",
+                "completed",
+                "text_explicitly_resolved",
+            ),
+            (
+                "Please provide the missing token. "
+                "No action is required from the CI runner.",
+                "waiting",
+                "text_required_action",
+            ),
+            (
+                "请确认生产环境。预发环境无需确认。",
+                "waiting",
+                "text_required_action",
+            ),
+        )
+
+        for message, outcome, reason in cases:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual((result.outcome, result.reason), (outcome, reason))
+
     def test_direct_imperatives_and_chinese_coordination_require_action(self):
         messages = (
             "Choose production or staging.",
@@ -549,6 +630,39 @@ class CompletionClassifierTests(unittest.TestCase):
             "Confirm deployment.",
             "选择 A 或 B。",
             "请确认部署并提供缺失令牌。无需确认。",
+        )
+
+        for message in messages:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("waiting", "text_required_action"),
+                )
+
+    def test_all_supported_bare_imperatives_require_action(self):
+        messages = (
+            "Provide the missing token.",
+            "Retry the build.",
+            "Review the diff.",
+            "确认部署。",
+            "提供缺失令牌。",
+        )
+
+        for message in messages:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("waiting", "text_required_action"),
+                )
+
+    def test_bounded_coordinated_actions_survive_confirmation_resolution(self):
+        messages = (
+            "Please confirm deployment and also provide token. "
+            "No confirmation is required.",
+            "请确认部署并在准备好后再提供缺失令牌。无需确认。",
+            "请确认部署然后再提供缺失令牌。无需确认。",
         )
 
         for message in messages:
@@ -574,10 +688,52 @@ class CompletionClassifierTests(unittest.TestCase):
             ("waiting", "text_choice_handoff"),
         )
 
+    def test_resolved_option_group_does_not_suppress_later_choice_action(self):
+        result = classify_completion(
+            "Options:\n"
+            "A. production\n"
+            "B. staging\n"
+            "No choice is required.\n"
+            "Please choose deployment A or B."
+        )
+
+        self.assertEqual(
+            (result.outcome, result.reason),
+            ("waiting", "text_required_action"),
+        )
+
     def test_option_body_cue_does_not_activate_adjacent_procedure_group(self):
         result = classify_completion(
             "A. Choose one parser implementation.\n"
             "B. Use the existing parser.\n"
+            "1. Download dependencies.\n"
+            "2. Run tests."
+        )
+
+        self.assertEqual(
+            (result.outcome, result.reason),
+            ("completed", "completion_only"),
+        )
+
+    def test_option_groups_allow_indented_continuation_lines(self):
+        result = classify_completion(
+            "Options:\n"
+            "A. Production\n"
+            "   Uses the release cluster.\n"
+            "B. Staging\n"
+            "   Uses the validation cluster.\n"
+            "I recommend A."
+        )
+
+        self.assertEqual(
+            (result.outcome, result.reason),
+            ("waiting", "text_choice_handoff"),
+        )
+
+    def test_cross_block_option_body_cue_does_not_activate_procedure_group(self):
+        result = classify_completion(
+            "A. Choose one parser implementation.\n"
+            "   This note belongs to the option body.\n\n"
             "1. Download dependencies.\n"
             "2. Run tests."
         )
@@ -625,6 +781,20 @@ class CompletionClassifierTests(unittest.TestCase):
             with self.subTest(message=message):
                 result = classify_completion(message)
                 self.assertEqual((result.outcome, result.reason), (outcome, reason))
+
+    def test_new_imperative_ends_courtesy_coordination(self):
+        messages = (
+            "If you'd like more detail, let me know, and please confirm deployment.",
+            "如果你想了解更多，请告诉我，并请确认部署环境。",
+        )
+
+        for message in messages:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("waiting", "text_required_action"),
+                )
 
     def test_historical_quote_context_applies_to_one_adjacent_span(self):
         cases = (
@@ -692,6 +862,18 @@ class CompletionClassifierTests(unittest.TestCase):
                     (result.outcome, result.reason),
                     ("waiting", "text_choice_handoff"),
                 )
+
+    def test_choice_question_after_options_uses_choice_handoff_reason(self):
+        result = classify_completion(
+            "A. Production\n"
+            "B. Staging\n"
+            "Which should I use?"
+        )
+
+        self.assertEqual(
+            (result.outcome, result.reason),
+            ("waiting", "text_choice_handoff"),
+        )
 
     def test_later_choice_handoff_after_resolution_is_waiting(self):
         result = classify_completion(

@@ -72,11 +72,15 @@ _REQUIRED_ACTION_RE = re.compile(
     re.IGNORECASE,
 )
 _IMPERATIVE_ACTION_RE = re.compile(
-    r"\b(?:choose|select|reply\s+with|confirm)\b|选择", re.IGNORECASE
+    r"\b(?:confirm|choose|select|provide|reply(?:\s+with)?|retry|review)\b|"
+    r"(?:确认|选择|提供|回复|重新|重试|复核)",
+    re.IGNORECASE,
 )
 _COORDINATED_ACTION_RE = re.compile(
-    r"\b(?:and|then) (?:confirm|choose|select|provide|reply|retry|review)\b|"
-    r"(?:并且|并|然后)(?:请)?(?:确认|选择|提供|回复|重新|复核)",
+    r"\b(?:and|then)\s+(?:also\s+)?"
+    r"(?:confirm|choose|select|provide|reply|retry|review)\b|"
+    r"(?:并且|并|然后)(?:[^\r\n。！？.!?؟]{0,20}?再)?(?:请)?"
+    r"(?:确认|选择|提供|回复|重新|重试|复核)",
     re.IGNORECASE,
 )
 _COMMUNICATIVE_CHOICE_RE = re.compile(
@@ -96,7 +100,12 @@ _COURTESY_CLAUSE_RE = re.compile(
     re.IGNORECASE,
 )
 _COURTESY_BREAK_RE = re.compile(
-    r"(?:[;；]|,\s*(?:but|however)\b|，?(?:但|但是|不过))",
+    r"(?:[;；]|,\s*(?:but|however)\b|"
+    r",\s*(?:and|then)\s+(?=(?:please\s+)?"
+    r"(?:confirm|choose|select|provide|reply|retry|review)\b)|"
+    r"，?(?:但|但是|不过)|"
+    r"，?\s*(?:并且|并|然后)(?=(?:请)?"
+    r"(?:确认|选择|提供|回复|重新|重试|复核)))",
     re.IGNORECASE,
 )
 _CLAUSE_RE = re.compile(r"[^\r\n。！？.!?؟]+(?:[。！？.!?؟]+|$)")
@@ -136,6 +145,12 @@ _INVALID_RESOLUTION_SUFFIX_RE = re.compile(
     r"(?:之后|以后|如果|待))",
     re.IGNORECASE,
 )
+_ASSISTANT_CONTINUATION_SUFFIX_RE = re.compile(
+    r"^\s*[，,;；]?\s*(?:(?:afterward|afterwards|later|then)\s+)?"
+    r"I(?:'ll|\s+will)\b|"
+    r"^\s*[，,;；]?\s*(?:之后|以后|然后)?我(?:会|将)",
+    re.IGNORECASE,
+)
 _SELF_ANSWER_DECISION_RE = re.compile(
     r"(?:(?:方案|选项)[^\r\n。！？!?]{0,24}"
     r"(?:稍后(?:再)?定|稍后决定|待定|尚未(?:决定|选择)|再(?:定|选择|决定))|"
@@ -160,7 +175,8 @@ _RECOMMEND_LABEL_RE = re.compile(
     re.IGNORECASE,
 )
 _OPTION_LINE_RE = re.compile(
-    r"^\s*(?:[-*]\s*)?([A-Z]|[1-9])\s*[.、:：)）]\s*\S+", re.MULTILINE
+    r"^[ \t]*(?:[-*][ \t]*)?([A-Z]|[1-9])\s*[.、:：)）][ \t]*\S+",
+    re.MULTILINE,
 )
 _OPTION_HEADING_RE = re.compile(r"^(?:Options:|可用方案：)\s*$", re.MULTILINE)
 
@@ -345,35 +361,81 @@ def _normalize_referent(text: str) -> str | None:
     return referent or None
 
 
+_REFERENT_BREAK_RE = re.compile(
+    r"[，,;；。.!?！？؟]|"
+    r"\b(?:because|since|although|though|while|unless)\b|"
+    r"\b(?:and|then)\s+(?:also\s+)?(?="
+    r"(?:confirm|choose|select|provide|reply|retry|review)\b)|"
+    r"\bplease\s+(?=(?:confirm|choose|select|provide|reply|retry|review)\b)|"
+    r"(?:因为|由于|虽然|如果|除非)|"
+    r"(?:并且|并|然后)(?:[^\r\n。！？.!?؟]{0,20}?再)?(?:请)?(?="
+    r"(?:确认|选择|提供|回复|重新|重试|复核))",
+    re.IGNORECASE,
+)
+
+
+def _bounded_referent(text: str) -> str | None:
+    bounded = text[:160]
+    boundary = _REFERENT_BREAK_RE.search(bounded)
+    if boundary is not None:
+        bounded = bounded[: boundary.start()]
+    return _normalize_referent(bounded)
+
+
 def _action_referent(match: re.Match[str], clause: _Clause) -> str | None:
-    tail = clause.text[match.end() - clause.start :]
-    tail = re.split(
-        r"[，,;；。.!?！？؟]|\b(?:and|then)\s+"
-        r"(?=(?:confirm|choose|select|provide|reply|retry|review)\b)",
-        tail,
-        maxsplit=1,
-        flags=re.IGNORECASE,
-    )[0]
-    return _normalize_referent(tail)
+    relative_end = match.end() - clause.start
+    tail = clause.text[relative_end : relative_end + 160]
+    return _bounded_referent(tail)
+
+
+def _question_referent(question: re.Match[str], clause: _Clause) -> str | None:
+    relative_start = question.start() - clause.start
+    prefix = clause.text[max(0, relative_start - 160) : relative_start]
+    english = re.search(
+        r"\b(?:can|may|should|could)\s+I\s+"
+        r"(?:proceed(?:\s+with)?|deploy|use|confirm|choose|select)\s*(.*?)\s*$",
+        prefix,
+        re.IGNORECASE,
+    )
+    if english is not None:
+        return _bounded_referent(english.group(1))
+    chinese = re.search(r"(?:部署|使用|选择|确认)([^，,;；。.!?！？؟]*)$", prefix)
+    return _bounded_referent(chinese.group(1)) if chinese is not None else None
 
 
 def _resolution_referent(match: re.Match[str], clause: _Clause) -> str | None:
-    suffix = clause.text[match.end() - clause.start :]
-    referent = re.match(
-        r"\s+for\s+([^，,;；。.!?！？؟]+)", suffix, re.IGNORECASE
-    )
-    return _normalize_referent(referent.group(1)) if referent is not None else None
+    relative_end = match.end() - clause.start
+    suffix = clause.text[relative_end : relative_end + 160]
+    referent = re.match(r"\s+for\s+", suffix, re.IGNORECASE)
+    if referent is not None:
+        return _bounded_referent(suffix[referent.end() :])
+    unsupported = re.match(r"\s+(?:from|by|for|on behalf of)\s+", suffix, re.IGNORECASE)
+    if unsupported is not None:
+        return _bounded_referent(suffix.strip())
+    if re.search(r"(?:无需|不需要)", match.group()) is None:
+        return None
+    relative_start = match.start() - clause.start
+    prefix = clause.text[max(0, relative_start - 80) : relative_start]
+    chinese = re.search(r"([^\s，,;；。.!?！？؟]{1,40})\s*$", prefix)
+    return _normalize_referent(chinese.group(1)) if chinese is not None else None
 
 
 def _action_scopes(match: re.Match[str], clause: _Clause) -> FrozenSet[_EvidenceScope]:
     action = match.group().casefold()
     if re.search(
-        r"(?:重新|复核|操作|\b(?:retry|review)\b)", action, re.IGNORECASE
+        r"(?:重新|重试|复核|操作|\b(?:retry|review)\b)", action, re.IGNORECASE
     ):
         return frozenset({_EvidenceScope.EXECUTION})
     if re.search(r"(?:选择|\bchoose\b|\bselect\b)", action, re.IGNORECASE):
         return frozenset({_EvidenceScope.CHOICE})
     if re.search(r"(?:确认|\bconfirm\b)", action, re.IGNORECASE):
+        return frozenset({_EvidenceScope.CONFIRMATION})
+    if re.search(r"\b(?:reply|respond)\b", action, re.IGNORECASE) and re.search(
+        r"\b(?:reply|respond)\b[^\r\n。！？.!?؟]{0,24}"
+        r"(?:yes\s+or\s+no|proceed)",
+        clause.text,
+        re.IGNORECASE,
+    ):
         return frozenset({_EvidenceScope.CONFIRMATION})
     if (
         re.search(r"(?:回复|\breply\b|\brespond\b)", action, re.IGNORECASE)
@@ -422,9 +484,12 @@ def _valid_resolution_matches(
         clause_end = clauses[clause_index].end if clauses else len(prose)
         prefix = prose[max(clause_start, match.start() - 120) : match.start()]
         suffix = prose[match.end() : min(clause_end, match.end() + 120)]
-        if (
-            _INVALID_RESOLUTION_PREFIX_RE.search(prefix) is None
-            and _INVALID_RESOLUTION_SUFFIX_RE.search(suffix) is None
+        invalid_suffix = _INVALID_RESOLUTION_SUFFIX_RE.search(suffix) is not None
+        assistant_continuation = (
+            _ASSISTANT_CONTINUATION_SUFFIX_RE.search(suffix) is not None
+        )
+        if _INVALID_RESOLUTION_PREFIX_RE.search(prefix) is None and (
+            not invalid_suffix or assistant_continuation
         ):
             matches.append(match)
     return matches
@@ -487,9 +552,40 @@ def _question_evidence(
                     frozenset(
                         {clause.question_scope if clause else _EvidenceScope.REPLY}
                     ),
+                    _question_referent(question, clause) if clause else None,
                 )
             )
     return evidence
+
+
+def _option_line_spans(
+    prose: str, option_matches: Sequence[re.Match[str]]
+) -> List[Tuple[int, int]]:
+    spans = []
+    for match in option_matches:
+        line_end = prose.find("\n", match.start())
+        spans.append((match.start(), line_end if line_end >= 0 else len(prose)))
+    return spans
+
+
+def _option_body_spans(
+    prose: str, option_matches: Sequence[re.Match[str]]
+) -> List[Tuple[int, int]]:
+    spans = []
+    for start, line_end in _option_line_spans(prose, option_matches):
+        body_end = line_end
+        cursor = line_end + 1
+        while cursor < len(prose):
+            next_end = prose.find("\n", cursor)
+            if next_end < 0:
+                next_end = len(prose)
+            line = prose[cursor:next_end]
+            if re.match(r"[ \t]+\S", line) is None:
+                break
+            body_end = next_end
+            cursor = next_end + 1
+        spans.append((start, body_end))
+    return spans
 
 
 def _choice_evidence(
@@ -507,27 +603,48 @@ def _choice_evidence(
     cues_by_block = [
         list(_CHOICE_HANDOFF_CUE_RE.finditer(prose)) for prose in prose_blocks
     ]
+    cue_starts_by_block = [
+        [match.start() for match in matches] for matches in cues_by_block
+    ]
     headings_by_block = [
         list(_OPTION_HEADING_RE.finditer(prose)) for prose in prose_blocks
+    ]
+    heading_starts_by_block = [
+        [match.start() for match in matches] for matches in headings_by_block
     ]
     recommendations_by_block = [
         list(_RECOMMEND_LABEL_RE.finditer(prose)) for prose in prose_blocks
     ]
+    recommendation_starts_by_block = [
+        [match.start() for match in matches] for matches in recommendations_by_block
+    ]
+    option_matches_by_block = [
+        list(_OPTION_LINE_RE.finditer(prose)) for prose in prose_blocks
+    ]
+    option_body_spans_by_block = [
+        _option_body_spans(prose, matches)
+        for prose, matches in zip(prose_blocks, option_matches_by_block)
+    ]
+    option_body_starts_by_block = [
+        [start for start, _ in spans] for spans in option_body_spans_by_block
+    ]
+    question_offsets_by_block = [
+        [question.offset for question in questions]
+        for questions in questions_by_block
+    ]
+
+    def in_option_body(block_index: int, offset: int) -> bool:
+        spans = option_body_spans_by_block[block_index]
+        starts = option_body_starts_by_block[block_index]
+        span_index = bisect.bisect_right(starts, offset) - 1
+        return span_index >= 0 and offset < spans[span_index][1]
+
     for index, prose in enumerate(prose_blocks):
-        option_matches = list(_OPTION_LINE_RE.finditer(prose))
+        option_matches = option_matches_by_block[index]
         if not option_matches:
             continue
-        option_line_spans = []
-        for match in option_matches:
-            line_end = prose.find("\n", match.start())
-            option_line_spans.append(
-                (match.start(), line_end if line_end >= 0 else len(prose))
-            )
+        option_line_spans = _option_line_spans(prose, option_matches)
         option_line_starts = [start for start, _ in option_line_spans]
-
-        def in_option_body(offset: int) -> bool:
-            span_index = bisect.bisect_right(option_line_starts, offset) - 1
-            return span_index >= 0 and offset < option_line_spans[span_index][1]
 
         groups = []
         current = []
@@ -539,7 +656,10 @@ def _choice_evidence(
             label_kind = "number" if label.isdigit() else "letter"
             gap = prose[previous_line_end : match.start()] if current else ""
             separate = bool(current) and (
-                re.fullmatch(r"\r?\n[ \t]*", gap) is None
+                re.fullmatch(
+                    r"(?:\r?\n[ \t]+[^\r\n]*)*\r?\n[ \t]*", gap
+                )
+                is None
                 or label in current_labels
                 or label_kind != previous_kind
             )
@@ -579,41 +699,85 @@ def _choice_evidence(
                 else len(prose)
             )
             anchors = []
-            for question_block in (index - 1, index):
-                if 0 <= question_block < len(questions_by_block):
-                    anchors.extend(
-                        question.offset
-                        for question in questions_by_block[question_block]
-                        if question.offset < group_offset
-                        and (
-                            question_block != index
-                            or blocks[index].offset + local_lower <= question.offset
-                        )
-                    )
+            if index > 0 and group_index == 0:
+                anchors.extend(
+                    question.offset
+                    for question in questions_by_block[index - 1]
+                    if question.offset < group_offset
+                )
+            current_questions = questions_by_block[index]
+            current_question_offsets = question_offsets_by_block[index]
+            question_lower = bisect.bisect_left(
+                current_question_offsets, blocks[index].offset + local_lower
+            )
+            question_upper = bisect.bisect_left(
+                current_question_offsets, group_offset
+            )
+            anchors.extend(
+                question.offset
+                for question in current_questions[question_lower:question_upper]
+            )
+            trailing_question_lower = bisect.bisect_left(
+                current_question_offsets, group_offset
+            )
+            trailing_question_upper = bisect.bisect_left(
+                current_question_offsets, blocks[index].offset + local_upper
+            )
+            anchors.extend(
+                question.offset
+                for question in current_questions[
+                    trailing_question_lower:trailing_question_upper
+                ]
+                if _EvidenceScope.CHOICE in question.scopes
+            )
             nearby = range(max(0, index - 1), min(len(blocks), index + 2))
             for nearby_index in nearby:
                 if nearby_index < index and group_index > 0:
                     continue
                 if nearby_index > index and group_index + 1 < len(valid_groups):
                     continue
-                for cue in cues_by_block[nearby_index]:
-                    if nearby_index == index and (
-                        in_option_body(cue.start())
-                        or not local_lower <= cue.start() < local_upper
-                    ):
+                if nearby_index == index:
+                    cue_lower = bisect.bisect_left(
+                        cue_starts_by_block[index], local_lower
+                    )
+                    cue_upper = bisect.bisect_left(
+                        cue_starts_by_block[index], local_upper
+                    )
+                    nearby_cues = cues_by_block[index][cue_lower:cue_upper]
+                else:
+                    nearby_cues = cues_by_block[nearby_index]
+                for cue in nearby_cues:
+                    if in_option_body(nearby_index, cue.start()):
                         continue
                     anchors.append(blocks[nearby_index].offset + cue.start())
-                for heading in headings_by_block[nearby_index]:
-                    if nearby_index == index and not (
-                        local_lower <= heading.start() < group_start
-                    ):
-                        continue
+                if nearby_index == index:
+                    heading_lower = bisect.bisect_left(
+                        heading_starts_by_block[index], local_lower
+                    )
+                    heading_upper = bisect.bisect_left(
+                        heading_starts_by_block[index], group_start
+                    )
+                    nearby_headings = headings_by_block[index][
+                        heading_lower:heading_upper
+                    ]
+                else:
+                    nearby_headings = headings_by_block[nearby_index]
+                for heading in nearby_headings:
                     anchors.append(blocks[nearby_index].offset + heading.start())
-                for recommendation in recommendations_by_block[nearby_index]:
-                    if nearby_index == index and (
-                        in_option_body(recommendation.start())
-                        or not local_lower <= recommendation.start() < local_upper
-                    ):
+                if nearby_index == index:
+                    recommendation_lower = bisect.bisect_left(
+                        recommendation_starts_by_block[index], local_lower
+                    )
+                    recommendation_upper = bisect.bisect_left(
+                        recommendation_starts_by_block[index], local_upper
+                    )
+                    nearby_recommendations = recommendations_by_block[index][
+                        recommendation_lower:recommendation_upper
+                    ]
+                else:
+                    nearby_recommendations = recommendations_by_block[nearby_index]
+                for recommendation in nearby_recommendations:
+                    if in_option_body(nearby_index, recommendation.start()):
                         continue
                     if recommendation.group(1).upper() in labels:
                         anchors.append(
@@ -649,7 +813,19 @@ def _required_action_evidence(
 ) -> List[_Evidence]:
     primary_matches = list(_REQUIRED_ACTION_RE.finditer(prose))
     clause_index = 0
+    covered_primary_index = 0
     for match in _IMPERATIVE_ACTION_RE.finditer(prose):
+        while (
+            covered_primary_index < len(primary_matches)
+            and primary_matches[covered_primary_index].end() <= match.start()
+        ):
+            covered_primary_index += 1
+        if (
+            covered_primary_index < len(primary_matches)
+            and primary_matches[covered_primary_index].start() <= match.start()
+            < primary_matches[covered_primary_index].end()
+        ):
+            continue
         while (
             clause_index + 1 < len(clauses)
             and match.start() >= clauses[clause_index].end
@@ -739,12 +915,8 @@ def _text_evidence(blocks: Sequence[_Block]) -> List[_Evidence]:
         zip(blocks, prose_blocks, clauses_by_block)
     ):
         courtesy_spans = _courtesy_spans(clauses)
-        option_line_spans = []
-        for option in _OPTION_LINE_RE.finditer(prose):
-            line_end = prose.find("\n", option.start())
-            option_line_spans.append(
-                (option.start(), line_end if line_end >= 0 else len(prose))
-            )
+        option_matches = list(_OPTION_LINE_RE.finditer(prose))
+        option_body_spans = _option_body_spans(prose, option_matches)
         resolution_matches = _valid_resolution_matches(prose, clauses)
         resolution_spans = [(match.start(), match.end()) for match in resolution_matches]
         block_resolutions = []
@@ -776,7 +948,7 @@ def _text_evidence(blocks: Sequence[_Block]) -> List[_Evidence]:
         actions = _required_action_evidence(
             block,
             prose,
-            courtesy_spans + option_line_spans + resolution_spans,
+            courtesy_spans + option_body_spans + resolution_spans,
             clauses,
         )
         evidence.extend(actions)
@@ -785,12 +957,14 @@ def _text_evidence(blocks: Sequence[_Block]) -> List[_Evidence]:
         questions_by_block[block_index].extend(block_questions)
     choices = _choice_evidence(blocks, prose_blocks, resolutions, questions_by_block)
     if choices:
+        choice_anchor_offsets = {choice.offset for choice in choices}
         evidence = [
             item
             for item in evidence
             if not (
                 item.kind is _EvidenceKind.REQUIRED_ACTION
                 and item.scopes == frozenset({_EvidenceScope.CHOICE})
+                and item.offset in choice_anchor_offsets
             )
         ]
         evidence.extend(choices)
