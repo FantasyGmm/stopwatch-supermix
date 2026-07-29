@@ -7,6 +7,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <memory>
+#include <new>
 
 #if defined(ESP_PLATFORM)
 #include <nvs.h>
@@ -187,6 +189,13 @@ struct Selector {
     uint32_t generation = 0;
 };
 
+struct StoreWorkspace {
+    StoredSlot a = {};
+    StoredSlot b = {};
+    std::array<uint8_t, kMaxSlotSize> encoded = {};
+    std::array<uint8_t, kMaxPayloadSize> payload = {};
+};
+
 size_t record_name_size(const AgentRecord& record)
 {
     const auto end = std::find(
@@ -292,19 +301,23 @@ bool digest(
            mbedtls_sha256(input, size, output.data(), 0) == 0;
 }
 
-StoredSlot read_slot(RegistryStorageBackend& backend, const char* key)
+void read_slot(
+    RegistryStorageBackend& backend,
+    const char* key,
+    StoredSlot& result,
+    std::array<uint8_t, kMaxSlotSize>& encoded)
 {
-    StoredSlot result = {};
-    std::array<uint8_t, kMaxSlotSize> encoded = {};
+    result = {};
+    encoded.fill(0);
     size_t size = encoded.size();
     const StorageIoResult io = backend.read(key, encoded.data(), size);
     if (io == StorageIoResult::NotFound) {
-        return result;
+        return;
     }
     result.present = true;
     if (io != StorageIoResult::Ok ||
         size < kSlotHeaderSize + kDigestSize) {
-        return result;
+        return;
     }
     Reader reader(encoded.data(), size);
     uint16_t version = 0;
@@ -313,7 +326,7 @@ StoredSlot read_slot(RegistryStorageBackend& backend, const char* key)
         !reader.u32(result.generation) || result.generation == 0 ||
         !reader.u16(payload_size) ||
         size != kSlotHeaderSize + payload_size + kDigestSize) {
-        return result;
+        return;
     }
     std::array<uint8_t, kDigestSize> expected = {};
     if (!digest(encoded.data(), kSlotHeaderSize + payload_size, expected) ||
@@ -326,10 +339,9 @@ StoredSlot read_slot(RegistryStorageBackend& backend, const char* key)
             encoded.data() + kSlotHeaderSize,
             payload_size,
             result.registry)) {
-        return result;
+        return;
     }
     result.valid = true;
-    return result;
 }
 
 Selector read_selector(RegistryStorageBackend& backend)
@@ -361,9 +373,10 @@ bool encode_slot(
     const AgentRegistry& registry,
     uint32_t generation,
     std::array<uint8_t, kMaxSlotSize>& output,
+    std::array<uint8_t, kMaxPayloadSize>& payload,
     size_t& size)
 {
-    std::array<uint8_t, kMaxPayloadSize> payload = {};
+    payload.fill(0);
     size_t payload_size = 0;
     if (generation == 0 ||
         !encode_payload(
@@ -390,9 +403,11 @@ bool verify_slot(
     RegistryStorageBackend& backend,
     const char* key,
     uint32_t generation,
-    const AgentRegistry& registry)
+    const AgentRegistry& registry,
+    StoredSlot& slot,
+    std::array<uint8_t, kMaxSlotSize>& encoded)
 {
-    const StoredSlot slot = read_slot(backend, key);
+    read_slot(backend, key, slot, encoded);
     return slot.valid && slot.generation == generation &&
            slot.registry == registry;
 }
@@ -455,20 +470,29 @@ AgentRegistryStore::AgentRegistryStore(RegistryStorageBackend& backend)
 StoreResult AgentRegistryStore::load(AgentRegistry& output)
 {
     output = {};
-    const StoredSlot a = read_slot(_backend, kRegistrySlotA);
-    const StoredSlot b = read_slot(_backend, kRegistrySlotB);
+    std::unique_ptr<StoreWorkspace> workspace(
+        new (std::nothrow) StoreWorkspace());
+    if (!workspace) {
+        return StoreResult::StorageError;
+    }
+    read_slot(
+        _backend, kRegistrySlotA, workspace->a, workspace->encoded);
+    read_slot(
+        _backend, kRegistrySlotB, workspace->b, workspace->encoded);
     const Selector selector = read_selector(_backend);
-    const int selected = selected_slot(a, b, selector);
+    const int selected =
+        selected_slot(workspace->a, workspace->b, selector);
     if (selected == 0) {
-        output = a.registry;
+        output = workspace->a.registry;
         return StoreResult::Ok;
     }
     if (selected == 1) {
-        output = b.registry;
+        output = workspace->b.registry;
         return StoreResult::Ok;
     }
-    return a.present || b.present || selector.present ? StoreResult::Corrupt
-                                                      : StoreResult::NotFound;
+    return workspace->a.present || workspace->b.present || selector.present
+               ? StoreResult::Corrupt
+               : StoreResult::NotFound;
 }
 
 StoreResult AgentRegistryStore::save(const AgentRegistry& registry)
@@ -476,30 +500,49 @@ StoreResult AgentRegistryStore::save(const AgentRegistry& registry)
     if (!registry.initialized()) {
         return StoreResult::InvalidRegistry;
     }
-    const StoredSlot a = read_slot(_backend, kRegistrySlotA);
-    const StoredSlot b = read_slot(_backend, kRegistrySlotB);
+    std::unique_ptr<StoreWorkspace> workspace(
+        new (std::nothrow) StoreWorkspace());
+    if (!workspace) {
+        return StoreResult::StorageError;
+    }
+    read_slot(
+        _backend, kRegistrySlotA, workspace->a, workspace->encoded);
+    read_slot(
+        _backend, kRegistrySlotB, workspace->b, workspace->encoded);
     const Selector selector = read_selector(_backend);
-    const int active = selected_slot(a, b, selector);
+    const int active =
+        selected_slot(workspace->a, workspace->b, selector);
     const uint32_t active_generation =
-        active == 0 ? a.generation : active == 1 ? b.generation : 0;
+        active == 0
+            ? workspace->a.generation
+            : active == 1 ? workspace->b.generation : 0;
     if (active_generation == std::numeric_limits<uint32_t>::max()) {
         return StoreResult::StorageError;
     }
     const uint8_t inactive = active == 0 ? 1 : 0;
     const char* key = inactive == 0 ? kRegistrySlotA : kRegistrySlotB;
     const uint32_t generation = active_generation + 1;
-    std::array<uint8_t, kMaxSlotSize> encoded = {};
     size_t encoded_size = 0;
     if (!encode_slot(
-            registry, generation, encoded, encoded_size)) {
+            registry,
+            generation,
+            workspace->encoded,
+            workspace->payload,
+            encoded_size)) {
         return StoreResult::InvalidRegistry;
     }
-    if (_backend.write(key, encoded.data(), encoded_size) !=
+    if (_backend.write(key, workspace->encoded.data(), encoded_size) !=
             StorageIoResult::Ok ||
         _backend.commit() != StorageIoResult::Ok) {
         return StoreResult::StorageError;
     }
-    if (!verify_slot(_backend, key, generation, registry)) {
+    if (!verify_slot(
+            _backend,
+            key,
+            generation,
+            registry,
+            workspace->a,
+            workspace->encoded)) {
         return StoreResult::Corrupt;
     }
     if (write_selector(_backend, inactive, generation) !=

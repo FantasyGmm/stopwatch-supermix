@@ -45,11 +45,26 @@ secure_pairing::AgentEnrollment enrollment(uint8_t scalar, const char* name)
 
 class MemoryBackend : public secure_pairing::RegistryStorageBackend {
 public:
+    bool near_stack(const void* pointer) const
+    {
+        if (stack_anchor == nullptr || pointer == nullptr) {
+            return false;
+        }
+        const uintptr_t anchor =
+            reinterpret_cast<uintptr_t>(stack_anchor);
+        const uintptr_t address = reinterpret_cast<uintptr_t>(pointer);
+        const uintptr_t distance =
+            anchor > address ? anchor - address : address - anchor;
+        return distance < 64 * 1024;
+    }
+
     secure_pairing::StorageIoResult read(
         const char* key,
         uint8_t* output,
         size_t& size) override
     {
+        stack_buffer_seen =
+            stack_buffer_seen || (size > 256 && near_stack(output));
         const auto found = committed.find(key);
         if (found == committed.end()) {
             return secure_pairing::StorageIoResult::NotFound;
@@ -68,6 +83,8 @@ public:
         const uint8_t* input,
         size_t size) override
     {
+        stack_buffer_seen =
+            stack_buffer_seen || (size > 256 && near_stack(input));
         if (fail_write_key == key) {
             return secure_pairing::StorageIoResult::Error;
         }
@@ -100,6 +117,8 @@ public:
     std::map<std::string, std::vector<uint8_t>> staged;
     std::string fail_write_key;
     bool fail_next_commit = false;
+    const void* stack_anchor = nullptr;
+    bool stack_buffer_seen = false;
 };
 
 }  // namespace
@@ -201,4 +220,15 @@ int main()
     AgentRegistry after_interruption = {};
     assert(interrupted_store.load(after_interruption) == StoreResult::Ok);
     assert(after_interruption == first_generation);
+
+    uint8_t stack_anchor = 0;
+    MemoryBackend bounded_stack_backend;
+    bounded_stack_backend.stack_anchor = &stack_anchor;
+    AgentRegistryStore bounded_stack_store(bounded_stack_backend);
+    assert(bounded_stack_store.save(registry) == StoreResult::Ok);
+    AgentRegistry bounded_stack_loaded = {};
+    assert(
+        bounded_stack_store.load(bounded_stack_loaded) == StoreResult::Ok);
+    assert(bounded_stack_loaded == registry);
+    assert(!bounded_stack_backend.stack_buffer_seen);
 }
