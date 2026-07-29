@@ -281,9 +281,21 @@ _RESOLUTION_RE = re.compile(
     r"\bno (?:choice|selection) is required\b|"
     r"\bthe choice (?:is|has been) resolved\b|"
     r"\bthe previously offered choice has already been applied\b)"
-    r"|(?P<security_pair>"
-    r"\bno (?:approval[ \t]+or[ \t]+authorization|"
-    r"authorization[ \t]+or[ \t]+approval)[ \t]+is[ \t]+required\b)"
+    r"|(?P<security_list>"
+    r"\bno (?:approval|authorization|verification)"
+    r"(?:,[ \t]*(?:(?:and|or)[ \t]+)?|[ \t]+(?:and|or)[ \t]+)"
+    r"(?:approval|authorization|verification)"
+    r"(?:(?:,[ \t]*(?:(?:and|or)[ \t]+)?|[ \t]+(?:and|or)[ \t]+)"
+    r"(?:approval|authorization|verification))*[ \t]+(?:is|are)[ \t]+required\b|"
+    r"\bneither[ \t]+(?:approval|authorization|verification)"
+    r"(?:,[ \t]*(?:approval|authorization|verification))*"
+    r",?[ \t]+nor[ \t]+(?:approval|authorization|verification)"
+    r"[ \t]+(?:is|are)[ \t]+required\b|"
+    r"(?:无需|不需要)(?:(?:你|您)的?)?"
+    r"(?:批准|授权|验证)"
+    r"(?:(?:[、，,][ \t]*(?:或|及|和|并|与|以及)?|"
+    r"(?:或|及|和|并|与|以及))"
+    r"(?:批准|授权|验证))+)"
     r"|(?P<approval>"
     r"(?:无需|不需要)(?:(?:你|您)的?)?批准|"
     r"\b(?:no approval is required|approval is (?:no longer|not) required)\b)"
@@ -425,6 +437,11 @@ class _Clause:
     end: int
     question_scopes: FrozenSet[_EvidenceScope]
     communicative_choice: bool
+    has_question_mark: bool = False
+    question_actions: Tuple[Tuple[_EvidenceScope, int], ...] = ()
+    question_action_ends: Tuple[int, ...] = ()
+    question_action_referents: Tuple[str | None, ...] = ()
+    question_complement_range: Tuple[int, int] | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -535,6 +552,14 @@ _QUESTION_COMPLEMENT_RE = re.compile(
     r"\b(?:that|whether|if)\b|(?:是否)",
     re.IGNORECASE,
 )
+_QUESTION_OUTER_ACTION_RESTART_RE = re.compile(
+    r"(?:\bthen[ \t]+(?:please[ \t]+)?|"
+    r",[ \t]*(?:(?:and|then)[ \t]+)(?:please[ \t]+)?)"
+    r"(?=(?:provide|review|reply|choose|select|retry|confirm)\b)|"
+    r"(?:，(?:并|然后)?|然后)(?:请)?"
+    r"(?=(?:确认|选择|提供|回复|重新|重试|复核))",
+    re.IGNORECASE,
+)
 
 
 def _question_action_scope(action: str) -> _EvidenceScope:
@@ -548,6 +573,29 @@ def _question_action_scope(action: str) -> _EvidenceScope:
     return _EvidenceScope.CONFIRMATION
 
 
+def _question_complement_range(
+    clause_text: str, actions: Sequence[Tuple[_EvidenceScope, int]]
+) -> Tuple[int, int] | None:
+    if not actions:
+        return None
+    governing_end = actions[0][1]
+    complement = _QUESTION_COMPLEMENT_RE.search(clause_text, governing_end)
+    if complement is None:
+        return None
+    if (
+        complement.group().casefold() == "if"
+        and clause_text[governing_end : complement.start()].strip()
+    ):
+        return None
+    restart = _QUESTION_OUTER_ACTION_RESTART_RE.search(
+        clause_text, complement.end()
+    )
+    return (
+        complement.start(),
+        restart.start() if restart is not None else len(clause_text),
+    )
+
+
 def _governing_question_actions(
     action_prose: str,
 ) -> Tuple[Tuple[_EvidenceScope, int], ...]:
@@ -558,9 +606,9 @@ def _governing_question_actions(
     actions = [(_question_action_scope(action), governing_action.end())]
     cursor = governing_action.end()
     while coordinated := _COORDINATED_QUESTION_ACTION_RE.search(
-        action_prose[cursor:]
+        action_prose, cursor
     ):
-        intervening = action_prose[cursor : cursor + coordinated.start()]
+        intervening = action_prose[cursor : coordinated.start()]
         complement = _QUESTION_COMPLEMENT_RE.search(intervening)
         if (
             complement is not None
@@ -571,26 +619,40 @@ def _governing_question_actions(
         restart = (
             re.search(r"\bthen\b|然后", coordinated.group(), re.IGNORECASE)
             is not None
-            or coordinated.group().lstrip().startswith((",", "，"))
-            or intervening.rstrip().endswith((",", "，"))
+            or re.match(
+                r"\s*,\s*(?:and|then)\b",
+                coordinated.group(),
+                re.IGNORECASE,
+            )
+            is not None
+            or (
+                intervening.rstrip().endswith("，")
+                and re.match(r"(?:并|然后)", coordinated.group()) is not None
+            )
         )
         if complement is not None and not restart:
             break
         action = coordinated.group("english") or coordinated.group("chinese")
         if coordinated.group("chinese") and re.match(
-            r"状态", action_prose[cursor + coordinated.end() :]
+            r"状态", action_prose[coordinated.end() :]
         ):
             break
-        actions.append((_question_action_scope(action), cursor + coordinated.end()))
-        cursor += coordinated.end()
+        actions.append((_question_action_scope(action), coordinated.end()))
+        cursor = coordinated.end()
     return tuple(actions)
 
 
-def _question_scopes(prose: str) -> FrozenSet[_EvidenceScope]:
-    action_prose = _QUOTED_TEXT_RE.sub(
-        lambda match: " " * len(match.group()), prose
-    )
-    actions = _governing_question_actions(action_prose)
+def _question_scopes(
+    prose: str,
+    actions: Sequence[Tuple[_EvidenceScope, int]] | None = None,
+    action_prose: str | None = None,
+) -> FrozenSet[_EvidenceScope]:
+    if action_prose is None:
+        action_prose = _QUOTED_TEXT_RE.sub(
+            lambda match: " " * len(match.group()), prose
+        )
+    if actions is None:
+        actions = _governing_question_actions(action_prose)
     if actions:
         return frozenset(scope for scope, _ in actions)
     if _ALTERNATIVE_CHOICE_RE.search(prose) is not None or re.search(
@@ -611,17 +673,42 @@ def _question_scopes(prose: str) -> FrozenSet[_EvidenceScope]:
 
 
 def _clauses(prose: str) -> List[_Clause]:
-    return [
-        _Clause(
-            text=match.group(),
-            start=match.start(),
-            end=match.end(),
-            question_scopes=_question_scopes(match.group()),
-            communicative_choice=_COMMUNICATIVE_CHOICE_RE.search(match.group())
-            is not None,
+    clauses = []
+    for match in _CLAUSE_RE.finditer(prose):
+        text = match.group()
+        action_prose = _QUOTED_TEXT_RE.sub(
+            lambda quoted: " " * len(quoted.group()), text
         )
-        for match in _CLAUSE_RE.finditer(prose)
-    ]
+        actions = _governing_question_actions(action_prose)
+        group_ends = _question_action_group_ends(text, actions)
+        group_referents = {}
+        previous_group_last = None
+        for group_last in group_ends:
+            if group_last != previous_group_last:
+                group_referents[group_last] = _governing_question_referent(
+                    text, actions, group_last, group_last
+                )
+                previous_group_last = group_last
+        clauses.append(
+            _Clause(
+                text=text,
+                start=match.start(),
+                end=match.end(),
+                question_scopes=_question_scopes(text, actions, action_prose),
+                communicative_choice=_COMMUNICATIVE_CHOICE_RE.search(text)
+                is not None,
+                has_question_mark=_QUESTION_MARK_RE.search(text) is not None,
+                question_actions=actions,
+                question_action_ends=tuple(end for _, end in actions),
+                question_action_referents=tuple(
+                    group_referents[group_last] for group_last in group_ends
+                ),
+                question_complement_range=_question_complement_range(
+                    text, actions
+                ),
+            )
+        )
+    return clauses
 
 
 def _normalize_referent(text: str) -> str | None:
@@ -635,7 +722,7 @@ def _normalize_referent(text: str) -> str | None:
 
 _REFERENT_BREAK_RE = re.compile(
     r"[，,;；。.!?！？؟]|"
-    r"\b(?:because|since|although|though|while|unless)\b|"
+    r"\b(?:because|since|although|though|while|unless|if)\b|"
     r"\b(?:and|or|then)\s+(?:also\s+)?(?="
     r"(?:approve|authorize|confirm|choose|select|provide|reply|retry|review|verify)\b)|"
     r"\bplease\s+(?=(?:approve|authorize|confirm|choose|select|provide|"
@@ -679,10 +766,18 @@ def _action_referent(match: re.Match[str], clause: _Clause) -> str | None:
         if coordinated:
             group_last = coordinated[0]
             for candidate in coordinated[1:]:
-                if re.search(r"\bthen\b|然后", candidate.group(), re.IGNORECASE):
+                between = tail[group_last.end() : candidate.start()]
+                if (
+                    re.search(
+                        r"\bthen\b|然后", candidate.group(), re.IGNORECASE
+                    )
+                    or _bounded_referent(between) is not None
+                ):
                     break
                 group_last = candidate
-            referent = _bounded_referent(tail[group_last.end() :])
+            referent = _bounded_referent(
+                tail[group_last.end() : group_last.end() + 160]
+            )
     return referent
 
 
@@ -704,13 +799,25 @@ def _question_referent(
 
 
 def _governing_question_referent(
-    clause: _Clause,
+    clause_text: str,
     actions: Sequence[Tuple[_EvidenceScope, int]],
     action_index: int,
+    group_last: int,
 ) -> str | None:
     _, action_end = actions[action_index]
-    tail = clause.text[action_end:]
+    tail = clause_text[action_end : action_end + 200]
+    stripped_tail = tail.lstrip()
+    if not stripped_tail or stripped_tail.startswith(
+        (",", "，", ";", "；", ".", "。", "?", "？", "!", "！", "؟")
+    ):
+        return None
     complement = _QUESTION_COMPLEMENT_RE.search(tail)
+    if (
+        complement is not None
+        and complement.group().casefold() == "if"
+        and tail[: complement.start()].strip()
+    ):
+        complement = None
     next_action = _COORDINATED_QUESTION_ACTION_RE.search(tail)
     if complement is not None and (
         next_action is None or complement.start() < next_action.start()
@@ -740,14 +847,31 @@ def _governing_question_referent(
         else _bounded_referent(tail)
     )
     if referent is None and action_index + 1 < len(actions):
-        group_last = action_index
-        for next_index in range(action_index + 1, len(actions)):
-            between = clause.text[actions[next_index - 1][1] : actions[next_index][1]]
-            if re.search(r"\bthen\b|然后", between, re.IGNORECASE):
-                break
-            group_last = next_index
-        referent = _bounded_referent(clause.text[actions[group_last][1] :])
+        group_end = actions[group_last][1]
+        referent = _bounded_referent(clause_text[group_end : group_end + 160])
     return referent
+
+
+def _question_action_group_ends(
+    clause_text: str, actions: Sequence[Tuple[_EvidenceScope, int]]
+) -> Tuple[int, ...]:
+    group_ends = [0] * len(actions)
+    group_start = 0
+    for action_index in range(1, len(actions)):
+        between = clause_text[
+            actions[action_index - 1][1] : actions[action_index][1]
+        ]
+        starts_new_group = (
+            re.search(r"\bthen\b|然后", between, re.IGNORECASE) is not None
+            or _bounded_referent(between) is not None
+        )
+        if starts_new_group:
+            for member in range(group_start, action_index):
+                group_ends[member] = action_index - 1
+            group_start = action_index
+    for member in range(group_start, len(actions)):
+        group_ends[member] = len(actions) - 1
+    return tuple(group_ends)
 
 
 def _resolution_referent(match: re.Match[str], clause: _Clause) -> str | None:
@@ -772,6 +896,10 @@ def _resolution_referent(match: re.Match[str], clause: _Clause) -> str | None:
     relative_start = match.start() - clause.start
     prefix = clause.text[max(0, relative_start - 80) : relative_start]
     chinese = re.search(r"([^\s，,;；。.!?！？؟]{1,40})\s*$", prefix)
+    if chinese is not None and chinese.group(1).endswith(("也", "且")):
+        stripped = chinese.group(1)[:-1]
+        if stripped:
+            return _normalize_referent(stripped)
     if chinese is not None and chinese.group(1) in {"也", "且"}:
         coordinated = re.search(
             r"([^\s，,;；。.!?！？؟]{1,40})"
@@ -842,10 +970,16 @@ def _resolution_scopes(match: re.Match[str]) -> FrozenSet[_EvidenceScope]:
         return frozenset({_EvidenceScope.CONFIRMATION})
     if match.lastgroup == "choice":
         return frozenset({_EvidenceScope.CHOICE})
-    if match.lastgroup == "security_pair":
-        return frozenset(
-            {_EvidenceScope.APPROVAL, _EvidenceScope.AUTHORIZATION}
-        )
+    if match.lastgroup == "security_list":
+        text = match.group().casefold()
+        scopes = set()
+        if re.search(r"approval|批准", text):
+            scopes.add(_EvidenceScope.APPROVAL)
+        if re.search(r"authorization|授权", text):
+            scopes.add(_EvidenceScope.AUTHORIZATION)
+        if re.search(r"verification|验证", text):
+            scopes.add(_EvidenceScope.VERIFICATION)
+        return frozenset(scopes)
     if match.lastgroup == "approval":
         return frozenset({_EvidenceScope.APPROVAL})
     if match.lastgroup == "authorization":
@@ -937,23 +1071,13 @@ def _question_evidence(
             and _SELF_ANSWER_DECISION_RE.search(decision_context) is None
         )
         if not self_answered:
-            action_prose = (
-                _QUOTED_TEXT_RE.sub(
-                    lambda match: " " * len(match.group()), clause.text
-                )
-                if clause
-                else ""
-            )
-            question_actions = _governing_question_actions(action_prose)
+            question_actions = clause.question_actions if clause else ()
             if clause and question_actions:
                 scoped_referents = tuple(
-                    (
-                        scope,
-                        _governing_question_referent(
-                            clause, question_actions, action_index
-                        ),
+                    (scope, clause.question_action_referents[action_index])
+                    for action_index, (scope, _) in enumerate(
+                        question_actions
                     )
-                    for action_index, (scope, _) in enumerate(question_actions)
                 )
             else:
                 question_scopes = (
@@ -1268,17 +1392,24 @@ def _required_action_evidence(
             clause_index += 1
         clause = clauses[clause_index] if clauses else None
         clause_start = clause.start if clause is not None else 0
-        is_choose = re.search(r"(?:\b(?:choose|select)\b|选择)", match.group(), re.IGNORECASE)
-        has_alternatives = (
-            clause is not None
-            and (
-                clause.communicative_choice
-                or re.search(r"\b\S+\s+or\s+\S+\b|或", clause.text, re.IGNORECASE)
-                is not None
-            )
+        is_choose = re.search(
+            r"(?:\b(?:choose|select)\b|选择)",
+            match.group(),
+            re.IGNORECASE,
         )
-        if is_choose is not None and not has_alternatives:
-            continue
+        if is_choose is not None:
+            has_alternatives = (
+                clause is not None
+                and (
+                    clause.communicative_choice
+                    or re.search(
+                        r"\b\S+\s+or\s+\S+\b|或", clause.text, re.IGNORECASE
+                    )
+                    is not None
+                )
+            )
+            if not has_alternatives:
+                continue
         prefix_start = max(clause_start, match.start() - 160)
         prefix = prose[prefix_start : match.start()]
         boundaries = list(_IMPERATIVE_BOUNDARY_RE.finditer(prefix))
@@ -1316,10 +1447,32 @@ def _required_action_evidence(
             clause_index += 1
         clause = clauses[clause_index] if clauses else None
         primary_index = bisect.bisect_left(primary_starts, match.start()) - 1
-        if (
-            clause is not None
-            and primary_index >= 0
+        has_primary_anchor = (
+            primary_index >= 0
+            and clause is not None
             and primary_starts[primary_index] >= clause.start
+        )
+        has_question_anchor = (
+            clause is not None
+            and bool(clause.question_actions)
+            and clause.question_complement_range is not None
+            and clause.question_complement_range[1] < len(clause.text)
+            and match.start() - clause.start
+            >= clause.question_complement_range[1]
+        )
+        overlaps_question_action = False
+        if has_question_anchor:
+            relative_start = match.start() - clause.start
+            relative_end = match.end() - clause.start
+            action_index = bisect.bisect_right(
+                clause.question_action_ends, relative_start
+            )
+            overlaps_question_action = (
+                action_index < len(clause.question_action_ends)
+                and clause.question_action_ends[action_index] <= relative_end
+            )
+        if has_primary_anchor or (
+            has_question_anchor and not overlaps_question_action
         ):
             action_matches.append(match)
     clause_index = 0
@@ -1371,18 +1524,27 @@ def _required_action_evidence(
         relative_start = match.start() - clause.start
         relative_end = match.end() - clause.start
         question_actions = (
-            _governing_question_actions(clause.text)
-            if _QUESTION_MARK_RE.search(clause.text) is not None
+            clause.question_actions
+            if clause.has_question_mark
             else ()
         )
         if question_actions:
             governing_end = question_actions[0][1]
+            overlapping_action = bisect.bisect_right(
+                clause.question_action_ends, relative_start
+            )
+            if (
+                overlapping_action < len(clause.question_action_ends)
+                and clause.question_action_ends[overlapping_action]
+                <= relative_end
+            ):
+                continue
             if (
                 relative_end > governing_end
-                and _QUESTION_COMPLEMENT_RE.search(
-                    clause.text[governing_end:relative_end]
-                )
-                is not None
+                and clause.question_complement_range is not None
+                and clause.question_complement_range[0]
+                < relative_end
+                <= clause.question_complement_range[1]
             ):
                 continue
         action_suffix = clause.text[relative_end : relative_end + 80]

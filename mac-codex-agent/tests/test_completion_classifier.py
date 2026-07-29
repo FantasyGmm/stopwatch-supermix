@@ -10,6 +10,50 @@ from completion_classifier import classify_completion
 
 
 class CompletionClassifierTests(unittest.TestCase):
+    def test_question_action_group_referents_scale_near_linearly(self):
+        def measure(count):
+            actions = " and ".join(
+                f"approve target{index}" for index in range(count)
+            )
+            elapsed = []
+            result = None
+            for _ in range(2):
+                started = time.monotonic()
+                result = classify_completion(f"Can you {actions}?")
+                elapsed.append(time.monotonic() - started)
+            return min(elapsed), result
+
+        one, _ = measure(1_000)
+        two, _ = measure(2_000)
+        four, result = measure(4_000)
+        self.assertEqual(
+            (result.outcome, result.reason), ("waiting", "text_direct_question")
+        )
+        self.assertLess(four, 2.0)
+        self.assertLess(four, two * 3 + 0.08)
+        self.assertLess(two, one * 3 + 0.05)
+
+    def test_empty_question_action_groups_scale_near_linearly(self):
+        def measure(count):
+            actions = ", then ".join("approve" for _ in range(count))
+            elapsed = []
+            result = None
+            for _ in range(2):
+                started = time.monotonic()
+                result = classify_completion(f"Can you {actions}?")
+                elapsed.append(time.monotonic() - started)
+            return min(elapsed), result
+
+        sixteen, _ = measure(16_000)
+        thirty_two, _ = measure(32_000)
+        sixty_four, result = measure(64_000)
+        self.assertEqual(
+            (result.outcome, result.reason), ("waiting", "text_direct_question")
+        )
+        self.assertLess(sixty_four, 2.0)
+        self.assertLess(sixty_four, thirty_two * 3 + 0.1)
+        self.assertLess(thirty_two, sixteen * 3 + 0.08)
+
     def test_resolution_matching_is_bounded_for_repeated_prefixes(self):
         message = "已经按" * 10_000 + "仍在处理中。"
         started = time.monotonic()
@@ -1567,6 +1611,92 @@ class CompletionClassifierTests(unittest.TestCase):
             ("waiting", "text_direct_question"),
         )
 
+    def test_condition_clauses_do_not_contaminate_action_referents(self):
+        messages = (
+            "Can you approve staging if tests pass? "
+            "No approval is required for staging.",
+            "Please approve staging if tests pass. "
+            "No approval is required for staging.",
+        )
+        for message in messages:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("completed", "text_explicitly_resolved"),
+                )
+
+    def test_complement_ranges_support_general_outer_actions(self):
+        inner = classify_completion(
+            "Can you confirm whether I should approve, authorize, or verify? "
+            "No confirmation is required."
+        )
+        self.assertEqual(
+            (inner.outcome, inner.reason),
+            ("completed", "text_explicitly_resolved"),
+        )
+        inner_general = classify_completion(
+            "Can you confirm whether I should review and provide input? "
+            "No confirmation is required."
+        )
+        self.assertEqual(
+            (inner_general.outcome, inner_general.reason),
+            ("completed", "text_explicitly_resolved"),
+        )
+
+        outer_messages = (
+            "Can you confirm whether approval is required, then please review? "
+            "No confirmation is required.",
+            "Can you confirm whether approval is required, and please provide input? "
+            "No confirmation is required.",
+            "你能确认是否需要批准，然后请提供输入吗？无需确认。",
+            "Can you confirm whether approval is required, and provide input? "
+            "No confirmation is required.",
+            "Can you confirm whether approval is required, then review the plan? "
+            "No confirmation is required.",
+            "你能确认是否需要批准，然后提供输入吗？无需确认。",
+        )
+        for message in outer_messages:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual(result.outcome, "waiting")
+
+    def test_three_scope_and_chinese_coordinated_resolutions(self):
+        messages = (
+            "Please approve, authorize, and verify deployment. "
+            "No verification, approval, or authorization is required.",
+            "请批准并授权部署。无需批准或授权。",
+            "生产需要您的批准，测试需要您的授权。"
+            "生产无需批准，测试也无需授权。",
+            "Please approve, authorize, and verify deployment. "
+            "No approval, authorization, or verification are required.",
+            "请批准并授权及验证部署。无需批准、授权或验证。",
+            "请批准并授权部署。无需批准和授权。",
+            "Please approve and authorize deployment. "
+            "Neither approval nor authorization is required.",
+            "Please approve, authorize, and verify deployment. "
+            "Neither approval, authorization, nor verification is required.",
+            "请批准并授权部署。无需批准与授权。",
+            "请批准并授权部署。无需批准以及授权。",
+        )
+        for message in messages:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("completed", "text_explicitly_resolved"),
+                )
+
+    def test_nearest_attribution_wins_across_multiple_sources(self):
+        historical = classify_completion(
+            "The docs say approval is required, but the logs say authorization "
+            "is required in the old workflow."
+        )
+        self.assertEqual(
+            (historical.outcome, historical.reason),
+            ("completed", "completion_only"),
+        )
+
     def test_question_action_groups_share_only_local_trailing_referents(self):
         result = classify_completion(
             "Can you approve and authorize production, then verify staging? "
@@ -1586,6 +1716,16 @@ class CompletionClassifierTests(unittest.TestCase):
         )
         self.assertEqual(
             (non_question.outcome, non_question.reason),
+            ("completed", "text_explicitly_resolved"),
+        )
+        comma_group = classify_completion(
+            "Please approve and authorize production, verify staging. "
+            "No approval is required for production. "
+            "No authorization is required for production. "
+            "No verification is required for staging."
+        )
+        self.assertEqual(
+            (comma_group.outcome, comma_group.reason),
             ("completed", "text_explicitly_resolved"),
         )
 
