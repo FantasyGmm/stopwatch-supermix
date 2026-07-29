@@ -1,14 +1,26 @@
 import pathlib
 import sys
+import time
 import unittest
 
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
-from completion_classifier import classify_completion
+from completion_classifier import _RESOLUTION_RE, classify_completion
 
 
 class CompletionClassifierTests(unittest.TestCase):
+    def test_resolution_matching_is_bounded_for_repeated_prefixes(self):
+        self.assertNotIn(".+?", _RESOLUTION_RE.pattern)
+
+        message = "已经按" * 10_000 + "仍在处理中。"
+        started = time.monotonic()
+        result = classify_completion(message)
+        elapsed = time.monotonic() - started
+
+        self.assertEqual((result.outcome, result.reason), ("completed", "completion_only"))
+        self.assertLess(elapsed, 1.0)
+
     def test_unresolved_input_has_highest_priority(self):
         result = classify_completion(
             "The work is complete.",
@@ -77,6 +89,30 @@ class CompletionClassifierTests(unittest.TestCase):
         self.assertEqual(result.outcome, "completed")
         self.assertEqual(result.reason, "text_explicitly_resolved")
 
+    def test_quote_context_distinguishes_prompts_from_historical_reports(self):
+        cases = (
+            (
+                "You don't want to proceed? That's okay.",
+                "waiting",
+                "text_direct_question",
+            ),
+            (
+                "Please answer “Continue?”",
+                "waiting",
+                "text_direct_question",
+            ),
+            (
+                "The earlier log asked “Continue?”. The repair is complete.",
+                "completed",
+                "completion_only",
+            ),
+        )
+
+        for message, outcome, reason in cases:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual((result.outcome, result.reason), (outcome, reason))
+
     def test_inverted_question_punctuation_is_waiting(self):
         result = classify_completion("¿Desea continuar.")
 
@@ -91,6 +127,17 @@ class CompletionClassifierTests(unittest.TestCase):
 
         self.assertEqual(result.outcome, "completed")
         self.assertEqual(result.reason, "completion_only")
+
+    def test_answer_cue_only_suppresses_one_preceding_question(self):
+        result = classify_completion(
+            "Why did the build fail? Should I deploy now? "
+            "Because the cache was stale."
+        )
+
+        self.assertEqual(
+            (result.outcome, result.reason),
+            ("waiting", "text_direct_question"),
+        )
 
     def test_directed_question_is_not_mistaken_for_self_answer(self):
         result = classify_completion(
@@ -172,6 +219,90 @@ class CompletionClassifierTests(unittest.TestCase):
                 result = classify_completion(message)
                 self.assertEqual((result.outcome, result.reason), (outcome, reason))
 
+    def test_direct_requests_and_conditional_courtesies(self):
+        cases = (
+            (
+                "Let me know which deployment to use.",
+                "waiting",
+                "text_required_action",
+            ),
+            ("告诉我应该部署哪个环境。", "waiting", "text_required_action"),
+            (
+                "If you'd like more detail, please reply with a topic.",
+                "completed",
+                "completion_only",
+            ),
+            (
+                "如果你想了解更多，请回复希望展开的主题。",
+                "completed",
+                "completion_only",
+            ),
+            (
+                "如需更多细节，请告诉我。",
+                "completed",
+                "completion_only",
+            ),
+        )
+
+        for message, outcome, reason in cases:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual((result.outcome, result.reason), (outcome, reason))
+
+    def test_resolution_only_clears_compatible_waiting_evidence(self):
+        cases = (
+            (
+                "Please provide the missing token.\n\nNo choice is required.",
+                "waiting",
+                "text_required_action",
+            ),
+            (
+                "Please confirm the deployment.\n\nNo confirmation is required.",
+                "completed",
+                "text_explicitly_resolved",
+            ),
+            (
+                "Please choose A or B.\n\nNo selection is required.",
+                "completed",
+                "text_explicitly_resolved",
+            ),
+            (
+                "Please provide the missing token.\n\nNo reply is required.",
+                "completed",
+                "text_explicitly_resolved",
+            ),
+        )
+
+        for message, outcome, reason in cases:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual((result.outcome, result.reason), (outcome, reason))
+
+    def test_strong_resolution_vocabulary_clears_prior_evidence(self):
+        cases = (
+            (
+                "A. one\nB. two\n\nI recommend A.\n\n"
+                "The previously offered choice has already been applied.",
+                "completed",
+                "text_explicitly_resolved",
+            ),
+            (
+                "Please choose A or B.\n\nNo selection is required.",
+                "completed",
+                "text_explicitly_resolved",
+            ),
+            (
+                "Please provide the missing token.\n\nNo action is required.",
+                "completed",
+                "text_explicitly_resolved",
+            ),
+        )
+
+        for message, outcome, reason in cases:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual((result.outcome, result.reason), (outcome, reason))
+
     def test_contextual_choice_handoff_is_waiting(self):
         result = classify_completion(
             "可用方案：\n\n"
@@ -185,6 +316,24 @@ class CompletionClassifierTests(unittest.TestCase):
             (result.outcome, result.reason),
             ("waiting", "text_choice_handoff"),
         )
+
+    def test_same_block_choice_context_after_options_is_waiting(self):
+        cases = (
+            "A. Preserve the current layout.\n"
+            "B. Use the compact layout.\n"
+            "I recommend A.",
+            "1. Preserve the current layout.\n"
+            "2. Use the compact layout.\n"
+            "Choose 1 or 2.",
+        )
+
+        for message in cases:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("waiting", "text_choice_handoff"),
+                )
 
     def test_later_choice_handoff_after_resolution_is_waiting(self):
         result = classify_completion(
@@ -229,6 +378,81 @@ class CompletionClassifierTests(unittest.TestCase):
         self.assertEqual(
             (result.outcome, result.reason),
             ("waiting", "text_required_action"),
+        )
+
+    def test_topical_decision_words_do_not_create_waiting_evidence(self):
+        cases = (
+            "Why did the build fail? Because the cache expired. "
+            "I recommend clearing it next time.",
+            (
+                "1. Document the 方案 payload.\n"
+                "2. Parse option and reply payload nouns.\n\n"
+                "All procedure steps are complete."
+            ),
+            (
+                "A. 修复筛选器。\n"
+                "B. 更新结果列表。\n\n"
+                "两项维护工作均已完成。"
+            ),
+            (
+                "A. 修复搜索栏。\n"
+                "B. 更新结果列表。\n\n"
+                "你已修复筛选器，两项维护工作均已完成。"
+            ),
+            (
+                "1. Clear the cache.\n"
+                "2. Run the tests.\n\n"
+                "I recommend clearing it earlier next time."
+            ),
+            (
+                "A. Preserve the current layout.\n"
+                "B. Use the compact layout.\n\n"
+                "Recommendation archived for reference."
+            ),
+        )
+
+        for message in cases:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("completed", "completion_only"),
+                )
+
+    def test_whitespace_blank_lines_keep_singleton_steps_separate(self):
+        cases = (
+            (
+                "1. Download dependencies.\n \t\n"
+                "The workspace is configured next.\n\t\n"
+                "2. Run tests.\n \n"
+                "Choose the defaults for future installations."
+            ),
+            (
+                "1. Download dependencies.\r\n \t\r\n"
+                "The workspace is configured next.\r\n\t\r\n"
+                "2. Run tests.\r\n \r\n"
+                "Choose the defaults for future installations."
+            ),
+        )
+
+        for message in cases:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("completed", "completion_only"),
+                )
+
+    def test_resolution_blocks_later_context_for_an_earlier_choice_group(self):
+        result = classify_completion(
+            "A. one\n"
+            "B. two\n\n"
+            "No choice is required. I recommend A."
+        )
+
+        self.assertEqual(
+            (result.outcome, result.reason),
+            ("completed", "text_explicitly_resolved"),
         )
 
     def test_numbered_procedure_is_not_a_choice_handoff(self):
