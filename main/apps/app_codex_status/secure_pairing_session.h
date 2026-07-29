@@ -12,10 +12,10 @@ namespace secure_pairing {
 
 constexpr uint64_t kPairingSessionTimeoutMs = 60000;
 constexpr uint64_t kPairingCooldownMs = 60000;
-constexpr size_t kAuthenticationChallengeFixedSize = 49;
+constexpr size_t kAuthenticationChallengeFixedSize = 82;
 constexpr size_t kAuthenticationChallengeSize =
     kAuthenticationChallengeFixedSize + kAgentNameBytes;
-constexpr size_t kCredentialPlaintextSize = 59;
+constexpr size_t kCredentialPlaintextSize = 92;
 constexpr size_t kCredentialCiphertextSize =
     kCredentialPlaintextSize + crypto::kTagSize;
 constexpr size_t kCredentialAckSize = 4 + crypto::kTagSize;
@@ -77,6 +77,7 @@ struct AuthenticationChallenge {
     RandomValue connection_nonce = {};
     uint32_t key_epoch = 0;
     uint8_t connection_role = 1;
+    crypto::PublicKey watch_ephemeral_public = {};
     AgentName display_name = {};
     size_t display_name_size = 0;
 };
@@ -98,6 +99,7 @@ struct PairingPresentation {
     WatchId watch_id = {};
     RandomValue watch_nonce = {};
     crypto::PublicKey watch_ephemeral_public = {};
+    crypto::PublicKey watch_identity_public = {};
     crypto::VerificationCode verification_code = {};
     bool credential_ready = false;
     CredentialEnvelope credential = {};
@@ -158,6 +160,8 @@ public:
     PairingState state() const;
     const PairingPresentation& presentation() const;
     const AuthenticationChallenge& authentication_challenge() const;
+    const uint8_t* watch_challenge_signature() const;
+    size_t watch_challenge_signature_size() const;
     const AgentFingerprint& authenticated_fingerprint() const;
     uint16_t connection_handle() const;
     uint8_t failure_count() const;
@@ -181,12 +185,16 @@ private:
         const crypto::PublicKey& watch_ephemeral_public);
 
     PairingState _state = PairingState::Idle;
-    uint64_t _deadline_ms = 0;
-    uint64_t _cooldown_until_ms = 0;
+    uint32_t _deadline_ms = 0;
+    uint32_t _cooldown_until_ms = 0;
     uint8_t _failure_count = 0;
     PairingRequest _pairing_request = {};
+    bool _pairing_existing_identity = false;
     AuthenticationRequest _authentication_request = {};
     AuthenticationChallenge _authentication_challenge = {};
+    std::array<uint8_t, crypto::kMaxSignatureSize>
+        _watch_challenge_signature = {};
+    size_t _watch_challenge_signature_size = 0;
     PairingPresentation _presentation = {};
     AgentFingerprint _authenticated_fingerprint = {};
     crypto::PrivateScalar _watch_ephemeral_private = {};

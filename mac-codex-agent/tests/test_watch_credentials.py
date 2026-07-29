@@ -37,6 +37,7 @@ def credential(seed, epoch):
         master_key=bytes([seed + 1]) * 16,
         key_epoch=epoch,
         fingerprint=bytes([seed + 2]) * 16,
+        watch_identity_public=b"\x02" + bytes([seed + 3]) * 32,
     )
 
 
@@ -129,6 +130,7 @@ class WatchCredentialTests(unittest.TestCase):
             dataclasses.replace(valid, watch_id=b"short"),
             dataclasses.replace(valid, master_key=b"short"),
             dataclasses.replace(valid, fingerprint=b"short"),
+            dataclasses.replace(valid, watch_identity_public=b"short"),
             dataclasses.replace(valid, key_epoch=0),
         )
         for item in invalid:

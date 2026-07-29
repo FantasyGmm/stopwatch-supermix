@@ -281,11 +281,15 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         identity_public = public_key_bytes(identity_key.public_key())
         fingerprint = __import__("hashlib").sha256(identity_public).digest()[:16]
         watch_id = bytes(range(16))
+        watch_identity_public = public_key_bytes(
+            ec.derive_private_key(23, ec.SECP256R1()).public_key()
+        )
         credential = WatchCredential(
             watch_id=watch_id,
             master_key=b"K" * 16,
             key_epoch=3,
             fingerprint=fingerprint,
+            watch_identity_public=watch_identity_public,
         )
         events = []
 
@@ -316,7 +320,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
         class Transport:
             async def discover_watch(self):
-                return WatchDiscovery(watch_id, 3)
+                return WatchDiscovery(watch_id, 3, watch_identity_public)
 
         states = []
         authorizer = SecureConnectionAuthorizer(
@@ -340,8 +344,15 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_known_watch_authenticates_and_accepts_new_epoch(self):
         watch_id = bytes(range(16))
-        old = WatchCredential(watch_id, b"A" * 16, 2, b"F" * 16)
-        updated = WatchCredential(watch_id, b"B" * 16, 5, b"F" * 16)
+        watch_identity_public = public_key_bytes(
+            ec.derive_private_key(29, ec.SECP256R1()).public_key()
+        )
+        old = WatchCredential(
+            watch_id, b"A" * 16, 2, b"F" * 16, watch_identity_public
+        )
+        updated = WatchCredential(
+            watch_id, b"B" * 16, 5, b"F" * 16, watch_identity_public
+        )
 
         class IdentityStore:
             def load_or_create(self):
@@ -370,7 +381,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
         class Transport:
             async def discover_watch(self):
-                return WatchDiscovery(watch_id, 5)
+                return WatchDiscovery(watch_id, 5, watch_identity_public)
 
         client = Client()
         states = []
@@ -393,7 +404,11 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
     async def test_runtime_does_not_open_production_surface_before_authorization(self):
         release = asyncio.Event()
         credential = WatchCredential(
-            bytes(range(16)), b"K" * 16, 9, b"F" * 16
+            bytes(range(16)),
+            b"K" * 16,
+            9,
+            b"F" * 16,
+            b"\x02" + b"W" * 32,
         )
 
         class Authorizer:
@@ -473,14 +488,6 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runtime.snapshot().trae.task_state, "running")
         runtime.submit(AgentCommand.STOP)
         await asyncio.wait_for(task, 1)
-
-    def setUp(self):
-        self.keychain_patch = patch(
-            "runtime.load_key_from_keychain",
-            side_effect=VoiceKeyError("test Keychain has no voice key"),
-        )
-        self.keychain_patch.start()
-        self.addCleanup(self.keychain_patch.stop)
 
     async def test_setup_failure_publishes_sanitized_error_without_changing_ble(self):
         runtime = AgentRuntime(
@@ -1884,6 +1891,44 @@ class FakeRuntime:
 
 
 class AgentControllerTests(unittest.TestCase):
+    def test_forget_current_watch_removes_credential_and_reconnects(self):
+        class Authorizer:
+            def __init__(self):
+                self.forgot = 0
+
+            def forget_current_watch(self):
+                self.forgot += 1
+                return True
+
+        runtime = FakeRuntime()
+        authorizer = Authorizer()
+        controller = AgentController(
+            preferences=MemoryPreferences(True),
+            runtime=runtime,
+            secure_authorizer=authorizer,
+        )
+
+        self.assertTrue(controller.forget_current_watch())
+
+        self.assertEqual(authorizer.forgot, 1)
+        self.assertEqual(runtime.commands, [AgentCommand.RECONNECT])
+
+    def test_forget_current_watch_does_not_reconnect_without_known_watch(self):
+        class Authorizer:
+            def forget_current_watch(self):
+                return False
+
+        runtime = FakeRuntime()
+        controller = AgentController(
+            preferences=MemoryPreferences(True),
+            runtime=runtime,
+            secure_authorizer=Authorizer(),
+        )
+
+        self.assertFalse(controller.forget_current_watch())
+
+        self.assertEqual(runtime.commands, [])
+
     def test_rename_persists_name_updates_menu_and_reconnects_for_signed_sync(self):
         class IdentityStore:
             def load_or_create(self):

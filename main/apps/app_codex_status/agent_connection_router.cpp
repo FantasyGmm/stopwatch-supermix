@@ -4,7 +4,9 @@
 
 namespace secure_pairing {
 
-AgentConnectionAdmission AgentConnectionRouter::connected(uint16_t handle)
+AgentConnectionAdmission AgentConnectionRouter::connected(
+    uint16_t handle,
+    uint32_t now_ms)
 {
     std::lock_guard<std::mutex> lock(_mutex);
     if (handle == kNoAgentConnection) {
@@ -23,6 +25,7 @@ AgentConnectionAdmission AgentConnectionRouter::connected(uint16_t handle)
     *slot = {};
     slot->handle = handle;
     slot->role = AgentConnectionRole::Pending;
+    slot->admitted_at_ms = now_ms;
     return AgentConnectionAdmission::Pending;
 }
 
@@ -88,6 +91,30 @@ bool AgentConnectionRouter::reject_pending(uint16_t handle)
     return true;
 }
 
+uint16_t AgentConnectionRouter::expire_unauthorized_pending(
+    uint32_t now_ms,
+    uint32_t timeout_ms)
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    const auto found = std::find_if(
+        _connections.begin(),
+        _connections.end(),
+        [](const AgentConnection& connection) {
+            return connection.role == AgentConnectionRole::Pending;
+        });
+    AgentConnection* connection =
+        found == _connections.end() ? nullptr : &*found;
+    if (connection == nullptr || connection->identity_authorized ||
+        timeout_ms == 0 ||
+        static_cast<uint32_t>(now_ms - connection->admitted_at_ms) <
+            timeout_ms) {
+        return kNoAgentConnection;
+    }
+    const uint16_t handle = connection->handle;
+    *connection = {};
+    return handle;
+}
+
 AgentConnectionRole AgentConnectionRouter::role(uint16_t handle) const
 {
     std::lock_guard<std::mutex> lock(_mutex);
@@ -130,7 +157,9 @@ bool AgentConnectionRouter::update_voice_subscription(
 {
     std::lock_guard<std::mutex> lock(_mutex);
     AgentConnection* connection = find_locked(handle);
-    if (connection == nullptr) {
+    if (connection == nullptr ||
+        connection->role != AgentConnectionRole::Active ||
+        !connection->identity_authorized) {
         return false;
     }
     connection->voice_subscribed = enabled;

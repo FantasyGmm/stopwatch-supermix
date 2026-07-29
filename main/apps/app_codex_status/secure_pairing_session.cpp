@@ -7,6 +7,18 @@
 namespace secure_pairing {
 namespace {
 
+bool time_after(uint64_t now_ms, uint32_t deadline_ms)
+{
+    return static_cast<int32_t>(
+               static_cast<uint32_t>(now_ms) - deadline_ms) > 0;
+}
+
+bool time_reached(uint64_t now_ms, uint32_t deadline_ms)
+{
+    return static_cast<int32_t>(
+               static_cast<uint32_t>(now_ms) - deadline_ms) >= 0;
+}
+
 constexpr std::array<uint8_t, 6> kAuthenticationMagic = {
     'S', 'W', 'A', 'U', 'T', 'H',
 };
@@ -112,6 +124,14 @@ bool constant_equal(const uint8_t* lhs, const uint8_t* rhs, size_t size)
     return difference == 0;
 }
 
+bool all_zero(const uint8_t* value, size_t size)
+{
+    return value != nullptr &&
+           std::all_of(value, value + size, [](uint8_t byte) {
+               return byte == 0;
+           });
+}
+
 }  // namespace
 
 bool encode_authentication_challenge(
@@ -131,6 +151,12 @@ bool encode_authentication_challenge(
         !nonzero(value.watch_id.data(), value.watch_id.size()) ||
         !nonzero(
             value.connection_nonce.data(), value.connection_nonce.size())) {
+        return false;
+    }
+    if (!all_zero(
+            value.watch_ephemeral_public.data(),
+            value.watch_ephemeral_public.size()) &&
+        !crypto::valid_public_key(value.watch_ephemeral_public)) {
         return false;
     }
     size_t offset = 0;
@@ -153,6 +179,11 @@ bool encode_authentication_challenge(
     offset += value.connection_nonce.size();
     write_u32(value.key_epoch, output + offset);
     offset += 4;
+    std::copy(
+        value.watch_ephemeral_public.begin(),
+        value.watch_ephemeral_public.end(),
+        output + offset);
+    offset += value.watch_ephemeral_public.size();
     output[offset++] = static_cast<uint8_t>(value.display_name_size);
     std::copy_n(
         value.display_name.begin(), value.display_name_size, output + offset);
@@ -207,10 +238,9 @@ SessionResult SecurePairingSession::request_pairing(
         !crypto::valid_public_key(request.agent_identity_public)) {
         return SessionResult::InvalidRequest;
     }
-    if (find_public_key(registry, request.agent_identity_public) != nullptr) {
-        return SessionResult::DuplicateAgent;
-    }
-    if (registry.count() >= kMaxAgents) {
+    const bool existing_identity =
+        find_public_key(registry, request.agent_identity_public) != nullptr;
+    if (!existing_identity && registry.count() >= kMaxAgents) {
         return SessionResult::RegistryFull;
     }
 
@@ -236,6 +266,10 @@ SessionResult SecurePairingSession::request_pairing(
     transcript.watch_nonce = watch_nonce;
     transcript.agent_nonce = request.agent_nonce;
     transcript.watch_ephemeral_public = watch_public;
+    if (!registry.watch_identity_public(transcript.watch_identity_public)) {
+        clear_transaction(PairingState::Idle);
+        return SessionResult::CryptoFailure;
+    }
     transcript.agent_ephemeral_public = request.agent_ephemeral_public;
     transcript.agent_identity_public = request.agent_identity_public;
     transcript.agent_name = request.agent_name;
@@ -259,13 +293,16 @@ SessionResult SecurePairingSession::request_pairing(
     }
 
     _pairing_request = request;
+    _pairing_existing_identity = existing_identity;
     _presentation.connection_handle = request.connection_handle;
     _presentation.transaction_id = request.transaction_id;
     _presentation.watch_id = registry.watch_id();
     _presentation.watch_nonce = watch_nonce;
     _presentation.watch_ephemeral_public = watch_public;
+    _presentation.watch_identity_public = transcript.watch_identity_public;
     _presentation.verification_code = code;
-    _deadline_ms = now_ms + kPairingSessionTimeoutMs;
+    _deadline_ms = static_cast<uint32_t>(
+        static_cast<uint32_t>(now_ms) + kPairingSessionTimeoutMs);
     _state = PairingState::AwaitingConfirmation;
     return SessionResult::Ok;
 }
@@ -289,20 +326,38 @@ SessionResult SecurePairingSession::confirm_pairing(
     }
 
     const RegistrySnapshot before = registry.snapshot();
-    AgentEnrollment enrollment = {};
-    enrollment.public_key = _pairing_request.agent_identity_public;
-    enrollment.display_name_size = _pairing_request.agent_name_size;
-    std::copy_n(
-        _pairing_request.agent_name.begin(),
-        enrollment.display_name_size,
-        enrollment.display_name.begin());
-    enrollment.display_name[enrollment.display_name_size] = '\0';
-    const RegistryResult added = registry.add(enrollment);
-    if (added != RegistryResult::Ok) {
-        clear_transaction(PairingState::Idle);
-        return added == RegistryResult::Full
-                   ? SessionResult::RegistryFull
-                   : SessionResult::InvalidRequest;
+    if (_pairing_existing_identity) {
+        const AgentRecord* existing =
+            find_public_key(registry, _pairing_request.agent_identity_public);
+        AgentName display_name = {};
+        std::copy_n(
+            _pairing_request.agent_name.begin(),
+            _pairing_request.agent_name_size,
+            display_name.begin());
+        if (existing == nullptr ||
+            registry.rename(
+                existing->fingerprint,
+                display_name,
+                _pairing_request.agent_name_size) != RegistryResult::Ok) {
+            clear_transaction(PairingState::Idle);
+            return SessionResult::InvalidRequest;
+        }
+    } else {
+        AgentEnrollment enrollment = {};
+        enrollment.public_key = _pairing_request.agent_identity_public;
+        enrollment.display_name_size = _pairing_request.agent_name_size;
+        std::copy_n(
+            _pairing_request.agent_name.begin(),
+            enrollment.display_name_size,
+            enrollment.display_name.begin());
+        enrollment.display_name[enrollment.display_name_size] = '\0';
+        const RegistryResult added = registry.add(enrollment);
+        if (added != RegistryResult::Ok) {
+            clear_transaction(PairingState::Idle);
+            return added == RegistryResult::Full
+                       ? SessionResult::RegistryFull
+                       : SessionResult::InvalidRequest;
+        }
     }
     if (store.save(registry) != StoreResult::Ok) {
         (void)AgentRegistry::restore(before, registry);
@@ -402,13 +457,47 @@ SessionResult SecurePairingSession::request_authentication(
             challenge.connection_nonce.size())) {
         return SessionResult::EntropyFailure;
     }
+    std::array<uint8_t, kAuthenticationChallengeSize> encoded = {};
+    size_t encoded_size = 0;
+    if (request.agent_key_epoch < registry.key_epoch()) {
+        crypto::SharedSecret shared = {};
+        if (!generate_ephemeral(
+                entropy,
+                entropy_context,
+                _watch_ephemeral_private,
+                challenge.watch_ephemeral_public) ||
+            !crypto::derive_shared_secret(
+                _watch_ephemeral_private, record->public_key, shared) ||
+            !encode_authentication_challenge(
+                challenge, encoded.data(), encoded.size(), encoded_size) ||
+            !crypto::derive_pairing_keys(
+                shared, encoded.data(), encoded_size, _keys)) {
+            clear_transaction(PairingState::Idle);
+            return SessionResult::CryptoFailure;
+        }
+    } else if (!encode_authentication_challenge(
+                   challenge, encoded.data(), encoded.size(), encoded_size)) {
+        clear_transaction(PairingState::Idle);
+        return SessionResult::CryptoFailure;
+    }
+    if (!crypto::sign_challenge(
+            registry.watch_identity_private(),
+            encoded.data(),
+            encoded_size,
+            _watch_challenge_signature.data(),
+            _watch_challenge_signature.size(),
+            _watch_challenge_signature_size)) {
+        clear_transaction(PairingState::Idle);
+        return SessionResult::CryptoFailure;
+    }
     _authentication_request = request;
     _authentication_challenge = challenge;
     _presentation.connection_handle = request.connection_handle;
     _presentation.transaction_id = request.transaction_id;
     _presentation.watch_id = registry.watch_id();
     _authenticated_fingerprint = request.fingerprint;
-    _deadline_ms = now_ms + kPairingSessionTimeoutMs;
+    _deadline_ms = static_cast<uint32_t>(
+        static_cast<uint32_t>(now_ms) + kPairingSessionTimeoutMs);
     _state = PairingState::AwaitingAuthentication;
     return SessionResult::Ok;
 }
@@ -477,28 +566,20 @@ SessionResult SecurePairingSession::authenticate(
         return SessionResult::Ok;
     }
 
-    crypto::PublicKey watch_public = {};
-    crypto::SharedSecret shared = {};
-    if (!generate_ephemeral(
-            entropy,
-            entropy_context,
-            _watch_ephemeral_private,
-            watch_public) ||
-        !crypto::derive_shared_secret(
-            _watch_ephemeral_private, record->public_key, shared) ||
-        !crypto::derive_pairing_keys(
-            shared, challenge.data(), challenge_size, _keys) ||
+    if (!crypto::valid_public_key(
+            _authentication_challenge.watch_ephemeral_public) ||
         !prepare_credential(
             CredentialPurpose::Rekey,
             registry,
             record->fingerprint,
             entropy,
             entropy_context,
-            watch_public)) {
+            _authentication_challenge.watch_ephemeral_public)) {
         clear_transaction(PairingState::Idle);
         return SessionResult::CryptoFailure;
     }
-    _presentation.watch_ephemeral_public = watch_public;
+    _presentation.watch_ephemeral_public =
+        _authentication_challenge.watch_ephemeral_public;
     _presentation.credential_ready = true;
     _state = PairingState::AwaitingCredentialAck;
     return SessionResult::Ok;
@@ -509,11 +590,12 @@ bool SecurePairingSession::expire(uint64_t now_ms)
     if ((_state == PairingState::AwaitingConfirmation ||
          _state == PairingState::AwaitingAuthentication ||
          _state == PairingState::AwaitingCredentialAck) &&
-        now_ms > _deadline_ms) {
+        time_after(now_ms, _deadline_ms)) {
         clear_transaction(PairingState::Idle);
         return true;
     }
-    if (_state == PairingState::Cooldown && now_ms >= _cooldown_until_ms) {
+    if (_state == PairingState::Cooldown &&
+        time_reached(now_ms, _cooldown_until_ms)) {
         clear_transaction(PairingState::Idle);
         _failure_count = 0;
     }
@@ -542,6 +624,16 @@ const AuthenticationChallenge&
 SecurePairingSession::authentication_challenge() const
 {
     return _authentication_challenge;
+}
+
+const uint8_t* SecurePairingSession::watch_challenge_signature() const
+{
+    return _watch_challenge_signature.data();
+}
+
+size_t SecurePairingSession::watch_challenge_signature_size() const
+{
+    return _watch_challenge_signature_size;
 }
 
 const AgentFingerprint&
@@ -590,7 +682,8 @@ SessionResult SecurePairingSession::fail_attempt(
     }
     if (_failure_count >= 3) {
         clear_transaction(PairingState::Cooldown);
-        _cooldown_until_ms = now_ms + kPairingCooldownMs;
+        _cooldown_until_ms = static_cast<uint32_t>(
+            static_cast<uint32_t>(now_ms) + kPairingCooldownMs);
         return SessionResult::Cooldown;
     }
     clear_transaction(PairingState::Idle);
@@ -608,8 +701,11 @@ void SecurePairingSession::clear_transaction(PairingState next_state)
     std::fill(_keys.wrap_key.begin(), _keys.wrap_key.end(), uint8_t{0});
     std::fill(_keys.ack_key.begin(), _keys.ack_key.end(), uint8_t{0});
     _pairing_request = {};
+    _pairing_existing_identity = false;
     _authentication_request = {};
     _authentication_challenge = {};
+    _watch_challenge_signature = {};
+    _watch_challenge_signature_size = 0;
     _presentation = {};
     _authenticated_fingerprint = {};
     _deadline_ms = 0;
@@ -686,6 +782,15 @@ bool SecurePairingSession::prepare_credential(
         registry.watch_id().end(),
         plaintext.begin() + static_cast<std::ptrdiff_t>(offset));
     offset += registry.watch_id().size();
+    crypto::PublicKey watch_identity_public = {};
+    if (!registry.watch_identity_public(watch_identity_public)) {
+        return false;
+    }
+    std::copy(
+        watch_identity_public.begin(),
+        watch_identity_public.end(),
+        plaintext.begin() + static_cast<std::ptrdiff_t>(offset));
+    offset += watch_identity_public.size();
     std::copy(
         fingerprint.begin(),
         fingerprint.end(),

@@ -46,7 +46,6 @@ from voice_driver import (
     DriverState,
     detect_driver_state,
 )
-from voice_input_crypto import load_key_from_keychain
 from voice_input_protocol import (
     ACCESSIBILITY_REQUIRED,
     DRIVER_REQUIRED,
@@ -129,6 +128,9 @@ class SecureConnectionAuthorizer:
             or not isinstance(discovery.key_epoch, int)
             or isinstance(discovery.key_epoch, bool)
             or discovery.key_epoch <= 0
+            or not isinstance(discovery.watch_identity_public, bytes)
+            or len(discovery.watch_identity_public) != 33
+            or not any(discovery.watch_identity_public)
         ):
             raise ValueError("watch discovery response is invalid")
         with self._state_lock:
@@ -162,6 +164,11 @@ class SecureConnectionAuthorizer:
                 raise PermissionError("pairing was rejected on watch")
             credential = result.credential
         else:
+            if (
+                credential.watch_identity_public
+                != discovery.watch_identity_public
+            ):
+                raise PermissionError("watch identity does not match Keychain")
             state = (
                 PairingState.REKEYING
                 if credential.key_epoch != discovery.key_epoch
@@ -181,6 +188,8 @@ class SecureConnectionAuthorizer:
         if (
             credential.watch_id != discovery.watch_id
             or credential.key_epoch != discovery.key_epoch
+            or credential.watch_identity_public
+            != discovery.watch_identity_public
         ):
             raise ValueError("watch credential epoch is not current")
         publish(
@@ -284,7 +293,9 @@ class AgentRuntime:
         self._status_interval = status_interval
         self._retry_delays = tuple(retry_delays) or (1.0,)
         self._disconnect_timeout = disconnect_timeout
-        self._voice_key_loader = voice_key_loader or load_key_from_keychain
+        # Kept only as an explicit test/development injection. Production must
+        # receive the voice key from the authenticated watch credential.
+        self._voice_key_loader = voice_key_loader
         self._voice_session_factory = voice_session_factory or _create_voice_session
         self._voice_nonce_factory = voice_nonce_factory or _new_voice_nonce
         self._secure_authorizer = secure_authorizer
@@ -615,6 +626,12 @@ class AgentRuntime:
     async def _prepare_voice(self, context: _BleSessionContext) -> None:
         key = context.voice_key
         if key is None:
+            if self._voice_key_loader is None:
+                self._transition_voice(
+                    VoiceState.ERROR,
+                    "Secure watch credential is required",
+                )
+                return
             try:
                 key = await _run_in_daemon_thread(self._voice_key_loader)
             except Exception as error:
@@ -1081,6 +1098,14 @@ class AgentController:
         self._runtime.set_agent_name(display_name)
         self._runtime.submit(AgentCommand.RECONNECT)
         return display_name
+
+    def forget_current_watch(self) -> bool:
+        if self._secure_authorizer is None:
+            return False
+        forgotten = self._secure_authorizer.forget_current_watch()
+        if forgotten:
+            self._runtime.submit(AgentCommand.RECONNECT)
+        return forgotten
 
     def refresh_voice_readiness(self) -> None:
         self._runtime.refresh_voice_readiness()

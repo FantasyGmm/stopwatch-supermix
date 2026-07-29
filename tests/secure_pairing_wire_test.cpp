@@ -81,11 +81,24 @@ void test_discovery_response_matches_python_fixture()
     }
     std::array<uint8_t, kMaxPairingWireFrameSize> encoded = {};
     size_t encoded_size = 0;
+    crypto::PublicKey watch_identity_public = {};
+    watch_identity_public[0] = 0x02;
+    std::fill(
+        watch_identity_public.begin() + 1,
+        watch_identity_public.end(),
+        static_cast<uint8_t>('I'));
     assert(encode_discovery_response(
-        1, watch_id, 7, encoded.data(), encoded.size(), encoded_size));
+        1,
+        watch_id,
+        7,
+        watch_identity_public,
+        encoded.data(),
+        encoded.size(),
+        encoded_size));
     const auto expected = decode_hex(
-        "535750520102000000010014"
-        "000102030405060708090a0b0c0d0e0f00000007");
+        "535750520102000000010035"
+        "000102030405060708090a0b0c0d0e0f00000007"
+        "024949494949494949494949494949494949494949494949494949494949494949");
     assert(encoded_size == expected.size());
     assert(std::equal(expected.begin(), expected.end(), encoded.begin()));
 }

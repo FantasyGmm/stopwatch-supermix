@@ -13,7 +13,7 @@ constexpr size_t kWatchIdSize = 16;
 constexpr size_t kRandomSize = 16;
 constexpr size_t kPublicKeySize = crypto::kPublicKeySize;
 constexpr size_t kMaxAgentNameBytes = 24;
-constexpr size_t kMaxTranscriptSize = 196;
+constexpr size_t kMaxTranscriptSize = 231;
 
 using WatchId = std::array<uint8_t, kWatchIdSize>;
 using RandomValue = std::array<uint8_t, kRandomSize>;
@@ -24,6 +24,7 @@ struct PairingTranscript {
     RandomValue watch_nonce = {};
     RandomValue agent_nonce = {};
     crypto::PublicKey watch_ephemeral_public = {};
+    crypto::PublicKey watch_identity_public = {};
     crypto::PublicKey agent_ephemeral_public = {};
     crypto::PublicKey agent_identity_public = {};
     std::array<char, kMaxAgentNameBytes> agent_name = {};

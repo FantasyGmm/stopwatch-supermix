@@ -9,11 +9,11 @@ namespace {
 
 constexpr std::array<uint8_t, 4> kMagic = {'S', 'W', 'P', 'R'};
 constexpr uint8_t kWireVersion = 1;
-constexpr size_t kDiscoveryResponseSize = 20;
+constexpr size_t kDiscoveryResponseSize = 53;
 constexpr size_t kPairingRequestFixedSize = 83;
-constexpr size_t kPairingOfferSize = 65;
+constexpr size_t kPairingOfferSize = 98;
 constexpr size_t kAuthenticationRequestFixedSize = 21;
-constexpr size_t kAuthenticationChallengeWireFixedSize = 38;
+constexpr size_t kAuthenticationChallengeWireFixedSize = 71;
 constexpr size_t kCredentialEnvelopeFixedSize = 66;
 
 bool nonzero(const uint8_t* data, size_t size)
@@ -142,16 +142,23 @@ bool encode_discovery_response(
     uint32_t transaction_id,
     const WatchId& watch_id,
     uint32_t key_epoch,
+    const crypto::PublicKey& watch_identity_public,
     uint8_t* output,
     size_t output_capacity,
     size_t& output_size)
 {
     std::array<uint8_t, kDiscoveryResponseSize> payload = {};
-    if (key_epoch == 0 || !nonzero(watch_id.data(), watch_id.size())) {
+    if (key_epoch == 0 || !nonzero(watch_id.data(), watch_id.size()) ||
+        !nonzero(
+            watch_identity_public.data(), watch_identity_public.size())) {
         return false;
     }
     std::copy(watch_id.begin(), watch_id.end(), payload.begin());
     write_u32(key_epoch, payload.data() + watch_id.size());
+    std::copy(
+        watch_identity_public.begin(),
+        watch_identity_public.end(),
+        payload.begin() + 20);
     return encode_frame(
         WireMessageType::DiscoveryResponse,
         transaction_id,
@@ -219,6 +226,10 @@ bool encode_pairing_offer(
         presentation.watch_ephemeral_public.begin(),
         presentation.watch_ephemeral_public.end(),
         payload.begin() + 32);
+    std::copy(
+        presentation.watch_identity_public.begin(),
+        presentation.watch_identity_public.end(),
+        payload.begin() + 65);
     return encode_frame(
         WireMessageType::PairingOffer,
         presentation.transaction_id,
@@ -275,16 +286,21 @@ bool decode_authentication_request(
 
 bool encode_authentication_challenge_wire(
     const AuthenticationChallenge& challenge,
+    const uint8_t* watch_signature,
+    size_t watch_signature_size,
     uint8_t* output,
     size_t output_capacity,
     size_t& output_size)
 {
     std::array<uint8_t,
-               kAuthenticationChallengeWireFixedSize + kAgentNameBytes>
+               kAuthenticationChallengeWireFixedSize + kAgentNameBytes + 2 +
+                   crypto::kMaxSignatureSize>
         payload = {};
     if (challenge.key_epoch == 0 || challenge.connection_role != 1 ||
         challenge.display_name_size == 0 ||
-        challenge.display_name_size > kAgentNameBytes) {
+        challenge.display_name_size > kAgentNameBytes ||
+        watch_signature == nullptr || watch_signature_size == 0 ||
+        watch_signature_size > crypto::kMaxSignatureSize) {
         return false;
     }
     std::copy(
@@ -295,16 +311,28 @@ bool encode_authentication_challenge_wire(
         payload.begin() + 16);
     write_u32(challenge.key_epoch, payload.data() + 32);
     payload[36] = challenge.connection_role;
-    payload[37] = static_cast<uint8_t>(challenge.display_name_size);
+    std::copy(
+        challenge.watch_ephemeral_public.begin(),
+        challenge.watch_ephemeral_public.end(),
+        payload.begin() + 37);
+    payload[70] = static_cast<uint8_t>(challenge.display_name_size);
     std::copy_n(
         challenge.display_name.begin(),
         challenge.display_name_size,
         payload.begin() + kAuthenticationChallengeWireFixedSize);
+    const size_t signature_offset =
+        kAuthenticationChallengeWireFixedSize + challenge.display_name_size;
+    write_u16(static_cast<uint16_t>(watch_signature_size),
+              payload.data() + signature_offset);
+    std::copy_n(
+        watch_signature,
+        watch_signature_size,
+        payload.begin() + static_cast<std::ptrdiff_t>(signature_offset + 2));
     return encode_frame(
         WireMessageType::AuthenticationChallenge,
         challenge.transaction_id,
         payload.data(),
-        kAuthenticationChallengeWireFixedSize + challenge.display_name_size,
+        signature_offset + 2 + watch_signature_size,
         output,
         output_capacity,
         output_size);

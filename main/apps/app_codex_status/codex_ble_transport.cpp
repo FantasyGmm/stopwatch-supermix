@@ -1,6 +1,7 @@
 #include "codex_ble_transport.h"
 
 #include <esp_log.h>
+#include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <host/ble_hs.h>
@@ -30,6 +31,7 @@ constexpr size_t kVoiceControlQueueDepth = 8;
 constexpr size_t kProductionVoiceControlQueueDepth = 8;
 constexpr size_t kPairingFrameQueueDepth = 8;
 constexpr size_t kMaxNotificationSize = 256;
+constexpr uint32_t kPendingAuthenticationTimeoutMs = 60000;
 constexpr uint16_t kDefaultMtu = 23;
 constexpr size_t kMaxVoiceControlSize =
     std::max(ble_voice_probe::kControlCommandSize, voice_input::kControlSize);
@@ -636,6 +638,17 @@ void CodexBleTransport::stop()
 
 void CodexBleTransport::poll(uint32_t now_ms)
 {
+    const uint16_t expired_pending =
+        _connection_router.expire_unauthorized_pending(
+            now_ms, kPendingAuthenticationTimeoutMs);
+    if (expired_pending != secure_pairing::kNoAgentConnection &&
+        _initialized) {
+        if (_pairing_frame_queue != nullptr) {
+            xQueueReset(static_cast<QueueHandle_t>(_pairing_frame_queue));
+        }
+        (void)ble_gap_terminate(
+            expired_pending, BLE_ERR_REM_USER_CONN_TERM);
+    }
     if (_frame_queue == nullptr) {
         return;
     }
@@ -1016,7 +1029,9 @@ bool CodexBleTransport::enqueue_pairing_frame_from_ble(
 
 bool CodexBleTransport::handle_gap_connected(uint16_t connection_handle)
 {
-    return _connection_router.connected(connection_handle) !=
+    const uint32_t now_ms = static_cast<uint32_t>(
+        static_cast<uint64_t>(esp_timer_get_time()) / 1000U);
+    return _connection_router.connected(connection_handle, now_ms) !=
            secure_pairing::AgentConnectionAdmission::RejectedFull;
 }
 

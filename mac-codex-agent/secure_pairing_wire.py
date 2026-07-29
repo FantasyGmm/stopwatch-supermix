@@ -21,11 +21,11 @@ MAX_WIRE_FRAME_SIZE = 256
 MAX_AGENT_NAME_BYTES = 24
 
 _HEADER = struct.Struct(">4sBBIH")
-_DISCOVERY_RESPONSE = struct.Struct(">16sI")
+_DISCOVERY_RESPONSE = struct.Struct(">16sI33s")
 _PAIRING_REQUEST = struct.Struct(">16s33s33sB")
-_PAIRING_OFFER = struct.Struct(">16s16s33s")
+_PAIRING_OFFER = struct.Struct(">16s16s33s33s")
 _AUTHENTICATION_REQUEST = struct.Struct(">16sIB")
-_AUTHENTICATION_CHALLENGE = struct.Struct(">16s16sIBB")
+_AUTHENTICATION_CHALLENGE = struct.Struct(">16s16sIB33sB")
 _CREDENTIAL_ENVELOPE = struct.Struct(">BI33s13s13sH")
 _LENGTH_PREFIX = struct.Struct(">H")
 
@@ -115,7 +115,10 @@ def encode_discovery_request(transaction_id: int) -> bytes:
 
 
 def encode_discovery_response(
-    transaction_id: int, watch_id: bytes, key_epoch: int
+    transaction_id: int,
+    watch_id: bytes,
+    key_epoch: int,
+    watch_identity_public: bytes,
 ) -> bytes:
     _bytes(watch_id, 16, "watch identifier")
     if key_epoch <= 0 or key_epoch > 0xFFFFFFFF:
@@ -123,18 +126,24 @@ def encode_discovery_response(
     return encode_frame(
         WireMessageType.DISCOVERY_RESPONSE,
         transaction_id,
-        _DISCOVERY_RESPONSE.pack(watch_id, key_epoch),
+        _DISCOVERY_RESPONSE.pack(
+            watch_id,
+            key_epoch,
+            _bytes(watch_identity_public, 33, "watch identity key"),
+        ),
     )
 
 
 def decode_discovery_response(payload: bytes):
     if len(payload) != _DISCOVERY_RESPONSE.size:
         raise PairingWireError("discovery response has invalid size")
-    watch_id, key_epoch = _DISCOVERY_RESPONSE.unpack(payload)
+    watch_id, key_epoch, watch_identity_public = _DISCOVERY_RESPONSE.unpack(payload)
     _bytes(watch_id, 16, "watch identifier")
     if key_epoch <= 0:
         raise PairingWireError("watch key epoch is invalid")
-    return watch_id, key_epoch
+    return watch_id, key_epoch, _bytes(
+        watch_identity_public, 33, "watch identity key"
+    )
 
 
 def encode_pairing_request(request: BeginPairingRequest) -> bytes:
@@ -181,6 +190,7 @@ def encode_pairing_offer(offer: PairingOffer) -> bytes:
             _bytes(offer.watch_id, 16, "watch identifier"),
             _bytes(offer.watch_nonce, 16, "watch nonce"),
             _bytes(offer.watch_ephemeral_public, 33, "watch ephemeral key"),
+            _bytes(offer.watch_identity_public, 33, "watch identity key"),
         ),
     )
 
@@ -188,12 +198,13 @@ def encode_pairing_offer(offer: PairingOffer) -> bytes:
 def decode_pairing_offer(transaction_id: int, payload: bytes) -> PairingOffer:
     if len(payload) != _PAIRING_OFFER.size:
         raise PairingWireError("pairing offer has invalid size")
-    watch_id, nonce, public_key = _PAIRING_OFFER.unpack(payload)
+    watch_id, nonce, public_key, identity_key = _PAIRING_OFFER.unpack(payload)
     return PairingOffer(
         _transaction(transaction_id),
         _bytes(watch_id, 16, "watch identifier"),
         _bytes(nonce, 16, "watch nonce"),
         _bytes(public_key, 33, "watch ephemeral key"),
+        _bytes(identity_key, 33, "watch identity key"),
     )
 
 
@@ -257,6 +268,13 @@ def encode_authentication_challenge(challenge: AuthenticationChallenge) -> bytes
     name = challenge.display_name.encode("utf-8")
     if not name or len(name) > MAX_AGENT_NAME_BYTES:
         raise PairingWireError("authentication display name is invalid")
+    signature = _bytes(
+        challenge.watch_signature,
+        len(challenge.watch_signature),
+        "watch challenge signature",
+    )
+    if len(signature) > 80:
+        raise PairingWireError("watch challenge signature is invalid")
     return encode_frame(
         WireMessageType.AUTHENTICATION_CHALLENGE,
         challenge.transaction_id,
@@ -265,8 +283,14 @@ def encode_authentication_challenge(challenge: AuthenticationChallenge) -> bytes
             _bytes(challenge.connection_nonce, 16, "connection nonce"),
             challenge.key_epoch,
             challenge.connection_role,
+            _bytes(
+                challenge.watch_ephemeral_public,
+                33,
+                "watch rekey public key",
+                nonzero=False,
+            ),
             len(name),
-        ) + name,
+        ) + name + _LENGTH_PREFIX.pack(len(signature)) + signature,
     )
 
 
@@ -275,12 +299,22 @@ def decode_authentication_challenge(
 ) -> AuthenticationChallenge:
     if len(payload) < _AUTHENTICATION_CHALLENGE.size:
         raise PairingWireError("authentication challenge has invalid size")
-    watch_id, nonce, key_epoch, role, name_size = (
+    watch_id, nonce, key_epoch, role, watch_ephemeral_public, name_size = (
         _AUTHENTICATION_CHALLENGE.unpack_from(payload)
     )
-    name = payload[_AUTHENTICATION_CHALLENGE.size :]
-    if name_size != len(name) or not name or len(name) > MAX_AGENT_NAME_BYTES:
+    name_start = _AUTHENTICATION_CHALLENGE.size
+    name_end = name_start + name_size
+    if (
+        name_size == 0
+        or name_size > MAX_AGENT_NAME_BYTES
+        or name_end + _LENGTH_PREFIX.size > len(payload)
+    ):
         raise PairingWireError("authentication display name is invalid")
+    name = payload[name_start:name_end]
+    signature_size = _LENGTH_PREFIX.unpack_from(payload, name_end)[0]
+    signature = payload[name_end + _LENGTH_PREFIX.size :]
+    if signature_size != len(signature) or not signature or signature_size > 80:
+        raise PairingWireError("watch challenge signature is invalid")
     try:
         display_name = name.decode("utf-8")
     except UnicodeDecodeError as error:
@@ -293,7 +327,14 @@ def decode_authentication_challenge(
         _bytes(nonce, 16, "connection nonce"),
         key_epoch,
         role,
+        _bytes(
+            watch_ephemeral_public,
+            33,
+            "watch rekey public key",
+            nonzero=False,
+        ),
         display_name,
+        signature,
     )
 
 

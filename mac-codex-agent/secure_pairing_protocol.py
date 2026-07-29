@@ -22,6 +22,7 @@ class PairingTranscript:
     watch_nonce: bytes
     agent_nonce: bytes
     watch_ephemeral_public: bytes
+    watch_identity_public: bytes
     agent_ephemeral_public: bytes
     agent_identity_public: bytes
     agent_name: str
@@ -61,6 +62,7 @@ def _validate_transcript(value: PairingTranscript) -> bytes:
     if len(value.agent_nonce) != _NONCE_BYTES or not any(value.agent_nonce):
         raise ValueError("Agent nonce must be 16 nonzero bytes")
     _validate_public_key(value.watch_ephemeral_public)
+    _validate_public_key(value.watch_identity_public)
     _validate_public_key(value.agent_ephemeral_public)
     _validate_public_key(value.agent_identity_public)
     return _encode_name(value.agent_name)
@@ -73,6 +75,7 @@ def encode_pairing_transcript(value: PairingTranscript) -> bytes:
         value.watch_nonce,
         value.agent_nonce,
         value.watch_ephemeral_public,
+        value.watch_identity_public,
         value.agent_ephemeral_public,
         value.agent_identity_public,
         name,
@@ -97,7 +100,7 @@ def decode_pairing_transcript(data: bytes) -> PairingTranscript:
     offset += 4
 
     fields = []
-    for _ in range(7):
+    for _ in range(8):
         if offset + 2 > len(data):
             raise ValueError("truncated pairing transcript")
         size = struct.unpack_from(">H", data, offset)[0]
@@ -109,7 +112,7 @@ def decode_pairing_transcript(data: bytes) -> PairingTranscript:
     if offset != len(data):
         raise ValueError("trailing pairing transcript bytes")
     try:
-        name = fields[6].decode("utf-8")
+        name = fields[7].decode("utf-8")
     except UnicodeDecodeError as error:
         raise ValueError("Agent name is not UTF-8") from error
 
@@ -119,8 +122,9 @@ def decode_pairing_transcript(data: bytes) -> PairingTranscript:
         watch_nonce=fields[1],
         agent_nonce=fields[2],
         watch_ephemeral_public=fields[3],
-        agent_ephemeral_public=fields[4],
-        agent_identity_public=fields[5],
+        watch_identity_public=fields[4],
+        agent_ephemeral_public=fields[5],
+        agent_identity_public=fields[6],
         agent_name=name,
     )
     _validate_transcript(result)

@@ -75,6 +75,7 @@ bool valid(const PairingTranscript& value)
 {
     return nonzero(value.watch_nonce) && nonzero(value.agent_nonce) &&
            crypto::valid_public_key(value.watch_ephemeral_public) &&
+           crypto::valid_public_key(value.watch_identity_public) &&
            crypto::valid_public_key(value.agent_ephemeral_public) &&
            crypto::valid_public_key(value.agent_identity_public) &&
            valid_utf8_name(value.agent_name, value.agent_name_size);
@@ -220,6 +221,7 @@ bool operator==(const PairingTranscript& lhs, const PairingTranscript& rhs)
            lhs.watch_nonce == rhs.watch_nonce &&
            lhs.agent_nonce == rhs.agent_nonce &&
            lhs.watch_ephemeral_public == rhs.watch_ephemeral_public &&
+           lhs.watch_identity_public == rhs.watch_identity_public &&
            lhs.agent_ephemeral_public == rhs.agent_ephemeral_public &&
            lhs.agent_identity_public == rhs.agent_identity_public &&
            lhs.agent_name_size == rhs.agent_name_size &&
@@ -254,6 +256,9 @@ bool encode_pairing_transcript(
         !writer.field(
             value.watch_ephemeral_public.data(),
             value.watch_ephemeral_public.size()) ||
+        !writer.field(
+            value.watch_identity_public.data(),
+            value.watch_identity_public.size()) ||
         !writer.field(
             value.agent_ephemeral_public.data(),
             value.agent_ephemeral_public.size()) ||
@@ -290,6 +295,9 @@ bool decode_pairing_transcript(
         !reader.field(
             output.watch_ephemeral_public.data(),
             output.watch_ephemeral_public.size()) ||
+        !reader.field(
+            output.watch_identity_public.data(),
+            output.watch_identity_public.size()) ||
         !reader.field(
             output.agent_ephemeral_public.data(),
             output.agent_ephemeral_public.size()) ||

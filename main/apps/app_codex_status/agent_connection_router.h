@@ -36,11 +36,12 @@ struct AgentConnection {
     uint16_t mtu = kDefaultAgentMtu;
     bool voice_subscribed = false;
     bool pairing_subscribed = false;
+    uint32_t admitted_at_ms = 0;
 };
 
 class AgentConnectionRouter {
 public:
-    AgentConnectionAdmission connected(uint16_t handle);
+    AgentConnectionAdmission connected(uint16_t handle, uint32_t now_ms = 0);
     AgentConnectionRole disconnected(uint16_t handle);
 
     bool authorize_pending(
@@ -48,6 +49,9 @@ public:
         const AgentFingerprint& fingerprint);
     bool promote_pending(uint16_t handle);
     bool reject_pending(uint16_t handle);
+    uint16_t expire_unauthorized_pending(
+        uint32_t now_ms,
+        uint32_t timeout_ms);
 
     AgentConnectionRole role(uint16_t handle) const;
     bool can_access(uint16_t handle, AgentGattSurface surface) const;

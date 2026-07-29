@@ -48,6 +48,7 @@ bool encode_discovery_response(
     uint32_t transaction_id,
     const WatchId& watch_id,
     uint32_t key_epoch,
+    const crypto::PublicKey& watch_identity_public,
     uint8_t* output,
     size_t output_capacity,
     size_t& output_size);
@@ -69,6 +70,8 @@ bool decode_authentication_request(
     AuthenticationRequest& output);
 bool encode_authentication_challenge_wire(
     const AuthenticationChallenge& challenge,
+    const uint8_t* watch_signature,
+    size_t watch_signature_size,
     uint8_t* output,
     size_t output_capacity,
     size_t& output_size);

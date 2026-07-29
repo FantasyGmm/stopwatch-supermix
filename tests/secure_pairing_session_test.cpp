@@ -109,6 +109,7 @@ std::vector<uint8_t> pairing_ack(
     transcript.watch_nonce = presentation.watch_nonce;
     transcript.agent_nonce = request_value.agent_nonce;
     transcript.watch_ephemeral_public = presentation.watch_ephemeral_public;
+    transcript.watch_identity_public = presentation.watch_identity_public;
     transcript.agent_ephemeral_public = request_value.agent_ephemeral_public;
     transcript.agent_identity_public = request_value.agent_identity_public;
     transcript.agent_name = request_value.agent_name;
@@ -361,10 +362,27 @@ int main()
         SessionResult::UnknownAgent);
 
     session.reset();
+    const size_t count_before_recovery = rotated.count();
     assert(
         session.request_pairing(
             pairing_request, rotated, fill_entropy, &entropy, 5000) ==
-        SessionResult::DuplicateAgent);
+        SessionResult::Ok);
+    assert(
+        session.confirm_pairing(
+            true, rotated, store, fill_entropy, &entropy, 5001) ==
+        SessionResult::Ok);
+    const auto recovery_ack = pairing_ack(
+        pairing_request,
+        session.presentation(),
+        agent_ephemeral_private,
+        session.presentation().credential);
+    assert(
+        session.acknowledge_credential(
+            pairing_request.transaction_id,
+            recovery_ack.data(),
+            recovery_ack.size(),
+            5002) == SessionResult::Ok);
+    assert(rotated.count() == count_before_recovery);
 
     crypto::PrivateScalar unknown_identity = {};
     unknown_identity.back() = 23;
@@ -431,4 +449,14 @@ int main()
         SessionResult::StorageFailure);
     assert(rotated == before_failure);
     assert(!commit_failure.presentation().credential_ready);
+
+    SecurePairingSession wrap_session;
+    unknown.transaction_id = 61;
+    constexpr uint32_t near_wrap = UINT32_MAX - 1000U;
+    assert(
+        wrap_session.request_pairing(
+            unknown, rotated, fill_entropy, &entropy, near_wrap) ==
+        SessionResult::Ok);
+    assert(!wrap_session.expire(500U));
+    assert(wrap_session.expire(59001U));
 }

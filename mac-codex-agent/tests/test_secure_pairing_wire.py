@@ -55,6 +55,7 @@ class PairingWireTests(unittest.TestCase):
             watch_id=b"W" * 16,
             watch_nonce=b"R" * 16,
             watch_ephemeral_public=b"\x02" + b"P" * 32,
+            watch_identity_public=b"\x03" + b"I" * 32,
         )
 
         kind, transaction_id, payload = decode_frame(encode_pairing_offer(offer))
@@ -65,7 +66,14 @@ class PairingWireTests(unittest.TestCase):
     def test_authentication_request_and_challenge_round_trip(self):
         request = AuthenticationRequest(9, b"F" * 16, 2, "Studio Mac")
         challenge = AuthenticationChallenge(
-            9, b"W" * 16, b"C" * 16, 5, 1, "Studio Mac"
+            9,
+            b"W" * 16,
+            b"C" * 16,
+            5,
+            1,
+            b"\x02" + b"R" * 32,
+            "Studio Mac",
+            b"S" * 70,
         )
 
         request_frame = decode_frame(encode_authentication_request(request))

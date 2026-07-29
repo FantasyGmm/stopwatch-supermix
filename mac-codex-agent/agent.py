@@ -78,6 +78,7 @@ PAIRING_RESPONSE_QUEUE_SIZE = 8
 class WatchDiscovery:
     watch_id: bytes
     key_epoch: int
+    watch_identity_public: bytes
 
 
 @dataclasses.dataclass
@@ -483,8 +484,10 @@ class BleStatusTransport:
             encode_discovery_request(transaction_id),
             (WireMessageType.DISCOVERY_RESPONSE,),
         )
-        watch_id, key_epoch = decode_discovery_response(payload)
-        return WatchDiscovery(watch_id, key_epoch)
+        watch_id, key_epoch, watch_identity_public = decode_discovery_response(
+            payload
+        )
+        return WatchDiscovery(watch_id, key_epoch, watch_identity_public)
 
     async def request_pairing(self, request: BeginPairingRequest):
         _, transaction_id, payload = await self._pairing_exchange(

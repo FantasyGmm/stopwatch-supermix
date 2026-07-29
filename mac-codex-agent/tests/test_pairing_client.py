@@ -20,6 +20,7 @@ from secure_pairing_crypto import (
     derive_pairing_keys,
     derive_shared_secret,
     public_key_bytes,
+    sign_challenge,
     unwrap_credential,
     verify_challenge,
     wrap_credential,
@@ -48,6 +49,10 @@ class FakeWatch:
         self.master_key = bytes(range(16, 32))
         self.key_epoch = 3
         self.fingerprint = hashlib.sha256(identity_public).digest()[:16]
+        self.watch_identity = ec.derive_private_key(41, ec.SECP256R1())
+        self.watch_identity_public = public_key_bytes(
+            self.watch_identity.public_key()
+        )
         self._pairing_keys = None
         self._pairing_request = None
         self._auth_challenge = None
@@ -55,6 +60,8 @@ class FakeWatch:
         self.acks = []
         self.tamper_envelope = False
         self.authentication_name_override = None
+        self.tamper_watch_signature = False
+        self.tamper_rekey_public = False
 
     async def request_pairing(self, request):
         self._pairing_request = request
@@ -65,6 +72,7 @@ class FakeWatch:
             watch_id=self.watch_id,
             watch_nonce=bytes(range(64, 80)),
             watch_ephemeral_public=public_key_bytes(watch_private.public_key()),
+            watch_identity_public=self.watch_identity_public,
         )
         transcript = PairingTranscript(
             transaction_id=request.transaction_id,
@@ -72,6 +80,7 @@ class FakeWatch:
             watch_nonce=offer.watch_nonce,
             agent_nonce=request.agent_nonce,
             watch_ephemeral_public=offer.watch_ephemeral_public,
+            watch_identity_public=offer.watch_identity_public,
             agent_ephemeral_public=request.agent_ephemeral_public,
             agent_identity_public=request.agent_identity_public,
             agent_name=request.display_name,
@@ -100,6 +109,7 @@ class FakeWatch:
                 master_key=self.master_key,
                 key_epoch=self.key_epoch,
                 fingerprint=self.fingerprint,
+                watch_identity_public=self.watch_identity_public,
             )
         )
         ciphertext = wrap_credential(
@@ -139,15 +149,44 @@ class FakeWatch:
             raise ValueError("invalid acknowledgement")
 
     async def request_authentication(self, request):
-        self._auth_challenge = AuthenticationChallenge(
+        self._requested_epoch = request.agent_key_epoch
+        watch_ephemeral_public = bytes(33)
+        if request.agent_key_epoch != self.key_epoch:
+            self._watch_auth_private = ec.derive_private_key(
+                37, ec.SECP256R1()
+            )
+            watch_ephemeral_public = public_key_bytes(
+                self._watch_auth_private.public_key()
+            )
+        unsigned = AuthenticationChallenge(
             transaction_id=request.transaction_id,
             watch_id=self.watch_id,
             connection_nonce=bytes(range(106, 122)),
             key_epoch=self.key_epoch,
             connection_role=1,
+            watch_ephemeral_public=watch_ephemeral_public,
             display_name=(
                 self.authentication_name_override or request.display_name
             ),
+            watch_signature=b"",
+        )
+        watch_signature = sign_challenge(
+            self.watch_identity,
+            encode_authentication_challenge(unsigned),
+        )
+        if self.tamper_watch_signature:
+            watch_signature = watch_signature[:-1] + bytes(
+                (watch_signature[-1] ^ 1,)
+            )
+        self._auth_challenge = AuthenticationChallenge(
+            transaction_id=unsigned.transaction_id,
+            watch_id=unsigned.watch_id,
+            connection_nonce=unsigned.connection_nonce,
+            key_epoch=unsigned.key_epoch,
+            connection_role=unsigned.connection_role,
+            watch_ephemeral_public=unsigned.watch_ephemeral_public,
+            display_name=unsigned.display_name,
+            watch_signature=watch_signature,
         )
         return self._auth_challenge
 
@@ -157,19 +196,24 @@ class FakeWatch:
             raise ValueError("identity signature rejected")
         if self._requested_epoch == self.key_epoch:
             return None
-        watch_private = ec.derive_private_key(37, ec.SECP256R1())
-        shared = derive_shared_secret(watch_private, self.identity_public)
+        shared = derive_shared_secret(
+            self._watch_auth_private, self.identity_public
+        )
         self._auth_keys = derive_pairing_keys(shared, encoded)
+        envelope_public = self._auth_challenge.watch_ephemeral_public
+        if self.tamper_rekey_public:
+            envelope_public = public_key_bytes(
+                ec.derive_private_key(43, ec.SECP256R1()).public_key()
+            )
         self._last_auth_envelope = self._envelope(
             CredentialPurpose.REKEY,
             transaction_id,
             self._auth_keys,
-            public_key_bytes(watch_private.public_key()),
+            envelope_public,
         )
         return self._last_auth_envelope
 
     async def begin_authentication(self, request):
-        self._requested_epoch = request.agent_key_epoch
         return await self.request_authentication(request)
 
     def remember_pairing_envelope(self, envelope):
@@ -238,6 +282,7 @@ class PairingClientTests(unittest.IsolatedAsyncioTestCase):
             master_key=b"x" * 16,
             key_epoch=2,
             fingerprint=self.watch.fingerprint,
+            watch_identity_public=self.watch.watch_identity_public,
         )
         result = await self.client.authenticate(
             self.watch, self.identity, current, "Studio Mac"
@@ -262,6 +307,7 @@ class PairingClientTests(unittest.IsolatedAsyncioTestCase):
             master_key=b"x" * 16,
             key_epoch=3,
             fingerprint=self.watch.fingerprint,
+            watch_identity_public=self.watch.watch_identity_public,
         )
         self.watch.authentication_name_override = "Attacker Name"
 
@@ -272,6 +318,38 @@ class PairingClientTests(unittest.IsolatedAsyncioTestCase):
                 current,
                 "Studio Mac",
             )
+
+    async def test_authentication_rejects_unpinned_watch_signature_before_agent_signs(self):
+        current = WatchCredential(
+            watch_id=self.watch.watch_id,
+            master_key=b"x" * 16,
+            key_epoch=2,
+            fingerprint=self.watch.fingerprint,
+            watch_identity_public=self.watch.watch_identity_public,
+        )
+        self.watch.tamper_watch_signature = True
+
+        with self.assertRaisesRegex(PermissionError, "watch identity"):
+            await self.client.authenticate(
+                self.watch, self.identity, current, "Studio Mac"
+            )
+        self.assertEqual(self.store.saved, [])
+
+    async def test_rekey_rejects_ephemeral_key_not_bound_to_signed_challenge(self):
+        current = WatchCredential(
+            watch_id=self.watch.watch_id,
+            master_key=b"x" * 16,
+            key_epoch=2,
+            fingerprint=self.watch.fingerprint,
+            watch_identity_public=self.watch.watch_identity_public,
+        )
+        self.watch.tamper_rekey_public = True
+
+        with self.assertRaisesRegex(ValueError, "bound to watch challenge"):
+            await self.client.authenticate(
+                self.watch, self.identity, current, "Studio Mac"
+            )
+        self.assertEqual(self.store.saved, [])
 
     async def test_tampered_wrapped_credential_is_rejected_without_store_or_ack(self):
         await self.client.request_pairing(

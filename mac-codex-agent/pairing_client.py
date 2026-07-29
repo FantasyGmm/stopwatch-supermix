@@ -17,6 +17,7 @@ from secure_pairing_crypto import (
     sign_challenge,
     unwrap_credential,
     verification_code,
+    verify_challenge,
     wrap_credential,
 )
 from secure_pairing_protocol import (
@@ -35,8 +36,8 @@ _CREDENTIAL_MAGIC = b"SWCRED"
 _ENVELOPE_MAGIC = b"SWENV"
 _ACK_MAGIC = b"SWACK"
 _AUTH_MAGIC = b"SWAUTH"
-_AUTH_CHALLENGE = struct.Struct(">6sBBI16s16sIB")
-_CREDENTIAL = struct.Struct(">6sB16sI16s16s")
+_AUTH_CHALLENGE = struct.Struct(">6sBBI16s16sI33sB")
+_CREDENTIAL = struct.Struct(">6sB16sI16s33s16s")
 _ENVELOPE_AAD = struct.Struct(">5sBBI")
 _ACK_AAD = struct.Struct(">5sBI")
 
@@ -61,6 +62,7 @@ class PairingOffer:
     watch_id: bytes
     watch_nonce: bytes
     watch_ephemeral_public: bytes
+    watch_identity_public: bytes
 
 
 @dataclass(frozen=True)
@@ -78,7 +80,9 @@ class AuthenticationChallenge:
     connection_nonce: bytes
     key_epoch: int
     connection_role: int
+    watch_ephemeral_public: bytes
     display_name: str
+    watch_signature: bytes
 
 
 @dataclass(frozen=True)
@@ -98,6 +102,7 @@ class WatchCredential:
     master_key: bytes
     key_epoch: int
     fingerprint: bytes
+    watch_identity_public: bytes
 
 
 @dataclass(frozen=True)
@@ -179,6 +184,12 @@ def encode_authentication_challenge(
         challenge.watch_id,
         challenge.connection_nonce,
         challenge.key_epoch,
+        _require_bytes(
+            challenge.watch_ephemeral_public,
+            33,
+            "watch rekey public key",
+            nonzero=False,
+        ),
         len(name),
     ) + name
 
@@ -189,6 +200,11 @@ def encode_credential_plaintext(credential: WatchCredential) -> bytes:
     _require_bytes(
         credential.fingerprint, _FINGERPRINT_BYTES, "Agent fingerprint"
     )
+    _require_bytes(
+        credential.watch_identity_public,
+        33,
+        "watch identity public key",
+    )
     if credential.key_epoch <= 0 or credential.key_epoch > 0xFFFFFFFF:
         raise ValueError("credential key epoch is invalid")
     return _CREDENTIAL.pack(
@@ -197,6 +213,7 @@ def encode_credential_plaintext(credential: WatchCredential) -> bytes:
         credential.master_key,
         credential.key_epoch,
         credential.watch_id,
+        credential.watch_identity_public,
         credential.fingerprint,
     )
 
@@ -204,7 +221,15 @@ def encode_credential_plaintext(credential: WatchCredential) -> bytes:
 def decode_credential_plaintext(data: bytes) -> WatchCredential:
     if len(data) != _CREDENTIAL.size:
         raise ValueError("credential plaintext has invalid size")
-    magic, version, master_key, key_epoch, watch_id, fingerprint = (
+    (
+        magic,
+        version,
+        master_key,
+        key_epoch,
+        watch_id,
+        watch_identity_public,
+        fingerprint,
+    ) = (
         _CREDENTIAL.unpack(data)
     )
     if magic != _CREDENTIAL_MAGIC or version != PAIRING_VERSION:
@@ -214,6 +239,7 @@ def decode_credential_plaintext(data: bytes) -> WatchCredential:
         master_key=master_key,
         key_epoch=key_epoch,
         fingerprint=fingerprint,
+        watch_identity_public=watch_identity_public,
     )
 
 
@@ -303,6 +329,7 @@ class PairingClient:
             watch_nonce=offer.watch_nonce,
             agent_nonce=agent_nonce,
             watch_ephemeral_public=offer.watch_ephemeral_public,
+            watch_identity_public=offer.watch_identity_public,
             agent_ephemeral_public=request.agent_ephemeral_public,
             agent_identity_public=identity_public,
             agent_name=display_name,
@@ -386,6 +413,12 @@ class PairingClient:
         ):
             raise ValueError("watch returned a mismatched challenge")
         encoded = encode_authentication_challenge(challenge)
+        if not verify_challenge(
+            credential.watch_identity_public,
+            encoded,
+            challenge.watch_signature,
+        ):
+            raise PermissionError("watch identity signature was rejected")
         self._pending_authentication = _PendingAuthentication(
             transport=transport,
             identity=identity,
@@ -424,6 +457,11 @@ class PairingClient:
         shared = derive_shared_secret(
             pending.identity, envelope.watch_ephemeral_public
         )
+        if (
+            envelope.watch_ephemeral_public
+            != pending.challenge.watch_ephemeral_public
+        ):
+            raise ValueError("rekey envelope is not bound to watch challenge")
         keys = derive_pairing_keys(shared, pending.encoded_challenge)
         credential = self._unwrap_envelope(
             envelope,

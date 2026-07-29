@@ -43,6 +43,7 @@ EXPECTED_TRANSCRIPT_HEX = (
     "001000112233445566778899aabbccddeeff"
     "0010ffeeddccbbaa99887766554433221100"
     "0021" + WATCH_PUBLIC_HEX +
+    "0021" + IDENTITY_PUBLIC_HEX +
     "0021" + AGENT_PUBLIC_HEX +
     "0021" + IDENTITY_PUBLIC_HEX +
     "000a53747564696f204d6163"
@@ -51,9 +52,9 @@ EXPECTED_SHARED_SECRET_HEX = (
     "ccfc261f58193c98ca4ad4a53bbac6f0"
     "ee29bc4d48438090446908622ca79af6"
 )
-EXPECTED_CONFIRM_KEY_HEX = "6f6671511a2e699c9e45a1e9e0fffc51"
-EXPECTED_WRAP_KEY_HEX = "96386cf8e7b4968c70cfe5d8eb81d127"
-EXPECTED_ACK_KEY_HEX = "7340fea9148e4a1ae9885eb1a6137271"
+EXPECTED_CONFIRM_KEY_HEX = "b8a80f8e6163543c9f246f966de93072"
+EXPECTED_WRAP_KEY_HEX = "9f0df5d9315a44cb61c4fc5f0e23a79e"
+EXPECTED_ACK_KEY_HEX = "5887abf88287da67131dfd25085e9b18"
 WRAP_NONCE = bytes.fromhex("0102030405060708090a0b0c0d")
 CREDENTIAL = bytes.fromhex(
     "00112233445566778899aabbccddeeff"
@@ -62,10 +63,10 @@ CREDENTIAL = bytes.fromhex(
     "2ea06a7bca900cd2410d78584bdc1add"
 )
 EXPECTED_WRAPPED_HEX = (
-    "e11a7485dada5a637d45b236530ccce70"
-    "c06f0f699565a19be3ff0f523f9c56a"
-    "4747b9a11f679f0c4a9153bfcb5f055b"
-    "7ae3ded9e14981ca4292dc6b"
+    "a932792ba08de46917aa1c7469d8fd51"
+    "c1d7d45a785b81d33b381be7fbee8395"
+    "2a01d6472584e8f619ce5531c0baf8ed"
+    "583758f77d639f494e29bb71"
 )
 
 
@@ -76,6 +77,7 @@ def fixture() -> PairingTranscript:
         watch_nonce=bytes.fromhex("00112233445566778899aabbccddeeff"),
         agent_nonce=bytes.fromhex("ffeeddccbbaa99887766554433221100"),
         watch_ephemeral_public=bytes.fromhex(WATCH_PUBLIC_HEX),
+        watch_identity_public=bytes.fromhex(IDENTITY_PUBLIC_HEX),
         agent_ephemeral_public=bytes.fromhex(AGENT_PUBLIC_HEX),
         agent_identity_public=bytes.fromhex(IDENTITY_PUBLIC_HEX),
         agent_name="Studio Mac",
@@ -110,7 +112,7 @@ class SecurePairingCryptoTests(unittest.TestCase):
         self.assertEqual(keys.confirm_key.hex(), EXPECTED_CONFIRM_KEY_HEX)
         self.assertEqual(keys.wrap_key.hex(), EXPECTED_WRAP_KEY_HEX)
         self.assertEqual(keys.ack_key.hex(), EXPECTED_ACK_KEY_HEX)
-        self.assertEqual(verification_code(keys.confirm_key, transcript), "421761")
+        self.assertEqual(verification_code(keys.confirm_key, transcript), "782441")
 
         wrapped = wrap_credential(keys.wrap_key, WRAP_NONCE, CREDENTIAL, transcript)
         self.assertEqual(wrapped.hex(), EXPECTED_WRAPPED_HEX)
@@ -130,6 +132,7 @@ class SecurePairingCryptoTests(unittest.TestCase):
             "watch_nonce": b"x" + original.watch_nonce[1:],
             "agent_nonce": b"x" + original.agent_nonce[1:],
             "watch_ephemeral_public": bytes.fromhex(AGENT_PUBLIC_HEX),
+            "watch_identity_public": bytes.fromhex(WATCH_PUBLIC_HEX),
             "agent_ephemeral_public": bytes.fromhex(WATCH_PUBLIC_HEX),
             "agent_identity_public": bytes.fromhex(WATCH_PUBLIC_HEX),
             "agent_name": "Studio Mac 2",

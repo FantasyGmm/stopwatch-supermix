@@ -16,8 +16,8 @@ WATCH_SERVICE_PREFIX = "com.stopwatch.codex-agent.watch."
 WATCH_ACCOUNT = "credential"
 
 _MAGIC = b"SWCRED"
-_VERSION = 1
-_RECORD = struct.Struct(">6sB16sI16s16s")
+_VERSION = 2
+_RECORD = struct.Struct(">6sB16sI16s16s33s")
 _CHECKSUM_BYTES = 16
 
 
@@ -46,6 +46,9 @@ def _validate(credential: WatchCredential) -> None:
     _require_bytes(credential.watch_id, 16, "watch identifier")
     _require_bytes(credential.master_key, 16, "watch master key")
     _require_bytes(credential.fingerprint, 16, "Agent fingerprint")
+    _require_bytes(
+        credential.watch_identity_public, 33, "watch identity public key"
+    )
     if (
         not isinstance(credential.key_epoch, int)
         or isinstance(credential.key_epoch, bool)
@@ -69,6 +72,7 @@ def _encode(credential: WatchCredential) -> bytes:
         credential.key_epoch,
         credential.master_key,
         credential.fingerprint,
+        credential.watch_identity_public,
     )
     return record + hashlib.sha256(record).digest()[:_CHECKSUM_BYTES]
 
@@ -81,7 +85,15 @@ def _decode(payload: bytes, expected_watch_id: bytes) -> WatchCredential:
     expected_checksum = hashlib.sha256(record).digest()[:_CHECKSUM_BYTES]
     if not hmac.compare_digest(checksum, expected_checksum):
         raise ValueError("invalid credential record")
-    magic, version, watch_id, key_epoch, master_key, fingerprint = (
+    (
+        magic,
+        version,
+        watch_id,
+        key_epoch,
+        master_key,
+        fingerprint,
+        watch_identity_public,
+    ) = (
         _RECORD.unpack(record)
     )
     credential = WatchCredential(
@@ -89,6 +101,7 @@ def _decode(payload: bytes, expected_watch_id: bytes) -> WatchCredential:
         master_key=master_key,
         key_epoch=key_epoch,
         fingerprint=fingerprint,
+        watch_identity_public=watch_identity_public,
     )
     _validate(credential)
     if magic != _MAGIC or version != _VERSION or watch_id != expected_watch_id:

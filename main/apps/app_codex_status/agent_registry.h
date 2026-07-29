@@ -35,6 +35,7 @@ struct AgentRecord {
 
 struct RegistrySnapshot {
     std::array<uint8_t, 16> watch_id = {};
+    crypto::PrivateScalar watch_identity_private = {};
     WatchMasterKey master_key = {};
     uint32_t key_epoch = 0;
     bool has_last_selected = false;
@@ -86,6 +87,8 @@ public:
     const std::array<AgentRecord, kMaxAgents>& records() const;
     size_t count() const;
     const std::array<uint8_t, 16>& watch_id() const;
+    const crypto::PrivateScalar& watch_identity_private() const;
+    bool watch_identity_public(crypto::PublicKey& output) const;
     const WatchMasterKey& master_key() const;
     uint32_t key_epoch() const;
     bool has_last_selected() const;

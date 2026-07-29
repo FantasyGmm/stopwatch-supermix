@@ -23,7 +23,7 @@ namespace {
 #if defined(ESP_PLATFORM)
 constexpr char kNvsNamespace[] = "codex_agents";
 #endif
-constexpr uint16_t kRegistryVersion = 1;
+constexpr uint16_t kRegistryVersion = 2;
 constexpr size_t kDigestSize = 32;
 constexpr size_t kSlotHeaderSize = 8;
 constexpr size_t kSelectorSize = 8;
@@ -31,7 +31,8 @@ constexpr size_t kRecordSize =
     crypto::kPublicKeySize + kAgentFingerprintBytes + 1 +
     kAgentNameBytes + 8;
 constexpr size_t kPayloadBaseSize =
-    16 + kWatchMasterKeyBytes + 4 + 1 + kAgentFingerprintBytes + 1;
+    16 + crypto::kPrivateScalarSize + kWatchMasterKeyBytes + 4 + 1 +
+    kAgentFingerprintBytes + 1;
 constexpr size_t kMaxPayloadSize =
     kPayloadBaseSize + kMaxAgents * kRecordSize;
 constexpr size_t kMaxSlotSize =
@@ -206,6 +207,9 @@ bool encode_payload(
     Writer writer(output, capacity);
     if (!writer.bytes(registry.watch_id().data(), registry.watch_id().size()) ||
         !writer.bytes(
+            registry.watch_identity_private().data(),
+            registry.watch_identity_private().size()) ||
+        !writer.bytes(
             registry.master_key().data(), registry.master_key().size()) ||
         !writer.u32(registry.key_epoch()) ||
         !writer.byte(registry.has_last_selected() ? 1U : 0U) ||
@@ -242,6 +246,9 @@ bool decode_payload(
     uint8_t selected = 0;
     uint8_t count = 0;
     if (!reader.bytes(snapshot.watch_id.data(), snapshot.watch_id.size()) ||
+        !reader.bytes(
+            snapshot.watch_identity_private.data(),
+            snapshot.watch_identity_private.size()) ||
         !reader.bytes(snapshot.master_key.data(), snapshot.master_key.size()) ||
         !reader.u32(snapshot.key_epoch) || !reader.byte(selected) ||
         selected > 1 ||

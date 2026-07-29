@@ -102,6 +102,34 @@ bool fill_nonzero(
            entropy(context, output, size) && nonzero(output, size);
 }
 
+bool generate_watch_identity(
+    RegistryEntropy entropy,
+    void* context,
+    crypto::PrivateScalar& private_key)
+{
+    crypto::PublicKey public_key = {};
+    for (int attempt = 0; attempt < 8; ++attempt) {
+        if (!fill_nonzero(
+                entropy,
+                context,
+                private_key.data(),
+                private_key.size())) {
+            return false;
+        }
+        if (crypto::public_key_from_private(private_key, public_key)) {
+            return true;
+        }
+    }
+    private_key = {};
+    return false;
+}
+
+bool valid_watch_identity(const crypto::PrivateScalar& private_key)
+{
+    crypto::PublicKey public_key = {};
+    return crypto::public_key_from_private(private_key, public_key);
+}
+
 bool valid_record(const AgentRecord& record)
 {
     AgentFingerprint expected = {};
@@ -126,6 +154,10 @@ RegistryResult AgentRegistry::initialize(
             entropy_context,
             data.watch_id.data(),
             data.watch_id.size()) ||
+        !generate_watch_identity(
+            entropy,
+            entropy_context,
+            data.watch_identity_private) ||
         !fill_nonzero(
             entropy,
             entropy_context,
@@ -146,7 +178,8 @@ RegistryResult AgentRegistry::restore(
     output = {};
     if (snapshot.key_epoch == 0 || snapshot.count > kMaxAgents ||
         !nonzero(snapshot.watch_id.data(), snapshot.watch_id.size()) ||
-        !nonzero(snapshot.master_key.data(), snapshot.master_key.size())) {
+        !nonzero(snapshot.master_key.data(), snapshot.master_key.size()) ||
+        !valid_watch_identity(snapshot.watch_identity_private)) {
         return RegistryResult::InvalidRecord;
     }
     for (size_t index = 0; index < snapshot.count; ++index) {
@@ -334,6 +367,17 @@ const std::array<uint8_t, 16>& AgentRegistry::watch_id() const
     return _data.watch_id;
 }
 
+const crypto::PrivateScalar& AgentRegistry::watch_identity_private() const
+{
+    return _data.watch_identity_private;
+}
+
+bool AgentRegistry::watch_identity_public(crypto::PublicKey& output) const
+{
+    return _initialized && crypto::public_key_from_private(
+        _data.watch_identity_private, output);
+}
+
 const WatchMasterKey& AgentRegistry::master_key() const
 {
     return _data.master_key;
@@ -383,6 +427,7 @@ bool operator==(const AgentRegistry& lhs, const AgentRegistry& rhs)
     const RegistrySnapshot left = lhs.snapshot();
     const RegistrySnapshot right = rhs.snapshot();
     return left.watch_id == right.watch_id &&
+           left.watch_identity_private == right.watch_identity_private &&
            left.master_key == right.master_key &&
            left.key_epoch == right.key_epoch &&
            left.has_last_selected == right.has_last_selected &&

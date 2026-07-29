@@ -38,6 +38,7 @@ secure_pairing::PairingTranscript fixture()
     value.watch_ephemeral_public = from_hex<kPublicKeySize>(
         "020217e617f0b6443928278f96999e69"
         "a23a4f2c152bdf6d6cdf66e5b80282d4ed");
+    value.watch_identity_public = value.watch_ephemeral_public;
     value.agent_ephemeral_public = from_hex<kPublicKeySize>(
         "03d65a93977caa3d1b081852ff57a79e"
         "465f1660577304baead505dd3a48589cf3");
@@ -55,11 +56,13 @@ secure_pairing::PairingTranscript fixture()
 int main()
 {
     using namespace secure_pairing;
-    const auto expected = from_hex<182>(
+    const auto expected = from_hex<217>(
         "5357504149520101020304"
         "0010d4c3b2a19080706050403020100f0e0d"
         "001000112233445566778899aabbccddeeff"
         "0010ffeeddccbbaa99887766554433221100"
+        "0021020217e617f0b6443928278f96999e69"
+        "a23a4f2c152bdf6d6cdf66e5b80282d4ed"
         "0021020217e617f0b6443928278f96999e69"
         "a23a4f2c152bdf6d6cdf66e5b80282d4ed"
         "002103d65a93977caa3d1b081852ff57a79e"

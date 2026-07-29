@@ -49,6 +49,7 @@ class FakeController:
         self.agent_name = "Studio Mac"
         self.pairing_state = pairing_state
         self.renamed_agents = []
+        self.forgot_watch_count = 0
 
     def start(self):
         self.started = True
@@ -131,6 +132,11 @@ class FakeController:
         self.agent_name = value.strip()
         self.reconnect_count += 1
         return self.agent_name
+
+    def forget_current_watch(self):
+        self.forgot_watch_count += 1
+        self.reconnect_count += 1
+        return True
 
     def refresh_voice_readiness(self):
         self.voice_refresh_count += 1
@@ -257,6 +263,20 @@ class MenuBarApplicationTests(unittest.TestCase):
 
         self.assertFalse(delegate.retry_pairing_item.isHidden())
         delegate.retryPairing_(None)
+        self.assertEqual(controller.reconnect_count, 1)
+
+    def test_failed_pairing_can_forget_stale_watch_credential(self):
+        NSApplication.sharedApplication()
+        controller = FakeController(pairing_state=PairingState.ERROR)
+        delegate = MenuBarApplication.alloc().initWithController_(controller)
+        delegate.applicationDidFinishLaunching_(None)
+        self.addCleanup(delegate._shutdown)
+        delegate.watch_forget_confirmer = lambda: True
+
+        self.assertFalse(delegate.forget_watch_item.isHidden())
+        delegate.forgetWatch_(None)
+
+        self.assertEqual(controller.forgot_watch_count, 1)
         self.assertEqual(controller.reconnect_count, 1)
 
     def test_confirmation_explains_authorization_and_possible_restart(self):

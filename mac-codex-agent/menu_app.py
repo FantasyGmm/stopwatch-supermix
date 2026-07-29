@@ -78,6 +78,18 @@ def confirm_voice_setup(alert_factory=None) -> bool:
     return alert.runModal() == NSAlertFirstButtonReturn
 
 
+def confirm_forget_watch(alert_factory=None) -> bool:
+    alert = alert_factory() if alert_factory is not None else NSAlert.alloc().init()
+    alert.setMessageText_("Forget This Watch Credential?")
+    alert.setInformativeText_(
+        "The Agent will reconnect and require the six-digit code plus "
+        "physical approval on the watch before receiving a new credential."
+    )
+    alert.addButtonWithTitle_("Forget and Re-pair")
+    alert.addButtonWithTitle_("Cancel")
+    return alert.runModal() == NSAlertFirstButtonReturn
+
+
 def prompt_agent_name(current_name: str, alert_factory=None, field_factory=None):
     alert = alert_factory() if alert_factory is not None else NSAlert.alloc().init()
     field = (
@@ -127,6 +139,7 @@ class MenuBarApplication(NSObject):
         self.voice_installer = BlackHoleInstaller()
         self.voice_package_path = bundled_blackhole_package()
         self.voice_setup_confirmer = confirm_voice_setup
+        self.watch_forget_confirmer = confirm_forget_watch
         self.agent_name_prompt = prompt_agent_name
         self.voice_worker_factory = lambda target: threading.Thread(
             target=target,
@@ -244,6 +257,9 @@ class MenuBarApplication(NSObject):
         )
         self.retry_pairing_item = self._action_item(
             "Retry Pairing", "retryPairing:"
+        )
+        self.forget_watch_item = self._action_item(
+            "Forget This Watch Credential...", "forgetWatch:"
         )
         self.menu.addItem_(NSMenuItem.separatorItem())
         self.open_log_item = self._action_item("Open Log", "openLog:")
@@ -391,6 +407,8 @@ class MenuBarApplication(NSObject):
         pairing_failed = view.pairing_text == "Pairing: Failed"
         self.retry_pairing_item.setHidden_(not pairing_failed)
         self.retry_pairing_item.setEnabled_(pairing_failed and not self._stopping)
+        self.forget_watch_item.setHidden_(not pairing_failed)
+        self.forget_watch_item.setEnabled_(pairing_failed and not self._stopping)
         image = NSImage.imageWithSystemSymbolName_accessibilityDescription_(
             view.symbol_name,
             view.bluetooth_text,
@@ -408,6 +426,13 @@ class MenuBarApplication(NSObject):
 
     def retryPairing_(self, _sender):
         self.controller.reconnect()
+
+    def forgetWatch_(self, _sender):
+        if not self.watch_forget_confirmer():
+            return
+        if not self.controller.forget_current_watch():
+            LOGGER.warning("No current watch credential was available to forget")
+        self.refresh_(None)
 
     def renameAgent_(self, _sender):
         current_name = self.controller.snapshot().agent_name
@@ -529,6 +554,7 @@ class MenuBarApplication(NSObject):
         self.reconnect_item.setEnabled_(False)
         self.rename_agent_item.setEnabled_(False)
         self.retry_pairing_item.setEnabled_(False)
+        self.forget_watch_item.setEnabled_(False)
         self.setup_voice_item.setEnabled_(False)
         self.accessibility_item.setEnabled_(False)
         worker = self._voice_install_thread

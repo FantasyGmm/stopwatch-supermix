@@ -544,6 +544,7 @@ class CodexStatusAgentTests(unittest.TestCase):
 class BleStatusTransportVoiceTests(unittest.IsolatedAsyncioTestCase):
     async def test_watch_discovery_uses_only_restricted_pairing_gatt(self):
         watch_id = bytes(range(16))
+        watch_identity_public = b"\x02" + b"W" * 32
 
         class Client:
             is_connected = True
@@ -563,7 +564,12 @@ class BleStatusTransportVoiceTests(unittest.IsolatedAsyncioTestCase):
                 asyncio.get_running_loop().call_soon(
                     self.callback,
                     None,
-                    encode_discovery_response(transaction_id, watch_id, 7),
+                    encode_discovery_response(
+                        transaction_id,
+                        watch_id,
+                        7,
+                        watch_identity_public,
+                    ),
                 )
 
         client = Client()
@@ -573,7 +579,10 @@ class BleStatusTransportVoiceTests(unittest.IsolatedAsyncioTestCase):
 
         discovery = await transport.discover_watch()
 
-        self.assertEqual(discovery, WatchDiscovery(watch_id, 7))
+        self.assertEqual(
+            discovery,
+            WatchDiscovery(watch_id, 7, watch_identity_public),
+        )
         self.assertIs(client.assert_kind, WireMessageType.DISCOVERY_REQUEST)
         self.assertEqual(
             client.calls,
