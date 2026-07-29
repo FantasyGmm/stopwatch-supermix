@@ -80,10 +80,14 @@ _IMPERATIVE_ACTION_RE = re.compile(
 )
 _IMPERATIVE_BOUNDARY_RE = re.compile(r"[;；:：]|[ \t]+[—–-][ \t]+")
 _ACTION_LIST_PREFIX_RE = re.compile(
-    r"(?:next[ \t]+steps?|actions?[ \t]+required)\s*$", re.IGNORECASE
-)
-_REPORT_PREFIX_RE = re.compile(
-    r"(?:(?:the[ \t]+)?summary|status|phase)\s*$", re.IGNORECASE
+    r"^\s*(?:[-*][ \t]*)?(?:"
+    r"required[ \t]+actions?|"
+    r"to[ \t]+do|"
+    r"remaining[ \t]+steps?|"
+    r"(?:the[ \t]+)?next[ \t]+steps?(?:[ \t]+are)?|"
+    r"next[ \t]+actions?|"
+    r"actions?[ \t]+required)\s*$",
+    re.IGNORECASE,
 )
 _REPORT_NOUN_SUFFIX_RE = re.compile(
     r"^\s*(?:[,，](?!\s*(?:(?:then[ \t]+)?"
@@ -102,7 +106,8 @@ _COORDINATED_ACTION_RE = re.compile(
     re.IGNORECASE,
 )
 _COORDINATED_REQUIREMENT_NOUN_RE = re.compile(
-    r"(?:\band[ \t]+(?:also[ \t]+)?(?:your[ \t]+)?|,[ \t]*)"
+    r"(?:\band[ \t]+(?:also[ \t]+)?|,[ \t]*)"
+    r"(?:your[ \t]+)?"
     r"(?:confirmation|choice|input|reply)\b",
     re.IGNORECASE,
 )
@@ -121,11 +126,20 @@ _ALTERNATIVE_CHOICE_RE = re.compile(
     r"^\s*[A-Z1-9]\s*(?:or|或|还是)\s*[A-Z1-9]\s*[?？؟]?[.!。]?\s*$|"
     r"\b(?:do|will|would|can|could|should|may)[ \t]+"
     r"(?:you|we|I)[ \t]+[^\r\n。！？.!?؟]{0,40}"
-    r"\b(?:prefer|use|choose|select|pick)\b"
+    r"\b(?:prefer|choose|select|pick)\b"
     r"[^\r\n。！？.!?؟]{0,80}\bor\b|"
-    r"(?:使用|选择|选)[^\r\n。！？.!?؟]{0,80}(?:或|还是)|"
-    r"[\u3400-\u9fffA-Za-z0-9][^\r\n。！？.!?؟]{0,24}"
-    r"还是[^\r\n。！？.!?؟]{0,24}[\u3400-\u9fffA-Za-z0-9]",
+    r"\b(?:should|will)[ \t]+(?:you|we|I)[ \t]+"
+    r"[^\r\n。！？.!?؟]{0,40}\buse\b"
+    r"[^\r\n。！？.!?؟]{0,80}\bor\b|"
+    r"^\s*use\b[^\r\n。！？.!?؟]{0,80}\bor\b|"
+    r"(?:你|您)[^\r\n。！？.!?؟]{0,12}"
+    r"(?:要|希望|想|使用|选择|选)[^\r\n。！？.!?؟]{0,16}"
+    r"还是[^\r\n。！？.!?؟]{1,16}|"
+    r"^\s*(?![\u3400-\u9fff]{0,12}(?:使用|采用|报告))"
+    r"[\u3400-\u9fff]{1,12}(?:环境|方案|选项|版本|模式)"
+    r"[ \t]*还是[ \t]*"
+    r"[\u3400-\u9fff]{1,12}(?:环境|方案|选项|版本|模式)"
+    r"\s*[？?]?[。.]?\s*$",
     re.IGNORECASE,
 )
 _COURTESY_CLAUSE_RE = re.compile(
@@ -249,11 +263,10 @@ class _EvidenceScope(enum.Enum):
     EXECUTION = "execution"
 
 
-_COMMUNICATIVE_SCOPES = frozenset(
+_REPLY_RESOLUTION_SCOPES = frozenset(
     {
         _EvidenceScope.REPLY,
         _EvidenceScope.CONFIRMATION,
-        _EvidenceScope.CHOICE,
     }
 )
 _ALL_SCOPES = frozenset(set(_EvidenceScope))
@@ -521,7 +534,7 @@ def _action_scopes(match: re.Match[str], clause: _Clause) -> FrozenSet[_Evidence
 
 def _resolution_scopes(match: re.Match[str]) -> FrozenSet[_EvidenceScope]:
     if match.lastgroup == "reply":
-        return _COMMUNICATIVE_SCOPES
+        return _REPLY_RESOLUTION_SCOPES
     if match.lastgroup == "confirmation":
         return frozenset({_EvidenceScope.CONFIRMATION})
     if match.lastgroup == "choice":
@@ -917,11 +930,13 @@ def _required_action_evidence(
             boundary = boundaries[-1]
             boundary_context = prefix[: boundary.start()]
             action_list = _ACTION_LIST_PREFIX_RE.search(boundary_context) is not None
-            if not action_list and _REPORT_PREFIX_RE.search(boundary_context) is not None:
-                continue
-            suffix = prose[match.end() : match.end() + 80]
-            if not action_list and _REPORT_NOUN_SUFFIX_RE.search(suffix) is not None:
-                continue
+            if boundary.group().strip() not in {";", "；"}:
+                if not action_list:
+                    continue
+            else:
+                suffix = prose[match.end() : match.end() + 80]
+                if _REPORT_NOUN_SUFFIX_RE.search(suffix) is not None:
+                    continue
             prefix = prefix[boundary.end() :]
         elif prefix_start > clause_start:
             continue
