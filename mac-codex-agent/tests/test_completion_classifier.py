@@ -1661,6 +1661,43 @@ class CompletionClassifierTests(unittest.TestCase):
                 result = classify_completion(message)
                 self.assertEqual(result.outcome, "waiting")
 
+    def test_complement_structure_distinguishes_inner_and_outer_actions(self):
+        inner_messages = (
+            "Can you confirm whether I should review, provide input, and reply "
+            "with details? No confirmation is required.",
+            "Can you confirm whether I should review and then provide input? "
+            "No confirmation is required.",
+        )
+        for message in inner_messages:
+            with self.subTest(kind="inner", message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("completed", "text_explicitly_resolved"),
+                )
+
+        outer_messages = (
+            "Can you confirm whether approval is required and provide input? "
+            "No confirmation is required.",
+            "Can you confirm whether approval is required, then please authorize "
+            "release? No confirmation is required.",
+            "Can you confirm whether approval is required and please approve "
+            "release? No confirmation is required.",
+            "Can you confirm whether approval is required and can you verify "
+            "release? No confirmation is required.",
+            "Can you confirm whether the build passed and provide input? "
+            "No confirmation is required.",
+            "Can you confirm whether deployment is ready and authorize release? "
+            "No confirmation is required.",
+            "你能确认构建是否通过并提供输入吗？无需确认。",
+            "你能确认是否需要批准，并且请授权发布吗？无需确认。",
+            "你能确认是否需要批准，并且你能验证发布吗？无需确认。",
+        )
+        for message in outer_messages:
+            with self.subTest(kind="outer", message=message):
+                result = classify_completion(message)
+                self.assertEqual(result.outcome, "waiting")
+
     def test_three_scope_and_chinese_coordinated_resolutions(self):
         messages = (
             "Please approve, authorize, and verify deployment. "
@@ -1688,13 +1725,30 @@ class CompletionClassifierTests(unittest.TestCase):
                 )
 
     def test_nearest_attribution_wins_across_multiple_sources(self):
-        historical = classify_completion(
+        historical_messages = (
             "The docs say approval is required, but the logs say authorization "
-            "is required in the old workflow."
+            "is required in the old workflow.",
+            "The docs say approval is required, but according to the logs, "
+            "authorization is required in the old workflow.",
+            "The docs say approval is required, but per the logs, authorization "
+            "is required in the old workflow.",
+        )
+        for message in historical_messages:
+            with self.subTest(message=message):
+                historical = classify_completion(message)
+                self.assertEqual(
+                    (historical.outcome, historical.reason),
+                    ("completed", "completion_only"),
+                )
+
+        resolved = classify_completion(
+            "The docs say approval is required, but authorization is required. "
+            "The logs say authorization is required in the old workflow. "
+            "No authorization is required."
         )
         self.assertEqual(
-            (historical.outcome, historical.reason),
-            ("completed", "completion_only"),
+            (resolved.outcome, resolved.reason),
+            ("completed", "text_explicitly_resolved"),
         )
 
     def test_question_action_groups_share_only_local_trailing_referents(self):
@@ -2103,6 +2157,37 @@ class CompletionClassifierTests(unittest.TestCase):
             (historical_resolution.outcome, historical_resolution.reason),
             ("waiting", "text_required_action"),
         )
+
+    def test_postposed_plural_security_resolutions_clear_each_scope(self):
+        resolved = classify_completion(
+            "Please approve, authorize, and verify deployment. "
+            "Approval, authorization, and verification are not required."
+        )
+        self.assertEqual(
+            (resolved.outcome, resolved.reason),
+            ("completed", "text_explicitly_resolved"),
+        )
+
+        negative_neighbors = (
+            "Please approve, authorize, and verify deployment. The docs say "
+            "approval, authorization, and verification are not required.",
+            "Please approve, authorize, and verify deployment. Approval, "
+            "authorization, and verification are not required after migration.",
+            "请批准并授权及验证部署。文档说无需批准、授权或验证。",
+            "Please approve, authorize, and verify deployment. The logs indicate "
+            "approval, authorization, and verification are not required.",
+            "Please approve, authorize, and verify deployment. We expect approval, "
+            "authorization, and verification are not required.",
+            "Please approve, authorize, and verify deployment. Approval, "
+            "authorization, and verification are not required to be documented.",
+        )
+        for message in negative_neighbors:
+            with self.subTest(message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("waiting", "text_required_action"),
+                )
 
     def test_bounded_security_ownership_requests_require_action(self):
         messages = (

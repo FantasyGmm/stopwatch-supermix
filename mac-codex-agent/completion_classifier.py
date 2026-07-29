@@ -60,13 +60,16 @@ _SECOND_PERSON_RE = re.compile(
 )
 _REQUIRED_ACTION_RE = re.compile(
     r"(?:请(?:确认|选择|提供|回复|重新|复核|批准|授权|验证)|"
+    r"(?:你|您)(?:能否|能|可以)(?:请)?"
+    r"(?:确认|选择|提供|回复|复核|批准|授权|验证)|"
     r"确认后(?:继续|我继续|我会继续)|"
     r"等待(?:你的)?(?:回复|确认)|"
     r"需要(?:你|您)的?(?:确认|选择|提供|回复|操作|批准|授权|验证)|"
     r"需要进一步指令|无法继续|"
     r"\bplease[ \t]+(?:confirm|choose|select|provide|reply|retry|review)\b|"
     r"\bplease[ \t]+(?:approve|authorize|verify)\b|"
-    r"\bcan[ \t]+you[ \t]+(?:confirm|choose|select|provide|reply|retry|review)\b|"
+    r"\bcan[ \t]+you[ \t]+(?:approve|authorize|confirm|choose|select|provide|"
+    r"reply|retry|review|verify)\b|"
     r"\bwaiting[ \t]+for[ \t]+your[ \t]+"
     r"(?:reply|confirmation|choice|input|approval|authorization|verification)\b|"
     r"\bneed[ \t]+your[ \t]+"
@@ -89,7 +92,8 @@ _REQUIRED_ACTION_RE = re.compile(
 )
 _ATTRIBUTED_ACTION_PREFIX_RE = re.compile(
     r"(?:\b(?:docs?|documentation|examples?|logs?|incident[ \t]+report)\b"
-    r"[^\r\n。！？.!?؟]{0,40}\b(?:say|says|state|states|said)\b|"
+    r"[^\r\n。！？.!?؟]{0,40}\b(?:say|says|state|states|said|"
+    r"indicate|indicates|show|shows|suggest|suggests)\b|"
     r"\b(?:according[ \t]+to|per)[ \t]+"
     r"(?:(?:the|our|your|their|its)[ \t]+)?"
     r"(?:[A-Za-z-]+[ \t]+){0,2}"
@@ -291,6 +295,10 @@ _RESOLUTION_RE = re.compile(
     r"(?:,[ \t]*(?:approval|authorization|verification))*"
     r",?[ \t]+nor[ \t]+(?:approval|authorization|verification)"
     r"[ \t]+(?:is|are)[ \t]+required\b|"
+    r"\b(?:approval|authorization|verification)"
+    r"(?:(?:,[ \t]*(?:(?:and|or)[ \t]+)?|[ \t]+(?:and|or)[ \t]+)"
+    r"(?:approval|authorization|verification))+"
+    r"[ \t]+are[ \t]+not[ \t]+required\b|"
     r"(?:无需|不需要)(?:(?:你|您)的?)?"
     r"(?:批准|授权|验证)"
     r"(?:(?:[、，,][ \t]*(?:或|及|和|并|与|以及)?|"
@@ -318,11 +326,13 @@ _INVALID_RESOLUTION_PREFIX_RE = re.compile(
     r"\b(?:do not|don't) assume\b|"
     r"\b(?:docs?|documentation|examples?|logs?|incident[ \t]+report)\b"
     r"(?:[ \t]+[A-Za-z-]+){0,2}[ \t]+"
-    r"(?:say|says|state|states|said)\b|"
+    r"(?:say|says|state|states|said|indicate|indicates|show|shows|"
+    r"suggest|suggests)\b|"
     r"\b(?:according[ \t]+to|per)[ \t]+"
     r"(?:(?:the|our|your|their|its)[ \t]+)?"
     r"(?:[A-Za-z-]+[ \t]+){0,2}"
     r"(?:docs?|documentation|examples?|logs?|incident[ \t]+report)\b|"
+    r"\b(?:I|we|they)[ \t]+(?:expect|expects|anticipate|anticipates)\b|"
     r"\b(?:after|once|when|if|until|then)\b|"
     r"(?:并非|不是|文档(?:说|写道|指出)|"
     r"根据[\u4e00-\u9fff]{0,8}文档|之后|以后|如果|待))",
@@ -330,6 +340,7 @@ _INVALID_RESOLUTION_PREFIX_RE = re.compile(
 )
 _INVALID_RESOLUTION_SUFFIX_RE = re.compile(
     r"(?:\b(?:after|once|when|if|until)\b|"
+    r"\bto[ \t]+be\b|"
     r"\baccording to (?:the )?(?:docs?|documentation|examples?)\b|"
     r"(?:之后|以后|如果|待))",
     re.IGNORECASE,
@@ -552,12 +563,37 @@ _QUESTION_COMPLEMENT_RE = re.compile(
     r"\b(?:that|whether|if)\b|(?:是否)",
     re.IGNORECASE,
 )
-_QUESTION_OUTER_ACTION_RESTART_RE = re.compile(
-    r"(?:\bthen[ \t]+(?:please[ \t]+)?|"
-    r",[ \t]*(?:(?:and|then)[ \t]+)(?:please[ \t]+)?)"
-    r"(?=(?:provide|review|reply|choose|select|retry|confirm)\b)|"
-    r"(?:，(?:并|然后)?|然后)(?:请)?"
-    r"(?=(?:确认|选择|提供|回复|重新|重试|复核))",
+_QUESTION_ACTION_PATTERN = (
+    r"(?:approve|authorize|confirm|choose|select|provide|reply|retry|review|verify)"
+)
+_CHINESE_QUESTION_ACTION_PATTERN = (
+    r"(?:确认|选择|提供|回复|重新|重试|复核|批准|授权|验证)"
+)
+_QUESTION_EXPLICIT_OUTER_ACTION_RE = re.compile(
+    rf"(?:,[ \t]*)?(?:and|then)[ \t]+"
+    rf"(?:(?:please)[ \t]+|(?:can|could|would|will)[ \t]+you[ \t]+"
+    rf"(?:please[ \t]+)?)(?={_QUESTION_ACTION_PATTERN}\b)|"
+    rf"(?:，)?(?:并且|并|然后)(?:请|你能|您能|你可以|您可以)"
+    rf"(?={_CHINESE_QUESTION_ACTION_PATTERN})",
+    re.IGNORECASE,
+)
+_QUESTION_COMPLEMENT_PREDICATE_RE = re.compile(
+    r"\b(?:the[ \t]+)?[A-Za-z0-9][A-Za-z0-9_-]*"
+    r"(?:[ \t]+[A-Za-z0-9][A-Za-z0-9_-]*){0,3}[ \t]+"
+    r"(?:is|are|was|were|remains?)[ \t]+(?:(?:still|also)[ \t]+)?"
+    r"(?:approved|authorized|available|complete|completed|ready|required|"
+    r"successful|verified)\b|"
+    r"\b(?:the[ \t]+)?[A-Za-z0-9][A-Za-z0-9_-]*"
+    r"(?:[ \t]+[A-Za-z0-9][A-Za-z0-9_-]*){0,3}[ \t]+"
+    r"(?:completed|failed|finished|passed|succeeded)\b|"
+    r"(?:是否)?(?:需要|需)(?:批准|授权|确认|验证)|"
+    r"(?:通过|完成|就绪|成功|失败)",
+    re.IGNORECASE,
+)
+_QUESTION_COMPLETED_OUTER_ACTION_RE = re.compile(
+    rf"(?:,[ \t]*)?(?:and|then)[ \t]+(?:please[ \t]+)?"
+    rf"(?={_QUESTION_ACTION_PATTERN}\b)|"
+    rf"(?:，)?(?:并且|并|然后)(?:请)?(?={_CHINESE_QUESTION_ACTION_PATTERN})",
     re.IGNORECASE,
 )
 
@@ -587,13 +623,34 @@ def _question_complement_range(
         and clause_text[governing_end : complement.start()].strip()
     ):
         return None
-    restart = _QUESTION_OUTER_ACTION_RESTART_RE.search(
-        clause_text, complement.end()
-    )
+    restart = _question_complement_restart(clause_text, complement.end())
     return (
         complement.start(),
         restart.start() if restart is not None else len(clause_text),
     )
+
+
+def _question_complement_restart(
+    clause_text: str, complement_end: int
+) -> re.Match[str] | None:
+    explicit = _QUESTION_EXPLICIT_OUTER_ACTION_RE.search(
+        clause_text, complement_end
+    )
+    predicate = _QUESTION_COMPLEMENT_PREDICATE_RE.search(
+        clause_text, complement_end
+    )
+    completed = (
+        _QUESTION_COMPLETED_OUTER_ACTION_RE.search(
+            clause_text, predicate.end()
+        )
+        if predicate is not None
+        else None
+    )
+    if explicit is None:
+        return completed
+    if completed is None or explicit.start() < completed.start():
+        return explicit
+    return completed
 
 
 def _governing_question_actions(
@@ -616,22 +673,13 @@ def _governing_question_actions(
             and intervening[: complement.start()].strip()
         ):
             complement = None
-        restart = (
-            re.search(r"\bthen\b|然后", coordinated.group(), re.IGNORECASE)
-            is not None
-            or re.match(
-                r"\s*,\s*(?:and|then)\b",
-                coordinated.group(),
-                re.IGNORECASE,
+        if complement is not None:
+            complement_end = cursor + complement.end()
+            restart = _question_complement_restart(
+                action_prose, complement_end
             )
-            is not None
-            or (
-                intervening.rstrip().endswith("，")
-                and re.match(r"(?:并|然后)", coordinated.group()) is not None
-            )
-        )
-        if complement is not None and not restart:
-            break
+            if restart is None or coordinated.start() < restart.start():
+                break
         action = coordinated.group("english") or coordinated.group("chinese")
         if coordinated.group("chinese") and re.match(
             r"状态", action_prose[coordinated.end() :]
@@ -1452,6 +1500,19 @@ def _required_action_evidence(
             and clause is not None
             and primary_starts[primary_index] >= clause.start
         )
+        if has_primary_anchor and clause.has_question_mark:
+            primary = primary_matches[primary_index]
+            primary_start = primary.start() - clause.start
+            primary_end = primary.end() - clause.start
+            question_action_index = bisect.bisect_right(
+                clause.question_action_ends, primary_start
+            )
+            if (
+                question_action_index < len(clause.question_action_ends)
+                and clause.question_action_ends[question_action_index]
+                <= primary_end
+            ):
+                has_primary_anchor = False
         has_question_anchor = (
             clause is not None
             and bool(clause.question_actions)
@@ -1561,7 +1622,9 @@ def _required_action_evidence(
         ):
             action_prefix = action_prefix[: not_only_prefix.start()]
         action_context = clause.text[context_start:relative_end]
-        attribution = _ATTRIBUTED_ACTION_PREFIX_RE.search(action_context)
+        attribution = None
+        for source in _ATTRIBUTED_ACTION_PREFIX_RE.finditer(action_context):
+            attribution = source
         attribution_tail = (
             action_context[attribution.end() :]
             if attribution is not None
