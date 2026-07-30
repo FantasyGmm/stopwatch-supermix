@@ -2407,8 +2407,6 @@ class CompletionClassifierTests(unittest.TestCase):
             "required; we documented it too.",
             "Please approve deployment. We did not merely definitively confirm that "
             "approval is not required; we documented it too.",
-            "Please approve deployment. We expected and it has been confirmed that "
-            "approval is not required.",
             "Please approve and authorize deployment. It is expected that approval "
             "and authorization are not required.",
             "Please approve and authorize deployment. We do not expect that approval "
@@ -3224,6 +3222,282 @@ class CompletionClassifierTests(unittest.TestCase):
 
         small_elapsed, _ = measure(1_000)
         large_elapsed, result = measure(4_000)
+
+        self.assertEqual(
+            (result.outcome, result.reason),
+            ("completed", "text_explicitly_resolved"),
+        )
+        self.assertLess(large_elapsed, 1.0)
+        self.assertLess(large_elapsed, small_elapsed * 7 + 0.05)
+
+    def test_typed_confirmation_state_resets_local_uncertainty_and_parses_time(self):
+        completed_messages = (
+            "Please approve deployment. We expected a delay, and Alice confirmed that "
+            "approval is not required.",
+            "Please approve deployment. We expected a delay, Alice confirmed that "
+            "approval is not required.",
+            "Please approve deployment. We expected and it has been confirmed that "
+            "approval is not required.",
+            "Please approve deployment. Two hours ago, Alice confirmed that approval "
+            "is not required.",
+            "Please approve deployment. Following completion of the audit, Alice "
+            "confirmed that approval is not required.",
+            "Please approve deployment. Long before migration, Alice confirmed that "
+            "approval is not required.",
+            "Please approve deployment. One hundred twenty three thousand four hundred "
+            "fifty six hours ago, Alice confirmed that approval is not required.",
+        )
+        guarded_messages = (
+            "Please approve deployment. We expected that Alice confirmed that approval "
+            "is not required.",
+            "Please approve deployment. We can confirm in 2 hours that approval is not "
+            "required.",
+            "Please approve deployment. We can confirm in two hours that approval is "
+            "not required.",
+            "Please approve deployment. We can confirm in twenty one days that approval "
+            "is not required.",
+            "Please approve deployment. We can confirm in one hundred twenty three "
+            "thousand four hundred fifty six hours that approval is not required.",
+            "Please approve deployment. We can confirm before long that approval is not "
+            "required.",
+            "Please approve deployment. We can confirm following completion of the "
+            "audit that approval is not required.",
+        )
+        for message in completed_messages:
+            with self.subTest(kind="completed", message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("completed", "text_explicitly_resolved"),
+                )
+        for message in guarded_messages:
+            with self.subTest(kind="guarded", message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("waiting", "text_required_action"),
+                )
+
+    def test_typed_confirmation_state_orders_post_that_uncertainty(self):
+        completed_messages = (
+            "Please approve deployment. We confirmed that it is clear that approval is "
+            "not required.",
+            "Please approve deployment. We confirmed that approval is not required, "
+            "certainly.",
+            "Please approve deployment. We confirmed that approval is not required, "
+            "definitely.",
+        )
+        guarded_messages = (
+            "Please approve deployment. We confirmed that it is false that approval is "
+            "not required.",
+            "Please approve deployment. We confirmed that whether approval is not "
+            "required remains unclear.",
+            "Please approve deployment. We confirmed that we are unsure whether approval "
+            "is not required.",
+            "Please approve deployment. We confirmed that approval is not required, "
+            "perhaps.",
+            "Please approve deployment. We confirmed that approval is not required, "
+            "possibly.",
+        )
+        for message in completed_messages:
+            with self.subTest(kind="completed", message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("completed", "text_explicitly_resolved"),
+                )
+        for message in guarded_messages:
+            with self.subTest(kind="guarded", message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("waiting", "text_required_action"),
+                )
+
+    def test_typed_confirmation_reversals_bind_referents_and_ignore_history(self):
+        completed_messages = (
+            "Please approve deployment. We confirmed that approval is not required. "
+            "The checksum confirmation was wrong.",
+            "Please approve deployment. We confirmed that approval is not required. "
+            "Separately, the checksum confirmation was wrong.",
+            "Please approve deployment. We confirmed that approval is not required. "
+            "We confirmed that the checksum is valid. That confirmation was wrong.",
+            "Please approve deployment. We confirmed that approval is not required. "
+            "The confirmation of the checksum was wrong.",
+            "Please approve deployment. We confirmed that approval is not required. "
+            "The confirmation about deployment was wrong.",
+            "Please approve deployment. We confirmed that approval is not required. "
+            "The build confirmation was wrong.",
+            "Please approve deployment. We confirmed that approval is not required. "
+            "The release confirmation was wrong.",
+            "Please approve deployment. We confirmed that approval is not required. "
+            "The deployment confirmation was wrong.",
+            "Please approve deployment. We confirmed that approval is not required. "
+            "The test confirmation was wrong.",
+            "Please approve deployment. We confirmed that approval is not required. "
+            "Historically, approval was required.",
+            "Please approve deployment. We confirmed that approval is not required. "
+            "Historically, the approval decision was clearly required.",
+            "Please approve deployment. We confirmed that the checksum is possibly "
+            "wrong, but approval is not required.",
+            "Please authorize deployment. We confirmed that approval and authorization "
+            "are not required. The approval confirmation was wrong.",
+            "Please approve deployment. We confirmed that approval is not required. "
+            "Approval was required historically.",
+            "Please approve deployment. We confirmed that approval is not required. "
+            "Approval was required before migration.",
+            "Please approve deployment. We confirmed that approval is not required. "
+            "Before migration, approval was required.",
+            "Please approve deployment. We confirmed that approval is not required. "
+            "Before the migration, approval was required.",
+            "Please approve deployment. We confirmed that approval is not required. "
+            "Approval before migration was required.",
+        )
+        guarded_messages = (
+            "Please approve deployment. We confirmed that approval is not required. "
+            "That confirmation was wrong.",
+            "Please approve deployment. We confirmed that approval is not required. "
+            "The approval confirmation was wrong.",
+            "Please approve deployment. We confirmed that approval is not required. "
+            "The confirmation of the approval was wrong.",
+            "Please approve deployment. We confirmed that approval is not required. "
+            "The latest confirmation was wrong.",
+            "Please approve deployment. We confirmed that approval is not required. "
+            "The final confirmation was wrong.",
+            "Please approve deployment. We confirmed that approval is not required. "
+            "The earlier confirmation was wrong.",
+            "Please approve deployment. We confirmed that approval is not required. "
+            "The previous confirmation was wrong.",
+            "Please approve deployment. We confirmed that approval is not required. "
+            "The written confirmation was wrong.",
+            "Please approve deployment. We confirmed that approval is not required. "
+            "The official confirmation was wrong.",
+            "Please approve deployment. We confirmed that approval is not required. "
+            "The recent confirmation was wrong.",
+            "Please approve deployment. We confirmed that approval is not required. "
+            "The subsequent confirmation was wrong.",
+            "Please approve deployment. We confirmed that approval is not required. "
+            "The current confirmation was wrong.",
+            "Please approve deployment. We confirmed that approval is not required. "
+            "The explicit confirmation was wrong.",
+            "Please approve deployment. We confirmed that approval is not required. "
+            "The definitive confirmation was wrong.",
+            "Please approve deployment. We confirmed that approval is not required. "
+            "The formal confirmation was wrong.",
+            "Please approve deployment. We confirmed that approval is not required. "
+            "The prior confirmation was wrong.",
+            "Please approve deployment. We confirmed that approval is not required. "
+            "The approval's confirmation was wrong.",
+            "Please authorize deployment. We confirmed that authorization is not "
+            "required. The authorization's confirmation was wrong.",
+            "Please verify deployment. We confirmed that verification is not required. "
+            "The verification's confirmation was wrong.",
+            "Please approve deployment. We confirmed that approval and authorization "
+            "are not required. The approval confirmation was wrong.",
+            "Please approve deployment. We confirmed that approval is not required. "
+            "Approval is actually required.",
+            "Please approve deployment. We confirmed that approval is not required. "
+            "The checksum confirmation was wrong. Separately, approval is required.",
+            "Please approve deployment. We confirmed that approval is not required. "
+            "Approval may actually be required now, although historically it was "
+            "required before migration.",
+            "Please approve deployment. We confirmed that approval is not required. "
+            "Before migration ended, approval is required now.",
+        )
+        for message in completed_messages:
+            with self.subTest(kind="completed", message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("completed", "text_explicitly_resolved"),
+                )
+        for message in guarded_messages:
+            with self.subTest(kind="guarded", message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("waiting", "text_required_action"),
+                )
+
+    def test_typed_confirmation_suffix_invalidators_bind_referents(self):
+        completed_messages = (
+            "Please approve deployment. Approval is not required, but deployment is not "
+            "ready yet.",
+            "Please approve deployment. Approval is not required, but the checksum is "
+            "not ready yet.",
+            "Please approve deployment. Approval is not required, but perhaps deployment "
+            "is not ready.",
+            "Please approve deployment. Approval is not required, but possibly the "
+            "checksum is stale.",
+            "Please approve deployment. Approval is not required, but the build is not "
+            "ready yet.",
+            "Please approve deployment. Approval is not required, but the release is "
+            "not ready yet.",
+            "Please approve deployment. Approval is not required, but the audit is not "
+            "ready yet.",
+            "Please approve deployment. Approval is not required, but deployment and "
+            "checksum are not ready yet.",
+            "Please authorize deployment. Approval and authorization are not required, "
+            "but the approval decision is not final yet.",
+            "Please approve deployment. Approval and authorization are not required, "
+            "but the authorization decision is not final yet.",
+        )
+        guarded_messages = (
+            "Please approve deployment. Approval is not required yet.",
+            "Please approve deployment. Approval is not required, but the approval "
+            "decision is not final yet.",
+            "Please approve deployment. Approval and authorization are not required, "
+            "but the approval decision is not final yet.",
+            "Please authorize deployment. Approval and authorization are not required, "
+            "but the authorization decision is not final yet.",
+            "Please approve deployment. Approval is not required, but is not final yet.",
+            "Please approve deployment. Approval is not required, but may not be final "
+            "yet.",
+            "Please approve deployment. Approval is not required, and is not final yet.",
+            "Please approve deployment. Approval is not required, but the pending "
+            "approval decision is not final yet.",
+            "Please approve deployment. Approval is not required, but our approval "
+            "decision is not final yet.",
+            "Please approve deployment. Approval is not required, but final approval is "
+            "not decided yet.",
+            "Please approve deployment. Approval is not required, but approval and "
+            "deployment are not ready yet.",
+            "Please approve deployment. Approval is not required, but deployment and "
+            "approval are not ready yet.",
+            "Please approve deployment. Approval is not required after the security "
+            "review.",
+        )
+        for message in completed_messages:
+            with self.subTest(kind="completed", message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("completed", "text_explicitly_resolved"),
+                )
+        for message in guarded_messages:
+            with self.subTest(kind="guarded", message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("waiting", "text_required_action"),
+                )
+
+    def test_typed_confirmation_ownership_scales_near_linearly(self):
+        def measure(count):
+            history = " ".join(
+                "Separately, the checksum confirmation was wrong historically."
+                for _ in range(count)
+            )
+            message = (
+                "Please approve deployment. We confirmed that approval is not required. "
+                f"{history}"
+            )
+            started = time.monotonic()
+            result = classify_completion(message)
+            return time.monotonic() - started, result
+
+        small_elapsed, _ = measure(200)
+        large_elapsed, result = measure(800)
 
         self.assertEqual(
             (result.outcome, result.reason),
