@@ -2407,8 +2407,6 @@ class CompletionClassifierTests(unittest.TestCase):
             "required; we documented it too.",
             "Please approve deployment. We did not merely definitively confirm that "
             "approval is not required; we documented it too.",
-            "Please approve deployment. We may retry and we confirmed that approval is "
-            "not required.",
             "Please approve deployment. We expected and it has been confirmed that "
             "approval is not required.",
             "Please approve and authorize deployment. It is expected that approval "
@@ -3010,6 +3008,229 @@ class CompletionClassifierTests(unittest.TestCase):
                     (result.outcome, result.reason),
                     ("completed", "text_explicitly_resolved"),
                 )
+
+    def test_confirmation_events_use_local_predicates_and_isolate_quotes(self):
+        completed_messages = (
+            "Please approve deployment. We confirm that approval is not required.",
+            "Please approve deployment. We may retry and we confirmed that approval is "
+            "not required.",
+            "Please approve deployment. We might investigate and Alice confirmed that "
+            "approval is not required.",
+            "Please approve deployment. Alice said \"not yet\"; we confirmed that "
+            "approval is not required.",
+            "Please approve deployment. We did not retry and we confirmed that "
+            "approval is not required.",
+            "Please approve deployment. We did not retry and Alice confirmed that "
+            "approval is not required.",
+            "Please approve deployment. We may retry and the auditor confirmed that "
+            "approval is not required.",
+            "Please approve deployment. We may retry and our reviewer confirmed that "
+            "approval is not required.",
+            "Please approve deployment. We may retry and engineers confirmed that "
+            "approval is not required.",
+            "Please approve deployment. We may retry and Alice immediately confirmed "
+            "that approval is not required.",
+            "Please approve deployment. We may retry and after Alice reviewed logs, "
+            "Bob confirmed that approval is not required.",
+        )
+        guarded_messages = (
+            "Please approve deployment. We may confirm that approval is not required.",
+            "Please approve deployment. We may retry and confirmed that approval is not "
+            "required.",
+            "Please approve deployment. The note says \"we confirmed\" that approval is "
+            "not required.",
+            "Please approve deployment. \"We confirmed\" that approval is not required.",
+            "Please approve deployment. The note says \"we confirmed.\" that approval "
+            "is not required.",
+            "Please approve deployment. \"We confirmed!\" that approval is not "
+            "required.",
+            "Please approve deployment. We may retry and, after reviewing logs, "
+            "confirmed that approval is not required.",
+            "Please approve deployment. We may retry and with care confirmed that "
+            "approval is not required.",
+            "Please approve deployment. We may retry and definitively confirmed that "
+            "approval is not required.",
+            "Please approve deployment. We may retry and upon reviewing the logs "
+            "confirmed that approval is not required.",
+            "Please approve deployment. We may retry and following a careful review "
+            "confirmed that approval is not required.",
+            "Please approve deployment. We may retry and afterward confirmed that "
+            "approval is not required.",
+            "Please approve deployment. We may retry and once ready confirmed that "
+            "approval is not required.",
+            "Please approve deployment. We may retry and after Alice reviewed logs, "
+            "confirmed that approval is not required.",
+        )
+        for message in completed_messages:
+            with self.subTest(kind="completed", message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("completed", "text_explicitly_resolved"),
+                )
+        for message in guarded_messages:
+            with self.subTest(kind="guarded", message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("waiting", "text_required_action"),
+                )
+
+    def test_confirmation_events_handle_inversion_and_reversal_polarity(self):
+        completed_messages = (
+            "Please approve deployment. Alice confirmed that approval is not required.",
+            "Please approve deployment. Alice had confirmed that approval is not "
+            "required.",
+            "Please approve deployment. We confirmed that approval is not required. "
+            "The confirmation was far from wrong.",
+            "Please approve deployment. We confirmed that approval is not required. "
+            "The confirmation was anything but wrong.",
+        )
+        guarded_messages = (
+            "Please approve deployment. Were it confirmed that approval is not "
+            "required, we could continue.",
+            "Please approve deployment. Had Alice confirmed that approval is not "
+            "required, we could continue.",
+            "Please approve deployment. Had it been confirmed that approval is not "
+            "required, we could continue.",
+            "Please approve deployment. Yesterday, had Alice confirmed that approval "
+            "is not required, we could continue.",
+            "Please approve deployment. In that case, were it confirmed that approval "
+            "is not required, we could continue.",
+            "Please approve deployment. We confirmed that approval is not required. "
+            "The confirmation was wrong.",
+        )
+        for message in completed_messages:
+            with self.subTest(kind="completed", message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("completed", "text_explicitly_resolved"),
+                )
+        for message in guarded_messages:
+            with self.subTest(kind="guarded", message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("waiting", "text_required_action"),
+                )
+
+    def test_confirmation_events_order_post_that_uncertainty_and_future_markers(self):
+        remote_detail = " ".join(["with extensive routine release evidence"] * 10)
+        completed_messages = (
+            "Please approve deployment. We can confirm in summary that approval is not "
+            "required.",
+            "Please approve deployment. We confirmed that approval is not required. "
+            "The confirmation may be correct.",
+            "Please approve deployment. We confirmed that approval is not required, "
+            "and authorization was required historically.",
+        )
+        guarded_messages = (
+            "Please approve deployment. We confirmed that it is possible that approval "
+            "is not required.",
+            "Please approve deployment. We confirmed that perhaps approval is not "
+            "required.",
+            "Please approve deployment. We confirmed that approval is not required. "
+            "The confirmation may be wrong.",
+            "Please approve deployment. We confirmed that approval is not required. "
+            "Approval may actually be required.",
+            "Please approve deployment. We can confirm in due course that approval is "
+            "not required.",
+            "Please approve deployment. We can confirm shortly that approval is not "
+            "required.",
+            "Please approve deployment. We can confirm in the near future that approval "
+            "is not required.",
+            "Please approve deployment. We confirmed that approval is not required "
+            f"{remote_detail} after the security review.",
+        )
+        for message in completed_messages:
+            with self.subTest(kind="completed", message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("completed", "text_explicitly_resolved"),
+                )
+        for message in guarded_messages:
+            with self.subTest(kind="guarded", message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("waiting", "text_required_action"),
+                )
+
+    def test_confirmation_events_preserve_distant_state_and_reversals(self):
+        detail = " ".join(["after reviewing extensive release evidence"] * 10)
+        distant_reversal = " ".join(
+            ["The deployment record contains routine operational details."] * 10
+        )
+        completed_messages = (
+            f"Please approve deployment. We have, {detail}, confirmed that approval is "
+            "not required.",
+            "Please approve deployment. We confirmed that approval is not required. "
+            f"{distant_reversal} The confirmation was not wrong.",
+        )
+        guarded_messages = (
+            f"Please approve deployment. We have not, {detail}, confirmed that approval "
+            "is not required.",
+            "Please approve deployment. We confirmed that approval is not required. "
+            f"{distant_reversal} The confirmation was wrong.",
+        )
+        for message in completed_messages:
+            with self.subTest(kind="completed", message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("completed", "text_explicitly_resolved"),
+                )
+        for message in guarded_messages:
+            with self.subTest(kind="guarded", message=message):
+                result = classify_completion(message)
+                self.assertEqual(
+                    (result.outcome, result.reason),
+                    ("waiting", "text_required_action"),
+                )
+
+    def test_distant_confirmation_state_scales_near_linearly(self):
+        def measure(count):
+            detail = " ".join(["evidence"] * count)
+            message = (
+                f"Please approve deployment. We have not, {detail}, confirmed that "
+                "approval is not required."
+            )
+            started = time.monotonic()
+            result = classify_completion(message)
+            return time.monotonic() - started, result
+
+        small_elapsed, _ = measure(200)
+        large_elapsed, result = measure(800)
+
+        self.assertEqual(
+            (result.outcome, result.reason),
+            ("waiting", "text_required_action"),
+        )
+        self.assertLess(large_elapsed, 1.0)
+        self.assertLess(large_elapsed, small_elapsed * 7 + 0.05)
+
+    def test_dense_confirmation_predicates_scale_near_linearly(self):
+        def measure(count):
+            message = (
+                "Please approve deployment. We "
+                + "confirmed " * count
+                + "that approval is not required."
+            )
+            started = time.monotonic()
+            result = classify_completion(message)
+            return time.monotonic() - started, result
+
+        small_elapsed, _ = measure(1_000)
+        large_elapsed, result = measure(4_000)
+
+        self.assertEqual(
+            (result.outcome, result.reason),
+            ("completed", "text_explicitly_resolved"),
+        )
+        self.assertLess(large_elapsed, 1.0)
+        self.assertLess(large_elapsed, small_elapsed * 7 + 0.05)
 
     def test_bounded_security_ownership_requests_require_action(self):
         messages = (
