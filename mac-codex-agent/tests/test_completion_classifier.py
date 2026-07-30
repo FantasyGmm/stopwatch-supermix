@@ -3240,8 +3240,18 @@ class CompletionClassifierTests(unittest.TestCase):
             "approval is not required.",
             "Please approve deployment. Two hours ago, Alice confirmed that approval "
             "is not required.",
+            "Please approve deployment. A few hours ago, Alice confirmed that approval "
+            "is not required.",
+            "Please approve deployment. Several hours ago, Alice confirmed that "
+            "approval is not required.",
+            "Please approve deployment. About two hours ago, Alice confirmed that "
+            "approval is not required.",
             "Please approve deployment. Following completion of the audit, Alice "
             "confirmed that approval is not required.",
+            "Please approve deployment. Following the completion of the audit, Alice "
+            "confirmed that approval is not required.",
+            "Please approve deployment. Upon completion of the audit, Alice confirmed "
+            "that approval is not required.",
             "Please approve deployment. Long before migration, Alice confirmed that "
             "approval is not required.",
             "Please approve deployment. One hundred twenty three thousand four hundred "
@@ -3256,12 +3266,22 @@ class CompletionClassifierTests(unittest.TestCase):
             "not required.",
             "Please approve deployment. We can confirm in twenty one days that approval "
             "is not required.",
+            "Please approve deployment. We can confirm in a few hours that approval is "
+            "not required.",
+            "Please approve deployment. We can confirm in several hours that approval "
+            "is not required.",
+            "Please approve deployment. We can confirm in about two hours that approval "
+            "is not required.",
             "Please approve deployment. We can confirm in one hundred twenty three "
             "thousand four hundred fifty six hours that approval is not required.",
             "Please approve deployment. We can confirm before long that approval is not "
             "required.",
             "Please approve deployment. We can confirm following completion of the "
             "audit that approval is not required.",
+            "Please approve deployment. We can confirm following the completion of the "
+            "audit that approval is not required.",
+            "Please approve deployment. We can confirm upon completion of the audit "
+            "that approval is not required.",
         )
         for message in completed_messages:
             with self.subTest(kind="completed", message=message):
@@ -3290,6 +3310,8 @@ class CompletionClassifierTests(unittest.TestCase):
         guarded_messages = (
             "Please approve deployment. We confirmed that it is false that approval is "
             "not required.",
+            "Please approve deployment. We confirmed that it is impossible that "
+            "approval is not required.",
             "Please approve deployment. We confirmed that whether approval is not "
             "required remains unclear.",
             "Please approve deployment. We confirmed that we are unsure whether approval "
@@ -3342,6 +3364,10 @@ class CompletionClassifierTests(unittest.TestCase):
             "wrong, but approval is not required.",
             "Please authorize deployment. We confirmed that approval and authorization "
             "are not required. The approval confirmation was wrong.",
+            "Please authorize deployment. We confirmed that approval and authorization "
+            "are not required. That confirmation was wrong only for approval.",
+            "Please approve deployment. We confirmed that approval and authorization "
+            "are not required. That confirmation was wrong only for authorization.",
             "Please approve deployment. We confirmed that approval is not required. "
             "Approval was required historically.",
             "Please approve deployment. We confirmed that approval is not required. "
@@ -3352,6 +3378,16 @@ class CompletionClassifierTests(unittest.TestCase):
             "Before the migration, approval was required.",
             "Please approve deployment. We confirmed that approval is not required. "
             "Approval before migration was required.",
+            "Please approve deployment. Approval is not required. Historically, "
+            "approval was required.",
+            "Please approve deployment. Approval is not required. According to the "
+            "docs, approval is required.",
+            "Please approve deployment. Approval is not required. In the past, approval "
+            "was required.",
+            "Please approve deployment. Approval is not required. Last year, approval "
+            "was required.",
+            "Please approve deployment. Approval is not required. Approval was required "
+            "prior to migration.",
         )
         guarded_messages = (
             "Please approve deployment. We confirmed that approval is not required. "
@@ -3394,6 +3430,10 @@ class CompletionClassifierTests(unittest.TestCase):
             "The verification's confirmation was wrong.",
             "Please approve deployment. We confirmed that approval and authorization "
             "are not required. The approval confirmation was wrong.",
+            "Please approve deployment. We confirmed that approval and authorization "
+            "are not required. That confirmation was wrong only for approval.",
+            "Please authorize deployment. We confirmed that approval and authorization "
+            "are not required. That confirmation was wrong only for authorization.",
             "Please approve deployment. We confirmed that approval is not required. "
             "Approval is actually required.",
             "Please approve deployment. We confirmed that approval is not required. "
@@ -3403,6 +3443,18 @@ class CompletionClassifierTests(unittest.TestCase):
             "required before migration.",
             "Please approve deployment. We confirmed that approval is not required. "
             "Before migration ended, approval is required now.",
+            "Please approve deployment. Approval is not required. Approval is actually "
+            "required.",
+            "Please approve deployment. Approval is not required. Approval may actually "
+            "be required now.",
+            "Please approve deployment. Approval is not required. In the current "
+            "release, approval is required.",
+            "Please approve deployment. Approval is not required. This year, approval "
+            "is required.",
+            "Please approve deployment. Approval is not required. Approval is required "
+            "after migration.",
+            "Please approve deployment. Approval is not required. According to the "
+            "docs, approval was required, but approval is actually required now.",
         )
         for message in completed_messages:
             with self.subTest(kind="completed", message=message):
@@ -3437,6 +3489,10 @@ class CompletionClassifierTests(unittest.TestCase):
             "ready yet.",
             "Please approve deployment. Approval is not required, but deployment and "
             "checksum are not ready yet.",
+            "Please approve deployment. Approval and authorization are not required, "
+            "although deployment is not ready yet.",
+            "Please approve deployment. Approval and authorization are not required, "
+            "but the deployment decision is not final yet.",
             "Please authorize deployment. Approval and authorization are not required, "
             "but the approval decision is not final yet.",
             "Please approve deployment. Approval and authorization are not required, "
@@ -3464,6 +3520,16 @@ class CompletionClassifierTests(unittest.TestCase):
             "deployment are not ready yet.",
             "Please approve deployment. Approval is not required, but deployment and "
             "approval are not ready yet.",
+            "Please approve deployment. Approval and authorization are not required, "
+            "but it is not final yet.",
+            "Please authorize deployment. Approval and authorization are not required, "
+            "but the decision is not final yet.",
+            "Please approve deployment. Approval and authorization are not required, "
+            "although the decision is not final yet.",
+            "Please approve deployment. Approval and authorization are not required, "
+            "but the final decision is not final yet.",
+            "Please approve deployment. Approval and authorization are not required, "
+            "but that decision is not final yet.",
             "Please approve deployment. Approval is not required after the security "
             "review.",
         )

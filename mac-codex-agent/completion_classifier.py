@@ -431,6 +431,14 @@ _CONFIRMATION_NUMBER_TOKENS = frozenset(
         "zero",
     }
 )
+_CONFIRMATION_QUANTITY_DETERMINERS = frozenset({"a", "an", "about"})
+_CONFIRMATION_QUANTIFIERS = frozenset({"few", "several"})
+_CONFIRMATION_LOGICAL_NEGATION_TOKENS = frozenset(
+    {"false", "impossible"}
+)
+_CONFIRMATION_CONTRAST_CONNECTORS = frozenset(
+    {"although", "and", "but"}
+)
 _CONFIRMATION_HISTORICAL_TOKENS = frozenset(
     {"formerly", "historically", "previously"}
 )
@@ -1514,7 +1522,8 @@ def _is_confirmation_modal_token(token: str) -> bool:
 def _is_confirmation_uncertain_token(token: str) -> bool:
     return (
         token in _CONFIRMATION_UNCERTAIN_TOKENS
-        or token in {"false", "if", "unclear", "unless", "unsure", "whether"}
+        or token in _CONFIRMATION_LOGICAL_NEGATION_TOKENS
+        or token in {"if", "unclear", "unless", "unsure", "whether"}
         or token.startswith(("anticipat", "expect", "suggest"))
     )
 
@@ -1561,33 +1570,61 @@ def _confirmation_structured_future_indices(
 ) -> FrozenSet[int]:
     markers = set()
     number_phrase_start = None
-    number_seen = False
+    quantity_state = "idle"
+    completion_relation_start = None
+    completion_relation = None
     for index, token in enumerate(tokens):
         if token.quote_id >= 0:
             number_phrase_start = None
-            number_seen = False
+            quantity_state = "idle"
+            completion_relation_start = None
+            completion_relation = None
             continue
         word = token.text
         following = [item.text for item in tokens[index + 1 : index + 3]]
         if word == "before" and following[:1] == ["long"]:
             markers.add(index)
-        if word == "following" and following[:2] == ["completion", "of"]:
-            markers.add(index)
+        if word in {"following", "upon"}:
+            completion_relation_start = index
+            completion_relation = word
+            continue
+        if completion_relation_start is not None:
+            if word == "the" and completion_relation == "following":
+                continue
+            if word == "completion":
+                markers.add(completion_relation_start)
+            completion_relation_start = None
+            completion_relation = None
         if word == "in":
             number_phrase_start = index
-            number_seen = False
+            quantity_state = "quantity"
             continue
         if number_phrase_start is None:
             continue
-        if _confirmation_is_number_token(word):
-            number_seen = True
+        if (
+            quantity_state == "quantity"
+            and word in _CONFIRMATION_QUANTITY_DETERMINERS
+        ):
+            if word != "about":
+                quantity_state = "determiner"
             continue
-        if word == "and" and number_seen:
+        if (
+            quantity_state in {"quantity", "determiner"}
+            and word in _CONFIRMATION_QUANTIFIERS
+        ):
+            quantity_state = "ready"
             continue
-        if number_seen and _confirmation_is_time_token(word):
+        if quantity_state == "quantity" and _confirmation_is_number_token(word):
+            quantity_state = "ready"
+            continue
+        if quantity_state == "ready" and _confirmation_is_number_token(word):
+            continue
+        if word == "and" and quantity_state == "ready":
+            continue
+        if quantity_state == "ready" and _confirmation_is_time_token(word):
             markers.add(number_phrase_start)
         number_phrase_start = None
-        number_seen = False
+        quantity_state = "idle"
     return frozenset(markers)
 
 
@@ -2080,8 +2117,9 @@ def _confirmation_suffix_offsets_by_scope(
     }
     subject_skip = (
         _CONFIRMATION_SUBJECT_DETERMINERS
+        | _CONFIRMATION_ANAPHORIC_MODIFIERS
         | _CONFIRMATION_UNCERTAIN_TOKENS
-        | {"not", "only"}
+        | {"decision", "it", "not", "only", "pending", "that"}
     )
     contrast_subjects: dict[
         int, FrozenSet[_EvidenceScope] | None
@@ -2112,7 +2150,7 @@ def _confirmation_suffix_offsets_by_scope(
         word = token.text
         if word == "and" and contrast_offset is not None:
             continue
-        if word in {"and", "but"}:
+        if word in _CONFIRMATION_CONTRAST_CONNECTORS:
             finish_contrast()
             contrast_offset = token.start
             continue
@@ -2159,7 +2197,10 @@ def _confirmation_suffix_offsets_by_scope(
             if token.start < current_resolution.end or token.quote_id >= 0:
                 continue
             word = token.text
-            if word in {"and", "but"} and token.start in contrast_subjects:
+            if (
+                word in _CONFIRMATION_CONTRAST_CONNECTORS
+                and token.start in contrast_subjects
+            ):
                 explicit_referents = contrast_subjects[token.start]
         referents = (
             current_resolution.referents
@@ -2172,6 +2213,57 @@ def _confirmation_suffix_offsets_by_scope(
         for scope, offsets in offsets_by_scope.items()
         if offsets
     }
+
+
+def _confirmation_only_for_scopes(
+    tokens: Sequence[_ConfirmationToken], start: int, end: int
+) -> dict[int, FrozenSet[_EvidenceScope]]:
+    qualifiers = {}
+    target_offset = None
+    state = "idle"
+    scopes = set()
+
+    def finish() -> None:
+        nonlocal target_offset, state, scopes
+        if target_offset is not None and scopes:
+            qualifiers[target_offset] = frozenset(scopes)
+        target_offset = None
+        state = "idle"
+        scopes = set()
+
+    scope_words = {
+        "approval": _EvidenceScope.APPROVAL,
+        "authorization": _EvidenceScope.AUTHORIZATION,
+        "verification": _EvidenceScope.VERIFICATION,
+    }
+    for token in tokens[start:end]:
+        if token.quote_id >= 0:
+            continue
+        word = token.text
+        if word in {"denied", "wrong"}:
+            finish()
+            target_offset = token.start
+            state = "target"
+            continue
+        if target_offset is None:
+            continue
+        if state == "target" and word == "only":
+            state = "only"
+            continue
+        if state == "only" and word == "for":
+            state = "scopes"
+            continue
+        if state == "scopes":
+            scope = scope_words.get(word)
+            if scope is not None:
+                scopes.add(scope)
+                continue
+            if word in {"and", ",", "the"}:
+                continue
+        if word not in {",", "("}:
+            finish()
+    finish()
+    return qualifiers
 
 
 def _confirmation_reversal_index(
@@ -2197,6 +2289,9 @@ def _confirmation_reversal_index(
             continue
         punctuation = "" if at_end else tokens[sentence_end].text
         if punctuation not in {"?", "？"}:
+            only_for_scopes = _confirmation_only_for_scopes(
+                tokens, sentence_start, sentence_end
+            )
             anchors: dict[_EvidenceScope, Tuple[int, int, int]] = {}
             confirmation_scopes: FrozenSet[_EvidenceScope] = frozenset()
             conditional = False
@@ -2205,6 +2300,7 @@ def _confirmation_reversal_index(
             break_negative_count = 0
             previous_words: List[str] = []
             historical_segment = False
+            attributed_segment = False
             for index in range(sentence_start, sentence_end):
                 token = tokens[index]
                 if token.quote_id >= 0:
@@ -2225,6 +2321,8 @@ def _confirmation_reversal_index(
                     "yet",
                 }:
                     historical_segment = False
+                if word in {"but", "however", "yet"}:
+                    attributed_segment = False
                 if word in _CONFIRMATION_HISTORICAL_TOKENS:
                     historical_segment = True
                 following_segment_words = [
@@ -2237,6 +2335,26 @@ def _confirmation_reversal_index(
                     or following_segment_words[:2] == ["the", "migration"]
                 ):
                     historical_segment = True
+                if (
+                    word == "in"
+                    and following_segment_words[:2] == ["the", "past"]
+                ) or (
+                    word == "last"
+                    and following_segment_words[:1] == ["year"]
+                ) or (
+                    word == "prior"
+                    and (
+                        following_segment_words[:2] == ["to", "migration"]
+                        or following_segment_words[:3]
+                        == ["to", "the", "migration"]
+                    )
+                ):
+                    historical_segment = True
+                if (
+                    word == "according"
+                    and following_segment_words[:1] == ["to"]
+                ) or word == "per":
+                    attributed_segment = True
                 conditional = conditional or word in {"if", "whether"}
                 if word in _CONFIRMATION_REVERSAL_SCOPE_BREAKS:
                     break_generation += 1
@@ -2324,7 +2442,12 @@ def _confirmation_reversal_index(
                             break_generation,
                         )
                 if word in {"denied", "wrong"}:
-                    target_scopes = tuple(confirmation_scopes)
+                    qualifier_scopes = only_for_scopes.get(token.start)
+                    target_scopes = tuple(
+                        scope
+                        for scope in confirmation_scopes
+                        if qualifier_scopes is None or scope in qualifier_scopes
+                    )
                 elif word == "required":
                     nearest_scope = max(
                         (
@@ -2351,6 +2474,10 @@ def _confirmation_reversal_index(
                         following_words[:1] == ["before"]
                         and "migration" in following_words[1:3]
                     )
+                    or (
+                        following_words[:2] == ["prior", "to"]
+                        and "migration" in following_words[2:4]
+                    )
                 )
                 for scope in target_scopes:
                     anchor = anchors.get(scope)
@@ -2358,6 +2485,7 @@ def _confirmation_reversal_index(
                         anchor is None
                         or conditional
                         or historical_target
+                        or attributed_segment
                     ):
                         continue
                     _, anchor_negative_count, anchor_break_generation = anchor
@@ -2655,10 +2783,9 @@ def _valid_resolution_matches(
                 scoped_offsets
             ):
                 invalid_suffix_scopes.add(scope)
-        if confirmation_polarity is _ConfirmationPolarity.POSITIVE:
-            invalid_suffix_scopes.update(
-                _confirmation_reversed_scopes(confirmation_index, match)
-            )
+        invalid_suffix_scopes.update(
+            _confirmation_reversed_scopes(confirmation_index, match)
+        )
         assistant_continuation = (
             _ASSISTANT_CONTINUATION_SUFFIX_RE.search(suffix) is not None
         )
