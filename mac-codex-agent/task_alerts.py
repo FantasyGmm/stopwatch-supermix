@@ -17,6 +17,7 @@ import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from completion_classifier import classify_completion
+from codex_turn_evidence import new_turn_signal, reduce_turn_signal
 
 
 UTC = datetime.timezone.utc
@@ -505,11 +506,7 @@ class TaskAlertTracker:
             signal_changed = False
             if isinstance(turn_id, str) and turn_id:
                 signals = self._state.setdefault("turn_signals", {})
-                next_signal = {
-                    "turn_id": turn_id,
-                    "unfinished_plan": False,
-                    "input_calls": [],
-                }
+                next_signal = new_turn_signal(turn_id)
                 if signals.get(thread.id) != next_signal:
                     signals[thread.id] = next_signal
                     signal_changed = True
@@ -641,50 +638,7 @@ class TaskAlertTracker:
             and signal.get("turn_id") != turn_id
         ):
             return False
-
-        item_type = payload.get("type")
-        if item_type == "function_call":
-            name = payload.get("name")
-            if name == "update_plan":
-                arguments = payload.get("arguments")
-                if isinstance(arguments, str):
-                    try:
-                        arguments = json.loads(arguments)
-                    except json.JSONDecodeError:
-                        return False
-                if not isinstance(arguments, dict):
-                    return False
-                plan = arguments.get("plan")
-                if not isinstance(plan, list):
-                    return False
-                unfinished = any(
-                    isinstance(item, dict)
-                    and item.get("status") in ("in_progress", "pending")
-                    for item in plan
-                )
-                if signal.get("unfinished_plan") == unfinished:
-                    return False
-                signal["unfinished_plan"] = unfinished
-                return True
-
-            if name == "request_user_input":
-                call_id = payload.get("call_id")
-                if not isinstance(call_id, str) or not call_id:
-                    return False
-                calls = signal.setdefault("input_calls", [])
-                if call_id in calls:
-                    return False
-                calls.append(call_id)
-                return True
-
-        if item_type == "function_call_output":
-            call_id = payload.get("call_id")
-            calls = signal.setdefault("input_calls", [])
-            if call_id not in calls:
-                return False
-            calls.remove(call_id)
-            return True
-        return False
+        return reduce_turn_signal(signal, payload)
 
     def _prune_old_alerts(self) -> bool:
         cutoff = self._now().astimezone(self._local_timezone).date() - datetime.timedelta(
