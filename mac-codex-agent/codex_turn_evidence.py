@@ -95,61 +95,80 @@ def latest_unsuperseded_completion(
     path: pathlib.Path,
 ) -> Optional[LatestCompletion]:
     try:
-        data = pathlib.Path(path).read_bytes()
+        stream = pathlib.Path(path).open("rb")
     except OSError as error:
         raise RolloutReplayError("rollout is unreadable") from error
-    if data and not data.endswith(b"\n"):
-        raise RolloutReplayError(
-            "rollout has an incomplete trailing record",
-            retryable=True,
-        )
 
     signal = None
     candidate = None
-    for raw in data.splitlines():
-        try:
-            item = json.loads(raw)
-        except (UnicodeDecodeError, json.JSONDecodeError) as error:
-            raise RolloutReplayError("rollout contains an invalid record") from error
-        if not isinstance(item, dict) or not isinstance(item.get("payload"), dict):
-            continue
-        payload = item["payload"]
+    try:
+        for raw in stream:
+            if not raw.endswith(b"\n"):
+                raise RolloutReplayError(
+                    "rollout has an incomplete trailing record",
+                    retryable=True,
+                )
+            try:
+                item = json.loads(raw)
+            except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                raise RolloutReplayError(
+                    "rollout contains an invalid record"
+                ) from error
+            if not isinstance(item, dict) or not isinstance(
+                item.get("payload"), dict
+            ):
+                continue
+            payload = item["payload"]
 
-        if item.get("type") == "response_item":
-            metadata = payload.get("internal_chat_message_metadata_passthrough")
-            turn_id = metadata.get("turn_id") if isinstance(metadata, dict) else None
-            if signal is not None and turn_id == signal.get("turn_id"):
-                reduce_turn_signal(signal, payload)
-            continue
-        if item.get("type") != "event_msg":
-            continue
+            if item.get("type") == "response_item":
+                metadata = payload.get(
+                    "internal_chat_message_metadata_passthrough"
+                )
+                turn_id = (
+                    metadata.get("turn_id") if isinstance(metadata, dict) else None
+                )
+                if signal is not None and (
+                    not isinstance(turn_id, str)
+                    or not turn_id
+                    or turn_id == signal.get("turn_id")
+                ):
+                    reduce_turn_signal(signal, payload)
+                continue
+            if item.get("type") != "event_msg":
+                continue
 
-        event_type = payload.get("type")
-        if event_type == "task_started":
-            turn_id = payload.get("turn_id")
-            signal = (
-                new_turn_signal(turn_id)
-                if isinstance(turn_id, str) and turn_id
-                else None
-            )
-            candidate = None
-        elif event_type == "user_message":
-            candidate = None
-        elif event_type == "task_complete":
-            turn_id = payload.get("turn_id")
-            matching = (
-                signal
-                if signal is not None and signal.get("turn_id") == turn_id
-                else {}
-            )
-            candidate = LatestCompletion(
-                timestamp=_timestamp(
-                    item.get("timestamp") or payload.get("timestamp")
-                ),
-                turn_id=turn_id if isinstance(turn_id, str) else "",
-                last_agent_message=payload.get("last_agent_message"),
-                unfinished_plan=bool(matching.get("unfinished_plan", False)),
-                unresolved_input=bool(matching.get("input_calls")),
-            )
-            signal = None
+            event_type = payload.get("type")
+            if event_type == "task_started":
+                turn_id = payload.get("turn_id")
+                signal = (
+                    new_turn_signal(turn_id)
+                    if isinstance(turn_id, str) and turn_id
+                    else None
+                )
+                candidate = None
+            elif event_type == "user_message":
+                candidate = None
+            elif event_type == "task_complete":
+                turn_id = payload.get("turn_id")
+                matching = (
+                    signal
+                    if signal is not None and signal.get("turn_id") == turn_id
+                    else {}
+                )
+                candidate = LatestCompletion(
+                    timestamp=_timestamp(
+                        item.get("timestamp") or payload.get("timestamp")
+                    ),
+                    turn_id=turn_id if isinstance(turn_id, str) else "",
+                    last_agent_message=payload.get("last_agent_message"),
+                    unfinished_plan=bool(
+                        matching.get("unfinished_plan", False)
+                    ),
+                    unresolved_input=bool(matching.get("input_calls")),
+                )
+                signal = None
+    except OSError as error:
+        raise RolloutReplayError("rollout is unreadable") from error
+    finally:
+        stream.close()
     return candidate

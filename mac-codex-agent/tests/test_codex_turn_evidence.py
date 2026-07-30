@@ -3,6 +3,7 @@ import pathlib
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
@@ -125,6 +126,55 @@ class CodexTurnEvidenceTests(unittest.TestCase):
         self.assertTrue(result.unresolved_input)
         self.assertTrue(result.unfinished_plan)
 
+    def test_response_without_turn_metadata_uses_active_turn(self):
+        self.append("2026-07-29T13:00:00Z", "task_started", turn_id="turn-a")
+        self.append(
+            "2026-07-29T13:00:01Z",
+            "response_item",
+            type="function_call",
+            name="update_plan",
+            arguments=json.dumps(
+                {"plan": [{"step": "Choose", "status": "pending"}]}
+            ),
+            call_id="plan-a",
+        )
+        self.append(
+            "2026-07-29T13:00:02Z",
+            "task_complete",
+            turn_id="turn-a",
+            last_agent_message="Choose one.",
+        )
+
+        result = latest_unsuperseded_completion(self.rollout)
+
+        self.assertIsNotNone(result)
+        self.assertTrue(result.unfinished_plan)
+
+    def test_response_with_another_turn_id_is_ignored(self):
+        self.append("2026-07-29T13:00:00Z", "task_started", turn_id="turn-a")
+        self.append(
+            "2026-07-29T13:00:01Z",
+            "response_item",
+            type="function_call",
+            name="update_plan",
+            arguments=json.dumps(
+                {"plan": [{"step": "Choose", "status": "pending"}]}
+            ),
+            call_id="plan-b",
+            internal_chat_message_metadata_passthrough={"turn_id": "turn-b"},
+        )
+        self.append(
+            "2026-07-29T13:00:02Z",
+            "task_complete",
+            turn_id="turn-a",
+            last_agent_message="Done.",
+        )
+
+        result = latest_unsuperseded_completion(self.rollout)
+
+        self.assertIsNotNone(result)
+        self.assertFalse(result.unfinished_plan)
+
     def test_function_output_resolves_input_before_completion(self):
         signal_metadata = {
             "internal_chat_message_metadata_passthrough": {"turn_id": "turn-a"}
@@ -203,6 +253,24 @@ class CodexTurnEvidenceTests(unittest.TestCase):
             latest_unsuperseded_completion(pathlib.Path(self.temporary.name))
 
         self.assertFalse(raised.exception.retryable)
+
+    def test_replay_does_not_materialize_the_whole_rollout(self):
+        self.append("2026-07-29T13:00:00Z", "task_started", turn_id="turn-a")
+        self.append(
+            "2026-07-29T13:00:01Z",
+            "task_complete",
+            turn_id="turn-a",
+            last_agent_message="Done.",
+        )
+
+        with mock.patch.object(
+            pathlib.Path,
+            "read_bytes",
+            side_effect=AssertionError("read_bytes must not be used"),
+        ):
+            result = latest_unsuperseded_completion(self.rollout)
+
+        self.assertIsNotNone(result)
 
 
 if __name__ == "__main__":
