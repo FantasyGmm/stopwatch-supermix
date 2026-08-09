@@ -18,6 +18,7 @@
 - Modify `main/apps/app_codex_status/app_codex_status.cpp`: apply the new font to both state labels.
 - Modify `mac-codex-agent/tests/test_codex_status_f_layout_contract.py`: lock the approved design contract and font asset.
 - Modify `mac-codex-agent/tests/test_firmware_font_contract.py`: update the cross-firmware typography expectation.
+- Modify `tests/codex_status_ui_layout_test.cpp`: lock the approved native layout geometry.
 
 ### Task 1: Lock the approved typography contract in failing tests
 
