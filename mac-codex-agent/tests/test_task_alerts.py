@@ -9,6 +9,7 @@ import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
+from completion_classifier import CLASSIFIER_VERSION
 from task_alerts import TaskAlertTracker, classify_outcome
 
 
@@ -173,6 +174,168 @@ class TaskAlertTrackerTests(unittest.TestCase):
         return TaskAlertTracker(
             **options,
         )
+
+    def downgrade_classifier_ledger(self, **alert_updates):
+        saved = json.loads(self.ledger.read_text(encoding="utf-8"))
+        saved["classifier_version"] = CLASSIFIER_VERSION - 1
+        if alert_updates:
+            saved["alerts"][-1].update(alert_updates)
+        self.ledger.write_text(json.dumps(saved), encoding="utf-8")
+
+    def test_classifier_upgrade_reclassifies_latest_completion_once(self):
+        tracker = self.tracker()
+        tracker.refresh()
+        append_event(
+            self.rollout,
+            "task_started",
+            "2026-07-29T13:59:00Z",
+            turn_id="turn-a",
+        )
+        append_event(
+            self.rollout,
+            "task_complete",
+            "2026-07-29T13:59:06Z",
+            turn_id="turn-a",
+            last_agent_message=(
+                "首次添加 Agent 时，你希望如何确认？\n\n"
+                "1. 验证码。\n2. 配对窗口。\n3. 系统配对。\n\n"
+                "我推荐第 1 种。"
+            ),
+        )
+        tracker.refresh()
+        self.downgrade_classifier_ledger(
+            state="completed",
+            outcome="completed",
+            reason="completion_only",
+            handled_at="2026-07-29T13:59:06Z",
+            watch_notified=True,
+        )
+
+        migrated = self.tracker().refresh()
+
+        self.assertEqual(migrated.pending_count, 1)
+        self.assertEqual(migrated.alerts[0].state, "pending")
+        self.assertEqual(
+            self.tracker().pending_watch_notification_ids(),
+            ("thread-a:2026-07-29T13:59:06Z",),
+        )
+        persisted = json.loads(self.ledger.read_text(encoding="utf-8"))
+        self.assertEqual(persisted["classifier_version"], CLASSIFIER_VERSION)
+        self.assertEqual(persisted["classifier_retry_threads"], [])
+
+    def test_classifier_upgrade_does_not_resurrect_after_later_user_message(self):
+        tracker = self.tracker()
+        tracker.refresh()
+        append_event(
+            self.rollout,
+            "task_started",
+            "2026-07-12T00:01:00Z",
+            turn_id="turn-a",
+        )
+        append_event(
+            self.rollout,
+            "task_complete",
+            "2026-07-12T00:01:01Z",
+            turn_id="turn-a",
+            last_agent_message="请选择一个方案。",
+        )
+        tracker.refresh()
+        append_event(self.rollout, "user_message", "2026-07-12T00:01:02Z")
+        tracker.refresh()
+        self.downgrade_classifier_ledger()
+
+        migrated = self.tracker().refresh()
+
+        self.assertEqual(migrated.pending_count, 0)
+        self.assertEqual(migrated.completed_count, 1)
+        persisted = json.loads(self.ledger.read_text(encoding="utf-8"))
+        self.assertEqual(persisted["classifier_version"], CLASSIFIER_VERSION)
+
+    def test_classifier_upgrade_preserves_already_notified_pending(self):
+        tracker = self.tracker()
+        tracker.refresh()
+        append_event(
+            self.rollout,
+            "task_complete",
+            "2026-07-12T00:02:00Z",
+            last_agent_message="请确认是否继续？",
+        )
+        tracker.refresh()
+        alert_ids = tracker.pending_watch_notification_ids()
+        tracker.mark_watch_notified(alert_ids)
+        self.downgrade_classifier_ledger()
+
+        migrated = self.tracker().refresh()
+
+        self.assertEqual(migrated.pending_count, 1)
+        self.assertEqual(self.tracker().pending_watch_notification_ids(), ())
+        self.assertTrue(migrated.alerts[0].watch_notified)
+
+    def test_classifier_upgrade_is_idempotent_across_restart(self):
+        tracker = self.tracker()
+        tracker.refresh()
+        append_event(
+            self.rollout,
+            "task_complete",
+            "2026-07-12T00:03:00Z",
+            last_agent_message="请选择 A 或 B。",
+        )
+        tracker.refresh()
+        self.downgrade_classifier_ledger(
+            state="completed",
+            outcome="completed",
+            reason="completion_only",
+            handled_at="2026-07-12T00:03:00Z",
+            watch_notified=True,
+        )
+
+        first = self.tracker().refresh()
+        first_revision = first.revision
+        second = self.tracker().refresh()
+
+        self.assertEqual(first.pending_count, 1)
+        self.assertEqual(second.pending_count, 1)
+        self.assertEqual(second.revision, first_revision)
+        self.assertEqual(
+            self.tracker().pending_watch_notification_ids(),
+            ("thread-a:2026-07-12T00:03:00Z",),
+        )
+
+    def test_classifier_upgrade_retries_after_incomplete_rollout(self):
+        tracker = self.tracker()
+        tracker.refresh()
+        append_event(
+            self.rollout,
+            "task_complete",
+            "2026-07-12T00:04:00Z",
+            last_agent_message="请选择 A 或 B。",
+        )
+        tracker.refresh()
+        self.downgrade_classifier_ledger(
+            state="completed",
+            outcome="completed",
+            reason="completion_only",
+            handled_at="2026-07-12T00:04:00Z",
+            watch_notified=True,
+        )
+        with self.rollout.open("ab") as stream:
+            stream.write(b'{"timestamp":"2026-07-12T00:05:00Z"')
+
+        unchanged = self.tracker().refresh()
+
+        self.assertEqual(unchanged.completed_count, 1)
+        waiting_ledger = json.loads(self.ledger.read_text(encoding="utf-8"))
+        self.assertEqual(waiting_ledger["classifier_version"], CLASSIFIER_VERSION)
+        self.assertEqual(waiting_ledger["classifier_retry_threads"], ["thread-a"])
+
+        with self.rollout.open("ab") as stream:
+            stream.write(b',"type":"event_msg","payload":{"type":"user_message"}}\n')
+        retried = self.tracker().refresh()
+
+        self.assertEqual(retried.pending_count, 0)
+        retried_ledger = json.loads(self.ledger.read_text(encoding="utf-8"))
+        self.assertEqual(retried_ledger["classifier_version"], CLASSIFIER_VERSION)
+        self.assertEqual(retried_ledger["classifier_retry_threads"], [])
 
     def test_classifies_only_the_final_paragraph(self):
         cases = (

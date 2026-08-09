@@ -248,11 +248,11 @@ class CodexTurnEvidenceTests(unittest.TestCase):
 
         self.assertFalse(raised.exception.retryable)
 
-    def test_unreadable_rollout_is_not_retryable(self):
+    def test_unreadable_rollout_is_retryable(self):
         with self.assertRaises(RolloutReplayError) as raised:
             latest_unsuperseded_completion(pathlib.Path(self.temporary.name))
 
-        self.assertFalse(raised.exception.retryable)
+        self.assertTrue(raised.exception.retryable)
 
     def test_replay_does_not_materialize_the_whole_rollout(self):
         self.append("2026-07-29T13:00:00Z", "task_started", turn_id="turn-a")

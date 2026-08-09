@@ -16,8 +16,13 @@ import threading
 import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
-from completion_classifier import classify_completion
-from codex_turn_evidence import new_turn_signal, reduce_turn_signal
+from completion_classifier import CLASSIFIER_VERSION, classify_completion
+from codex_turn_evidence import (
+    RolloutReplayError,
+    latest_unsuperseded_completion,
+    new_turn_signal,
+    reduce_turn_signal,
+)
 
 
 UTC = datetime.timezone.utc
@@ -264,6 +269,8 @@ class TaskAlertTracker:
             changed = self._needs_save
             if self._scan_threads(threads):
                 changed = True
+            if self._reconcile_classifier_version(threads):
+                changed = True
             if self._sync_thread_metadata(threads):
                 changed = True
             if self._prune_old_alerts():
@@ -397,6 +404,8 @@ class TaskAlertTracker:
             }
         return {
             "version": LEDGER_VERSION,
+            "classifier_version": CLASSIFIER_VERSION,
+            "classifier_retry_threads": [],
             "initialized_at": now,
             "last_scan_at": now,
             "revision": 0,
@@ -435,6 +444,93 @@ class TaskAlertTracker:
             for line in lines:
                 if self._reduce_line(thread, line, threshold):
                     changed = True
+        return changed
+
+    def _reconcile_classifier_version(
+        self,
+        threads: List[_ThreadInfo],
+    ) -> bool:
+        current = self._state.get("classifier_version")
+        retry_threads = set(self._state.get("classifier_retry_threads", []))
+        version_changed = current != CLASSIFIER_VERSION
+        if not version_changed and not retry_threads:
+            return False
+
+        previous_retry_threads = sorted(retry_threads)
+        retryable_failures = set()
+        changed = False
+        latest_alert_by_thread = {}
+        for item in self._state["alerts"]:
+            timestamp = _parse_timestamp(item.get("progress_at"))
+            thread_id = item.get("thread_id")
+            if timestamp is None or not isinstance(thread_id, str):
+                continue
+            existing = latest_alert_by_thread.get(thread_id)
+            if existing is None or timestamp >= existing[0]:
+                latest_alert_by_thread[thread_id] = (timestamp, item)
+
+        for thread in threads:
+            if not version_changed and thread.id not in retry_threads:
+                continue
+            existing = latest_alert_by_thread.get(thread.id)
+            if existing is None:
+                continue
+            try:
+                completion = latest_unsuperseded_completion(thread.rollout_path)
+            except RolloutReplayError as error:
+                LOGGER.warning(
+                    "Unable to reconcile Codex classifier: thread=%s",
+                    thread.id,
+                    exc_info=True,
+                )
+                if error.retryable:
+                    retryable_failures.add(thread.id)
+                continue
+            if completion is None:
+                continue
+
+            completion_time = _iso(completion.timestamp)
+            alert = existing[1]
+            if alert.get("id") != "{}:{}".format(thread.id, completion_time):
+                continue
+            classification = classify_completion(
+                completion.last_agent_message,
+                unfinished_plan=completion.unfinished_plan,
+                unresolved_input=completion.unresolved_input,
+            )
+            next_state = (
+                "pending" if classification.outcome == "waiting" else "completed"
+            )
+            previous_state = alert.get("state")
+            next_notified = (
+                False
+                if next_state == "pending" and previous_state != "pending"
+                else (
+                    bool(alert.get("watch_notified", False))
+                    if next_state == "pending"
+                    else True
+                )
+            )
+            updates = {
+                "state": next_state,
+                "outcome": classification.outcome,
+                "reason": classification.reason,
+                "handled_at": completion_time if next_state == "completed" else None,
+                "watch_notified": next_notified,
+            }
+            if any(alert.get(key) != value for key, value in updates.items()):
+                alert.update(updates)
+                changed = True
+
+        if current != CLASSIFIER_VERSION:
+            self._state["classifier_version"] = CLASSIFIER_VERSION
+            changed = True
+        next_retry_threads = sorted(retryable_failures)
+        if previous_retry_threads != next_retry_threads:
+            self._state["classifier_retry_threads"] = next_retry_threads
+            changed = True
+        if changed:
+            self._state["revision"] = int(self._state.get("revision", 0)) + 1
         return changed
 
     def _sync_thread_metadata(self, threads: List[_ThreadInfo]) -> bool:
@@ -761,6 +857,14 @@ class TaskAlertTracker:
             if not isinstance(state.get("turn_signals"), dict):
                 state["turn_signals"] = {}
                 self._needs_save = True
+            classifier_version = state.get("classifier_version", 0)
+            if not isinstance(classifier_version, int) or classifier_version < 0:
+                raise ValueError("invalid classifier version")
+            retry_threads = state.get("classifier_retry_threads", [])
+            if not isinstance(retry_threads, list) or not all(
+                isinstance(thread_id, str) for thread_id in retry_threads
+            ):
+                raise ValueError("invalid classifier retry threads")
             if state.get("version") != LEDGER_VERSION:
                 state["version"] = LEDGER_VERSION
                 self._needs_save = True

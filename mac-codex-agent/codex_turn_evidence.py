@@ -97,7 +97,7 @@ def latest_unsuperseded_completion(
     try:
         stream = pathlib.Path(path).open("rb")
     except OSError as error:
-        raise RolloutReplayError("rollout is unreadable") from error
+        raise RolloutReplayError("rollout is unreadable", retryable=True) from error
 
     signal = None
     candidate = None
