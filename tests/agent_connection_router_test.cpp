@@ -3,9 +3,44 @@
 #include <cassert>
 #include <cstdint>
 
+namespace {
+
+void test_active_voice_link_is_one_coherent_snapshot()
+{
+    using namespace secure_pairing;
+
+    AgentConnectionRouter router;
+    AgentFingerprint fingerprint = {};
+    fingerprint[0] = 0x44;
+
+    assert(router.connected(31, 100) == AgentConnectionAdmission::Pending);
+    assert(router.authorize_pending(31, fingerprint));
+    assert(router.promote_pending(31));
+    assert(router.update_mtu(31, 256));
+    assert(router.update_voice_subscription(31, true));
+
+    const AgentVoiceLink active = router.active_voice_link();
+    assert(active.handle == 31);
+    assert(active.generation != 0);
+    assert(active.mtu == 256);
+    assert(active.subscribed);
+    assert(active.authorized);
+
+    assert(router.disconnected(31) == AgentConnectionRole::Active);
+    const AgentVoiceLink disconnected = router.active_voice_link();
+    assert(disconnected.handle == kNoAgentConnection);
+    assert(disconnected.generation != active.generation);
+    assert(!disconnected.subscribed);
+    assert(!disconnected.authorized);
+}
+
+}  // namespace
+
 int main()
 {
     using namespace secure_pairing;
+
+    test_active_voice_link_is_one_coherent_snapshot();
 
     AgentConnectionRouter router;
     assert(

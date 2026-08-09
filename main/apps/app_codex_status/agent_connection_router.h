@@ -46,6 +46,14 @@ struct AgentActiveConnection {
     uint32_t generation = 0;
 };
 
+struct AgentVoiceLink {
+    uint16_t handle = kNoAgentConnection;
+    uint32_t generation = 0;
+    uint16_t mtu = kDefaultAgentMtu;
+    bool subscribed = false;
+    bool authorized = false;
+};
+
 class AgentConnectionRouter {
 public:
     AgentConnectionAdmission connected(uint16_t handle, uint32_t now_ms = 0);
@@ -70,6 +78,7 @@ public:
 
     uint16_t active_handle() const;
     AgentActiveConnection active_connection() const;
+    AgentVoiceLink active_voice_link() const;
     uint16_t pending_handle() const;
     uint16_t disconnecting_handle() const;
     uint16_t mtu(uint16_t handle) const;

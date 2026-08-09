@@ -235,6 +235,27 @@ AgentActiveConnection AgentConnectionRouter::active_connection() const
         _active_generation};
 }
 
+AgentVoiceLink AgentConnectionRouter::active_voice_link() const
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    const AgentConnection* connection =
+        role_locked(AgentConnectionRole::Active);
+    if (connection == nullptr) {
+        return AgentVoiceLink{
+            kNoAgentConnection,
+            _active_generation,
+            kDefaultAgentMtu,
+            false,
+            false};
+    }
+    return AgentVoiceLink{
+        connection->handle,
+        _active_generation,
+        connection->mtu,
+        connection->voice_subscribed,
+        connection->identity_authorized};
+}
+
 uint16_t AgentConnectionRouter::pending_handle() const
 {
     std::lock_guard<std::mutex> lock(_mutex);
