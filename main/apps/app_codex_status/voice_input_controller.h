@@ -18,6 +18,7 @@ struct Notification {
     NotificationKind kind = NotificationKind::VoiceError;
     uint16_t session = 0;
     uint32_t sequence = 0;
+    uint32_t connection_generation = 0;
     size_t size = 0;
     std::array<uint8_t, kMaxNotificationSize> bytes = {};
 };
@@ -210,6 +211,7 @@ private:
     void abort_with_failure(uint16_t code, uint16_t detail, uint32_t now_ms);
     void fail(uint16_t code, uint16_t detail, uint32_t now_ms);
     void stop_capture_bounded();
+    bool wait_transmitter_idle_bounded();
     void reset_session(bool ready_after_reset, bool clear_notifications);
     bool make_session_identity(
         uint16_t& session,
@@ -239,6 +241,8 @@ private:
     [[maybe_unused]] void* _producer_stopped = nullptr;
     VoiceNotificationTransport* _notification_transport = nullptr;
     std::atomic<bool> _transmitter_shutdown_requested{false};
+    std::atomic<bool> _transmitter_step_active{false};
+    std::atomic<bool> _producer_worker_failed{false};
     void* _transmitter_task = nullptr;
     [[maybe_unused]] void* _transmitter_stopped = nullptr;
     uint16_t _negotiated_mtu = 23;

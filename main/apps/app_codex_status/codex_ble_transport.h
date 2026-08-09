@@ -111,6 +111,7 @@ private:
     std::atomic<uint32_t> _production_voice_key_epoch{0};
     std::atomic<uint64_t> _active_disconnect_token{0};
     std::atomic<uint64_t> _active_production_revoked_token{0};
+    mutable std::mutex _voice_link_mutex;
     mutable std::mutex _rejected_disconnect_mutex;
     uint16_t _rejected_disconnect_handle =
         secure_pairing::kNoAgentConnection;

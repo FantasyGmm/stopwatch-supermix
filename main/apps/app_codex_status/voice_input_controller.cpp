@@ -28,6 +28,8 @@ constexpr uint16_t kMinimumAudioMtu =
 [[maybe_unused]] constexpr uint32_t kTransmitterStopTimeoutMs = 500;
 [[maybe_unused]] constexpr uint32_t kTransmitterCancelGraceMs = 250;
 [[maybe_unused]] constexpr uint32_t kTransmitterRetryDelayMs = 2;
+[[maybe_unused]] constexpr uint32_t kTransmitterIdleTimeoutMs = 500;
+constexpr uint16_t kQueueOverflowAudioBoundary = 1;
 static_assert(kProducerStopTimeoutMs > VoiceCapturePipeline::kCaptureReadTimeoutMs);
 static_assert(kProducerCancelGraceMs > VoiceCapturePipeline::kCaptureReadTimeoutMs);
 
@@ -290,6 +292,7 @@ bool VoiceInputController::initialize()
 #if !defined(STOPWATCH_HOST_TEST)
     _shutdown_requested = false;
     _transmitter_shutdown_requested = false;
+    _producer_worker_failed = false;
     _producer_stopped = xSemaphoreCreateBinary();
     _transmitter_stopped = xSemaphoreCreateBinary();
     if (_producer_stopped == nullptr || _transmitter_stopped == nullptr) {
@@ -345,6 +348,7 @@ bool VoiceInputController::initialize()
 #else
     _shutdown_requested = false;
     _transmitter_shutdown_requested = false;
+    _producer_worker_failed = false;
 #endif
     _initialized = true;
     return true;
@@ -393,6 +397,7 @@ void VoiceInputController::shutdown()
     stop_transmitter_bounded();
     _capture_pipeline->close();
     reset_session(false, true);
+    _producer_worker_failed = false;
     _initialized = false;
 }
 
@@ -508,17 +513,22 @@ void VoiceInputController::cancel_for_home(uint32_t now_ms)
     (void)now_ms;
     _capture_pipeline->requestStop();
     wake_producer();
-    wake_transmitter();
     stop_capture_bounded();
     _capture_pipeline->close();
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        _session.cancel_for_home();
+        _outgoing.clear();
+        _queued_audio_packets = 0;
+        _graceful_stop = false;
+        _terminal_pending = false;
+    }
+    const bool transmitter_idle = wait_transmitter_idle_bounded();
     std::lock_guard<std::mutex> lock(_mutex);
-    _session.cancel_for_home();
-    _outgoing.clear();
-    _queued_audio_packets = 0;
-    _graceful_stop = false;
-    _terminal_pending = false;
-    _ui_state = _ready.load() ? VoiceInputUiState::Ready
-                              : VoiceInputUiState::Off;
+    _ui_state = transmitter_idle
+                    ? (_ready.load() ? VoiceInputUiState::Ready
+                                     : VoiceInputUiState::Off)
+                    : VoiceInputUiState::Error;
 }
 
 void VoiceInputController::handle_disconnect()
@@ -527,10 +537,13 @@ void VoiceInputController::handle_disconnect()
     _button_pressed = false;
     _capture_pipeline->requestStop();
     wake_producer();
-    wake_transmitter();
     stop_capture_bounded();
     _capture_pipeline->close();
     reset_session(false, true);
+    if (!wait_transmitter_idle_bounded()) {
+        std::lock_guard<std::mutex> lock(_mutex);
+        _ui_state = VoiceInputUiState::Error;
+    }
 }
 
 void VoiceInputController::poll(uint32_t now_ms)
@@ -747,6 +760,15 @@ void VoiceInputController::transmitter_loop()
 
 bool VoiceInputController::transmitter_step(uint32_t now_ms)
 {
+    bool expected = false;
+    if (!_transmitter_step_active.compare_exchange_strong(expected, true)) {
+        return false;
+    }
+    struct ActiveGuard {
+        std::atomic<bool>& active;
+        ~ActiveGuard() { active = false; }
+    } active_guard{_transmitter_step_active};
+
     finalize_graceful_stop(now_ms);
     voice_input::Notification notification = {};
     VoiceNotificationTransport* transport = nullptr;
@@ -815,7 +837,9 @@ void VoiceInputController::producer_step(uint32_t now_ms)
 
 bool VoiceInputController::start_session(uint32_t now_ms)
 {
-    if (!initialize()) {
+    if (!initialize() || _producer_worker_failed.load()) {
+        std::lock_guard<std::mutex> lock(_mutex);
+        _ui_state = VoiceInputUiState::Error;
         return false;
     }
     {
@@ -945,7 +969,10 @@ bool VoiceInputController::prepare_audio(
         }
     }
     if (overflow) {
-        fail(static_cast<uint16_t>(VoiceFailure::QueueOverflow), 0, now_ms);
+        fail(
+            static_cast<uint16_t>(VoiceFailure::QueueOverflow),
+            kQueueOverflowAudioBoundary,
+            now_ms);
         return false;
     }
     if (exhausted) {
@@ -1121,7 +1148,7 @@ void VoiceInputController::stop_capture_bounded()
             vSemaphoreDelete(static_cast<SemaphoreHandle_t>(_producer_stopped));
             _producer_stopped = nullptr;
         }
-        _initialized = false;
+        _producer_worker_failed = true;
     }
 #else
     while (_producer_running.load()) {
@@ -1132,6 +1159,38 @@ void VoiceInputController::stop_capture_bounded()
     }
 #endif
     _producer_running = false;
+}
+
+bool VoiceInputController::wait_transmitter_idle_bounded()
+{
+#if !defined(STOPWATCH_HOST_TEST)
+    const int64_t deadline_us =
+        esp_timer_get_time() +
+        static_cast<int64_t>(kTransmitterIdleTimeoutMs) * 1000;
+    while (_transmitter_step_active.load() &&
+           esp_timer_get_time() < deadline_us) {
+        vTaskDelay(1);
+    }
+    if (_transmitter_step_active.load()) {
+        if (_transmitter_task != nullptr) {
+            vTaskDelete(static_cast<TaskHandle_t>(_transmitter_task));
+            _transmitter_task = nullptr;
+        }
+        if (_transmitter_stopped != nullptr) {
+            vSemaphoreDelete(
+                static_cast<SemaphoreHandle_t>(_transmitter_stopped));
+            _transmitter_stopped = nullptr;
+        }
+        _transmitter_step_active = false;
+        _producer_worker_failed = true;
+        return false;
+    }
+#else
+    while (_transmitter_step_active.load()) {
+        std::this_thread::yield();
+    }
+#endif
+    return true;
 }
 
 void VoiceInputController::stop_transmitter_bounded()
@@ -1228,6 +1287,7 @@ bool VoiceInputController::enqueue_encoded(
     wire.kind = logical.kind;
     wire.session = logical.session;
     wire.sequence = logical.sequence;
+    wire.connection_generation = _connection_epoch;
     if (_crypto == nullptr || !_crypto->ready() || _key_epoch == 0 ||
         logical.key_epoch != _key_epoch) {
         return false;

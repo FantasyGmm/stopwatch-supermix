@@ -161,6 +161,26 @@ public:
     std::vector<VoiceNotificationSendResult> results;
 };
 
+class BlockingNotificationTransport final : public VoiceNotificationTransport {
+public:
+    VoiceNotificationSendResult send_voice_notification(
+        const voice_input::Notification& notification) override
+    {
+        std::unique_lock<std::mutex> lock(mutex);
+        entered = true;
+        condition.notify_all();
+        condition.wait(lock, [this] { return released; });
+        sent.push_back(notification);
+        return VoiceNotificationSendResult::Accepted;
+    }
+
+    std::mutex mutex;
+    std::condition_variable condition;
+    bool entered = false;
+    bool released = false;
+    std::vector<voice_input::Notification> sent;
+};
+
 class FakeVoiceButtonSink final : public VoiceButtonSink {
 public:
     void handle_button(bool pressed, uint32_t now_ms) override
@@ -386,6 +406,10 @@ void test_queue_overflow_emits_error_and_cleans_capture()
     assert(controller.take_notification(wire));
     const auto error = decode(wire, crypto, &begin.session_nonce);
     assert(error.kind == voice_input::NotificationKind::VoiceError);
+    voice_input::ErrorBody error_body = {};
+    assert(voice_input::decode_error_body(
+        error.payload.data(), error.payload_size, error_body));
+    assert(error_body.detail != 0);
     controller.record_notification_result(
         wire, VoiceNotificationSendResult::Accepted, 522);
     assert(!controller.take_notification(wire));
@@ -947,6 +971,7 @@ void test_sixty_seconds_of_voice_does_not_depend_on_ui_polling()
     voice_input::crypto::CcmContext crypto(kKey);
     VoiceInputController controller(backend, crypto, entropy);
     controller.set_notification_transport(&transport);
+    controller.handle_connection_epoch(41);
     controller.set_ready(true, 256);
     controller.handle_button(true, 1000);
 
@@ -964,9 +989,57 @@ void test_sixty_seconds_of_voice_does_not_depend_on_ui_polling()
     assert(controller.ui_state() == VoiceInputUiState::Ready);
     assert(transport.sent.front().kind ==
            voice_input::NotificationKind::PttBegin);
+    assert(transport.sent.front().connection_generation == 41);
     assert(transport.sent.back().kind ==
            voice_input::NotificationKind::PttEnd);
+    assert(transport.sent.size() == 3002);
+    for (uint32_t index = 0; index < 3000; ++index) {
+        const auto& audio = transport.sent[index + 1];
+        assert(audio.kind == voice_input::NotificationKind::Audio);
+        assert(audio.sequence == index + 1);
+        assert(audio.connection_generation == 41);
+    }
     assert(controller.queued_audio_ms_for_test() == 0);
+}
+
+void test_cancel_waits_for_inflight_transmission()
+{
+    FakeBackend backend;
+    FakeEntropy entropy;
+    BlockingNotificationTransport transport;
+    voice_input::crypto::CcmContext crypto(kKey);
+    VoiceInputController controller(backend, crypto, entropy);
+    controller.set_notification_transport(&transport);
+    controller.set_ready(true, 256);
+    controller.handle_button(true, 1500);
+
+    std::thread transmitter([&] {
+        controller.run_transmit_worker_until_idle_for_test(1501);
+    });
+    {
+        std::unique_lock<std::mutex> lock(transport.mutex);
+        transport.condition.wait(lock, [&] { return transport.entered; });
+    }
+
+    std::atomic<bool> cancel_done{false};
+    std::thread cancel([&] {
+        controller.cancel_for_home(1502);
+        cancel_done = true;
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    assert(!cancel_done.load());
+    {
+        std::lock_guard<std::mutex> lock(transport.mutex);
+        transport.released = true;
+        transport.condition.notify_all();
+    }
+    transmitter.join();
+    cancel.join();
+
+    assert(cancel_done.load());
+    assert(controller.ui_state() == VoiceInputUiState::Ready);
+    voice_input::Notification pending = {};
+    assert(!controller.take_notification(pending));
 }
 
 void test_transient_congestion_retries_same_packet_and_recovers()
@@ -1003,7 +1076,7 @@ void test_sustained_congestion_fails_after_elapsed_deadline()
     FakeBackend backend;
     FakeEntropy entropy;
     FakeNotificationTransport transport;
-    transport.results.assign(64, VoiceNotificationSendResult::Congested);
+    transport.results.assign(256, VoiceNotificationSendResult::Congested);
     voice_input::crypto::CcmContext crypto(kKey);
     VoiceInputController controller(backend, crypto, entropy);
     controller.set_notification_transport(&transport);
@@ -1059,6 +1132,7 @@ int main()
     test_dispatcher_guard_handles_uint32_wraparound();
     test_cancel_waits_for_inflight_producer_cleanup();
     test_sixty_seconds_of_voice_does_not_depend_on_ui_polling();
+    test_cancel_waits_for_inflight_transmission();
     test_transient_congestion_retries_same_packet_and_recovers();
     test_sustained_congestion_fails_after_elapsed_deadline();
 }

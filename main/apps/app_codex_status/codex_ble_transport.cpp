@@ -47,6 +47,16 @@ uint64_t active_connection_token(
            (static_cast<uint32_t>(connection.handle) + 1U);
 }
 
+uint64_t active_connection_token(
+    const secure_pairing::AgentVoiceLink& connection)
+{
+    if (connection.handle == secure_pairing::kNoAgentConnection) {
+        return 0;
+    }
+    return (static_cast<uint64_t>(connection.generation) << 32U) |
+           (static_cast<uint32_t>(connection.handle) + 1U);
+}
+
 struct QueuedFrame {
     uint16_t connection_handle = secure_pairing::kNoAgentConnection;
     uint16_t length = 0;
@@ -844,9 +854,13 @@ size_t CodexBleTransport::voice_notification_limit() const
 
 CodexBleNotifyResult CodexBleTransport::notify_voice(const uint8_t* data, size_t length)
 {
+    std::lock_guard<std::mutex> voice_link_lock(_voice_link_mutex);
     const secure_pairing::AgentVoiceLink link =
         _connection_router.active_voice_link();
-    if (!link.authorized || !link.subscribed || link.mtu <= 3 ||
+    const bool revoked =
+        _active_production_revoked_token.load() ==
+        active_connection_token(link);
+    if (revoked || !link.authorized || !link.subscribed || link.mtu <= 3 ||
         data == nullptr || length == 0 ||
         length > std::min(
             kMaxNotificationSize,
@@ -859,9 +873,14 @@ CodexBleNotifyResult CodexBleTransport::notify_voice(const uint8_t* data, size_t
 VoiceNotificationSendResult CodexBleTransport::send_voice_notification(
     const voice_input::Notification& notification)
 {
+    std::lock_guard<std::mutex> voice_link_lock(_voice_link_mutex);
     const secure_pairing::AgentVoiceLink link =
         _connection_router.active_voice_link();
-    if (!link.authorized || !link.subscribed || notification.size == 0 ||
+    const bool revoked =
+        _active_production_revoked_token.load() ==
+        active_connection_token(link);
+    if (revoked || link.generation != notification.connection_generation ||
+        !link.authorized || !link.subscribed || notification.size == 0 ||
         link.mtu <= 3 ||
         notification.size > static_cast<size_t>(link.mtu - 3)) {
         return VoiceNotificationSendResult::PermanentFailure;
@@ -974,6 +993,7 @@ bool CodexBleTransport::authorize_gatt(
     uint16_t connection_handle,
     secure_pairing::AgentGattSurface surface) const
 {
+    std::lock_guard<std::mutex> voice_link_lock(_voice_link_mutex);
     const uint64_t revoked_token =
         _active_production_revoked_token.load();
     if (surface == secure_pairing::AgentGattSurface::Production &&
@@ -1003,6 +1023,7 @@ bool CodexBleTransport::note_pairing_activity(
 
 bool CodexBleTransport::promote_pending(uint16_t connection_handle)
 {
+    std::lock_guard<std::mutex> voice_link_lock(_voice_link_mutex);
     if (!_connection_router.promote_pending(connection_handle)) {
         return false;
     }
@@ -1037,16 +1058,20 @@ bool CodexBleTransport::reject_pending(uint16_t connection_handle)
 
 bool CodexBleTransport::request_active_disconnect(bool revoke_production)
 {
-    const auto active = _connection_router.active_connection();
-    if (!_initialized ||
-        active.handle == secure_pairing::kNoAgentConnection) {
-        return false;
+    secure_pairing::AgentActiveConnection active = {};
+    {
+        std::lock_guard<std::mutex> voice_link_lock(_voice_link_mutex);
+        active = _connection_router.active_connection();
+        if (!_initialized ||
+            active.handle == secure_pairing::kNoAgentConnection) {
+            return false;
+        }
+        const uint64_t token = active_connection_token(active);
+        if (revoke_production) {
+            _active_production_revoked_token.store(token);
+        }
+        _active_disconnect_token.store(token);
     }
-    const uint64_t token = active_connection_token(active);
-    if (revoke_production) {
-        _active_production_revoked_token.store(token);
-    }
-    _active_disconnect_token.store(token);
     return ble_gap_terminate(
                active.handle, BLE_ERR_REM_USER_CONN_TERM) == 0;
 }
@@ -1165,8 +1190,11 @@ bool CodexBleTransport::handle_gap_connected(uint16_t connection_handle)
 {
     const uint32_t now_ms = static_cast<uint32_t>(
         static_cast<uint64_t>(esp_timer_get_time()) / 1000U);
-    const auto admission =
-        _connection_router.connected(connection_handle, now_ms);
+    secure_pairing::AgentConnectionAdmission admission = {};
+    {
+        std::lock_guard<std::mutex> voice_link_lock(_voice_link_mutex);
+        admission = _connection_router.connected(connection_handle, now_ms);
+    }
     if (admission ==
         secure_pairing::AgentConnectionAdmission::RejectedFull) {
         std::lock_guard<std::mutex> lock(_rejected_disconnect_mutex);
@@ -1187,6 +1215,7 @@ void CodexBleTransport::handle_gap_disconnected(
                 secure_pairing::kNoAgentConnection;
         }
     }
+    std::lock_guard<std::mutex> voice_link_lock(_voice_link_mutex);
     const secure_pairing::AgentConnectionRole previous =
         _connection_router.disconnected(connection_handle);
     if (previous == secure_pairing::AgentConnectionRole::Active) {
@@ -1237,6 +1266,7 @@ void CodexBleTransport::handle_subscription(
     uint16_t attr_handle,
     bool enabled)
 {
+    std::lock_guard<std::mutex> voice_link_lock(_voice_link_mutex);
     if (attr_handle == g_voice_tx_value_handle) {
         (void)_connection_router.update_voice_subscription(
             connection_handle, enabled);
@@ -1249,6 +1279,7 @@ void CodexBleTransport::handle_subscription(
 
 void CodexBleTransport::handle_mtu_update(uint16_t connection_handle, uint16_t mtu)
 {
+    std::lock_guard<std::mutex> voice_link_lock(_voice_link_mutex);
     (void)_connection_router.update_mtu(connection_handle, mtu);
 }
 

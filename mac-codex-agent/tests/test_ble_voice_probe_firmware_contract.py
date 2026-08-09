@@ -192,14 +192,38 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         self.assertNotIn("_active_disconnect_token.load()", authorization)
 
     def test_revoked_active_cannot_receive_outbound_voice(self):
+        header = (
+            ROOT / "main/apps/app_codex_status/codex_ble_transport.h"
+        ).read_text()
         source = (
             ROOT / "main/apps/app_codex_status/codex_ble_transport.cpp"
         ).read_text()
-        notify = source.split(
-            "CodexBleNotifyResult CodexBleTransport::notify_voice", 1
-        )[1].split("bool CodexBleTransport::notify_pairing", 1)[0]
-        self.assertIn("authorize_gatt(", notify)
-        self.assertIn("AgentGattSurface::Production", notify)
+        send = source.split(
+            "VoiceNotificationSendResult CodexBleTransport::send_voice_notification",
+            1,
+        )[1].split(
+            "CodexBleNotifyResult CodexBleTransport::notify_voice_for_link", 1
+        )[0]
+        self.assertIn("_voice_link_mutex", header)
+        self.assertIn("_voice_link_mutex", send)
+        self.assertIn("_active_production_revoked_token.load()", send)
+        self.assertIn("notification.connection_generation", send)
+        self.assertIn("link.generation", send)
+
+    def test_forced_capture_worker_failure_cannot_duplicate_transmitter(self):
+        header = (
+            ROOT / "main/apps/app_codex_status/voice_input_controller.h"
+        ).read_text()
+        source = (
+            ROOT / "main/apps/app_codex_status/voice_input_controller.cpp"
+        ).read_text()
+        stop_capture = source.split(
+            "void VoiceInputController::stop_capture_bounded", 1
+        )[1].split("void VoiceInputController::stop_transmitter_bounded", 1)[0]
+
+        self.assertIn("_producer_worker_failed", header)
+        self.assertIn("_producer_worker_failed = true", stop_capture)
+        self.assertNotIn("_initialized = false", stop_capture)
 
     def test_disconnect_retry_is_bound_to_original_active_generation(self):
         header = (
