@@ -194,4 +194,3 @@ lv_font_t MontserratBold22 = {
 
 
 #endif /*#if MONTSERRATBOLD22*/
-
