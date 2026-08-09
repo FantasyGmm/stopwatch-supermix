@@ -1,4 +1,4 @@
-"""Accessibility-gated Fn shortcut control for an already-running Typeless."""
+"""Accessibility-gated shortcut control for an already-running Typeless."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from AppKit import NSRunningApplication
 
 
 TYPELESS_BUNDLE_IDENTIFIER = "now.typeless.desktop"
-FN_KEY_CODE = 0x3F
+LEFT_OPTION_KEY_CODE = 0x3A
 
 
 class AccessibilityRequired(RuntimeError):
@@ -33,8 +33,8 @@ def _is_typeless_running() -> bool:
     return bool(applications)
 
 
-def _post_fn(down: bool) -> None:
-    event = Quartz.CGEventCreateKeyboardEvent(None, FN_KEY_CODE, down)
+def _post_left_option(down: bool) -> None:
+    event = Quartz.CGEventCreateKeyboardEvent(None, LEFT_OPTION_KEY_CODE, down)
     Quartz.CGEventPost(Quartz.kCGHIDEventTap, event)
 
 
@@ -43,7 +43,7 @@ class FnShortcutController:
         self,
         trusted: Callable[[], bool] = _is_accessibility_trusted,
         typeless_running: Callable[[], bool] = _is_typeless_running,
-        post_key: Callable[[bool], None] = _post_fn,
+        post_key: Callable[[bool], None] = _post_left_option,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self._trusted = trusted
