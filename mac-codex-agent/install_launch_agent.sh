@@ -184,7 +184,7 @@ validate_no_key_material() {
         return 1
     fi
     if grep -R -I -q -E \
-        '(^|[^0-9A-Fa-f])[0-9A-Fa-f]{32}([^0-9A-Fa-f]|$)' \
+        '(^|[^0-9a-f])[0-9a-f]{32}([^0-9a-f]|$)' \
         "$app_path/Contents/Resources" \
         "$app_path/Contents/MacOS" \
         "$app_path/Contents/Info.plist"; then

@@ -464,6 +464,10 @@ class InstallScriptTests(unittest.TestCase):
                 "-----END CERTIFICATE-----\n",
                 encoding="utf-8",
             )
+            (certifi / "font-data.py").write_text(
+                "YAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD/\n",
+                encoding="utf-8",
+            )
 
             allowed = self.run_installer_function(
                 f"validate_no_key_material {shlex.quote(str(app))}"
@@ -471,7 +475,7 @@ class InstallScriptTests(unittest.TestCase):
             self.assertEqual(allowed.returncode, 0, allowed.stderr)
 
             (app / "Contents" / "Resources" / "app" / "bad.txt").write_text(
-                "-----BEGIN PRIVATE KEY-----\n",
+                "000102030405060708090a0b0c0d0e0f\n",
                 encoding="utf-8",
             )
             rejected = self.run_installer_function(
