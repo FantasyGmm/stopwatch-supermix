@@ -9,6 +9,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#if defined(STOPWATCH_HOST_TEST)
+#include <functional>
+#endif
 #include <memory>
 #include <mutex>
 
@@ -180,6 +183,7 @@ public:
     void set_next_connection_session_for_test(uint16_t session);
     void run_capture_worker_once_for_test(uint32_t now_ms);
     void run_transmit_worker_until_idle_for_test(uint32_t now_ms);
+    void set_transmitter_wake_hook_for_test(std::function<void()> hook);
     VoiceTransportDiagnostics transport_diagnostics_for_test() const;
 #endif
 
@@ -245,6 +249,9 @@ private:
     std::atomic<bool> _producer_worker_failed{false};
     void* _transmitter_task = nullptr;
     [[maybe_unused]] void* _transmitter_stopped = nullptr;
+#if defined(STOPWATCH_HOST_TEST)
+    std::function<void()> _transmitter_wake_hook_for_test;
+#endif
     uint16_t _negotiated_mtu = 23;
     uint16_t _next_session = 1;
     uint32_t _connection_epoch = 0;

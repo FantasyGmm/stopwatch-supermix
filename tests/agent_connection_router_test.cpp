@@ -1,7 +1,11 @@
 #include "main/apps/app_codex_status/agent_connection_router.h"
+#include "main/apps/app_codex_status/connection_termination_guard.h"
 
 #include <cassert>
+#include <condition_variable>
 #include <cstdint>
+#include <mutex>
+#include <thread>
 
 namespace {
 
@@ -34,6 +38,48 @@ void test_active_voice_link_is_one_coherent_snapshot()
     assert(!disconnected.authorized);
 }
 
+void test_connection_termination_holds_router_guard_through_submission()
+{
+    std::mutex router_guard;
+    std::mutex event_mutex;
+    std::condition_variable event_changed;
+    bool submission_entered = false;
+    bool allow_submission_to_finish = false;
+    int result = 0;
+
+    std::thread submitter([&]() {
+        result = secure_pairing::serialize_connection_termination(
+            router_guard,
+            [&]() {
+                std::unique_lock<std::mutex> lock(event_mutex);
+                submission_entered = true;
+                event_changed.notify_one();
+                event_changed.wait(lock, [&]() {
+                    return allow_submission_to_finish;
+                });
+                return 17;
+            });
+    });
+
+    {
+        std::unique_lock<std::mutex> lock(event_mutex);
+        event_changed.wait(lock, [&]() { return submission_entered; });
+    }
+    const bool guard_was_available = router_guard.try_lock();
+    if (guard_was_available) {
+        router_guard.unlock();
+    }
+    assert(!guard_was_available);
+
+    {
+        std::lock_guard<std::mutex> lock(event_mutex);
+        allow_submission_to_finish = true;
+    }
+    event_changed.notify_one();
+    submitter.join();
+    assert(result == 17);
+}
+
 }  // namespace
 
 int main()
@@ -41,6 +87,7 @@ int main()
     using namespace secure_pairing;
 
     test_active_voice_link_is_one_coherent_snapshot();
+    test_connection_termination_holds_router_guard_through_submission();
 
     AgentConnectionRouter router;
     assert(

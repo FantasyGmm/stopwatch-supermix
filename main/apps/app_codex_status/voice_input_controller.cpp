@@ -697,6 +697,12 @@ void VoiceInputController::run_transmit_worker_until_idle_for_test(
     }
 }
 
+void VoiceInputController::set_transmitter_wake_hook_for_test(
+    std::function<void()> hook)
+{
+    _transmitter_wake_hook_for_test = std::move(hook);
+}
+
 VoiceTransportDiagnostics
 VoiceInputController::transport_diagnostics_for_test() const
 {
@@ -1309,6 +1315,10 @@ void VoiceInputController::wake_transmitter()
 #if !defined(STOPWATCH_HOST_TEST)
     if (_transmitter_task != nullptr) {
         xTaskNotifyGive(static_cast<TaskHandle_t>(_transmitter_task));
+    }
+#else
+    if (_transmitter_wake_hook_for_test) {
+        _transmitter_wake_hook_for_test();
     }
 #endif
 }

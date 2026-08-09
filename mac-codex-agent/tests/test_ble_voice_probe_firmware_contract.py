@@ -267,10 +267,19 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
             "bool CodexBleTransport::connected", 1
         )[0]
 
+        reject = source.split(
+            "bool CodexBleTransport::reject_pending", 1
+        )[1].split("bool CodexBleTransport::request_active_disconnect", 1)[0]
+
+        self.assertIn("serialize_connection_termination", request)
+        self.assertIn("serialize_connection_termination", reject)
+        self.assertGreaterEqual(
+            poll.count("serialize_connection_termination"), 2
+        )
         self.assertIn("_voice_link_mutex", request)
-        self.assertIn("_voice_link_mutex", poll)
-        self.assertLess(request.index("_voice_link_mutex"), request.index("ble_gap_terminate"))
-        self.assertLess(poll.index("_voice_link_mutex"), poll.index("ble_gap_terminate"))
+        self.assertIn("_voice_link_mutex", reject)
+        self.assertIn("ble_gap_terminate", request)
+        self.assertIn("ble_gap_terminate", reject)
 
     def test_disconnect_retry_is_bound_to_original_active_generation(self):
         header = (

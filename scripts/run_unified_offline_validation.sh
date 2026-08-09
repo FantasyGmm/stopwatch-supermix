@@ -413,7 +413,7 @@ run_host_test secure_pairing_wire_test \
 
 stage "Agent connection router host test"
 run_host_test agent_connection_router_test \
-    -std=c++17 -Wall -Wextra -Werror -I. \
+    -std=c++17 -Wall -Wextra -Werror -pthread -I. \
     tests/agent_connection_router_test.cpp \
     main/apps/app_codex_status/agent_connection_router.cpp
 

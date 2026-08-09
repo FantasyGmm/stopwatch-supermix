@@ -1002,6 +1002,30 @@ void test_sixty_seconds_of_voice_does_not_depend_on_ui_polling()
     assert(controller.queued_audio_ms_for_test() == 0);
 }
 
+void test_immediate_begin_send_failure_cannot_be_overwritten_by_startup()
+{
+    FakeBackend backend;
+    FakeEntropy entropy;
+    FakeNotificationTransport transport;
+    transport.results = {VoiceNotificationSendResult::PermanentFailure};
+    voice_input::crypto::CcmContext crypto(kKey);
+    VoiceInputController controller(backend, crypto, entropy);
+    controller.set_notification_transport(&transport);
+    controller.set_ready(true, 256);
+    controller.set_transmitter_wake_hook_for_test([&]() {
+        controller.set_transmitter_wake_hook_for_test({});
+        controller.run_transmit_worker_until_idle_for_test(1201);
+    });
+
+    controller.handle_button(true, 1200);
+
+    assert(transport.sent.size() == 1);
+    assert(transport.sent.front().kind ==
+           voice_input::NotificationKind::PttBegin);
+    assert(controller.ui_state() == VoiceInputUiState::Error);
+    assert(backend.release_calls == 1);
+}
+
 void test_cancel_waits_for_inflight_transmission()
 {
     FakeBackend backend;
@@ -1132,6 +1156,7 @@ int main()
     test_dispatcher_guard_handles_uint32_wraparound();
     test_cancel_waits_for_inflight_producer_cleanup();
     test_sixty_seconds_of_voice_does_not_depend_on_ui_polling();
+    test_immediate_begin_send_failure_cannot_be_overwritten_by_startup();
     test_cancel_waits_for_inflight_transmission();
     test_transient_congestion_retries_same_packet_and_recovers();
     test_sustained_congestion_fails_after_elapsed_deadline();
