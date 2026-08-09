@@ -354,6 +354,24 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         self.assertIn("take_notification", source)
         self.assertIn("cancel_for_home", source)
 
+    def test_production_voice_delivery_is_not_driven_by_codex_ui_loop(self):
+        app = (ROOT / "main/apps/app_codex_status/app_codex_status.cpp").read_text()
+        controller = (
+            ROOT / "main/apps/app_codex_status/voice_input_controller.cpp"
+        ).read_text()
+        running = app.split("void AppCodexStatus::onRunning()", 1)[1].split(
+            "void AppCodexStatus::onClose()", 1
+        )[0]
+        production_voice = running.split("if (_voice_input)", 1)[1].split(
+            "if (_voice_probe)", 1
+        )[0]
+
+        self.assertNotIn("take_notification", production_voice)
+        self.assertNotIn("record_notification_result", production_voice)
+        self.assertNotIn("notify_voice(", production_voice)
+        self.assertIn("transmitter_loop", controller)
+        self.assertIn("xTaskCreate", controller)
+
     def test_gap_security_outcomes_are_logged_for_physical_diagnosis(self):
         source = (ROOT / "main/apps/app_codex_status/codex_ble_transport.cpp").read_text()
         self.assertIn("BLE_GAP_EVENT_ENC_CHANGE", source)

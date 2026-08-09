@@ -67,6 +67,13 @@ enum class VoiceNotificationSendResult : uint8_t {
     PermanentFailure,
 };
 
+class VoiceNotificationTransport {
+public:
+    virtual ~VoiceNotificationTransport() = default;
+    virtual VoiceNotificationSendResult send_voice_notification(
+        const voice_input::Notification& notification) = 0;
+};
+
 class VoiceButtonEdgeGate {
 public:
     // Keeps PTT start latency below 100 ms while reserving A+B for GoHome.
@@ -140,6 +147,7 @@ public:
 
     bool initialize();
     void shutdown();
+    void set_notification_transport(VoiceNotificationTransport* transport);
     bool set_credential(
         const voice_input::crypto::Key& key,
         uint32_t key_epoch);
@@ -160,12 +168,17 @@ public:
 #if defined(STOPWATCH_HOST_TEST)
     size_t queued_audio_ms_for_test() const;
     void set_next_connection_session_for_test(uint16_t session);
+    void run_capture_worker_once_for_test(uint32_t now_ms);
+    void run_transmit_worker_until_idle_for_test(uint32_t now_ms);
 #endif
 
 private:
     static void producer_entry(void* context);
     void producer_loop();
     void producer_step(uint32_t now_ms);
+    static void transmitter_entry(void* context);
+    void transmitter_loop();
+    bool transmitter_step(uint32_t now_ms);
     bool start_session(uint32_t now_ms);
     bool prepare_begin(uint32_t now_ms);
     bool prepare_audio(
@@ -195,6 +208,8 @@ private:
         const voice_input::VoiceNotification& logical,
         voice_input::Notification& wire);
     void wake_producer();
+    void wake_transmitter();
+    void stop_transmitter_bounded();
 
     std::unique_ptr<VoiceCapturePipeline> _capture_pipeline;
     voice_input::crypto::CcmContext* _crypto = nullptr;
@@ -212,6 +227,10 @@ private:
     std::atomic<bool> _shutdown_requested{false};
     void* _producer_task = nullptr;
     [[maybe_unused]] void* _producer_stopped = nullptr;
+    VoiceNotificationTransport* _notification_transport = nullptr;
+    std::atomic<bool> _transmitter_shutdown_requested{false};
+    void* _transmitter_task = nullptr;
+    [[maybe_unused]] void* _transmitter_stopped = nullptr;
     uint16_t _negotiated_mtu = 23;
     uint16_t _next_session = 1;
     uint32_t _connection_epoch = 0;

@@ -143,6 +143,24 @@ public:
     size_t index = 0;
 };
 
+class FakeNotificationTransport final : public VoiceNotificationTransport {
+public:
+    VoiceNotificationSendResult send_voice_notification(
+        const voice_input::Notification& notification) override
+    {
+        sent.push_back(notification);
+        if (results.empty()) {
+            return VoiceNotificationSendResult::Accepted;
+        }
+        const VoiceNotificationSendResult result = results.front();
+        results.erase(results.begin());
+        return result;
+    }
+
+    std::vector<voice_input::Notification> sent;
+    std::vector<VoiceNotificationSendResult> results;
+};
+
 class FakeVoiceButtonSink final : public VoiceButtonSink {
 public:
     void handle_button(bool pressed, uint32_t now_ms) override
@@ -920,6 +938,36 @@ void test_cancel_waits_for_inflight_producer_cleanup()
     assert(backend.release_calls.load() == 1);
 }
 
+void test_sixty_seconds_of_voice_does_not_depend_on_ui_polling()
+{
+    FakeBackend backend;
+    FakeEntropy entropy;
+    FakeNotificationTransport transport;
+    voice_input::crypto::CcmContext crypto(kKey);
+    VoiceInputController controller(backend, crypto, entropy);
+    controller.set_notification_transport(&transport);
+    controller.set_ready(true, 256);
+    controller.handle_button(true, 1000);
+
+    for (uint32_t block = 0; block < 3000; ++block) {
+        const uint32_t now = 1001 + block * 20;
+        controller.run_capture_worker_once_for_test(now);
+        controller.run_transmit_worker_until_idle_for_test(now);
+        assert(controller.ui_state() == VoiceInputUiState::Active);
+    }
+
+    controller.handle_button(false, 61001);
+    controller.run_capture_worker_once_for_test(61002);
+    controller.run_transmit_worker_until_idle_for_test(61002);
+
+    assert(controller.ui_state() == VoiceInputUiState::Ready);
+    assert(transport.sent.front().kind ==
+           voice_input::NotificationKind::PttBegin);
+    assert(transport.sent.back().kind ==
+           voice_input::NotificationKind::PttEnd);
+    assert(controller.queued_audio_ms_for_test() == 0);
+}
+
 }  // namespace
 
 int main()
@@ -956,4 +1004,5 @@ int main()
     test_dispatcher_entry_held_and_short_tap_do_not_start();
     test_dispatcher_guard_handles_uint32_wraparound();
     test_cancel_waits_for_inflight_producer_cleanup();
+    test_sixty_seconds_of_voice_does_not_depend_on_ui_polling();
 }

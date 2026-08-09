@@ -32,7 +32,7 @@ struct CodexPairingFrame {
 enum class CodexBleNotifyResult { Accepted, NotReady, Congested, InvalidSize };
 
 
-class CodexBleTransport {
+class CodexBleTransport final : public VoiceNotificationTransport {
 public:
     bool start(const std::string& device_name);
     void stop();
@@ -47,6 +47,8 @@ public:
     uint16_t negotiated_mtu() const;
     size_t voice_notification_limit() const;
     CodexBleNotifyResult notify_voice(const uint8_t* data, size_t length);
+    VoiceNotificationSendResult send_voice_notification(
+        const voice_input::Notification& notification) override;
     CodexBleNotifyResult notify_pairing(
         uint16_t connection_handle,
         const uint8_t* data,
@@ -95,6 +97,11 @@ public:
     bool stopping() const;
 
 private:
+    CodexBleNotifyResult notify_voice_for_link(
+        const secure_pairing::AgentVoiceLink& link,
+        const uint8_t* data,
+        size_t length);
+
     void* _frame_queue = nullptr;
     void* _voice_control_queue = nullptr;
     void* _production_voice_control_queue = nullptr;

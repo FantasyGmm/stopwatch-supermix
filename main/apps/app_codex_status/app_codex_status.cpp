@@ -388,14 +388,19 @@ void AppCodexStatus::onOpen()
                 _voice_probe.reset();
             }
             _voice_input = std::make_unique<VoiceInputController>();
-            (void)_voice_input->initialize();
+            _voice_input->set_notification_transport(_ble_transport.get());
+            if (!_voice_input->initialize()) {
+                _voice_input.reset();
+            }
             if (_agent_registry_ready) {
                 (void)_ble_transport->set_voice_credential(
                     _agent_registry.master_key(),
                     _agent_registry.key_epoch());
-                (void)_voice_input->set_credential(
-                    _agent_registry.master_key(),
-                    _agent_registry.key_epoch());
+                if (_voice_input) {
+                    (void)_voice_input->set_credential(
+                        _agent_registry.master_key(),
+                        _agent_registry.key_epoch());
+                }
             }
             set_status("BLE PAIR", kTextDim);
             set_host_text(_ble_name.c_str());
@@ -525,26 +530,6 @@ void AppCodexStatus::onRunning()
                 _production_voice_link_usable = production_link_usable;
                 _production_voice_mtu = voice_mtu;
                 _voice_input->set_ready(production_link_usable, voice_mtu);
-            }
-            _voice_input->poll(now);
-            voice_input::Notification notification;
-            while (_voice_input->take_notification(notification)) {
-                const CodexBleNotifyResult result = _ble_transport->notify_voice(
-                    notification.bytes.data(), notification.size);
-                VoiceNotificationSendResult send_result =
-                    VoiceNotificationSendResult::PermanentFailure;
-                if (result == CodexBleNotifyResult::Accepted) {
-                    send_result = VoiceNotificationSendResult::Accepted;
-                } else if (result == CodexBleNotifyResult::Congested) {
-                    send_result = VoiceNotificationSendResult::Congested;
-                }
-                _voice_input->record_notification_result(
-                    notification,
-                    send_result,
-                    now);
-                if (result != CodexBleNotifyResult::Accepted) {
-                    break;
-                }
             }
         }
         if (_voice_probe) {

@@ -844,16 +844,45 @@ size_t CodexBleTransport::voice_notification_limit() const
 
 CodexBleNotifyResult CodexBleTransport::notify_voice(const uint8_t* data, size_t length)
 {
-    if (data == nullptr || length == 0 || length > voice_notification_limit()) {
+    const secure_pairing::AgentVoiceLink link =
+        _connection_router.active_voice_link();
+    if (!link.authorized || !link.subscribed || link.mtu <= 3 ||
+        data == nullptr || length == 0 ||
+        length > std::min(
+            kMaxNotificationSize,
+            static_cast<size_t>(link.mtu - 3))) {
         return CodexBleNotifyResult::InvalidSize;
     }
-    const uint16_t connection_handle =
-        _connection_router.active_handle();
-    if (connection_handle == secure_pairing::kNoAgentConnection ||
-        !authorize_gatt(
-            connection_handle,
-            secure_pairing::AgentGattSurface::Production) ||
-        !_connection_router.active_voice_subscribed() ||
+    return notify_voice_for_link(link, data, length);
+}
+
+VoiceNotificationSendResult CodexBleTransport::send_voice_notification(
+    const voice_input::Notification& notification)
+{
+    const secure_pairing::AgentVoiceLink link =
+        _connection_router.active_voice_link();
+    if (!link.authorized || !link.subscribed || notification.size == 0 ||
+        link.mtu <= 3 ||
+        notification.size > static_cast<size_t>(link.mtu - 3)) {
+        return VoiceNotificationSendResult::PermanentFailure;
+    }
+    const CodexBleNotifyResult result = notify_voice_for_link(
+        link, notification.bytes.data(), notification.size);
+    if (result == CodexBleNotifyResult::Accepted) {
+        return VoiceNotificationSendResult::Accepted;
+    }
+    if (result == CodexBleNotifyResult::Congested) {
+        return VoiceNotificationSendResult::Congested;
+    }
+    return VoiceNotificationSendResult::PermanentFailure;
+}
+
+CodexBleNotifyResult CodexBleTransport::notify_voice_for_link(
+    const secure_pairing::AgentVoiceLink& link,
+    const uint8_t* data,
+    size_t length)
+{
+    if (link.handle == secure_pairing::kNoAgentConnection ||
         g_voice_tx_value_handle == 0) {
         return CodexBleNotifyResult::NotReady;
     }
@@ -869,7 +898,7 @@ CodexBleNotifyResult CodexBleTransport::notify_voice(const uint8_t* data, size_t
 
     // NimBLE consumes mbuf for every notify_custom result.
     const int result = ble_gatts_notify_custom(
-        connection_handle, g_voice_tx_value_handle, mbuf);
+        link.handle, g_voice_tx_value_handle, mbuf);
     if (result == 0) {
         return CodexBleNotifyResult::Accepted;
     }
