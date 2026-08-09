@@ -693,7 +693,7 @@ void AppCodexStatus::create_view()
         kPendingLabelX,
         kStateLabelY,
         kStateLabelWidth,
-        &MontserratBold16,
+        &MontserratBold22,
         kAlertVermilion,
         LV_TEXT_ALIGN_CENTER
     );
@@ -713,7 +713,7 @@ void AppCodexStatus::create_view()
         kRunningLabelX,
         kStateLabelY,
         kStateLabelWidth,
-        &MontserratBold16,
+        &MontserratBold22,
         kRunningCyan,
         LV_TEXT_ALIGN_CENTER
     );

@@ -56,13 +56,13 @@ constexpr int kAlertDividerX = 82;
 constexpr int kAlertDividerY = 258;
 constexpr int kAlertDividerWidth = 302;
 
-constexpr int kPendingLabelX = 62;
-constexpr int kRunningLabelX = 308;
+constexpr int kPendingLabelX = 54;
+constexpr int kRunningLabelX = 300;
 constexpr int kPendingCountX = 78;
 constexpr int kRunningCountX = 324;
-constexpr int kStateLabelY = 278;
-constexpr int kStateLabelWidth = 96;
-constexpr int kStateCountY = 294;
+constexpr int kStateLabelY = 272;
+constexpr int kStateLabelWidth = 112;
+constexpr int kStateCountY = 298;
 constexpr int kStateCountWidth = 64;
 
 constexpr int kTaskIndexX = 151;
