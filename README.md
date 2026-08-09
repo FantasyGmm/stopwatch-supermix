@@ -71,13 +71,16 @@ clock, persists the fixed-offset timezone, and writes the RX8130 RTC, so the
 same time is used by Launcher, Clock, alarms, and other applications and is
 restored after reboot. A reconnect refreshes the offset for timezone changes.
 
-The monitor maps `task_started` to Running. A `task_complete` response that asks
-for confirmation, information, or another action becomes Pending; a normal
-completion becomes Completed. Only Pending triggers a chime. The watch shows
-only project, current short conversation title, and `正在处理`, `等待指令`, or
-`已完成`. Pending records have priority and rotate exclusively; when Pending is
-empty, Running records rotate. With neither active state, static `COMPLETED` is
-green. Only the latest current-day state of each conversation is displayed.
+The monitor maps `task_started` to Running. On `task_complete`, structured
+unfinished plans and input requests take priority. A bounded, high-recall scan
+of the full final response then recognizes direct questions, choices, and
+required user actions; ambiguous handoffs remain Pending unless a later strong
+resolution clearly closes the same category. A normal completion becomes
+Completed. Only Pending triggers a chime. The watch shows only project, current
+short conversation title, and `正在处理`, `等待指令`, or `已完成`. Pending records
+have priority and rotate exclusively; when Pending is empty, Running records
+rotate. With neither active state, static `COMPLETED` is green. Only the latest
+current-day state of each conversation is displayed.
 
 The two upper arcs display the model and uppercased reasoning effort directly.
 They do not show separate `MODEL`, `EFFORT`, `auto`, or `reason` captions.

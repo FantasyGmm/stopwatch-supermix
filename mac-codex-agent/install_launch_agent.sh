@@ -546,6 +546,7 @@ build_staged_app() {
         codex_adapter.py \
         combined_collector.py \
         completion_classifier.py \
+        codex_turn_evidence.py \
         task_alerts.py \
         trae_adapter.py \
         trae_tasks.py \

@@ -69,6 +69,7 @@ class InstallScriptTests(unittest.TestCase):
             "trae_adapter.py",
             "combined_collector.py",
             "completion_classifier.py",
+            "codex_turn_evidence.py",
             "task_alerts.py",
             "protocol.py",
             "trae_tasks.py",

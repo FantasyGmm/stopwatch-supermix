@@ -188,16 +188,26 @@ a clean firmware build do not replace BLE and physical acceptance on the watch.
 The agent watches local Codex rollout events. `task_started` makes a conversation
 Running. When the turn completes, the classifier first checks structured rollout
 signals: unfinished plan items and unresolved input requests become Pending and
-chime once. It then checks the final response structure for questions, explicit
-choice handoffs, and required user actions. Normal responses become Completed
-without a chime. A later user message completes older Pending records in that
-conversation without affecting another conversation.
+chime once. It then scans the full final response with a bounded set of broad
+categories: direct questions, explicit choices, and required user actions.
+Ambiguous handoffs stay Pending; only a later strong resolution for the same
+category clears them. This intentionally favors an occasional false positive
+over silently missing a task that is waiting for the user. A normal response
+becomes Completed without a chime. A later user message completes older Pending
+records in that conversation without affecting another conversation.
 
 Classification stays entirely local and does not send response text to the
 watch. Each completed alert stores an explainable reason such as
 `structured_unfinished_plan`, `structured_input_request`, `text_question`, or
 `completion_only`, so incorrect classifications can be diagnosed from the
 ledger and log without exposing prompt or response content.
+
+The ledger also records the classifier version. After a classifier upgrade, the
+agent streams each conversation's latest completed rollout from disk and
+reclassifies only the latest unsuperseded completion. It never resurrects a turn
+that already has a later user message. Temporarily incomplete or unreadable
+rollouts remain queued for retry, and repeated refreshes do not duplicate the
+Pending chime.
 
 The project name is derived from the conversation working directory, and the
 conversation title is refreshed through Codex's local app-server so generated
