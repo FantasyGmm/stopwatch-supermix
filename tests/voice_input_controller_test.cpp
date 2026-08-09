@@ -353,12 +353,12 @@ void test_queue_overflow_emits_error_and_cleans_capture()
     VoiceInputController controller(backend, crypto, entropy);
     controller.set_ready(true, 256);
     controller.handle_button(true, 500);
-    for (int index = 0; index < 20; ++index) {
+    for (int index = 0; index < 60; ++index) {
         controller.poll(static_cast<uint32_t>(501 + index));
     }
     assert(controller.ui_state() == VoiceInputUiState::Error);
     assert(backend.release_calls == 1);
-    assert(controller.queued_audio_ms_for_test() <= 300);
+    assert(controller.queued_audio_ms_for_test() <= 1000);
     voice_input::Notification wire = {};
     assert(controller.take_notification(wire));
     const auto begin = decode(wire, crypto, nullptr);
@@ -371,6 +371,39 @@ void test_queue_overflow_emits_error_and_cleans_capture()
     controller.record_notification_result(
         wire, VoiceNotificationSendResult::Accepted, 522);
     assert(!controller.take_notification(wire));
+}
+
+void test_transient_main_loop_stall_is_buffered()
+{
+    FakeBackend backend;
+    FakeEntropy entropy;
+    voice_input::crypto::CcmContext crypto(kKey);
+    VoiceInputController controller(backend, crypto, entropy);
+    controller.set_ready(true, 256);
+    controller.handle_button(true, 550);
+
+    voice_input::Notification wire = {};
+    assert(controller.take_notification(wire));
+    controller.record_notification_result(
+        wire, VoiceNotificationSendResult::Accepted, 551);
+
+    // The physical failure contained a 326 ms consumer gap. Seventeen 20 ms
+    // blocks model the same scheduling jitter without changing capture rate.
+    for (int index = 0; index < 17; ++index) {
+        controller.poll(static_cast<uint32_t>(552 + index * 20));
+    }
+    assert(controller.ui_state() == VoiceInputUiState::Active);
+    assert(controller.queued_audio_ms_for_test() == 340);
+
+    for (int index = 0; index < 17; ++index) {
+        assert(controller.take_notification(wire));
+        assert(wire.kind == voice_input::NotificationKind::Audio);
+        controller.record_notification_result(
+            wire,
+            VoiceNotificationSendResult::Accepted,
+            static_cast<uint32_t>(900 + index));
+    }
+    assert(controller.queued_audio_ms_for_test() == 0);
 }
 
 void test_consecutive_sessions_do_not_reuse_identity()
@@ -897,6 +930,7 @@ int main()
     test_release_during_read_keeps_final_complete_block();
     test_duplicate_edges_disconnect_home_and_capture_failure_are_bounded();
     test_queue_overflow_emits_error_and_cleans_capture();
+    test_transient_main_loop_stall_is_buffered();
     test_consecutive_sessions_do_not_reuse_identity();
     test_session_exhaustion_requires_new_connection_epoch();
     test_notification_failure_stops_capture_before_error();

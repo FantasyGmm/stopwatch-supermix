@@ -349,7 +349,7 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         self.assertIn("VoiceCapturePipeline", header)
         self.assertIn("VoiceInputSession", header)
         self.assertIn("kProducerStackBytes = 8192", source)
-        self.assertIn("kMaxBufferedAudioMs = 300", source)
+        self.assertIn("kMaxBufferedAudioMs = 1000", source)
         self.assertIn("encode_notification", source)
         self.assertIn("take_notification", source)
         self.assertIn("cancel_for_home", source)

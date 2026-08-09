@@ -16,7 +16,7 @@
 namespace {
 
 [[maybe_unused]] constexpr size_t kProducerStackBytes = 8192;
-constexpr uint32_t kMaxBufferedAudioMs = 300;
+constexpr uint32_t kMaxBufferedAudioMs = 1000;
 constexpr uint32_t kAudioBlockMs = 20;
 constexpr size_t kMaxQueuedAudioPackets = kMaxBufferedAudioMs / kAudioBlockMs;
 constexpr uint8_t kMaxCongestionRetries = 3;
