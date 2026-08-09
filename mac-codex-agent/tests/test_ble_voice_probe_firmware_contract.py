@@ -219,11 +219,58 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         ).read_text()
         stop_capture = source.split(
             "void VoiceInputController::stop_capture_bounded", 1
-        )[1].split("void VoiceInputController::stop_transmitter_bounded", 1)[0]
+        )[1].split("bool VoiceInputController::wait_transmitter_idle_bounded", 1)[0]
 
         self.assertIn("_producer_worker_failed", header)
         self.assertIn("_producer_worker_failed = true", stop_capture)
         self.assertNotIn("_initialized = false", stop_capture)
+        self.assertNotIn("vTaskDelete", stop_capture)
+        self.assertIn("esp_restart()", stop_capture)
+
+    def test_voice_start_state_is_published_before_transmitter_wakeup(self):
+        source = (
+            ROOT / "main/apps/app_codex_status/voice_input_controller.cpp"
+        ).read_text()
+        start = source.split("bool VoiceInputController::start_session", 1)[1].split(
+            "bool VoiceInputController::prepare_begin", 1
+        )[0]
+        prepare_begin = source.split(
+            "bool VoiceInputController::prepare_begin", 1
+        )[1].split("bool VoiceInputController::prepare_audio", 1)[0]
+
+        self.assertNotIn("wake_transmitter", prepare_begin)
+        self.assertLess(start.index("_producer_running = true"), start.index("wake_transmitter()"))
+        self.assertLess(
+            start.index("_ui_state = VoiceInputUiState::Active"),
+            start.index("wake_transmitter()"),
+        )
+
+    def test_voice_worker_timeout_uses_fail_stop_not_forced_task_delete(self):
+        source = (
+            ROOT / "main/apps/app_codex_status/voice_input_controller.cpp"
+        ).read_text()
+        wait_tx = source.split(
+            "bool VoiceInputController::wait_transmitter_idle_bounded", 1
+        )[1].split("void VoiceInputController::stop_transmitter_bounded", 1)[0]
+
+        self.assertNotIn("vTaskDelete", wait_tx)
+        self.assertIn("esp_restart()", wait_tx)
+
+    def test_generation_bound_disconnect_holds_voice_link_lock_through_terminate(self):
+        source = (
+            ROOT / "main/apps/app_codex_status/codex_ble_transport.cpp"
+        ).read_text()
+        request = source.split(
+            "bool CodexBleTransport::request_active_disconnect", 1
+        )[1].split("bool CodexBleTransport::is_active_handle", 1)[0]
+        poll = source.split("void CodexBleTransport::poll", 1)[1].split(
+            "bool CodexBleTransport::connected", 1
+        )[0]
+
+        self.assertIn("_voice_link_mutex", request)
+        self.assertIn("_voice_link_mutex", poll)
+        self.assertLess(request.index("_voice_link_mutex"), request.index("ble_gap_terminate"))
+        self.assertLess(poll.index("_voice_link_mutex"), poll.index("ble_gap_terminate"))
 
     def test_disconnect_retry_is_bound_to_original_active_generation(self):
         header = (

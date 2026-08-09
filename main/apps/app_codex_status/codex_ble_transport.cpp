@@ -689,19 +689,22 @@ void CodexBleTransport::stop()
 
 void CodexBleTransport::poll(uint32_t now_ms)
 {
-    const uint64_t disconnect_token = _active_disconnect_token.load();
-    if (disconnect_token != 0) {
-        const auto active = _connection_router.active_connection();
-        if (active_connection_token(active) != disconnect_token) {
-            uint64_t expected = disconnect_token;
-            (void)_active_disconnect_token.compare_exchange_strong(
-                expected, 0);
-            expected = disconnect_token;
-            (void)_active_production_revoked_token.compare_exchange_strong(
-                expected, 0);
-        } else if (_initialized) {
-            (void)ble_gap_terminate(
-                active.handle, BLE_ERR_REM_USER_CONN_TERM);
+    {
+        std::lock_guard<std::mutex> voice_link_lock(_voice_link_mutex);
+        const uint64_t disconnect_token = _active_disconnect_token.load();
+        if (disconnect_token != 0) {
+            const auto active = _connection_router.active_connection();
+            if (active_connection_token(active) != disconnect_token) {
+                uint64_t expected = disconnect_token;
+                (void)_active_disconnect_token.compare_exchange_strong(
+                    expected, 0);
+                expected = disconnect_token;
+                (void)_active_production_revoked_token.compare_exchange_strong(
+                    expected, 0);
+            } else if (_initialized) {
+                (void)ble_gap_terminate(
+                    active.handle, BLE_ERR_REM_USER_CONN_TERM);
+            }
         }
     }
     const uint16_t expired_pending =
@@ -1058,20 +1061,17 @@ bool CodexBleTransport::reject_pending(uint16_t connection_handle)
 
 bool CodexBleTransport::request_active_disconnect(bool revoke_production)
 {
-    secure_pairing::AgentActiveConnection active = {};
-    {
-        std::lock_guard<std::mutex> voice_link_lock(_voice_link_mutex);
-        active = _connection_router.active_connection();
-        if (!_initialized ||
-            active.handle == secure_pairing::kNoAgentConnection) {
-            return false;
-        }
-        const uint64_t token = active_connection_token(active);
-        if (revoke_production) {
-            _active_production_revoked_token.store(token);
-        }
-        _active_disconnect_token.store(token);
+    std::lock_guard<std::mutex> voice_link_lock(_voice_link_mutex);
+    const auto active = _connection_router.active_connection();
+    if (!_initialized ||
+        active.handle == secure_pairing::kNoAgentConnection) {
+        return false;
     }
+    const uint64_t token = active_connection_token(active);
+    if (revoke_production) {
+        _active_production_revoked_token.store(token);
+    }
+    _active_disconnect_token.store(token);
     return ble_gap_terminate(
                active.handle, BLE_ERR_REM_USER_CONN_TERM) == 0;
 }

@@ -2,6 +2,7 @@
 
 #if !defined(STOPWATCH_HOST_TEST)
 #include <esp_random.h>
+#include <esp_system.h>
 #include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
@@ -332,9 +333,13 @@ bool VoiceInputController::initialize()
             reinterpret_cast<TaskHandle_t*>(&_transmitter_task)) != pdPASS) {
         _shutdown_requested = true;
         wake_producer();
-        (void)xSemaphoreTake(
+        const bool producer_stopped = xSemaphoreTake(
             static_cast<SemaphoreHandle_t>(_producer_stopped),
-            pdMS_TO_TICKS(kProducerStopTimeoutMs));
+            pdMS_TO_TICKS(kProducerStopTimeoutMs)) == pdTRUE;
+        if (!producer_stopped) {
+            esp_restart();
+            return false;
+        }
         vTaskDelete(static_cast<TaskHandle_t>(_producer_task));
         _producer_task = nullptr;
         vSemaphoreDelete(static_cast<SemaphoreHandle_t>(_producer_stopped));
@@ -384,7 +389,10 @@ void VoiceInputController::shutdown()
                           static_cast<SemaphoreHandle_t>(_producer_stopped),
                           pdMS_TO_TICKS(kProducerCancelGraceMs)) == pdTRUE;
         }
-        (void)stopped;
+        if (!stopped) {
+            esp_restart();
+            return;
+        }
         vTaskDelete(task);
         _producer_task = nullptr;
     }
@@ -895,6 +903,7 @@ bool VoiceInputController::start_session(uint32_t now_ms)
         std::lock_guard<std::mutex> lock(_mutex);
         _ui_state = VoiceInputUiState::Active;
     }
+    wake_transmitter();
     wake_producer();
     return true;
 }
@@ -918,7 +927,6 @@ bool VoiceInputController::prepare_begin(uint32_t now_ms)
         }
         _outgoing.push_back(wire);
     }
-    wake_transmitter();
     return true;
 }
 
@@ -1142,13 +1150,9 @@ void VoiceInputController::stop_capture_bounded()
         }
     }
     if (_producer_running.load() && _producer_task != nullptr) {
-        vTaskDelete(static_cast<TaskHandle_t>(_producer_task));
-        _producer_task = nullptr;
-        if (_producer_stopped != nullptr) {
-            vSemaphoreDelete(static_cast<SemaphoreHandle_t>(_producer_stopped));
-            _producer_stopped = nullptr;
-        }
         _producer_worker_failed = true;
+        esp_restart();
+        return;
     }
 #else
     while (_producer_running.load()) {
@@ -1172,17 +1176,8 @@ bool VoiceInputController::wait_transmitter_idle_bounded()
         vTaskDelay(1);
     }
     if (_transmitter_step_active.load()) {
-        if (_transmitter_task != nullptr) {
-            vTaskDelete(static_cast<TaskHandle_t>(_transmitter_task));
-            _transmitter_task = nullptr;
-        }
-        if (_transmitter_stopped != nullptr) {
-            vSemaphoreDelete(
-                static_cast<SemaphoreHandle_t>(_transmitter_stopped));
-            _transmitter_stopped = nullptr;
-        }
-        _transmitter_step_active = false;
         _producer_worker_failed = true;
+        esp_restart();
         return false;
     }
 #else
@@ -1210,7 +1205,10 @@ void VoiceInputController::stop_transmitter_bounded()
                           static_cast<SemaphoreHandle_t>(_transmitter_stopped),
                           pdMS_TO_TICKS(kTransmitterCancelGraceMs)) == pdTRUE;
         }
-        (void)stopped;
+        if (!stopped) {
+            esp_restart();
+            return;
+        }
         vTaskDelete(task);
         _transmitter_task = nullptr;
     }
