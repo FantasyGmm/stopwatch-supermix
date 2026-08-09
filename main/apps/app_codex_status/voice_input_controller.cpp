@@ -20,7 +20,7 @@ namespace {
 constexpr uint32_t kMaxBufferedAudioMs = 1000;
 constexpr uint32_t kAudioBlockMs = 20;
 constexpr size_t kMaxQueuedAudioPackets = kMaxBufferedAudioMs / kAudioBlockMs;
-constexpr uint8_t kMaxCongestionRetries = 3;
+constexpr uint32_t kCongestionDeadlineMs = 250;
 constexpr uint16_t kMinimumAudioMtu =
     static_cast<uint16_t>(voice_input::kAudioCharacteristicValueSize + 3);
 [[maybe_unused]] constexpr uint32_t kProducerStopTimeoutMs = 500;
@@ -569,22 +569,35 @@ void VoiceInputController::record_notification_result(
             _outgoing.front().sequence != notification.sequence) {
             return;
         }
-        if (result == VoiceNotificationSendResult::Congested &&
-            ++_congestion_retries <= kMaxCongestionRetries) {
-            return;
-        }
         if (result == VoiceNotificationSendResult::Congested) {
+            ++_transport_diagnostics.congestion_retries;
+            if (!_congestion_active) {
+                _congestion_active = true;
+                _congestion_started_ms = now_ms;
+                return;
+            }
+            if (now_ms - _congestion_started_ms < kCongestionDeadlineMs) {
+                return;
+            }
             result = VoiceNotificationSendResult::PermanentFailure;
         }
 
         if (result == VoiceNotificationSendResult::Accepted) {
             failed = _outgoing.front();
             _outgoing.pop_front();
-            _congestion_retries = 0;
+            _congestion_active = false;
+            _congestion_started_ms = 0;
             if (failed.kind == voice_input::NotificationKind::Audio &&
                 _queued_audio_packets != 0) {
                 --_queued_audio_packets;
             }
+            if (_has_accepted_timestamp) {
+                _transport_diagnostics.longest_accepted_gap_ms = std::max(
+                    _transport_diagnostics.longest_accepted_gap_ms,
+                    now_ms - _last_accepted_ms);
+            }
+            _last_accepted_ms = now_ms;
+            _has_accepted_timestamp = true;
             _last_accepted_sequence = failed.sequence;
             _has_accepted_notification = true;
             if (failed.kind == voice_input::NotificationKind::PttBegin) {
@@ -595,15 +608,18 @@ void VoiceInputController::record_notification_result(
                 _session.stopped();
                 _terminal_pending = false;
                 _begin_accepted = false;
+                _transport_diagnostics.terminal_delivered = true;
                 _ui_state = _ready.load() ? VoiceInputUiState::Ready
                                           : VoiceInputUiState::Off;
             } else if (failed.kind == voice_input::NotificationKind::VoiceError) {
                 _terminal_pending = false;
+                _transport_diagnostics.terminal_delivered = true;
             }
         } else {
             failed = _outgoing.front();
             _outgoing.pop_front();
-            _congestion_retries = 0;
+            _congestion_active = false;
+            _congestion_started_ms = 0;
             _session.record_queue_overflow();
             terminal_delivery_failed =
                 failed.kind == voice_input::NotificationKind::VoiceError;
@@ -658,6 +674,13 @@ void VoiceInputController::run_transmit_worker_until_idle_for_test(
 {
     while (transmitter_step(now_ms)) {
     }
+}
+
+VoiceTransportDiagnostics
+VoiceInputController::transport_diagnostics_for_test() const
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    return _transport_diagnostics;
 }
 #endif
 
@@ -806,7 +829,11 @@ bool VoiceInputController::start_session(uint32_t now_ms)
         _begin_accepted = false;
         _has_accepted_notification = false;
         _last_accepted_sequence = 0;
-        _congestion_retries = 0;
+        _congestion_started_ms = 0;
+        _last_accepted_ms = 0;
+        _transport_diagnostics = {};
+        _congestion_active = false;
+        _has_accepted_timestamp = false;
     }
 
     VoiceCaptureError capture_error = VoiceCaptureError::None;
@@ -907,6 +934,10 @@ bool VoiceInputController::prepare_audio(
                     _session.record_captured_samples(captured_samples);
                     _outgoing.push_back(wire);
                     ++_queued_audio_packets;
+                    _transport_diagnostics.max_queued_audio_ms = std::max(
+                        _transport_diagnostics.max_queued_audio_ms,
+                        static_cast<uint32_t>(
+                            _queued_audio_packets * kAudioBlockMs));
                     enqueued = true;
                 }
             }
@@ -1038,6 +1069,10 @@ void VoiceInputController::fail(uint16_t code, uint16_t detail, uint32_t now_ms)
     }
     _queued_audio_packets = 0;
     _graceful_stop = false;
+    _congestion_started_ms = 0;
+    _congestion_active = false;
+    _transport_diagnostics.failure_code = code;
+    _transport_diagnostics.failure_detail = detail;
     std::array<uint8_t, voice_input::kErrorBodySize> payload = {};
     const size_t size = voice_input::encode_error_body(
         voice_input::ErrorBody{code, detail}, payload.data(), payload.size());
@@ -1145,7 +1180,10 @@ void VoiceInputController::reset_session(
     _begin_accepted = false;
     _has_accepted_notification = false;
     _last_accepted_sequence = 0;
-    _congestion_retries = 0;
+    _congestion_started_ms = 0;
+    _last_accepted_ms = 0;
+    _congestion_active = false;
+    _has_accepted_timestamp = false;
     _ui_state = ready_after_reset ? VoiceInputUiState::Ready
                                   : VoiceInputUiState::Off;
 }

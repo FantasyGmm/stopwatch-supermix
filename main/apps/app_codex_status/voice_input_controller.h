@@ -67,6 +67,15 @@ enum class VoiceNotificationSendResult : uint8_t {
     PermanentFailure,
 };
 
+struct VoiceTransportDiagnostics {
+    uint32_t max_queued_audio_ms = 0;
+    uint32_t longest_accepted_gap_ms = 0;
+    uint32_t congestion_retries = 0;
+    uint16_t failure_code = 0;
+    uint16_t failure_detail = 0;
+    bool terminal_delivered = false;
+};
+
 class VoiceNotificationTransport {
 public:
     virtual ~VoiceNotificationTransport() = default;
@@ -170,6 +179,7 @@ public:
     void set_next_connection_session_for_test(uint16_t session);
     void run_capture_worker_once_for_test(uint32_t now_ms);
     void run_transmit_worker_until_idle_for_test(uint32_t now_ms);
+    VoiceTransportDiagnostics transport_diagnostics_for_test() const;
 #endif
 
 private:
@@ -236,11 +246,15 @@ private:
     uint32_t _connection_epoch = 0;
     uint32_t _key_epoch = 0;
     uint32_t _last_accepted_sequence = 0;
-    uint8_t _congestion_retries = 0;
+    uint32_t _congestion_started_ms = 0;
+    uint32_t _last_accepted_ms = 0;
+    VoiceTransportDiagnostics _transport_diagnostics = {};
     size_t _queued_audio_packets = 0;
     bool _button_pressed = false;
     bool _begin_accepted = false;
     bool _has_accepted_notification = false;
+    bool _congestion_active = false;
+    bool _has_accepted_timestamp = false;
     std::atomic<bool> _ready{false};
     bool _graceful_stop = false;
     bool _terminal_pending = false;
