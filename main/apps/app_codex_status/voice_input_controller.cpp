@@ -809,6 +809,7 @@ void VoiceInputController::producer_step(uint32_t now_ms)
         fail(failure_code(error), 0, now_ms);
     }
     active_guard.completed = true;
+    _producer_running = false;
     wake_transmitter();
 }
 

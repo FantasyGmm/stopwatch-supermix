@@ -372,6 +372,21 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         self.assertIn("transmitter_loop", controller)
         self.assertIn("xTaskCreate", controller)
 
+    def test_capture_completion_is_published_before_transmitter_wakeup(self):
+        controller = (
+            ROOT / "main/apps/app_codex_status/voice_input_controller.cpp"
+        ).read_text()
+        producer = controller.split(
+            "void VoiceInputController::producer_step", 1
+        )[1].split("bool VoiceInputController::start_session", 1)[0]
+
+        self.assertIn(
+            "active_guard.completed = true;\n"
+            "    _producer_running = false;\n"
+            "    wake_transmitter();",
+            producer,
+        )
+
     def test_gap_security_outcomes_are_logged_for_physical_diagnosis(self):
         source = (ROOT / "main/apps/app_codex_status/codex_ble_transport.cpp").read_text()
         self.assertIn("BLE_GAP_EVENT_ENC_CHANGE", source)
