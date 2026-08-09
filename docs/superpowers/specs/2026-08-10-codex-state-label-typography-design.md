@@ -4,7 +4,7 @@
 
 Approved visual direction: **C · 22 px strong emphasis**.
 
-The source of truth is `design/reference/codex-state-labels-c.png`, captured
+The source of truth is `design/reference/codex-state-labels-c.jpg`, captured
 from the approved `c-22px` watch mockup at a 466 x 466 viewport. This
 specification records the production values represented by that mockup so
 implementation and visual verification do not depend on browser font
