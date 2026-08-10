@@ -1,3 +1,4 @@
+import datetime
 import json
 import pathlib
 import sys
@@ -7,6 +8,7 @@ from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
+import codex_turn_evidence
 from codex_turn_evidence import (
     RolloutReplayError,
     latest_unsuperseded_completion,
@@ -271,6 +273,39 @@ class CodexTurnEvidenceTests(unittest.TestCase):
             result = latest_unsuperseded_completion(self.rollout)
 
         self.assertIsNotNone(result)
+
+    def test_matching_turn_abort_streams_the_exact_turn(self):
+        self.append("2026-07-29T13:00:00Z", "task_started", turn_id="turn-a")
+        self.append("2026-07-29T13:00:01Z", "task_started", turn_id="turn-b")
+        self.append("2026-07-29T13:00:02Z", "turn_aborted", turn_id="turn-a")
+
+        lookup = getattr(codex_turn_evidence, "matching_turn_abort", None)
+
+        self.assertTrue(callable(lookup))
+        result = lookup(
+            self.rollout,
+            datetime.datetime(2026, 7, 29, 13, 0, tzinfo=datetime.timezone.utc),
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(result.turn_id, "turn-a")
+        self.assertEqual(result.timestamp.isoformat(), "2026-07-29T13:00:02+00:00")
+
+    def test_matching_turn_abort_incomplete_tail_is_retryable(self):
+        self.append("2026-07-29T13:00:00Z", "task_started", turn_id="turn-a")
+        with self.rollout.open("ab") as stream:
+            stream.write(b'{"timestamp":"2026-07-29T13:00:02Z"')
+        lookup = getattr(codex_turn_evidence, "matching_turn_abort", None)
+
+        self.assertTrue(callable(lookup))
+        with self.assertRaises(RolloutReplayError) as raised:
+            lookup(
+                self.rollout,
+                datetime.datetime(
+                    2026, 7, 29, 13, 0, tzinfo=datetime.timezone.utc
+                ),
+            )
+
+        self.assertTrue(raised.exception.retryable)
 
 
 if __name__ == "__main__":

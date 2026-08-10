@@ -20,6 +20,7 @@ from completion_classifier import CLASSIFIER_VERSION, classify_completion
 from codex_turn_evidence import (
     RolloutReplayError,
     latest_unsuperseded_completion,
+    matching_turn_abort,
     new_turn_signal,
     reduce_turn_signal,
 )
@@ -33,6 +34,7 @@ DEFAULT_CODEX_BINARIES = (
     pathlib.Path("/Applications/Codex.app/Contents/Resources/codex"),
 )
 LEDGER_VERSION = 3
+ABORT_REDUCER_VERSION = 1
 RETENTION_DAYS = 7
 MAX_DISCOVERED_THREADS = 50
 THREAD_LIST_LIMIT = 200
@@ -269,6 +271,8 @@ class TaskAlertTracker:
             changed = self._needs_save
             if self._scan_threads(threads):
                 changed = True
+            if self._reconcile_abort_reducer_version(threads):
+                changed = True
             if self._reconcile_classifier_version(threads):
                 changed = True
             if self._sync_thread_metadata(threads):
@@ -406,6 +410,8 @@ class TaskAlertTracker:
             "version": LEDGER_VERSION,
             "classifier_version": CLASSIFIER_VERSION,
             "classifier_retry_threads": [],
+            "abort_reducer_version": ABORT_REDUCER_VERSION,
+            "abort_retry_threads": [],
             "initialized_at": now,
             "last_scan_at": now,
             "revision": 0,
@@ -533,6 +539,69 @@ class TaskAlertTracker:
             self._state["revision"] = int(self._state.get("revision", 0)) + 1
         return changed
 
+    def _reconcile_abort_reducer_version(
+        self,
+        threads: List[_ThreadInfo],
+    ) -> bool:
+        current = self._state.get("abort_reducer_version", 0)
+        retry_threads = set(self._state.get("abort_retry_threads", []))
+        version_changed = current != ABORT_REDUCER_VERSION
+        if not version_changed and not retry_threads:
+            return False
+
+        previous_retry_threads = sorted(retry_threads)
+        retryable_failures = set()
+        changed = False
+        latest_by_thread = {}
+        for item in self._state["alerts"]:
+            timestamp = _parse_timestamp(item.get("progress_at"))
+            thread_id = item.get("thread_id")
+            if timestamp is None or not isinstance(thread_id, str):
+                continue
+            existing = latest_by_thread.get(thread_id)
+            if existing is None or timestamp >= existing[0]:
+                latest_by_thread[thread_id] = (timestamp, item)
+
+        for thread in threads:
+            if not version_changed and thread.id not in retry_threads:
+                continue
+            existing = latest_by_thread.get(thread.id)
+            if existing is None or existing[1].get("state") != "running":
+                continue
+            try:
+                abort = matching_turn_abort(thread.rollout_path, existing[0])
+            except RolloutReplayError as error:
+                LOGGER.warning(
+                    "Unable to reconcile aborted Codex turn: thread=%s",
+                    thread.id,
+                    exc_info=True,
+                )
+                if error.retryable:
+                    retryable_failures.add(thread.id)
+                continue
+            if abort is not None and self._complete_aborted_running(
+                thread,
+                abort.timestamp,
+                abort.turn_id,
+                require_active_signal=False,
+                started_at=existing[0],
+            ):
+                changed = True
+
+        if current != ABORT_REDUCER_VERSION:
+            self._state["abort_reducer_version"] = ABORT_REDUCER_VERSION
+            changed = True
+        next_retry_threads = sorted(retryable_failures)
+        if (
+            "abort_retry_threads" not in self._state
+            or previous_retry_threads != next_retry_threads
+        ):
+            self._state["abort_retry_threads"] = next_retry_threads
+            changed = True
+        if changed:
+            self._state["revision"] = int(self._state.get("revision", 0)) + 1
+        return changed
+
     def _sync_thread_metadata(self, threads: List[_ThreadInfo]) -> bool:
         current = {thread.id: thread for thread in threads}
         changed = False
@@ -615,16 +684,16 @@ class TaskAlertTracker:
             if any(entry.get("id") == alert_id for entry in self._state["alerts"]):
                 return signal_changed
             alert = {
-                    "id": alert_id,
-                    "thread_id": thread.id,
-                    "project": thread.project,
-                    "title": thread.title,
-                    "progress_at": timestamp_text,
-                    "handled_at": None,
-                    "state": "running",
-                    "watch_notified": True,
-                    "outcome": "running",
-                }
+                "id": alert_id,
+                "thread_id": thread.id,
+                "project": thread.project,
+                "title": thread.title,
+                "progress_at": timestamp_text,
+                "handled_at": None,
+                "state": "running",
+                "watch_notified": True,
+                "outcome": "running",
+            }
             if isinstance(turn_id, str) and turn_id:
                 alert["turn_id"] = turn_id
             self._state["alerts"].append(alert)
@@ -743,6 +812,7 @@ class TaskAlertTracker:
         turn_id: str,
         *,
         require_active_signal: bool,
+        started_at: Optional[datetime.datetime] = None,
     ) -> bool:
         signals = self._state.setdefault("turn_signals", {})
         signal = signals.get(thread.id, {})
@@ -754,6 +824,9 @@ class TaskAlertTracker:
         for entry in self._state["alerts"]:
             progress = _parse_timestamp(entry.get("progress_at"))
             entry_turn_id = entry.get("turn_id")
+            legacy_owned = not entry_turn_id and (
+                signal_matches or (started_at is not None and progress == started_at)
+            )
             if (
                 entry.get("thread_id") != thread.id
                 or entry.get("state") != "running"
@@ -764,7 +837,7 @@ class TaskAlertTracker:
                     and entry_turn_id
                     and entry_turn_id != turn_id
                 )
-                or (not entry_turn_id and not signal_matches)
+                or (not entry_turn_id and not legacy_owned)
             ):
                 continue
             running.append((progress, entry))
@@ -942,6 +1015,17 @@ class TaskAlertTracker:
                 isinstance(thread_id, str) for thread_id in retry_threads
             ):
                 raise ValueError("invalid classifier retry threads")
+            abort_reducer_version = state.get("abort_reducer_version", 0)
+            if (
+                not isinstance(abort_reducer_version, int)
+                or abort_reducer_version < 0
+            ):
+                raise ValueError("invalid abort reducer version")
+            abort_retry_threads = state.get("abort_retry_threads", [])
+            if not isinstance(abort_retry_threads, list) or not all(
+                isinstance(thread_id, str) for thread_id in abort_retry_threads
+            ):
+                raise ValueError("invalid abort retry threads")
             if state.get("version") != LEDGER_VERSION:
                 state["version"] = LEDGER_VERSION
                 self._needs_save = True
