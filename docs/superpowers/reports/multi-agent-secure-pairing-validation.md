@@ -118,3 +118,36 @@ Future flash and physical acceptance should use one explicit watch port and a
 checksum-verified complete 16 MiB backup unless the user explicitly waives it.
 Verification codes and cryptographic material must not be copied into the
 resulting evidence.
+
+## UI-Independent Voice Transport Follow-up
+
+Date: 2026-08-10
+
+Commit `5ca33cb28be9f81e74aa1ad114da00f35df05c41` moves production
+voice capture and BLE transmission out of the Codex page update loop, binds
+notifications to an authorized connection generation, and serializes Agent
+termination through the corresponding GAP command submission. The unified
+host-test validation passed 53/53 stages, including 793 Python tests in the
+complete run. The final ESP32-S3 application image was 6,277,456 bytes,
+passed the capacity gate, and had SHA256
+`804c6cdf83e403fa8e688aee193a12e5b7af942fa1fdb3e80afa7b86cbd79c7c`.
+
+Only the application partition at `0x020000` was flashed, preserving NVS,
+pairing credentials, the partition table, and assets. The post-flash watch
+booted and the packaged Agent returned to `Bluetooth state: connected` and
+`Voice state: ready`. CoreBluetooth twice reported `Resources are
+insufficient` during an initial status write; the reconnect path recovered,
+and a clean Agent restart returned to `ready`.
+
+Physical voice evidence after that reconnect:
+
+| Start | End | Duration | Result |
+|---|---|---:|---|
+| 22:46:35.421 | 22:47:41.259 | 65.8 s | Returned to `ready`; no voice error or disconnect |
+| 22:52:31.235 | 22:52:44.276 | 13.0 s | Short interaction returned to `ready` |
+| 22:57:49.500 | 22:57:54.558 | 5.1 s | Short interaction returned to `ready`; hold duration was not independently confirmed |
+
+The user requested that testing stop after these interactions, replacing the
+planned ten-run stress matrix. No post-flash recording produced the previous
+watch error 5/detail 0, but this reduced sample is not sufficient evidence to
+claim that every long-session premature-stop scenario is eliminated.
