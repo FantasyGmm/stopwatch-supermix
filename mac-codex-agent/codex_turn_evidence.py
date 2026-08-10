@@ -1,4 +1,4 @@
-"""Reduce Codex turn signals and replay the latest terminal completion."""
+"""Reduce Codex turn signals and replay terminal lifecycle evidence."""
 
 from __future__ import annotations
 
@@ -25,6 +25,12 @@ class LatestCompletion:
     last_agent_message: Any
     unfinished_plan: bool
     unresolved_input: bool
+
+
+@dataclasses.dataclass(frozen=True)
+class MatchingTurnAbort:
+    timestamp: datetime.datetime
+    turn_id: str
 
 
 def new_turn_signal(turn_id: str) -> Dict[str, Any]:
@@ -89,6 +95,64 @@ def _timestamp(value: Any) -> datetime.datetime:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=UTC)
     return parsed.astimezone(UTC)
+
+
+def matching_turn_abort(
+    path: pathlib.Path,
+    started_at: datetime.datetime,
+) -> Optional[MatchingTurnAbort]:
+    if started_at.tzinfo is None:
+        started_at = started_at.replace(tzinfo=UTC)
+    started_at = started_at.astimezone(UTC)
+    try:
+        stream = pathlib.Path(path).open("rb")
+    except OSError as error:
+        raise RolloutReplayError("rollout is unreadable", retryable=True) from error
+
+    turn_id = None
+    try:
+        for raw in stream:
+            if not raw.endswith(b"\n"):
+                raise RolloutReplayError(
+                    "rollout has an incomplete trailing record",
+                    retryable=True,
+                )
+            try:
+                item = json.loads(raw)
+            except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                raise RolloutReplayError(
+                    "rollout contains an invalid record"
+                ) from error
+            if not isinstance(item, dict) or item.get("type") != "event_msg":
+                continue
+            payload = item.get("payload")
+            if not isinstance(payload, dict):
+                continue
+            event_type = payload.get("type")
+            if event_type == "task_started" and _timestamp(
+                item.get("timestamp") or payload.get("timestamp")
+            ) == started_at:
+                candidate = payload.get("turn_id")
+                if isinstance(candidate, str) and candidate:
+                    turn_id = candidate
+                continue
+            if (
+                turn_id is None
+                or event_type != "turn_aborted"
+                or payload.get("turn_id") != turn_id
+            ):
+                continue
+            return MatchingTurnAbort(
+                timestamp=_timestamp(
+                    item.get("timestamp") or payload.get("timestamp")
+                ),
+                turn_id=turn_id,
+            )
+    except OSError as error:
+        raise RolloutReplayError("rollout is unreadable", retryable=True) from error
+    finally:
+        stream.close()
+    return None
 
 
 def latest_unsuperseded_completion(

@@ -646,6 +646,155 @@ class TaskAlertTrackerTests(unittest.TestCase):
         self.assertEqual(snapshot.completed_count, 0)
         self.assertEqual(snapshot.alerts[0].state, "running")
 
+    def test_aborted_turn_retires_running_without_notification(self):
+        tracker = self.tracker()
+        tracker.refresh()
+        append_event(
+            self.rollout,
+            "task_started",
+            "2026-07-12T00:01:00Z",
+            turn_id="turn-a",
+        )
+        append_event(
+            self.rollout,
+            "turn_aborted",
+            "2026-07-12T00:01:05Z",
+            turn_id="turn-a",
+        )
+
+        snapshot = tracker.refresh()
+
+        self.assertEqual(snapshot.running_count, 0)
+        self.assertEqual(snapshot.pending_count, 0)
+        self.assertEqual(snapshot.completed_count, 1)
+        self.assertEqual(tracker.pending_watch_notification_ids(), ())
+        saved = json.loads(self.ledger.read_text(encoding="utf-8"))
+        self.assertEqual(saved["alerts"][-1]["reason"], "turn_aborted")
+        self.assertEqual(saved["alerts"][-1]["handled_at"], "2026-07-12T00:01:05Z")
+
+    def test_late_abort_cannot_clear_a_newer_turn(self):
+        tracker = self.tracker()
+        tracker.refresh()
+        append_event(
+            self.rollout,
+            "task_started",
+            "2026-07-12T00:01:00Z",
+            turn_id="turn-a",
+        )
+        append_event(
+            self.rollout,
+            "task_started",
+            "2026-07-12T00:01:05Z",
+            turn_id="turn-b",
+        )
+        append_event(
+            self.rollout,
+            "turn_aborted",
+            "2026-07-12T00:01:06Z",
+            turn_id="turn-a",
+        )
+
+        snapshot = tracker.refresh()
+
+        self.assertEqual(snapshot.running_count, 1)
+        self.assertEqual(snapshot.alerts[0].progress_at, "2026-07-12T00:01:05Z")
+
+    def test_aborted_turn_is_idempotent_across_restart(self):
+        tracker = self.tracker()
+        tracker.refresh()
+        append_event(
+            self.rollout,
+            "task_started",
+            "2026-07-12T00:01:00Z",
+            turn_id="turn-a",
+        )
+        append_event(
+            self.rollout,
+            "turn_aborted",
+            "2026-07-12T00:01:05Z",
+            turn_id="turn-a",
+        )
+        first = tracker.refresh()
+
+        restarted = self.tracker().refresh()
+
+        self.assertEqual(restarted.running_count, 0)
+        self.assertEqual(restarted.completed_count, 1)
+        self.assertEqual(restarted.revision, first.revision)
+
+    def test_abort_reducer_upgrade_repairs_stale_running_once(self):
+        tracker = self.tracker()
+        tracker.refresh()
+        append_event(
+            self.rollout,
+            "task_started",
+            "2026-07-12T00:01:00Z",
+            turn_id="turn-a",
+        )
+        tracker.refresh()
+        append_event(
+            self.rollout,
+            "turn_aborted",
+            "2026-07-12T00:01:05Z",
+            turn_id="turn-a",
+        )
+        saved = json.loads(self.ledger.read_text(encoding="utf-8"))
+        saved["cursors"]["thread-a"]["offset"] = self.rollout.stat().st_size
+        saved.pop("abort_reducer_version", None)
+        saved.pop("abort_retry_threads", None)
+        self.ledger.write_text(json.dumps(saved), encoding="utf-8")
+
+        repaired = self.tracker().refresh()
+        repaired_revision = repaired.revision
+        restarted = self.tracker().refresh()
+
+        self.assertEqual(repaired.running_count, 0)
+        self.assertEqual(repaired.completed_count, 1)
+        self.assertEqual(repaired.alerts[0].handled_at, "2026-07-12T00:01:05Z")
+        persisted = json.loads(self.ledger.read_text(encoding="utf-8"))
+        self.assertEqual(persisted["alerts"][-1]["reason"], "turn_aborted")
+        self.assertEqual(persisted["abort_reducer_version"], 1)
+        self.assertEqual(persisted["abort_retry_threads"], [])
+        self.assertEqual(restarted.revision, repaired_revision)
+
+    def test_abort_reducer_upgrade_retries_an_incomplete_rollout(self):
+        tracker = self.tracker()
+        tracker.refresh()
+        append_event(
+            self.rollout,
+            "task_started",
+            "2026-07-12T00:01:00Z",
+            turn_id="turn-a",
+        )
+        tracker.refresh()
+        append_event(
+            self.rollout,
+            "turn_aborted",
+            "2026-07-12T00:01:05Z",
+            turn_id="turn-a",
+            complete_line=False,
+        )
+        saved = json.loads(self.ledger.read_text(encoding="utf-8"))
+        saved["cursors"]["thread-a"]["offset"] = self.rollout.stat().st_size
+        saved.pop("abort_reducer_version", None)
+        saved.pop("abort_retry_threads", None)
+        self.ledger.write_text(json.dumps(saved), encoding="utf-8")
+
+        retrying = self.tracker().refresh()
+
+        self.assertEqual(retrying.running_count, 1)
+        persisted = json.loads(self.ledger.read_text(encoding="utf-8"))
+        self.assertEqual(persisted["abort_reducer_version"], 1)
+        self.assertEqual(persisted["abort_retry_threads"], ["thread-a"])
+
+        with self.rollout.open("ab") as stream:
+            stream.write(b"\n")
+        repaired = self.tracker().refresh()
+
+        self.assertEqual(repaired.running_count, 0)
+        persisted = json.loads(self.ledger.read_text(encoding="utf-8"))
+        self.assertEqual(persisted["abort_retry_threads"], [])
+
     def test_normal_completion_becomes_completed_without_notification(self):
         tracker = self.tracker()
         tracker.refresh()
