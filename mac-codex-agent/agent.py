@@ -11,7 +11,25 @@ import threading
 import time
 from typing import Any, Callable, Mapping, Optional
 
+from pairing_client import (
+    AuthenticationRequest,
+    BeginPairingRequest,
+)
 from protocol import EVENT_MESSAGE, MAX_MESSAGE_SIZE, STATUS_MESSAGE, encode_message
+from secure_pairing_wire import (
+    WireMessageType,
+    decode_authentication_challenge,
+    decode_credential_envelope,
+    decode_discovery_response,
+    decode_frame as decode_pairing_frame,
+    decode_pairing_offer,
+    encode_authentication_proof,
+    encode_authentication_request,
+    encode_credential_ack,
+    encode_discovery_request,
+    encode_pairing_confirmation,
+    encode_pairing_request,
+)
 
 
 DEVICE_NAME = "StopWatch-Codex"
@@ -19,6 +37,9 @@ SERVICE_UUID = "7a230001-5474-4f50-5741-544348434f44"
 STATUS_RX_UUID = "7a230002-5474-4f50-5741-544348434f44"
 VOICE_CONTROL_UUID = "7a230003-5474-4f50-5741-544348434f44"
 VOICE_TX_UUID = "7a230004-5474-4f50-5741-544348434f44"
+PAIRING_SERVICE_UUID = "7a230006-5474-4f50-5741-544348434f44"
+PAIRING_CONTROL_UUID = "7a230007-5474-4f50-5741-544348434f44"
+PAIRING_TX_UUID = "7a230008-5474-4f50-5741-544348434f44"
 STATUS_INTERVAL_SECONDS = 2.0
 SAFE_WRITE_SIZE = 20
 FRAME_BURST_SIZE = 8
@@ -49,6 +70,15 @@ VOICE_NOTIFICATION_QUEUE_SIZE = (
     VOICE_STARTUP_BUFFER_MS // VOICE_AUDIO_FRAME_MS + 2
 )
 GATT_OPERATION_TIMEOUT_SECONDS = 5.0
+PAIRING_CONFIRM_TIMEOUT_SECONDS = 65.0
+PAIRING_RESPONSE_QUEUE_SIZE = 8
+
+
+@dataclasses.dataclass(frozen=True)
+class WatchDiscovery:
+    watch_id: bytes
+    key_epoch: int
+    watch_identity_public: bytes
 
 
 @dataclasses.dataclass
@@ -300,6 +330,9 @@ class BleStatusTransport:
         self._voice_generation = None
         self._voice_notify_started = False
         self._voice_disabled = False
+        self._pairing_responses = None
+        self._pairing_notify_started = False
+        self._pairing_transaction = 1
 
     @property
     def connected(self) -> bool:
@@ -360,7 +393,150 @@ class BleStatusTransport:
         client = BleakClient(device, disconnected_callback=on_disconnect)
         await client.connect()
         self._client = client
+        try:
+            await self.start_pairing_notifications()
+        except BaseException:
+            self._client = None
+            if client.is_connected:
+                await client.disconnect()
+            raise
         return client.is_connected
+
+    async def start_pairing_notifications(self) -> None:
+        if not self.connected:
+            raise ConnectionError("StopWatch BLE connection is not active")
+        if self._pairing_notify_started:
+            return
+        loop = asyncio.get_running_loop()
+        self._pairing_responses = asyncio.Queue(
+            maxsize=PAIRING_RESPONSE_QUEUE_SIZE
+        )
+
+        def on_notification(_sender, data) -> None:
+            frame = bytes(data)
+
+            def deliver() -> None:
+                queue = self._pairing_responses
+                if queue is None:
+                    return
+                try:
+                    queue.put_nowait(frame)
+                except asyncio.QueueFull:
+                    while not queue.empty():
+                        try:
+                            queue.get_nowait()
+                        except asyncio.QueueEmpty:
+                            break
+                    queue.put_nowait(frame)
+
+            try:
+                loop.call_soon_threadsafe(deliver)
+            except RuntimeError:
+                pass
+
+        await asyncio.wait_for(
+            self._client.start_notify(PAIRING_TX_UUID, on_notification),
+            timeout=GATT_OPERATION_TIMEOUT_SECONDS,
+        )
+        self._pairing_notify_started = True
+
+    def _next_pairing_transaction(self) -> int:
+        transaction_id = self._pairing_transaction
+        self._pairing_transaction = (
+            1 if transaction_id >= 0xFFFFFFFF else transaction_id + 1
+        )
+        return transaction_id
+
+    async def _pairing_exchange(
+        self,
+        request: bytes,
+        expected,
+        *,
+        timeout: float = GATT_OPERATION_TIMEOUT_SECONDS,
+    ):
+        if not self.connected:
+            raise ConnectionError("StopWatch BLE connection is not active")
+        await self.start_pairing_notifications()
+        request_kind, transaction_id, _ = decode_pairing_frame(request)
+        await asyncio.wait_for(
+            self._client.write_gatt_char(
+                PAIRING_CONTROL_UUID, request, response=True
+            ),
+            timeout=GATT_OPERATION_TIMEOUT_SECONDS,
+        )
+        queue = self._pairing_responses
+        while True:
+            response = await asyncio.wait_for(queue.get(), timeout=timeout)
+            kind, response_transaction, payload = decode_pairing_frame(response)
+            if response_transaction != transaction_id:
+                continue
+            if kind is WireMessageType.ERROR:
+                raise PermissionError("watch rejected secure pairing operation")
+            if kind not in expected:
+                raise ValueError(
+                    "watch returned an unexpected secure pairing response"
+                )
+            return kind, response_transaction, payload
+
+    async def discover_watch(self) -> WatchDiscovery:
+        transaction_id = self._next_pairing_transaction()
+        _, _, payload = await self._pairing_exchange(
+            encode_discovery_request(transaction_id),
+            (WireMessageType.DISCOVERY_RESPONSE,),
+        )
+        watch_id, key_epoch, watch_identity_public = decode_discovery_response(
+            payload
+        )
+        return WatchDiscovery(watch_id, key_epoch, watch_identity_public)
+
+    async def request_pairing(self, request: BeginPairingRequest):
+        _, transaction_id, payload = await self._pairing_exchange(
+            encode_pairing_request(request),
+            (WireMessageType.PAIRING_OFFER,),
+        )
+        return decode_pairing_offer(transaction_id, payload)
+
+    async def confirm_pairing(self, transaction_id: int, accepted: bool):
+        kind, response_transaction, payload = await self._pairing_exchange(
+            encode_pairing_confirmation(transaction_id, accepted),
+            (WireMessageType.CREDENTIAL, WireMessageType.REJECTED),
+            timeout=PAIRING_CONFIRM_TIMEOUT_SECONDS,
+        )
+        if kind is WireMessageType.REJECTED:
+            if payload:
+                raise ValueError("watch rejection response is malformed")
+            return None
+        return decode_credential_envelope(response_transaction, payload)
+
+    async def begin_authentication(self, request: AuthenticationRequest):
+        _, transaction_id, payload = await self._pairing_exchange(
+            encode_authentication_request(request),
+            (WireMessageType.AUTHENTICATION_CHALLENGE,),
+        )
+        return decode_authentication_challenge(transaction_id, payload)
+
+    async def authenticate(self, transaction_id: int, signature: bytes):
+        kind, response_transaction, payload = await self._pairing_exchange(
+            encode_authentication_proof(transaction_id, signature),
+            (WireMessageType.AUTHENTICATION_OK, WireMessageType.CREDENTIAL),
+            timeout=PAIRING_CONFIRM_TIMEOUT_SECONDS,
+        )
+        if kind is WireMessageType.AUTHENTICATION_OK:
+            if payload:
+                raise ValueError("authentication response is malformed")
+            return None
+        return decode_credential_envelope(response_transaction, payload)
+
+    async def acknowledge_credential(
+        self, transaction_id: int, proof: bytes
+    ) -> None:
+        kind, _, payload = await self._pairing_exchange(
+            encode_credential_ack(transaction_id, proof),
+            (WireMessageType.CREDENTIAL_ACK_OK,),
+            timeout=PAIRING_CONFIRM_TIMEOUT_SECONDS,
+        )
+        if kind is not WireMessageType.CREDENTIAL_ACK_OK or payload:
+            raise ValueError("credential acknowledgement response is malformed")
 
     async def enable_voice(self, ready_payload: bytes, handler) -> None:
         if not self.connected:
@@ -562,9 +738,19 @@ class BleStatusTransport:
 
     async def disconnect(self) -> None:
         client = self._client
-        self._client = None
         if client and client.is_connected:
+            if self._pairing_notify_started:
+                try:
+                    await asyncio.wait_for(
+                        client.stop_notify(PAIRING_TX_UUID),
+                        timeout=GATT_OPERATION_TIMEOUT_SECONDS,
+                    )
+                except Exception:
+                    pass
             await client.disconnect()
+        self._client = None
+        self._pairing_notify_started = False
+        self._pairing_responses = None
 
     async def send_json(self, payload: str, message_type: int) -> None:
         if not self.connected:

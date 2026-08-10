@@ -64,6 +64,7 @@ class InstallScriptTests(unittest.TestCase):
             "runtime.py",
             "app_state.py",
             "agent.py",
+            "agent_identity.py",
             "codex_adapter.py",
             "trae_tasks.py",
             "trae_adapter.py",
@@ -72,12 +73,18 @@ class InstallScriptTests(unittest.TestCase):
             "codex_turn_evidence.py",
             "task_alerts.py",
             "protocol.py",
+            "pairing_client.py",
+            "secure_pairing_crypto.py",
+            "secure_pairing_protocol.py",
+            "secure_pairing_wire.py",
+            "watch_credentials.py",
             "trae_tasks.py",
             "trae_adapter.py",
             "combined_collector.py",
         ):
             self.assertIn(module, script)
         self.assertIn("STOPWATCH_CODEX_APP", script)
+        self.assertIn("import Security", script)
         self.assertNotIn('open -W -n "$APP_DIR"', script)
 
     def test_packaging_preserves_existing_product_identity(self):
@@ -137,6 +144,18 @@ class InstallScriptTests(unittest.TestCase):
         self.assertIn('validate_universal_macho_tree "$app_path" || return', script)
         self.assertIn('lipo -archs "$macho_path"', script)
 
+    def test_installer_rebuilds_pillow_as_universal2(self):
+        script = self.read_script()
+
+        self.assertIn(
+            '\'import importlib.metadata; '
+            'print(importlib.metadata.version("Pillow"))\'',
+            script,
+        )
+        self.assertIn('ARCHFLAGS="-arch arm64 -arch x86_64"', script)
+        self.assertIn("--no-binary=Pillow", script)
+        self.assertIn('"Pillow==$PILLOW_VERSION"', script)
+
     def test_installer_caches_and_packages_the_pinned_driver_without_installing_it(self):
         script = self.read_script()
 
@@ -176,17 +195,21 @@ class InstallScriptTests(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, script)
 
-    def test_installer_defers_key_provisioning_and_verifies_code_signature(self):
+    def test_installer_never_provisions_keys_and_verifies_code_signature(self):
         script = self.read_script()
 
-        self.assertIn("Task 10 intentionally owns external device-key provisioning", script)
-        self.assertIn("Task 10 creates the protocol/header provisioning script", script)
+        self.assertIn(
+            "Production voice keys are created and rotated by the watch registry",
+            script,
+        )
         for forbidden in (
             "openssl rand",
             "/dev/urandom",
             "security add-generic-password",
             "voice_input_crypto.h",
             "xxd -i",
+            "STOPWATCH_VOICE_KEY_FILE",
+            "voice_input_device_key.h",
         ):
             self.assertNotIn(forbidden, script)
         self.assertIn(
@@ -476,6 +499,35 @@ class InstallScriptTests(unittest.TestCase):
 
             (app / "Contents" / "Resources" / "app" / "bad.txt").write_text(
                 "000102030405060708090a0b0c0d0e0f\n",
+                encoding="utf-8",
+            )
+            rejected = self.run_installer_function(
+                f"validate_no_key_material {shlex.quote(str(app))}"
+            )
+            self.assertNotEqual(rejected.returncode, 0)
+
+    def test_key_scan_ignores_vendor_base64_and_url_hashes_but_rejects_hex_key(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            app = pathlib.Path(temporary) / "Agent.app"
+            resources = app / "Contents" / "Resources"
+            (resources / "app").mkdir(parents=True)
+            (app / "Contents" / "MacOS").mkdir(parents=True)
+            (app / "Contents" / "Info.plist").write_text(
+                "<plist></plist>", encoding="utf-8"
+            )
+            (resources / "vendor.py").write_text(
+                "embedded_font = 'YAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD/'\n"
+                "# https://gist.github.com/example/f51579ae8d93c8657a5564aefc2ffbca\n",
+                encoding="utf-8",
+            )
+
+            allowed = self.run_installer_function(
+                f"validate_no_key_material {shlex.quote(str(app))}"
+            )
+            self.assertEqual(allowed.returncode, 0, allowed.stderr)
+
+            (resources / "app" / "bad.txt").write_text(
+                "voice_key=00112233445566778899aabbccddeeff\n",
                 encoding="utf-8",
             )
             rejected = self.run_installer_function(

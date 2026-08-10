@@ -23,6 +23,13 @@ int main()
 {
     using namespace voice_input::crypto;
 
+    CcmContext runtime_context;
+    assert(!runtime_context.ready());
+    assert(runtime_context.set_key(kTestKey));
+    assert(runtime_context.ready());
+    runtime_context.clear();
+    assert(!runtime_context.ready());
+
     static_assert(static_cast<uint8_t>(Domain::Ready) == 0x01);
     static_assert(static_cast<uint8_t>(Domain::Unavailable) == 0x02);
     static_assert(static_cast<uint8_t>(Domain::PttBegin) == 0x11);

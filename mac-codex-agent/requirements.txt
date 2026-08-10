@@ -5,3 +5,4 @@ cryptography>=45,<47
 pyobjc-framework-ApplicationServices>=11.1,<12
 pyobjc-framework-Cocoa>=11.1,<12
 pyobjc-framework-Quartz>=11.1,<12
+pyobjc-framework-Security>=11.1,<12

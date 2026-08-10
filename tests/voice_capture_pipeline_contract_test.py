@@ -16,6 +16,7 @@ CONTROLLER_HEADER = (
 CONTROLLER_SOURCE = (
     ROOT / "main/apps/app_codex_status/ble_voice_probe_controller.cpp"
 )
+AUDIO_BACKEND_SOURCE = ROOT / "main/hal/audio/stopwatch_audio_backend.cpp"
 
 
 class VoiceCapturePipelineContractTests(unittest.TestCase):
@@ -64,6 +65,18 @@ class VoiceCapturePipelineContractTests(unittest.TestCase):
         self.assertIn("_resampler_output", header)
         self.assertIn("_microphone_pcm", header)
         self.assertNotIn("std::array<int16_t, kCaptureInputSamples> captured", source)
+
+    def test_audio_backend_i2s_slot_mode_matches_mono_capture_contract(self):
+        source = AUDIO_BACKEND_SOURCE.read_text()
+        initialization = source.split(
+            "bool StopWatchAudioBackend::initialize", 1
+        )[1].split("bool StopWatchAudioBackend::initialized", 1)[0]
+        self.assertIn(
+            "I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG("
+            "I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO)",
+            initialization,
+        )
+        self.assertNotIn("I2S_SLOT_MODE_STEREO", initialization)
 
     def test_pipeline_stays_transport_and_probe_policy_free(self):
         header, source = self.pipeline()

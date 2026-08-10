@@ -20,13 +20,45 @@ from voice_input_protocol import (  # noqa: E402
     PTT_END,
     VOICE_ERROR,
     EndSummary,
-    pack_notification,
+    pack_notification as _pack_notification,
 )
-from voice_session import VoiceSessionService, VoiceState  # noqa: E402
+from voice_session import (  # noqa: E402
+    VoiceSessionService as _VoiceSessionService,
+    VoiceState,
+)
 
 
 TEST_KEY = bytes.fromhex("000102030405060708090a0b0c0d0e0f")
 TEST_NONCE = bytes.fromhex("1011121314151617")
+TEST_EPOCH = 7
+
+
+def pack_notification(
+    key,
+    kind,
+    session,
+    sequence,
+    watch_ms,
+    payload,
+    session_nonce,
+    *,
+    key_epoch=TEST_EPOCH,
+):
+    return _pack_notification(
+        key,
+        kind,
+        session,
+        sequence,
+        watch_ms,
+        payload,
+        session_nonce,
+        key_epoch=key_epoch,
+    )
+
+
+def VoiceSessionService(route, shortcut, key, **kwargs):
+    kwargs.setdefault("key_epoch", TEST_EPOCH)
+    return _VoiceSessionService(route, shortcut, key, **kwargs)
 
 
 def nonce_for(value):
@@ -524,7 +556,7 @@ class VoiceSessionServiceTests(unittest.IsolatedAsyncioTestCase):
             "captured": dataclasses.replace(valid, captured_samples=319),
             "elapsed zero": dataclasses.replace(valid, elapsed_ms=0),
             "elapsed implausible": dataclasses.replace(valid, elapsed_ms=1000),
-            "mtu too small": dataclasses.replace(valid, negotiated_mtu=188),
+            "mtu too small": dataclasses.replace(valid, negotiated_mtu=192),
             "mtu too large": dataclasses.replace(valid, negotiated_mtu=528),
         }
 

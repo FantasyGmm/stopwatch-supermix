@@ -1,4 +1,4 @@
-"""Authenticated version-3 framing for production StopWatch voice input."""
+"""Authenticated version-4 framing for production StopWatch voice input."""
 
 import dataclasses
 import struct
@@ -15,10 +15,11 @@ from voice_input_crypto import (
     decrypt,
     derive_nonce,
     encrypt,
+    validate_key_epoch,
 )
 
 
-PROTOCOL_VERSION = 3
+PROTOCOL_VERSION = 4
 READY = 1
 UNAVAILABLE = 2
 PTT_BEGIN = 1
@@ -46,9 +47,9 @@ UNAVAILABLE_REASONS = frozenset(
     }
 )
 
-CONTROL_AAD = struct.Struct("<BBBB8s")
+CONTROL_AAD = struct.Struct("<BBBBI8s")
 CONTROL_BODY = struct.Struct("<I")
-HEADER = struct.Struct("<BBHIIH")
+HEADER = struct.Struct("<BBHIIIH")
 BEGIN_BODY = struct.Struct("<BHH")
 END_PAYLOAD = struct.Struct("<IIIIIIH")
 ERROR_PAYLOAD = struct.Struct("<HH")
@@ -72,6 +73,7 @@ _PAYLOAD_SIZES = {
 class Control:
     kind: int
     reason: int
+    key_epoch: int
     exchange_nonce: bytes
     target_bps: int
 
@@ -82,6 +84,7 @@ class Notification:
     session: int
     sequence: int
     watch_ms: int
+    key_epoch: int
     payload: bytes
     session_nonce: Optional[bytes] = None
 
@@ -114,45 +117,78 @@ class EndSummary:
         return cls(*END_PAYLOAD.unpack(payload))
 
 
-def encode_ready(key: bytes, exchange_nonce: bytes, target_bps: int) -> bytes:
+def encode_ready(
+    key: bytes,
+    exchange_nonce: bytes,
+    target_bps: int,
+    *,
+    key_epoch: int,
+) -> bytes:
     if target_bps != 8192:
         raise ValueError("READY target bitrate must be 8192")
-    return _encode_control(key, READY, 0, exchange_nonce, target_bps)
+    return _encode_control(
+        key, READY, 0, key_epoch, exchange_nonce, target_bps
+    )
 
 
-def encode_unavailable(key: bytes, exchange_nonce: bytes, reason: int) -> bytes:
+def encode_unavailable(
+    key: bytes,
+    exchange_nonce: bytes,
+    reason: int,
+    *,
+    key_epoch: int,
+) -> bytes:
     if reason not in UNAVAILABLE_REASONS:
         raise ValueError("UNAVAILABLE reason is not defined")
-    return _encode_control(key, UNAVAILABLE, reason, exchange_nonce, 0)
+    return _encode_control(
+        key, UNAVAILABLE, reason, key_epoch, exchange_nonce, 0
+    )
 
 
 def _encode_control(
     key: bytes,
     kind: int,
     reason: int,
+    key_epoch: int,
     exchange_nonce: bytes,
     target_bps: int,
 ) -> bytes:
+    validate_key_epoch(key_epoch)
     domain = _CONTROL_DOMAINS[kind]
     derive_nonce(domain, exchange_nonce, 0)
     aad = CONTROL_AAD.pack(
-        PROTOCOL_VERSION, kind, reason, 0, exchange_nonce
+        PROTOCOL_VERSION, kind, reason, 0, key_epoch, exchange_nonce
     )
     body = CONTROL_BODY.pack(target_bps)
     return aad + encrypt(key, domain, exchange_nonce, 0, body, aad)
 
 
-def decode_control(key: bytes, raw: bytes) -> Control:
+def decode_control(
+    key: bytes,
+    raw: bytes,
+    *,
+    expected_epoch: int,
+) -> Control:
+    validate_key_epoch(expected_epoch)
     expected_size = CONTROL_AAD.size + CONTROL_BODY.size + TAG_BYTES
     if len(raw) != expected_size:
         raise ValueError("invalid control size")
-    version, kind, reason, reserved, exchange_nonce = CONTROL_AAD.unpack_from(raw)
+    (
+        version,
+        kind,
+        reason,
+        reserved,
+        key_epoch,
+        exchange_nonce,
+    ) = CONTROL_AAD.unpack_from(raw)
     if version != PROTOCOL_VERSION:
         raise ValueError("unsupported production protocol version")
     if kind not in _CONTROL_DOMAINS:
         raise ValueError("unknown control kind")
     if reserved != 0:
         raise ValueError("control reserved byte must be zero")
+    if key_epoch != expected_epoch:
+        raise ValueError("voice key epoch does not match")
 
     aad = raw[: CONTROL_AAD.size]
     body = decrypt(
@@ -170,7 +206,7 @@ def decode_control(key: bytes, raw: bytes) -> Control:
         reason not in UNAVAILABLE_REASONS or target_bps != 0
     ):
         raise ValueError("invalid UNAVAILABLE control")
-    return Control(kind, reason, exchange_nonce, target_bps)
+    return Control(kind, reason, key_epoch, exchange_nonce, target_bps)
 
 
 def _validate_header_values(session: int, sequence: int, watch_ms: int) -> None:
@@ -214,7 +250,10 @@ def pack_notification(
     watch_ms: int,
     payload: bytes,
     session_nonce: bytes,
+    *,
+    key_epoch: int,
 ) -> bytes:
+    validate_key_epoch(key_epoch)
     _validate_header_values(session, sequence, watch_ms)
     if kind not in _NOTIFICATION_DOMAINS:
         raise ValueError("unknown notification kind")
@@ -227,6 +266,7 @@ def pack_notification(
         session,
         sequence,
         watch_ms,
+        key_epoch,
         clear_nonce_size + len(payload) + TAG_BYTES,
     )
     aad = header + session_nonce if kind == PTT_BEGIN else header
@@ -242,13 +282,28 @@ def pack_notification(
 
 
 def decode_notification(
-    key: bytes, raw: bytes, session_nonce: Optional[bytes] = None
+    key: bytes,
+    raw: bytes,
+    session_nonce: Optional[bytes] = None,
+    *,
+    expected_epoch: int,
 ) -> Notification:
+    validate_key_epoch(expected_epoch)
     if len(raw) < HEADER.size:
         raise ValueError("notification is shorter than its header")
-    version, kind, session, sequence, watch_ms, payload_length = HEADER.unpack_from(raw)
+    (
+        version,
+        kind,
+        session,
+        sequence,
+        watch_ms,
+        key_epoch,
+        payload_length,
+    ) = HEADER.unpack_from(raw)
     if version != PROTOCOL_VERSION:
         raise ValueError("unsupported production protocol version")
+    if key_epoch != expected_epoch:
+        raise ValueError("voice key epoch does not match")
     _validate_header_values(session, sequence, watch_ms)
     if kind not in _NOTIFICATION_DOMAINS:
         raise ValueError("unknown notification kind")
@@ -281,4 +336,12 @@ def decode_notification(
         aad,
     )
     _validate_notification_payload(kind, sequence, payload)
-    return Notification(kind, session, sequence, watch_ms, payload, packet_nonce)
+    return Notification(
+        kind,
+        session,
+        sequence,
+        watch_ms,
+        key_epoch,
+        payload,
+        packet_nonce,
+    )

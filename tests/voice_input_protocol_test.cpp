@@ -14,17 +14,19 @@ constexpr voice_input::crypto::Key kTestKey = {
 constexpr voice_input::crypto::ExchangeNonce kTestNonce = {
     0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
 };
-constexpr std::array<uint8_t, 24> kReadyVector = {
-    0x03, 0x01, 0x00, 0x00, 0x10, 0x11, 0x12, 0x13,
-    0x14, 0x15, 0x16, 0x17, 0xb0, 0xf4, 0xd7, 0xed,
-    0x23, 0x7c, 0x66, 0xad, 0x64, 0x7f, 0xe0, 0xaa,
+constexpr uint32_t kTestEpoch = 7;
+constexpr std::array<uint8_t, 28> kReadyVector = {
+    0x04, 0x01, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00,
+    0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+    0xb0, 0xf4, 0xd7, 0xed, 0xb4, 0x99, 0xc5, 0x1c,
+    0x18, 0xfe, 0xe1, 0xe9,
 };
-constexpr std::array<uint8_t, 35> kBeginVector = {
-    0x03, 0x01, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x64, 0x00, 0x00, 0x00, 0x15, 0x00, 0x10, 0x11,
-    0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0xdb, 0x7a,
-    0x3c, 0x2d, 0x9d, 0xe3, 0xce, 0x5c, 0x27, 0xd6,
-    0x55, 0x12, 0x4d,
+constexpr std::array<uint8_t, 39> kBeginVector = {
+    0x04, 0x01, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x64, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00,
+    0x15, 0x00, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15,
+    0x16, 0x17, 0xdb, 0x7a, 0x3c, 0x2d, 0x9d, 0x0b,
+    0x84, 0xd4, 0xce, 0xe7, 0x3f, 0x0f, 0x58,
 };
 
 }  // namespace
@@ -34,8 +36,39 @@ int main()
     using namespace voice_input;
 
     crypto::CcmContext context(kTestKey);
+    VoiceControl epoch_ready = {};
+    epoch_ready.kind = ControlKind::Ready;
+    epoch_ready.key_epoch = kTestEpoch;
+    epoch_ready.exchange_nonce = kTestNonce;
+    epoch_ready.target_bps = kTargetBitrate;
+    std::array<uint8_t, kControlSize> epoch_ready_bytes = {};
+    assert(encode_control(
+               epoch_ready,
+               context,
+               epoch_ready_bytes.data(),
+               epoch_ready_bytes.size()) == epoch_ready_bytes.size());
+    VoiceControl decoded_epoch_ready = {};
+    assert(decode_control(
+        epoch_ready_bytes.data(),
+        epoch_ready_bytes.size(),
+        context,
+        kTestEpoch,
+        decoded_epoch_ready));
+    assert(decoded_epoch_ready.key_epoch == kTestEpoch);
+    assert(!decode_control(
+        epoch_ready_bytes.data(),
+        epoch_ready_bytes.size(),
+        context,
+        kTestEpoch + 1,
+        decoded_epoch_ready));
+
     VoiceControl ready = {};
-    assert(decode_control(kReadyVector.data(), kReadyVector.size(), context, ready));
+    assert(decode_control(
+        kReadyVector.data(),
+        kReadyVector.size(),
+        context,
+        kTestEpoch,
+        ready));
     assert(ready.kind == ControlKind::Ready);
     assert(ready.reason == 0);
     assert(ready.exchange_nonce == kTestNonce);
@@ -49,6 +82,7 @@ int main()
     VoiceControl unavailable = {};
     unavailable.kind = ControlKind::Unavailable;
     unavailable.reason = static_cast<uint8_t>(UnavailableReason::DriverRequired);
+    unavailable.key_epoch = kTestEpoch;
     unavailable.exchange_nonce = kTestNonce;
     unavailable.target_bps = 0;
     assert(encode_control(
@@ -56,7 +90,11 @@ int main()
            kControlSize);
     VoiceControl decoded_unavailable = {};
     assert(decode_control(
-        encoded_ready.data(), encoded_ready.size(), context, decoded_unavailable));
+        encoded_ready.data(),
+        encoded_ready.size(),
+        context,
+        kTestEpoch,
+        decoded_unavailable));
     assert(decoded_unavailable.kind == ControlKind::Unavailable);
     assert(decoded_unavailable.reason == unavailable.reason);
     assert(decoded_unavailable.target_bps == 0);
@@ -66,6 +104,7 @@ int main()
     begin.session = 7;
     begin.sequence = 0;
     begin.watch_ms = 100;
+    begin.key_epoch = kTestEpoch;
     begin.session_nonce = kTestNonce;
     begin.payload_size = encode_begin_body(
         BeginBody{}, begin.payload.data(), begin.payload.size());
@@ -77,7 +116,12 @@ int main()
 
     VoiceNotification decoded_begin = {};
     assert(decode_notification(
-        encoded.data(), begin_size, context, nullptr, decoded_begin));
+        encoded.data(),
+        begin_size,
+        context,
+        kTestEpoch,
+        nullptr,
+        decoded_begin));
     assert(decoded_begin.kind == NotificationKind::PttBegin);
     assert(decoded_begin.session == 7);
     assert(decoded_begin.sequence == 0);
@@ -95,6 +139,7 @@ int main()
     audio.session = 7;
     audio.sequence = 1;
     audio.watch_ms = 120;
+    audio.key_epoch = kTestEpoch;
     audio.session_nonce = kTestNonce;
     audio.payload_size = kAudioPlaintextSize;
     for (size_t index = 0; index < audio.payload_size; ++index) {
@@ -103,13 +148,18 @@ int main()
     const size_t audio_size = encode_notification(
         audio, context, encoded.data(), encoded.size());
     assert(audio_size == kAudioCharacteristicValueSize);
-    assert(audio_size == 186);
+    assert(audio_size == 190);
     assert(encode_notification(
                audio, context, encoded.data(), kAudioCharacteristicValueSize - 1) ==
            0);
     VoiceNotification decoded_audio = {};
     assert(decode_notification(
-        encoded.data(), audio_size, context, &kTestNonce, decoded_audio));
+        encoded.data(),
+        audio_size,
+        context,
+        kTestEpoch,
+        &kTestNonce,
+        decoded_audio));
     assert(decoded_audio.payload_size == kAudioPlaintextSize);
     assert(std::equal(
         audio.payload.begin(),
@@ -129,6 +179,7 @@ int main()
     end.session = 7;
     end.sequence = 2;
     end.watch_ms = 300;
+    end.key_epoch = kTestEpoch;
     end.session_nonce = kTestNonce;
     end.payload_size = encode_end_summary(
         summary, end.payload.data(), end.payload.size());
@@ -137,7 +188,12 @@ int main()
     assert(end_size == kNotificationHeaderSize + kEndBodySize + crypto::kTagSize);
     VoiceNotification decoded_end = {};
     assert(decode_notification(
-        encoded.data(), end_size, context, &kTestNonce, decoded_end));
+        encoded.data(),
+        end_size,
+        context,
+        kTestEpoch,
+        &kTestNonce,
+        decoded_end));
     EndSummary decoded_summary = {};
     assert(decode_end_summary(
         decoded_end.payload.data(), decoded_end.payload_size, decoded_summary));
@@ -154,6 +210,7 @@ int main()
     error.session = 7;
     error.sequence = 3;
     error.watch_ms = 310;
+    error.key_epoch = kTestEpoch;
     error.session_nonce = kTestNonce;
     error.payload_size = encode_error_body(
         ErrorBody{4, 0x1234}, error.payload.data(), error.payload.size());
@@ -161,7 +218,12 @@ int main()
         error, context, encoded.data(), encoded.size());
     VoiceNotification decoded_error = {};
     assert(decode_notification(
-        encoded.data(), error_size, context, &kTestNonce, decoded_error));
+        encoded.data(),
+        error_size,
+        context,
+        kTestEpoch,
+        &kTestNonce,
+        decoded_error));
     ErrorBody decoded_error_body = {};
     assert(decode_error_body(
         decoded_error.payload.data(), decoded_error.payload_size, decoded_error_body));
@@ -170,22 +232,31 @@ int main()
 
     auto rejected = kReadyVector;
     rejected[0] = 2;
-    assert(!decode_control(rejected.data(), rejected.size(), context, ready));
+    assert(!decode_control(
+        rejected.data(), rejected.size(), context, kTestEpoch, ready));
     rejected = kReadyVector;
     rejected[2] = 1;
-    assert(!decode_control(rejected.data(), rejected.size(), context, ready));
+    assert(!decode_control(
+        rejected.data(), rejected.size(), context, kTestEpoch, ready));
     rejected = kReadyVector;
     rejected.back() ^= 1;
-    assert(!decode_control(rejected.data(), rejected.size(), context, ready));
+    assert(!decode_control(
+        rejected.data(), rejected.size(), context, kTestEpoch, ready));
 
     auto tampered_begin = kBeginVector;
-    for (const size_t index : {size_t{0}, size_t{2}, size_t{14}, size_t{22},
+    for (const size_t index : {size_t{0}, size_t{2}, size_t{12}, size_t{18},
+                               size_t{26},
                                tampered_begin.size() - 1}) {
         auto changed = tampered_begin;
         changed[index] ^= 1;
         VoiceNotification rejected_notification = {};
         assert(!decode_notification(
-            changed.data(), changed.size(), context, nullptr, rejected_notification));
+            changed.data(),
+            changed.size(),
+            context,
+            kTestEpoch,
+            nullptr,
+            rejected_notification));
     }
 
     VoiceNotification invalid = begin;
@@ -203,11 +274,19 @@ int main()
     invalid = audio;
     invalid.sequence = 0;
     assert(encode_notification(invalid, context, encoded.data(), encoded.size()) == 0);
+    invalid = audio;
+    invalid.key_epoch = 0;
+    assert(encode_notification(invalid, context, encoded.data(), encoded.size()) == 0);
 
     auto invalid_length = kBeginVector;
-    invalid_length[12] = 20;
+    invalid_length[16] = 20;
     assert(!decode_notification(
-        invalid_length.data(), invalid_length.size(), context, nullptr, decoded_begin));
+        invalid_length.data(),
+        invalid_length.size(),
+        context,
+        kTestEpoch,
+        nullptr,
+        decoded_begin));
 
     std::array<uint8_t, kBeginVector.size()> authenticated_bad_codec = {};
     std::copy_n(kBeginVector.data(), kNotificationHeaderSize, authenticated_bad_codec.data());
@@ -236,6 +315,7 @@ int main()
         authenticated_bad_codec.data(),
         authenticated_bad_codec.size(),
         context,
+        kTestEpoch,
         nullptr,
         decoded_begin));
 
@@ -244,9 +324,19 @@ int main()
     auto changed_audio = encoded;
     changed_audio[kNotificationHeaderSize] ^= 1;
     assert(!decode_notification(
-        changed_audio.data(), second_audio_size, context, &kTestNonce, decoded_audio));
+        changed_audio.data(),
+        second_audio_size,
+        context,
+        kTestEpoch,
+        &kTestNonce,
+        decoded_audio));
     auto wrong_session_nonce = kTestNonce;
     wrong_session_nonce[0] ^= 1;
     assert(!decode_notification(
-        encoded.data(), second_audio_size, context, &wrong_session_nonce, decoded_audio));
+        encoded.data(),
+        second_audio_size,
+        context,
+        kTestEpoch,
+        &wrong_session_nonce,
+        decoded_audio));
 }

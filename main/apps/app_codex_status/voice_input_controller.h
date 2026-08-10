@@ -9,6 +9,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#if defined(STOPWATCH_HOST_TEST)
+#include <functional>
+#endif
 #include <memory>
 #include <mutex>
 
@@ -18,6 +21,7 @@ struct Notification {
     NotificationKind kind = NotificationKind::VoiceError;
     uint16_t session = 0;
     uint32_t sequence = 0;
+    uint32_t connection_generation = 0;
     size_t size = 0;
     std::array<uint8_t, kMaxNotificationSize> bytes = {};
 };
@@ -28,6 +32,7 @@ public:
         const uint8_t* bytes,
         size_t length,
         crypto::CcmContext& crypto,
+        uint32_t expected_key_epoch,
         VoiceControl& control);
     void reset();
 
@@ -64,6 +69,22 @@ enum class VoiceNotificationSendResult : uint8_t {
     Accepted,
     Congested,
     PermanentFailure,
+};
+
+struct VoiceTransportDiagnostics {
+    uint32_t max_queued_audio_ms = 0;
+    uint32_t longest_accepted_gap_ms = 0;
+    uint32_t congestion_retries = 0;
+    uint16_t failure_code = 0;
+    uint16_t failure_detail = 0;
+    bool terminal_delivered = false;
+};
+
+class VoiceNotificationTransport {
+public:
+    virtual ~VoiceNotificationTransport() = default;
+    virtual VoiceNotificationSendResult send_voice_notification(
+        const voice_input::Notification& notification) = 0;
 };
 
 class VoiceButtonEdgeGate {
@@ -124,14 +145,26 @@ public:
 #ifndef STOPWATCH_HOST_TEST
     VoiceInputController();
 #endif
+#if defined(STOPWATCH_HOST_TEST)
     VoiceInputController(
         VoiceCaptureBackend& backend,
         voice_input::crypto::CcmContext& crypto,
         VoiceInputEntropy& entropy);
+#endif
+    VoiceInputController(
+        VoiceCaptureBackend& backend,
+        voice_input::crypto::CcmContext& crypto,
+        VoiceInputEntropy& entropy,
+        uint32_t key_epoch);
     ~VoiceInputController();
 
     bool initialize();
     void shutdown();
+    void set_notification_transport(VoiceNotificationTransport* transport);
+    bool set_credential(
+        const voice_input::crypto::Key& key,
+        uint32_t key_epoch);
+    void clear_credential();
     void set_ready(bool ready, uint16_t negotiated_mtu);
     void handle_connection_epoch(uint32_t connection_epoch);
     void handle_button(bool pressed, uint32_t now_ms) override;
@@ -148,12 +181,19 @@ public:
 #if defined(STOPWATCH_HOST_TEST)
     size_t queued_audio_ms_for_test() const;
     void set_next_connection_session_for_test(uint16_t session);
+    void run_capture_worker_once_for_test(uint32_t now_ms);
+    void run_transmit_worker_until_idle_for_test(uint32_t now_ms);
+    void set_transmitter_wake_hook_for_test(std::function<void()> hook);
+    VoiceTransportDiagnostics transport_diagnostics_for_test() const;
 #endif
 
 private:
     static void producer_entry(void* context);
     void producer_loop();
     void producer_step(uint32_t now_ms);
+    static void transmitter_entry(void* context);
+    void transmitter_loop();
+    bool transmitter_step(uint32_t now_ms);
     bool start_session(uint32_t now_ms);
     bool prepare_begin(uint32_t now_ms);
     bool prepare_audio(
@@ -175,6 +215,7 @@ private:
     void abort_with_failure(uint16_t code, uint16_t detail, uint32_t now_ms);
     void fail(uint16_t code, uint16_t detail, uint32_t now_ms);
     void stop_capture_bounded();
+    bool wait_transmitter_idle_bounded();
     void reset_session(bool ready_after_reset, bool clear_notifications);
     bool make_session_identity(
         uint16_t& session,
@@ -183,9 +224,12 @@ private:
         const voice_input::VoiceNotification& logical,
         voice_input::Notification& wire);
     void wake_producer();
+    void wake_transmitter();
+    void stop_transmitter_bounded();
 
     std::unique_ptr<VoiceCapturePipeline> _capture_pipeline;
     voice_input::crypto::CcmContext* _crypto = nullptr;
+    std::unique_ptr<voice_input::crypto::CcmContext> _owned_crypto;
     VoiceInputEntropy* _entropy = nullptr;
     std::unique_ptr<VoiceInputEntropy> _owned_entropy;
     voice_input::VoiceInputSession _session;
@@ -199,15 +243,29 @@ private:
     std::atomic<bool> _shutdown_requested{false};
     void* _producer_task = nullptr;
     [[maybe_unused]] void* _producer_stopped = nullptr;
+    VoiceNotificationTransport* _notification_transport = nullptr;
+    std::atomic<bool> _transmitter_shutdown_requested{false};
+    std::atomic<bool> _transmitter_step_active{false};
+    std::atomic<bool> _producer_worker_failed{false};
+    void* _transmitter_task = nullptr;
+    [[maybe_unused]] void* _transmitter_stopped = nullptr;
+#if defined(STOPWATCH_HOST_TEST)
+    std::function<void()> _transmitter_wake_hook_for_test;
+#endif
     uint16_t _negotiated_mtu = 23;
     uint16_t _next_session = 1;
     uint32_t _connection_epoch = 0;
+    uint32_t _key_epoch = 0;
     uint32_t _last_accepted_sequence = 0;
-    uint8_t _congestion_retries = 0;
+    uint32_t _congestion_started_ms = 0;
+    uint32_t _last_accepted_ms = 0;
+    VoiceTransportDiagnostics _transport_diagnostics = {};
     size_t _queued_audio_packets = 0;
     bool _button_pressed = false;
     bool _begin_accepted = false;
     bool _has_accepted_notification = false;
+    bool _congestion_active = false;
+    bool _has_accepted_timestamp = false;
     std::atomic<bool> _ready{false};
     bool _graceful_stop = false;
     bool _terminal_pending = false;

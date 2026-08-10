@@ -60,10 +60,20 @@ snapshot to the watch every two seconds. Install it with:
 ./mac-codex-agent/install_launch_agent.sh
 ```
 
-Open the Codex app on the watch to start advertising. The Mac agent scans,
-pairs using BLE Just Works, reconnects automatically, and writes only rendered
-status fields. It does not send OAuth credentials, prompts, responses, or
-source code to the watch.
+Open the Codex app on the watch to start advertising. A new Mac Agent uses
+P-256 ECDH and shows the same six-digit verification code on both devices; the
+watch must be approved physically before the Agent is authorized. Up to eight
+Agents can be stored. Pull down on the watch Codex page to choose the active
+Agent, while a new pairing request remains pending without interrupting the
+current connection. The Agent sends only rendered status fields, never OAuth
+credentials, prompts, responses, or source code.
+
+Each Mac keeps its own signing identity in Keychain. The watch keeps one
+random master voice key shared with its authorized Agents and sends the current
+key only after signature authentication. Removing an Agent rotates that master
+key and increments its epoch; an authorized Agent that was offline receives
+the new epoch on its next signed connection. Agent names are editable from the
+menu bar app and are signed before the watch stores or displays them.
 
 After every successful BLE connection, the Mac agent first sends the current
 Unix time and effective UTC offset. The watch applies them to its global system

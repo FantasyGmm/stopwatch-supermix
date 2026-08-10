@@ -1,6 +1,7 @@
 import pathlib
 import sys
 import unittest
+from unittest import mock
 
 
 AGENT_ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -10,12 +11,28 @@ sys.path.insert(0, str(AGENT_ROOT))
 from voice_shortcut import (  # noqa: E402
     AccessibilityRequired,
     FnShortcutController,
+    LEFT_OPTION_KEY_CODE,
     TypelessNotRunning,
+    _post_left_option,
 )
 
 
 class FnShortcutControllerTests(unittest.TestCase):
-    def test_start_and_stop_emit_complete_fn_taps(self):
+    def test_default_shortcut_posts_left_option(self):
+        with mock.patch(
+            "voice_shortcut.Quartz.CGEventCreateKeyboardEvent"
+        ) as create:
+            with mock.patch("voice_shortcut.Quartz.CGEventPost") as post:
+                event = object()
+                create.return_value = event
+
+                _post_left_option(True)
+
+        self.assertEqual(LEFT_OPTION_KEY_CODE, 0x3A)
+        create.assert_called_once_with(None, LEFT_OPTION_KEY_CODE, True)
+        post.assert_called_once_with(mock.ANY, event)
+
+    def test_start_and_stop_emit_complete_shortcut_taps(self):
         events = []
         controller = FnShortcutController(
             trusted=lambda: True,

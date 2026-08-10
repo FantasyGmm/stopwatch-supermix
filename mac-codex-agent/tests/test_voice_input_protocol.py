@@ -19,11 +19,11 @@ from voice_input_protocol import (  # noqa: E402
     EndSummary,
     IMA_ADPCM,
     PTT_BEGIN,
-    decode_control,
-    decode_notification,
-    encode_ready,
-    encode_unavailable,
-    pack_notification,
+    decode_control as _decode_control,
+    decode_notification as _decode_notification,
+    encode_ready as _encode_ready,
+    encode_unavailable as _encode_unavailable,
+    pack_notification as _pack_notification,
 )
 from voice_input_crypto import (  # noqa: E402
     AUDIO_DOMAIN,
@@ -34,14 +34,115 @@ from voice_input_crypto import (  # noqa: E402
 
 TEST_KEY = bytes.fromhex("000102030405060708090a0b0c0d0e0f")
 TEST_NONCE = bytes.fromhex("1011121314151617")
+TEST_EPOCH = 7
+
+
+def encode_ready(key, exchange_nonce, target_bps, *, key_epoch=TEST_EPOCH):
+    return _encode_ready(
+        key,
+        exchange_nonce,
+        target_bps,
+        key_epoch=key_epoch,
+    )
+
+
+def encode_unavailable(key, exchange_nonce, reason, *, key_epoch=TEST_EPOCH):
+    return _encode_unavailable(
+        key,
+        exchange_nonce,
+        reason,
+        key_epoch=key_epoch,
+    )
+
+
+def decode_control(key, raw, *, expected_epoch=TEST_EPOCH):
+    return _decode_control(key, raw, expected_epoch=expected_epoch)
+
+
+def pack_notification(
+    key,
+    kind,
+    session,
+    sequence,
+    watch_ms,
+    payload,
+    session_nonce,
+    *,
+    key_epoch=TEST_EPOCH,
+):
+    return _pack_notification(
+        key,
+        kind,
+        session,
+        sequence,
+        watch_ms,
+        payload,
+        session_nonce,
+        key_epoch=key_epoch,
+    )
+
+
+def decode_notification(
+    key,
+    raw,
+    session_nonce=None,
+    *,
+    expected_epoch=TEST_EPOCH,
+):
+    return _decode_notification(
+        key,
+        raw,
+        session_nonce,
+        expected_epoch=expected_epoch,
+    )
 
 
 class VoiceInputProtocolTests(unittest.TestCase):
+    def test_runtime_epoch_is_authenticated_and_must_match_exactly(self):
+        ready = encode_ready(
+            TEST_KEY,
+            TEST_NONCE,
+            8192,
+            key_epoch=TEST_EPOCH,
+        )
+        decoded = decode_control(
+            TEST_KEY,
+            ready,
+            expected_epoch=TEST_EPOCH,
+        )
+        self.assertEqual(decoded.key_epoch, TEST_EPOCH)
+        with self.assertRaises(ValueError):
+            decode_control(TEST_KEY, ready, expected_epoch=TEST_EPOCH + 1)
+
+        begin = pack_notification(
+            TEST_KEY,
+            PTT_BEGIN,
+            7,
+            0,
+            100,
+            BEGIN_BODY.pack(IMA_ADPCM, 16000, 320),
+            TEST_NONCE,
+            key_epoch=TEST_EPOCH,
+        )
+        packet = decode_notification(
+            TEST_KEY,
+            begin,
+            expected_epoch=TEST_EPOCH,
+        )
+        self.assertEqual(packet.key_epoch, TEST_EPOCH)
+        with self.assertRaises(ValueError):
+            decode_notification(
+                TEST_KEY,
+                begin,
+                expected_epoch=TEST_EPOCH + 1,
+            )
+
     def test_ready_control_matches_firmware_layout(self):
         self.assertEqual(
             encode_ready(TEST_KEY, TEST_NONCE, 8192),
             bytes.fromhex(
-                "030100001011121314151617b0f4d7ed237c66ad647fe0aa"
+                "04010000070000001011121314151617"
+                "b0f4d7edb499c51c18fee1e9"
             ),
         )
 
@@ -54,8 +155,8 @@ class VoiceInputProtocolTests(unittest.TestCase):
         self.assertEqual(
             raw,
             bytes.fromhex(
-                "03010700000000006400000015001011121314151617"
-                "db7a3c2d9de3ce5c27d655124d"
+                "040107000000000064000000070000001500"
+                "1011121314151617db7a3c2d9d0b84d4cee73f0f58"
             ),
         )
         packet = decode_notification(TEST_KEY, raw)
@@ -120,7 +221,7 @@ class VoiceInputProtocolTests(unittest.TestCase):
         audio = pack_notification(
             TEST_KEY, AUDIO, 7, 1, 100, audio_payload, TEST_NONCE
         )
-        self.assertEqual(len(audio), 186)
+        self.assertEqual(len(audio), 190)
         self.assertEqual(EndSummary.from_payload(cases[1][2]), summary)
         with self.assertRaises(dataclasses.FrozenInstanceError):
             summary.generated_packets = 0
@@ -175,7 +276,7 @@ class VoiceInputProtocolTests(unittest.TestCase):
             begin[: HEADER.size - 1],
             begin[:-1],
             bytes((2,)) + begin[1:],
-            bytes((3, 99)) + begin[2:],
+            bytes((4, 99)) + begin[2:],
             begin[:2] + b"\x00\x00" + begin[4:],
         )
         for raw in invalid_raw:
@@ -183,7 +284,7 @@ class VoiceInputProtocolTests(unittest.TestCase):
                 decode_notification(TEST_KEY, raw)
 
         invalid_body = BEGIN_BODY.pack(2, 16000, 320)
-        header = HEADER.pack(3, PTT_BEGIN, 7, 0, 100, 21)
+        header = HEADER.pack(4, PTT_BEGIN, 7, 0, 100, TEST_EPOCH, 21)
         aad = header + TEST_NONCE
         authenticated_invalid_begin = aad + encrypt(
             TEST_KEY,
@@ -198,7 +299,13 @@ class VoiceInputProtocolTests(unittest.TestCase):
 
         short_audio = bytes(163)
         short_audio_header = HEADER.pack(
-            3, AUDIO, 7, 1, 100, len(short_audio) + 8
+            4,
+            AUDIO,
+            7,
+            1,
+            100,
+            TEST_EPOCH,
+            len(short_audio) + 8,
         )
         authenticated_short_audio = short_audio_header + encrypt(
             TEST_KEY,

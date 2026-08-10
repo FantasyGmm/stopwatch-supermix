@@ -26,6 +26,16 @@ class ConnectionState(enum.Enum):
     ERROR = "error"
 
 
+class PairingState(enum.Enum):
+    IDLE = "idle"
+    REQUESTING = "requesting"
+    AWAITING_CONFIRMATION = "awaiting_confirmation"
+    AUTHENTICATING = "authenticating"
+    REKEYING = "rekeying"
+    PAIRED = "paired"
+    ERROR = "error"
+
+
 @dataclasses.dataclass(frozen=True)
 class TaskAlertView:
     project: str
@@ -110,6 +120,10 @@ class AgentSnapshot:
     codex: CodexSnapshot = dataclasses.field(default_factory=CodexSnapshot)
     trae: TraeSnapshot = dataclasses.field(default_factory=TraeSnapshot)
     changed_at: float = dataclasses.field(default_factory=time.time)
+    agent_name: str = ""
+    pairing_state: PairingState = PairingState.IDLE
+    verification_code: str = ""
+    watch_identity_suffix: str = ""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -129,6 +143,9 @@ class MenuPresentation:
     trae_task_text: str
     trae_detail_text: str
     agent_text: str
+    pairing_text: str
+    verification_text: str
+    watch_identity_text: str
     bluetooth_text: str
     device_text: str
     voice_state: VoiceState
@@ -159,6 +176,16 @@ _VOICE_STATE_LABELS = {
     VoiceState.READY: "Ready",
     VoiceState.RECORDING: "Recording",
     VoiceState.ERROR: "Error",
+}
+
+_PAIRING_STATE_LABELS = {
+    PairingState.IDLE: "Idle",
+    PairingState.REQUESTING: "Requesting",
+    PairingState.AWAITING_CONFIRMATION: "Confirm on Watch",
+    PairingState.AUTHENTICATING: "Authenticating",
+    PairingState.REKEYING: "Updating Key",
+    PairingState.PAIRED: "Paired",
+    PairingState.ERROR: "Failed",
 }
 
 
@@ -207,7 +234,26 @@ def present(snapshot: AgentSnapshot) -> MenuPresentation:
         trae_state_text="State: {}".format(trae_state),
         trae_task_text="Task: {}".format(trae.task_title or "--"),
         trae_detail_text="Detail: {}".format(trae.task_detail or "--"),
-        agent_text="Agent: Running",
+        agent_text="Agent: {}".format(snapshot.agent_name or "Running"),
+        pairing_text="Pairing: {}".format(
+            _PAIRING_STATE_LABELS[snapshot.pairing_state]
+        ),
+        verification_text="Verification Code: {}".format(
+            snapshot.verification_code
+            if len(snapshot.verification_code) == 6
+            and snapshot.verification_code.isascii()
+            and snapshot.verification_code.isdigit()
+            else "--"
+        ),
+        watch_identity_text="Watch: {}".format(
+            "· " + snapshot.watch_identity_suffix.upper()
+            if len(snapshot.watch_identity_suffix) == 4
+            and all(
+                character in "0123456789abcdefABCDEF"
+                for character in snapshot.watch_identity_suffix
+            )
+            else "--"
+        ),
         bluetooth_text="Bluetooth: {}".format(_STATE_LABELS[snapshot.state]),
         device_text="Device: {}".format(DEVICE_NAME),
         voice_state=snapshot.voice_state,

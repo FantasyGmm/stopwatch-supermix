@@ -20,7 +20,7 @@ from voice_input_protocol import (
 
 MAX_GAP_BLOCKS = 5
 MAX_SEQUENCE = 0xFFFFFFFF
-MIN_AUDIO_MTU = 189
+MIN_AUDIO_MTU = 193
 MAX_BLE_MTU = 527
 DRAIN_SECONDS = 0.150
 RECENT_NONCE_LIMIT = 8
@@ -67,12 +67,14 @@ class VoiceSessionService:
         shortcut,
         key: bytes,
         *,
+        key_epoch: int,
         readiness_checker=lambda: VoiceState.READY,
         sleep=asyncio.sleep,
     ):
         self.route = route
         self.shortcut = shortcut
         self._key = key
+        self._key_epoch = key_epoch
         self._readiness_checker = readiness_checker
         self._sleep = sleep
         self.state = VoiceState.READY
@@ -124,7 +126,12 @@ class VoiceSessionService:
 
     async def handle(self, raw: bytes) -> None:
         try:
-            packet = decode_notification(self._key, raw, self._session_nonce)
+            packet = decode_notification(
+                self._key,
+                raw,
+                self._session_nonce,
+                expected_epoch=self._key_epoch,
+            )
         except Exception as operation_error:
             if self._has_active_resources():
                 await self._abort_preserving(operation_error)

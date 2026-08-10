@@ -78,6 +78,38 @@ def confirm_voice_setup(alert_factory=None) -> bool:
     return alert.runModal() == NSAlertFirstButtonReturn
 
 
+def confirm_forget_watch(alert_factory=None) -> bool:
+    alert = alert_factory() if alert_factory is not None else NSAlert.alloc().init()
+    alert.setMessageText_("Forget This Watch Credential?")
+    alert.setInformativeText_(
+        "The Agent will reconnect and require the six-digit code plus "
+        "physical approval on the watch before receiving a new credential."
+    )
+    alert.addButtonWithTitle_("Forget and Re-pair")
+    alert.addButtonWithTitle_("Cancel")
+    return alert.runModal() == NSAlertFirstButtonReturn
+
+
+def prompt_agent_name(current_name: str, alert_factory=None, field_factory=None):
+    alert = alert_factory() if alert_factory is not None else NSAlert.alloc().init()
+    field = (
+        field_factory()
+        if field_factory is not None
+        else NSTextField.alloc().initWithFrame_(((0, 0), (280, 24)))
+    )
+    field.setStringValue_(current_name)
+    alert.setMessageText_("Name This Agent")
+    alert.setInformativeText_(
+        "This name is signed by this Mac and shown in the watch Agent list."
+    )
+    alert.setAccessoryView_(field)
+    alert.addButtonWithTitle_("Save")
+    alert.addButtonWithTitle_("Cancel")
+    if alert.runModal() != NSAlertFirstButtonReturn:
+        return None
+    return str(field.stringValue())
+
+
 def configure_logging(path: pathlib.Path = LOG_PATH) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     handler = logging.handlers.RotatingFileHandler(
@@ -107,6 +139,8 @@ class MenuBarApplication(NSObject):
         self.voice_installer = BlackHoleInstaller()
         self.voice_package_path = bundled_blackhole_package()
         self.voice_setup_confirmer = confirm_voice_setup
+        self.watch_forget_confirmer = confirm_forget_watch
+        self.agent_name_prompt = prompt_agent_name
         self.voice_worker_factory = lambda target: threading.Thread(
             target=target,
             name="blackhole-installer",
@@ -189,6 +223,15 @@ class MenuBarApplication(NSObject):
         self.agent_item, self.agent_label = self._informational_item(
             "Agent: Running", indent=STATUS_CHILD_INDENT
         )
+        self.pairing_item, self.pairing_label = self._informational_item(
+            "Pairing: Idle", indent=STATUS_CHILD_INDENT
+        )
+        self.verification_item, self.verification_label = self._informational_item(
+            "Verification Code: --", indent=STATUS_CHILD_INDENT
+        )
+        self.watch_identity_item, self.watch_identity_label = (
+            self._informational_item("Watch: --", indent=STATUS_CHILD_INDENT)
+        )
         self.bluetooth_item, self.bluetooth_label = self._informational_item(
             "Bluetooth: Scanning", indent=STATUS_CHILD_INDENT
         )
@@ -209,6 +252,15 @@ class MenuBarApplication(NSObject):
             "Enable Watch Connection", "toggleConnection:"
         )
         self.reconnect_item = self._action_item("Reconnect Now", "reconnect:")
+        self.rename_agent_item = self._action_item(
+            "Agent Name...", "renameAgent:"
+        )
+        self.retry_pairing_item = self._action_item(
+            "Retry Pairing", "retryPairing:"
+        )
+        self.forget_watch_item = self._action_item(
+            "Forget This Watch Credential...", "forgetWatch:"
+        )
         self.menu.addItem_(NSMenuItem.separatorItem())
         self.open_log_item = self._action_item("Open Log", "openLog:")
         self.menu.addItem_(NSMenuItem.separatorItem())
@@ -328,6 +380,9 @@ class MenuBarApplication(NSObject):
         self.trae_task_label.setStringValue_(view.trae_task_text)
         self.trae_detail_label.setStringValue_(view.trae_detail_text)
         self.agent_label.setStringValue_(view.agent_text)
+        self.pairing_label.setStringValue_(view.pairing_text)
+        self.verification_label.setStringValue_(view.verification_text)
+        self.watch_identity_label.setStringValue_(view.watch_identity_text)
         self.bluetooth_label.setStringValue_(view.bluetooth_text)
         self.device_label.setStringValue_(view.device_text)
         self.voice_label.setStringValue_(view.voice_text)
@@ -348,6 +403,12 @@ class MenuBarApplication(NSObject):
         )
         self.reconnect_item.setEnabled_(view.reconnect_enabled and not self._stopping)
         self.connection_item.setEnabled_(not self._stopping)
+        self.rename_agent_item.setEnabled_(not self._stopping)
+        pairing_failed = view.pairing_text == "Pairing: Failed"
+        self.retry_pairing_item.setHidden_(not pairing_failed)
+        self.retry_pairing_item.setEnabled_(pairing_failed and not self._stopping)
+        self.forget_watch_item.setHidden_(not pairing_failed)
+        self.forget_watch_item.setEnabled_(pairing_failed and not self._stopping)
         image = NSImage.imageWithSystemSymbolName_accessibilityDescription_(
             view.symbol_name,
             view.bluetooth_text,
@@ -362,6 +423,31 @@ class MenuBarApplication(NSObject):
 
     def reconnect_(self, _sender):
         self.controller.reconnect()
+
+    def retryPairing_(self, _sender):
+        self.controller.reconnect()
+
+    def forgetWatch_(self, _sender):
+        if not self.watch_forget_confirmer():
+            return
+        if not self.controller.forget_current_watch():
+            LOGGER.warning("No current watch credential was available to forget")
+        self.refresh_(None)
+
+    def renameAgent_(self, _sender):
+        current_name = self.controller.snapshot().agent_name
+        requested = self.agent_name_prompt(current_name)
+        if requested is None:
+            return
+        try:
+            self.controller.rename_agent(requested)
+        except (ValueError, RuntimeError) as error:
+            LOGGER.warning("Could not rename Agent: %s", error)
+            alert = NSAlert.alloc().init()
+            alert.setMessageText_("Agent Name Was Not Changed")
+            alert.setInformativeText_(str(error))
+            alert.runModal()
+        self.refresh_(None)
 
     def setupVoice_(self, _sender):
         if self._installing_voice or self._stopping:
@@ -466,6 +552,9 @@ class MenuBarApplication(NSObject):
             self.timer = None
         self.connection_item.setEnabled_(False)
         self.reconnect_item.setEnabled_(False)
+        self.rename_agent_item.setEnabled_(False)
+        self.retry_pairing_item.setEnabled_(False)
+        self.forget_watch_item.setEnabled_(False)
         self.setup_voice_item.setEnabled_(False)
         self.accessibility_item.setEnabled_(False)
         worker = self._voice_install_thread
