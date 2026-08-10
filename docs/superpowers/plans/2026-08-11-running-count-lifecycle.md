@@ -4,7 +4,7 @@
 
 **Goal:** Keep active Codex Running tasks counted across local midnight while retaining today's-only Completed history.
 
-**Architecture:** Change only the alert snapshot's date predicate. Prove the lifecycle behavior through the real `TaskAlertTracker` and rollout event stream.
+**Architecture:** Select each thread's latest lifecycle state before applying display-date policy, then date-filter only a latest `completed` state. Prove the lifecycle behavior through the real `TaskAlertTracker` and rollout event stream.
 
 **Tech Stack:** Python 3, `unittest`, JSONL Codex rollout fixtures.
 
@@ -16,33 +16,33 @@
 - Modify: `mac-codex-agent/task_alerts.py:906-920`
 - Test: `mac-codex-agent/tests/test_task_alerts.py`
 
-- [ ] **Step 1: Write the failing regression test**
+- [x] **Step 1: Write the failing regression test**
 
 Add a test that starts a turn before local midnight, advances the injected clock past midnight, and asserts `running_count == 1`.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run: `python3 -m unittest mac-codex-agent/tests/test_task_alerts.py -k running_survives_midnight`
 
 Expected: FAIL because the snapshot filters yesterday's Running record.
 
-- [ ] **Step 3: Implement the minimal predicate change**
+- [x] **Step 3: Implement the minimal snapshot-ordering change**
 
-Change the date condition so only `completed` is excluded when it is not from today:
+First select the latest record for every thread. While building visible alerts, exclude only a latest `completed` record that is not from today:
 
 ```python
 if state == "completed" and not is_today:
     continue
 ```
 
-- [ ] **Step 4: Verify GREEN and adjacent lifecycle behavior**
+- [x] **Step 4: Verify GREEN and adjacent lifecycle behavior**
 
-Run the focused test, then the complete task-alert suite. Confirm Pending survives midnight, Completed does not, and abort/completion retire Running normally.
+Run the focused tests, then the complete task-alert suite. Confirm Running and Pending survive midnight, a newer completion cannot expose an older active state, Completed does not survive into the next day's display, and abort/completion retire Running normally.
 
-- [ ] **Step 5: Verify repository quality gates**
+- [x] **Step 5: Verify repository quality gates**
 
 Run Python compilation and `git diff --check`, then inspect the final diff for unrelated changes.
 
 ## Self-review
 
-The plan covers every design requirement with one production-line change and one regression test. It introduces no new APIs, types, or placeholders.
+The plan covers every design requirement with one small snapshot-ordering change and paired regression tests. It introduces no new APIs, types, or placeholders.

@@ -911,17 +911,17 @@ class TaskAlertTracker:
             state = item.get("state")
             if timestamp is None or state not in ("pending", "running", "completed"):
                 continue
-            is_today = timestamp.astimezone(self._local_timezone).date() == today
-            if state != "pending" and not is_today:
-                continue
             thread_id = str(item.get("thread_id") or "")
             existing = latest_by_thread.get(thread_id)
             if existing is None or timestamp >= existing[0]:
                 latest_by_thread[thread_id] = (timestamp, item)
 
         alerts = []
-        for _timestamp, item in latest_by_thread.values():
+        for timestamp, item in latest_by_thread.values():
             state = item["state"]
+            is_today = timestamp.astimezone(self._local_timezone).date() == today
+            if state == "completed" and not is_today:
+                continue
             fallback_outcome = {
                 "pending": "waiting",
                 "running": "running",

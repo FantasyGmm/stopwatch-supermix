@@ -1164,6 +1164,66 @@ class TaskAlertTrackerTests(unittest.TestCase):
             ("thread-a:2026-07-12T23:59:00Z",),
         )
 
+    def test_running_survives_midnight_until_completion(self):
+        self.clock.value = datetime.datetime(2026, 7, 12, 23, 58, tzinfo=UTC)
+        tracker = self.tracker()
+        tracker.refresh()
+        append_event(
+            self.rollout,
+            "task_started",
+            "2026-07-12T23:59:00Z",
+            turn_id="turn-a",
+        )
+        self.assertEqual(tracker.refresh().running_count, 1)
+
+        self.clock.value = datetime.datetime(2026, 7, 13, 0, 1, tzinfo=UTC)
+        across_midnight = tracker.refresh()
+
+        self.assertEqual(across_midnight.running_count, 1)
+        self.assertEqual([alert.state for alert in across_midnight.alerts], ["running"])
+
+        append_event(
+            self.rollout,
+            "task_complete",
+            "2026-07-13T00:02:00Z",
+            turn_id="turn-a",
+            last_agent_message="All work is complete.",
+        )
+        completed = tracker.refresh()
+
+        self.assertEqual(completed.running_count, 0)
+        self.assertEqual(completed.completed_count, 1)
+        self.assertEqual([alert.state for alert in completed.alerts], ["completed"])
+
+    def test_yesterday_completion_does_not_resurrect_earlier_pending(self):
+        self.clock.value = datetime.datetime(2026, 7, 12, 23, 57, tzinfo=UTC)
+        tracker = self.tracker()
+        tracker.refresh()
+        append_event(
+            self.rollout,
+            "task_complete",
+            "2026-07-12T23:58:00Z",
+            turn_id="turn-a",
+            last_agent_message="Please confirm.",
+        )
+        self.assertEqual(tracker.refresh().pending_count, 1)
+        append_event(
+            self.rollout,
+            "task_complete",
+            "2026-07-12T23:59:00Z",
+            turn_id="turn-b",
+            last_agent_message="All work is complete.",
+        )
+        self.assertEqual(tracker.refresh().completed_count, 1)
+
+        self.clock.value = datetime.datetime(2026, 7, 13, 0, 1, tzinfo=UTC)
+        next_day = tracker.refresh()
+
+        self.assertEqual(next_day.running_count, 0)
+        self.assertEqual(next_day.pending_count, 0)
+        self.assertEqual(next_day.completed_count, 0)
+        self.assertEqual(next_day.alerts, ())
+
     def test_alerts_older_than_seven_local_days_are_pruned(self):
         self.clock.value = datetime.datetime(2026, 7, 3, 0, 0, tzinfo=UTC)
         tracker = self.tracker()
