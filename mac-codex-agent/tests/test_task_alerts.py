@@ -646,6 +646,82 @@ class TaskAlertTrackerTests(unittest.TestCase):
         self.assertEqual(snapshot.completed_count, 0)
         self.assertEqual(snapshot.alerts[0].state, "running")
 
+    def test_aborted_turn_retires_running_without_notification(self):
+        tracker = self.tracker()
+        tracker.refresh()
+        append_event(
+            self.rollout,
+            "task_started",
+            "2026-07-12T00:01:00Z",
+            turn_id="turn-a",
+        )
+        append_event(
+            self.rollout,
+            "turn_aborted",
+            "2026-07-12T00:01:05Z",
+            turn_id="turn-a",
+        )
+
+        snapshot = tracker.refresh()
+
+        self.assertEqual(snapshot.running_count, 0)
+        self.assertEqual(snapshot.pending_count, 0)
+        self.assertEqual(snapshot.completed_count, 1)
+        self.assertEqual(tracker.pending_watch_notification_ids(), ())
+        saved = json.loads(self.ledger.read_text(encoding="utf-8"))
+        self.assertEqual(saved["alerts"][-1]["reason"], "turn_aborted")
+        self.assertEqual(saved["alerts"][-1]["handled_at"], "2026-07-12T00:01:05Z")
+
+    def test_late_abort_cannot_clear_a_newer_turn(self):
+        tracker = self.tracker()
+        tracker.refresh()
+        append_event(
+            self.rollout,
+            "task_started",
+            "2026-07-12T00:01:00Z",
+            turn_id="turn-a",
+        )
+        append_event(
+            self.rollout,
+            "task_started",
+            "2026-07-12T00:01:05Z",
+            turn_id="turn-b",
+        )
+        append_event(
+            self.rollout,
+            "turn_aborted",
+            "2026-07-12T00:01:06Z",
+            turn_id="turn-a",
+        )
+
+        snapshot = tracker.refresh()
+
+        self.assertEqual(snapshot.running_count, 1)
+        self.assertEqual(snapshot.alerts[0].progress_at, "2026-07-12T00:01:05Z")
+
+    def test_aborted_turn_is_idempotent_across_restart(self):
+        tracker = self.tracker()
+        tracker.refresh()
+        append_event(
+            self.rollout,
+            "task_started",
+            "2026-07-12T00:01:00Z",
+            turn_id="turn-a",
+        )
+        append_event(
+            self.rollout,
+            "turn_aborted",
+            "2026-07-12T00:01:05Z",
+            turn_id="turn-a",
+        )
+        first = tracker.refresh()
+
+        restarted = self.tracker().refresh()
+
+        self.assertEqual(restarted.running_count, 0)
+        self.assertEqual(restarted.completed_count, 1)
+        self.assertEqual(restarted.revision, first.revision)
+
     def test_normal_completion_becomes_completed_without_notification(self):
         tracker = self.tracker()
         tracker.refresh()

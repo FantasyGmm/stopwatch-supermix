@@ -594,7 +594,12 @@ class TaskAlertTracker:
             return False
 
         event_type = payload.get("type")
-        if event_type not in ("task_started", "task_complete", "user_message"):
+        if event_type not in (
+            "task_started",
+            "task_complete",
+            "turn_aborted",
+            "user_message",
+        ):
             return False
 
         if event_type == "task_started":
@@ -609,8 +614,7 @@ class TaskAlertTracker:
             alert_id = "{}:{}".format(thread.id, timestamp_text)
             if any(entry.get("id") == alert_id for entry in self._state["alerts"]):
                 return signal_changed
-            self._state["alerts"].append(
-                {
+            alert = {
                     "id": alert_id,
                     "thread_id": thread.id,
                     "project": thread.project,
@@ -621,7 +625,23 @@ class TaskAlertTracker:
                     "watch_notified": True,
                     "outcome": "running",
                 }
-            )
+            if isinstance(turn_id, str) and turn_id:
+                alert["turn_id"] = turn_id
+            self._state["alerts"].append(alert)
+            self._state["revision"] = int(self._state.get("revision", 0)) + 1
+            return True
+
+        if event_type == "turn_aborted":
+            turn_id = payload.get("turn_id")
+            if not isinstance(turn_id, str) or not turn_id:
+                return False
+            if not self._complete_aborted_running(
+                thread,
+                timestamp,
+                turn_id,
+                require_active_signal=True,
+            ):
+                return False
             self._state["revision"] = int(self._state.get("revision", 0)) + 1
             return True
 
@@ -714,6 +734,63 @@ class TaskAlertTracker:
                 changed = True
         if changed:
             self._state["revision"] = int(self._state.get("revision", 0)) + 1
+        return changed
+
+    def _complete_aborted_running(
+        self,
+        thread: _ThreadInfo,
+        timestamp: datetime.datetime,
+        turn_id: str,
+        *,
+        require_active_signal: bool,
+    ) -> bool:
+        signals = self._state.setdefault("turn_signals", {})
+        signal = signals.get(thread.id, {})
+        signal_matches = signal.get("turn_id") == turn_id
+        if require_active_signal and not signal_matches:
+            return False
+
+        running = []
+        for entry in self._state["alerts"]:
+            progress = _parse_timestamp(entry.get("progress_at"))
+            entry_turn_id = entry.get("turn_id")
+            if (
+                entry.get("thread_id") != thread.id
+                or entry.get("state") != "running"
+                or progress is None
+                or progress > timestamp
+                or (
+                    isinstance(entry_turn_id, str)
+                    and entry_turn_id
+                    and entry_turn_id != turn_id
+                )
+                or (not entry_turn_id and not signal_matches)
+            ):
+                continue
+            running.append((progress, entry))
+
+        changed = False
+        if running:
+            timestamp_text = _iso(timestamp)
+            target = max(running, key=lambda candidate: candidate[0])[1]
+            target.update(
+                {
+                    "id": "{}:{}".format(thread.id, timestamp_text),
+                    "project": thread.project,
+                    "title": thread.title,
+                    "progress_at": timestamp_text,
+                    "handled_at": timestamp_text,
+                    "state": "completed",
+                    "watch_notified": True,
+                    "outcome": "completed",
+                    "reason": "turn_aborted",
+                    "turn_id": turn_id,
+                }
+            )
+            changed = True
+        if signal_matches:
+            del signals[thread.id]
+            changed = True
         return changed
 
     def _reduce_response_item(
