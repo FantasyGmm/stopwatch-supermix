@@ -276,6 +276,122 @@ async def wait_for_messages(transport, count):
 
 
 class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_authenticated_credential_is_injected_into_status_agent(self):
+        credential = WatchCredential(
+            bytes(range(16)),
+            b"K" * 16,
+            9,
+            b"F" * 16,
+            b"\x02" + b"W" * 32,
+        )
+
+        class Authorizer:
+            async def authorize(self, transport, publish):
+                return credential
+
+        captured = []
+
+        class StatusAgentSpy:
+            def __init__(self, collector, transport, **kwargs):
+                captured.append(kwargs)
+                self.transport = transport
+
+            async def sync_time(self):
+                pass
+
+            async def tick(self, status=None):
+                self.transport._connected = False
+
+        voice_service = type(
+            "VoiceSession",
+            (),
+            {
+                "state": VoiceState.ERROR,
+                "prepare": lambda self: asyncio.sleep(0, result=VoiceState.ERROR),
+                "disconnect": lambda self: asyncio.sleep(0),
+            },
+        )()
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            transport_factory=FakeTransportFactory([{}]),
+            secure_authorizer=Authorizer(),
+            voice_session_factory=lambda key, key_epoch: voice_service,
+        )
+
+        with patch("runtime.CodexStatusAgent", StatusAgentSpy):
+            result = await runtime._run_session()
+
+        self.assertEqual(result, "disconnected")
+        self.assertEqual(
+            captured,
+            [{"detail_key": credential.master_key, "detail_key_epoch": 9}],
+        )
+
+    async def test_active_rekey_rotates_status_agent_detail_credential(self):
+        original = WatchCredential(
+            bytes(range(16)),
+            b"K" * 16,
+            9,
+            b"F" * 16,
+            b"\x02" + b"W" * 32,
+        )
+        updated = WatchCredential(
+            original.watch_id,
+            b"N" * 16,
+            10,
+            original.fingerprint,
+            original.watch_identity_public,
+        )
+
+        class Authorizer:
+            async def authorize(self, transport, publish):
+                return original
+
+        rotations = []
+
+        class StatusAgentSpy:
+            def __init__(self, collector, transport, **kwargs):
+                self.transport = transport
+
+            async def sync_time(self):
+                pass
+
+            async def tick(self, status=None):
+                pass
+
+            def update_detail_credential(self, key, epoch):
+                rotations.append((key, epoch))
+
+        class RekeyRuntime(AgentRuntime):
+            async def _refresh_secure_credential(self, context):
+                context.credential = updated
+                context.voice_key = updated.master_key
+                context.voice_key_epoch = updated.key_epoch
+                context.transport._connected = False
+
+        voice_service = type(
+            "VoiceSession",
+            (),
+            {
+                "state": VoiceState.ERROR,
+                "prepare": lambda self: asyncio.sleep(0, result=VoiceState.ERROR),
+                "disconnect": lambda self: asyncio.sleep(0),
+            },
+        )()
+        runtime = RekeyRuntime(
+            collector=FakeCollector(),
+            transport_factory=FakeTransportFactory([{}]),
+            secure_authorizer=Authorizer(),
+            voice_session_factory=lambda key, key_epoch: voice_service,
+            status_interval=0,
+        )
+
+        with patch("runtime.CodexStatusAgent", StatusAgentSpy):
+            result = await runtime._run_session()
+
+        self.assertEqual(result, "disconnected")
+        self.assertEqual(rotations, [(updated.master_key, updated.key_epoch)])
+
     async def test_rollout_change_publishes_before_long_heartbeat(self):
         class ChangeCollector(FakeCollector):
             def __init__(self):

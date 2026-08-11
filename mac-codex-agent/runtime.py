@@ -706,7 +706,12 @@ class AgentRuntime:
                 context.voice_key = credential.master_key
                 context.voice_key_epoch = credential.key_epoch
             self._transition(ConnectionState.CONNECTED)
-            status_agent = CodexStatusAgent(self._collector, transport)
+            status_agent = CodexStatusAgent(
+                self._collector,
+                transport,
+                detail_key=context.voice_key,
+                detail_key_epoch=context.voice_key_epoch,
+            )
             await status_agent.sync_time()
             await self._prepare_voice(context)
             if self._status_ready is not None:
@@ -720,7 +725,19 @@ class AgentRuntime:
                     await self._isolate_voice_failure(context, failure)
                 sent_generation = self._status_generation
                 await status_agent.tick(status=dict(self._latest_status))
+                detail_credential = (
+                    context.voice_key,
+                    context.voice_key_epoch,
+                )
                 await self._refresh_secure_credential(context)
+                if detail_credential != (
+                    context.voice_key,
+                    context.voice_key_epoch,
+                ):
+                    status_agent.update_detail_credential(
+                        context.voice_key,
+                        context.voice_key_epoch,
+                    )
                 failure = await self._wait_for_status_interval(
                     transport,
                     ignore_voice_failure=context.voice_failed,

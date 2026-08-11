@@ -13,6 +13,7 @@ from voice_input_crypto import (  # noqa: E402
     PTT_BEGIN_DOMAIN,
     PTT_END_DOMAIN,
     READY_DOMAIN,
+    TASK_DETAIL_DOMAIN,
     UNAVAILABLE_DOMAIN,
     VOICE_ERROR_DOMAIN,
     VoiceKeyError,
@@ -36,6 +37,7 @@ class VoiceInputCryptoTests(unittest.TestCase):
             AUDIO_DOMAIN,
             PTT_END_DOMAIN,
             VOICE_ERROR_DOMAIN,
+            TASK_DETAIL_DOMAIN,
         )
         for domain in domains:
             with self.subTest(domain=domain):
