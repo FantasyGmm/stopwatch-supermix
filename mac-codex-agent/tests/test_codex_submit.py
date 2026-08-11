@@ -357,9 +357,6 @@ class PreparedCodexSubmissionTests(unittest.TestCase):
         if error != ApplicationServices.kAXErrorSuccess:
             self.skipTest("Could not read focused Accessibility attributes")
 
-        self.assertIn("ChromeAXNodeId", attribute_names)
-        self.assertNotIn("AXChromeAXNodeId", attribute_names)
-
         def read(attribute):
             error, value = ApplicationServices.AXUIElementCopyAttributeValue(
                 focused, attribute, None
@@ -379,6 +376,9 @@ class PreparedCodexSubmissionTests(unittest.TestCase):
             and "ProseMirror" in class_values
         ):
             self.skipTest("focused Codex element is not the task composer")
+
+        self.assertIn("ChromeAXNodeId", attribute_names)
+        self.assertNotIn("AXChromeAXNodeId", attribute_names)
 
         adapter = MacOSCodexAccessibility()
         current = adapter.snapshot()

@@ -12,6 +12,8 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 RUNNER = ROOT / "scripts/run_unified_offline_validation.sh"
 README = ROOT / "mac-codex-agent/README.md"
+PROJECT_README = ROOT / "README.md"
+VALIDATION = ROOT / "VALIDATION.md"
 PROBE_DOC = ROOT / "docs/ble-voice-link-probe.md"
 
 EXPECTED_HOST_TESTS = (
@@ -38,6 +40,7 @@ EXPECTED_HOST_TESTS = (
     "trae_status_model_test",
     "trae_task_carousel_test",
     "codex_status_model_test",
+    "codex_button_gesture_test",
     "status_page_swipe_logic_test",
     "trae_card_tap_logic_test",
     "display_protection_config_test",
@@ -57,6 +60,8 @@ EXPECTED_HOST_TESTS = (
     "voice_probe_crypto_test",
     "voice_input_crypto_test",
     "voice_input_protocol_test",
+    "input_action_protocol_test",
+    "input_action_controller_test",
     "voice_input_session_test",
     "voice_capture_pipeline_test",
     "voice_input_controller_test",
@@ -193,7 +198,11 @@ output.chmod(0o700)
 
         self.assertGreater(len(stages), 0)
         total = stages[0][1]
-        self.assertEqual(total, 47)
+        runner = RUNNER.read_text(encoding="utf-8")
+        declared_total = re.search(r"^TOTAL_STAGES=(\d+)$", runner, re.MULTILINE)
+        self.assertIsNotNone(declared_total)
+        self.assertEqual(total, int(declared_total.group(1)))
+        self.assertEqual(total, 50)
         self.assertEqual(len(stages), total)
         self.assertEqual([stage[0] for stage in stages], list(range(1, total + 1)))
         self.assertEqual({stage[1] for stage in stages}, {total})
@@ -230,6 +239,21 @@ output.chmod(0o700)
                 "main/apps/app_codex_status/voice_input_protocol.cpp",
                 "main/apps/app_codex_status/voice_input_crypto.cpp",
             },
+            "codex_button_gesture_test": {
+                "tests/codex_button_gesture_test.cpp",
+                "main/apps/app_codex_status/codex_button_gesture.cpp",
+            },
+            "input_action_protocol_test": {
+                "tests/input_action_protocol_test.cpp",
+                "main/apps/app_codex_status/input_action_protocol.cpp",
+                "main/apps/app_codex_status/voice_input_crypto.cpp",
+            },
+            "input_action_controller_test": {
+                "tests/input_action_controller_test.cpp",
+                "main/apps/app_codex_status/input_action_controller.cpp",
+                "main/apps/app_codex_status/input_action_protocol.cpp",
+                "main/apps/app_codex_status/voice_input_crypto.cpp",
+            },
             "voice_input_session_test": {
                 "tests/voice_input_session_test.cpp",
                 "main/apps/app_codex_status/voice_input_session.cpp",
@@ -241,6 +265,7 @@ output.chmod(0o700)
             "voice_input_controller_test": {
                 "tests/voice_input_controller_test.cpp",
                 "main/apps/app_codex_status/voice_input_controller.cpp",
+                "main/apps/app_codex_status/codex_button_gesture.cpp",
                 "main/apps/app_codex_status/voice_capture_pipeline.cpp",
                 "main/apps/app_codex_status/voice_input_session.cpp",
                 "main/apps/app_codex_status/voice_input_protocol.cpp",
@@ -313,8 +338,12 @@ output.chmod(0o700)
 
     def test_user_and_diagnostic_docs_cover_the_production_contract(self):
         readme = README.read_text(encoding="utf-8")
+        project_readme = PROJECT_README.read_text(encoding="utf-8")
+        validation = VALIDATION.read_text(encoding="utf-8")
         probe = PROBE_DOC.read_text(encoding="utf-8")
         normalized_readme = " ".join(readme.split())
+        normalized_project_readme = " ".join(project_readme.split())
+        normalized_validation = " ".join(validation.split())
         normalized_probe = " ".join(probe.split())
 
         for text in (
@@ -349,6 +378,32 @@ output.chmod(0o700)
         self.assertIn("normal `StopWatch-Codex` identity", normalized_probe)
         self.assertIn("physical acceptance", normalized_probe)
         self.assertIn("--host-tests-only", normalized_probe)
+
+        button_contract = (
+            "Inside the watch Codex app, an upper-right single click submits after "
+            "the 300 ms double-click window. A fast double click steers the running "
+            "turn, or sends once when idle. Holding beyond 90 ms still controls "
+            "Typeless."
+        )
+        for document in (
+            normalized_project_readme,
+            normalized_readme,
+            normalized_validation,
+        ):
+            self.assertIn(button_contract, document)
+            self.assertIn("com.openai.codex", document)
+            self.assertIn("A+B Home", document)
+            self.assertIn("does not activate Codex", document)
+            self.assertIn("independent of voice readiness", document)
+
+        for safety_fact in (
+            "AXPress",
+            "Command+Shift+Return",
+            "CGEventPostToPid",
+            "16 English and Simplified Chinese composer descriptions",
+            "same-process foreground race",
+        ):
+            self.assertIn(safety_fact, normalized_validation)
 
 
 if __name__ == "__main__":

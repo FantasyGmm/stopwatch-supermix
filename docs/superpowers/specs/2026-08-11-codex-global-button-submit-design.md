@@ -67,8 +67,22 @@ For `Submit`, the controller invokes the current normal submit behavior. For
 - running turn whose normal action is Queue: invoke the alternate submit
   shortcut that performs Steer.
 
-The controller uses semantic Accessibility state before synthesizing a
-shortcut. It never sends an unqualified Return key to an unknown focus target.
+The production adapter accepts only the real Codex task-composer shape: an
+editable `AXTextArea` with `ProseMirror`, a description from the current 16-ID
+English/Simplified-Chinese allowlist, stable `ChromeAXNodeId` tokens, and the
+`_RichTextInput_ -> _ComposerLayoutBody_` ancestor chain. A unique enabled
+Send, Queue, or Steer button must be present inside the bounded local subtree.
+
+Immediately before dispatch, the adapter revalidates the foreground PID,
+composer and button tokens, text, and semantics. Normal Send, Queue, and Steer
+invoke `AXPress` on that verified button. Only Queue-to-forced-Steer emits a
+complete Command+Shift+Return down/up pair through `CGEventPostToPid` for the
+verified Codex PID. It never sends an unqualified Return key to an unknown focus
+target and never activates Codex.
+
+Accessibility revalidation and event delivery cannot be atomic. A same-process
+focus change inside Codex after the final check is a residual race; at-most-once
+delivery and no retry prevent an ambiguous result from becoming a duplicate.
 
 ## Data Flow
 
@@ -99,6 +113,9 @@ readiness only gate push-to-talk; they do not gate button submission.
   app close.
 - Do not queue an action across reconnects and do not retry after an ambiguous
   desktop outcome; at-most-once submission is safer than duplicate submission.
+- Treat the residual same-PID focus race between Accessibility revalidation and
+  event delivery as bounded but unavoidable; `CGEventPostToPid` prevents
+  cross-application delivery but not a later focus change within Codex.
 
 ## Testing
 
