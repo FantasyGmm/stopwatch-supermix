@@ -468,6 +468,10 @@ class CodexStateCollectorTests(unittest.TestCase):
         self.assertNotIn("codex_alert_handled", snapshot)
         self.assertEqual(snapshot["codex_alert_revision"], 4)
         self.assertEqual(
+            snapshot["_codex_watch_notification_ids"],
+            ("thread-a:1",),
+        )
+        self.assertEqual(
             snapshot["codex_alerts"],
             [
                 {

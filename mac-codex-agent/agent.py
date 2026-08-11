@@ -136,6 +136,12 @@ class CodexStatusAgent:
     async def tick(self, status=None):
         if status is None:
             status = await asyncio.to_thread(self.collector.get_state)
+        raw_alert_ids = status.get("_codex_watch_notification_ids")
+        alert_ids = (
+            tuple(raw_alert_ids)
+            if isinstance(raw_alert_ids, (list, tuple))
+            else ()
+        )
         watch_status = _watch_codex_status(status)
         await self.transport.send_json(
             json.dumps(
@@ -166,9 +172,6 @@ class CodexStatusAgent:
                 self._last_trae_fingerprint = fingerprint
                 self._last_trae_sent_at = now
 
-        alert_ids = await asyncio.to_thread(
-            self.collector.pending_watch_notification_ids
-        )
         if alert_ids:
             await self.transport.send_json(
                 json.dumps(

@@ -42,7 +42,11 @@ class FakeCollector:
 
     def get_state(self):
         self.calls += 1
-        return {"codex_model": "gpt-5.3", "codex_effort": "high"}
+        return {
+            "codex_model": "gpt-5.3",
+            "codex_effort": "high",
+            "_codex_watch_notification_ids": self.pending_ids,
+        }
 
     def pending_watch_notification_ids(self):
         return self.pending_ids
@@ -162,6 +166,41 @@ class CodexStatusAgentTests(unittest.TestCase):
         self.assertEqual(result, status)
         self.assertEqual(collector.calls, 0)
         self.assertEqual(transport.messages[0], (STATUS_MESSAGE, status))
+
+    def test_provided_status_cannot_chime_from_a_newer_live_ledger(self):
+        collector = FakeCollector()
+
+        class LedgerAdvancingTransport(FakeTransport):
+            async def send_json(self, payload, message_type):
+                await super().send_json(payload, message_type)
+                if message_type == STATUS_MESSAGE:
+                    collector.pending_ids = ("newer-alert",)
+
+        transport = LedgerAdvancingTransport()
+        agent = CodexStatusAgent(collector=collector, transport=transport)
+        status = {
+            "codex_alert_pending": 0,
+            "codex_alert_revision": 10,
+            "codex_alerts": [],
+            "_codex_watch_notification_ids": (),
+        }
+
+        asyncio.run(agent.tick(status=status))
+
+        self.assertEqual(
+            transport.messages,
+            [
+                (
+                    STATUS_MESSAGE,
+                    {
+                        "codex_alert_pending": 0,
+                        "codex_alert_revision": 10,
+                        "codex_alerts": [],
+                    },
+                )
+            ],
+        )
+        self.assertEqual(collector.notified, [])
 
     def test_watch_payload_limits_and_truncates_alerts(self):
         collector = FakeCollector()
