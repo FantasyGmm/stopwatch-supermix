@@ -5,7 +5,8 @@
 
 namespace {
 
-void testSingleClickSubmitsAfterDoubleClickWindow() {
+void testSingleClickSubmitsAfterDoubleClickWindow()
+{
     CodexButtonGesture gesture;
 
     assert(gesture.update(true, false, false, 100U) == CodexButtonAction::None);
@@ -14,7 +15,8 @@ void testSingleClickSubmitsAfterDoubleClickWindow() {
     assert(gesture.update(false, false, false, 401U) == CodexButtonAction::None);
 }
 
-void testDoubleClickForceSteersWithoutSubmittingFirstClick() {
+void testDoubleClickForceSteersWithoutSubmittingFirstClick()
+{
     CodexButtonGesture gesture;
 
     assert(gesture.update(true, false, false, 100U) == CodexButtonAction::None);
@@ -23,7 +25,8 @@ void testDoubleClickForceSteersWithoutSubmittingFirstClick() {
     assert(gesture.update(false, false, false, 202U) == CodexButtonAction::None);
 }
 
-void testSecondPressHoldCancelsPendingSubmit() {
+void testSecondPressHoldCancelsPendingSubmit()
+{
     CodexButtonGesture gesture;
 
     assert(gesture.update(true, false, false, 100U) == CodexButtonAction::None);
@@ -32,7 +35,8 @@ void testSecondPressHoldCancelsPendingSubmit() {
     assert(gesture.update(false, false, false, 500U) == CodexButtonAction::None);
 }
 
-void testSuppressionResetsPendingClick() {
+void testSuppressionResetsPendingClick()
+{
     CodexButtonGesture gesture;
 
     assert(gesture.update(true, false, false, 100U) == CodexButtonAction::None);
@@ -40,7 +44,8 @@ void testSuppressionResetsPendingClick() {
     assert(gesture.update(false, false, false, 500U) == CodexButtonAction::None);
 }
 
-void testLatchedSecondClickMayReleaseAfterDoubleClickBoundary() {
+void testLatchedSecondClickMayReleaseAfterDoubleClickBoundary()
+{
     CodexButtonGesture gesture;
 
     assert(gesture.update(true, false, false, 100U) == CodexButtonAction::None);
@@ -48,7 +53,8 @@ void testLatchedSecondClickMayReleaseAfterDoubleClickBoundary() {
     assert(gesture.update(true, false, false, 450U) == CodexButtonAction::ForceSteer);
 }
 
-void testSingleClickExpiryHandlesUnsignedTimerWrap() {
+void testSingleClickExpiryHandlesUnsignedTimerWrap()
+{
     CodexButtonGesture gesture;
     constexpr uint32_t first_click_ms = UINT32_MAX - 100U;
 
@@ -57,7 +63,8 @@ void testSingleClickExpiryHandlesUnsignedTimerWrap() {
     assert(gesture.update(false, false, false, 199U) == CodexButtonAction::Submit);
 }
 
-void testResetClearsAllPendingState() {
+void testResetClearsAllPendingState()
+{
     CodexButtonGesture gesture;
 
     assert(gesture.update(true, false, false, 100U) == CodexButtonAction::None);
@@ -68,7 +75,8 @@ void testResetClearsAllPendingState() {
 
 }  // namespace
 
-int main() {
+int main()
+{
     testSingleClickSubmitsAfterDoubleClickWindow();
     testDoubleClickForceSteersWithoutSubmittingFirstClick();
     testSecondPressHoldCancelsPendingSubmit();

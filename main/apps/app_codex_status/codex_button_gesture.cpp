@@ -1,6 +1,7 @@
 #include "codex_button_gesture.h"
 
-void CodexButtonGesture::reset() {
+void CodexButtonGesture::reset()
+{
     _single_pending = false;
     _second_press_latched = false;
     _first_click_ms = 0;
@@ -10,7 +11,8 @@ CodexButtonAction CodexButtonGesture::update(bool short_click,
                                               bool right_pressed,
                                               bool hold_started,
                                               uint32_t now_ms,
-                                              bool suppressed) {
+                                              bool suppressed)
+{
     if (suppressed || hold_started) {
         reset();
         return CodexButtonAction::None;

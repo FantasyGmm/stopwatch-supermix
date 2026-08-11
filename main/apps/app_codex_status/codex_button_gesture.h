@@ -9,7 +9,7 @@ enum class CodexButtonAction : uint8_t {
 };
 
 class CodexButtonGesture {
-   public:
+public:
     static constexpr uint32_t kDoubleClickMs = 300;
 
     void reset();
@@ -17,7 +17,7 @@ class CodexButtonGesture {
                              bool hold_started, uint32_t now_ms,
                              bool suppressed = false);
 
-   private:
+private:
     bool _single_pending = false;
     bool _second_press_latched = false;
     uint32_t _first_click_ms = 0;
