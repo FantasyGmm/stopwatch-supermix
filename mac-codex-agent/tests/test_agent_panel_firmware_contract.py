@@ -32,6 +32,23 @@ class AgentPanelFirmwareContractTests(unittest.TestCase):
         )
         self.assertIn("_agent_panel_model.owns_touch()", source)
 
+    def test_panel_exclusively_owns_vertical_gestures_while_visible(self):
+        source = (
+            ROOT / "main/apps/app_codex_status/app_codex_status.cpp"
+        ).read_text()
+        render = source.split(
+            "void AppCodexStatus::render_agent_panel()", 1
+        )[1].split("void AppCodexStatus::update_agent_panel_touch", 1)[0]
+        close = source.split("void AppCodexStatus::onClose()", 1)[1].split(
+            "void AppCodexStatus::create_view()", 1
+        )[0]
+
+        self.assertIn(
+            "GetGlobalEdgeControlService().setEnabled(!snapshot.visible)",
+            render,
+        )
+        self.assertIn("GetGlobalEdgeControlService().setEnabled(true)", close)
+
     def test_panel_has_request_switch_delete_and_reset_controls(self):
         source = (
             ROOT / "main/apps/app_codex_status/app_codex_status.cpp"

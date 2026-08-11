@@ -645,6 +645,7 @@ void AppCodexStatus::onClose()
     clear_pairing_runtime();
 
     LvglLockGuard lock;
+    GetGlobalEdgeControlService().setEnabled(true);
     destroy_view();
     _alert_carousel.reset();
     _trae_carousel.reset();
@@ -1291,6 +1292,7 @@ void AppCodexStatus::render_agent_panel()
         return;
     }
     const AgentPanelSnapshot snapshot = _agent_panel_model.snapshot();
+    GetGlobalEdgeControlService().setEnabled(!snapshot.visible);
     lv_obj_set_y(
         _agent_panel_root,
         snapshot.visible ? kAgentPanelVisibleY : kAgentPanelHiddenY);
