@@ -55,7 +55,6 @@ constexpr int kPageWidth                 = 466;
 constexpr int kPageCount                 = 2;
 constexpr int kAgentPanelHiddenY         = -430;
 constexpr int kAgentPanelVisibleY        = 0;
-constexpr int kAgentPanelRowHeight       = 40;
 
 bool fill_agent_entropy(void*, uint8_t* output, size_t size)
 {
@@ -335,6 +334,12 @@ void AppCodexStatus::onOpen()
     _agent_panel_dirty = false;
     _agent_switch_pending = false;
     _agent_switch_target = {};
+    _agent_reset_hold_started_ms = 0;
+    _agent_panel_notice_until_ms = 0;
+    _agent_reset_hold_active = false;
+    _agent_reset_hold_queued = false;
+    _agent_pairing_expired = false;
+    _agent_panel_notice = {};
     clear_pairing_runtime();
     {
         std::lock_guard<std::mutex> decision_lock(_agent_decision_mutex);
@@ -462,6 +467,7 @@ void AppCodexStatus::onRunning()
             render_agent_panel();
             _agent_panel_dirty = false;
         }
+        update_agent_panel_runtime(now);
         update_agent_panel_touch(now);
         if (_agent_panel_model.owns_touch()) {
             _page_swipe.cancel();
@@ -884,7 +890,9 @@ void AppCodexStatus::create_view()
     lv_obj_set_style_border_width(_agent_panel_root, 0, 0);
     lv_obj_set_style_pad_all(_agent_panel_root, 0, 0);
     lv_obj_set_style_bg_color(
-        _agent_panel_root, lv_color_hex(kPanelGraphite), 0);
+        _agent_panel_root,
+        lv_color_hex(agent_panel_ui::kBackground),
+        0);
     lv_obj_set_style_bg_opa(_agent_panel_root, LV_OPA_COVER, 0);
     lv_obj_clear_flag(_agent_panel_root, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_move_foreground(_agent_panel_root);
@@ -939,14 +947,36 @@ void AppCodexStatus::destroy_view()
     _host_label     = nullptr;
     _pet_image      = nullptr;
     _agent_panel_root = nullptr;
+    _agent_rail = nullptr;
+    _agent_focus_band_left = nullptr;
+    _agent_focus_band_right = nullptr;
+    _agent_focus_marker = nullptr;
+    _agent_count_label = nullptr;
+    _agent_panel_notice_label = nullptr;
+    _agent_pairing_countdown_label = nullptr;
+    _agent_reset_progress = nullptr;
+    _agent_pairing_countdown_label = nullptr;
+    _agent_reset_progress = nullptr;
+    _agent_row_wrappers = {};
     _agent_row_buttons = {};
     _agent_delete_buttons = {};
+    _agent_row_names = {};
+    _agent_row_states = {};
+    _agent_row_dots = {};
     _agent_allow_button = nullptr;
     _agent_allow_switch_button = nullptr;
     _agent_reject_button = nullptr;
+    _agent_dismiss_button = nullptr;
     _agent_reset_button = nullptr;
     _agent_confirm_button = nullptr;
     _agent_cancel_button = nullptr;
+    _agent_revealed_delete_index = -1;
+    _agent_reset_hold_started_ms = 0;
+    _agent_panel_notice_until_ms = 0;
+    _agent_reset_hold_active = false;
+    _agent_reset_hold_queued = false;
+    _agent_pairing_expired = false;
+    _agent_panel_notice = {};
     _pet_frame      = 0;
 }
 
@@ -1293,42 +1323,100 @@ void AppCodexStatus::render_agent_panel()
         return;
     }
     const AgentPanelSnapshot snapshot = _agent_panel_model.snapshot();
+    if (snapshot.confirmation != AgentPanelConfirmation::ResetAll) {
+        _agent_reset_hold_started_ms = 0;
+        _agent_reset_hold_active = false;
+        _agent_reset_hold_queued = false;
+    }
     lv_obj_clean(_agent_panel_root);
+    _agent_rail = nullptr;
+    _agent_focus_band_left = nullptr;
+    _agent_focus_band_right = nullptr;
+    _agent_focus_marker = nullptr;
+    _agent_count_label = nullptr;
+    _agent_panel_notice_label = nullptr;
+    _agent_row_wrappers = {};
     _agent_row_buttons = {};
     _agent_delete_buttons = {};
+    _agent_row_names = {};
+    _agent_row_states = {};
+    _agent_row_dots = {};
     _agent_allow_button = nullptr;
     _agent_allow_switch_button = nullptr;
     _agent_reject_button = nullptr;
+    _agent_dismiss_button = nullptr;
     _agent_reset_button = nullptr;
     _agent_confirm_button = nullptr;
     _agent_cancel_button = nullptr;
+    _agent_revealed_delete_index = -1;
+
+    lv_obj_t* drag_handle = lv_obj_create(_agent_panel_root);
+    lv_obj_set_pos(
+        drag_handle,
+        agent_panel_ui::kDragHandle.x,
+        agent_panel_ui::kDragHandle.y);
+    lv_obj_set_size(
+        drag_handle,
+        agent_panel_ui::kDragHandle.w,
+        agent_panel_ui::kDragHandle.h);
+    lv_obj_set_style_radius(drag_handle, 2, 0);
+    lv_obj_set_style_border_width(drag_handle, 0, 0);
+    lv_obj_set_style_bg_color(
+        drag_handle, lv_color_hex(agent_panel_ui::kSecondaryText), 0);
+    lv_obj_set_style_bg_opa(drag_handle, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(drag_handle, LV_OBJ_FLAG_SCROLLABLE);
 
     make_center_label(
         _agent_panel_root,
         "AGENTS",
-        10,
-        &lv_font_montserrat_18,
-        kSignalWhite);
+        34,
+        &lv_font_montserrat_16,
+        agent_panel_ui::kPrimaryText);
+
+    if (snapshot.confirmation == AgentPanelConfirmation::None &&
+        !snapshot.request.present) {
+        char count_text[24] = {};
+        std::snprintf(
+            count_text,
+            sizeof(count_text),
+            "%u PAIRED",
+            static_cast<unsigned>(snapshot.count));
+        _agent_count_label = make_center_label(
+            _agent_panel_root,
+            count_text,
+            58,
+            &lv_font_montserrat_14,
+            agent_panel_ui::kSecondaryText);
+    }
 
     auto make_button = [this](
+                           lv_obj_t* parent,
                            const char* text,
                            int x,
                            int y,
                            int width,
                            int height,
-                           uint32_t color) {
-        lv_obj_t* button = lv_button_create(_agent_panel_root);
+                           uint32_t color,
+                           bool filled = true) {
+        lv_obj_t* button = lv_button_create(parent);
         lv_obj_set_size(button, width, height);
         lv_obj_set_pos(button, x, y);
-        lv_obj_set_style_radius(button, 8, 0);
-        lv_obj_set_style_border_width(button, 0, 0);
+        lv_obj_set_style_radius(button, height / 2, 0);
+        lv_obj_set_style_border_width(button, filled ? 0 : 1, 0);
+        lv_obj_set_style_border_color(button, lv_color_hex(color), 0);
         lv_obj_set_style_bg_color(button, lv_color_hex(color), 0);
-        lv_obj_set_style_bg_opa(button, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_opa(
+            button, filled ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
         lv_obj_t* label = lv_label_create(button);
         lv_label_set_text(label, text);
         lv_obj_set_style_text_font(label, &lv_font_montserrat_14, 0);
         lv_obj_set_style_text_color(
-            label, lv_color_hex(kSignalWhite), 0);
+            label,
+            lv_color_hex(
+                filled
+                    ? agent_panel_ui::kPrimaryText
+                    : color),
+            0);
         lv_obj_center(label);
         lv_obj_add_event_cb(
             button,
@@ -1339,113 +1427,674 @@ void AppCodexStatus::render_agent_panel()
     };
 
     if (snapshot.confirmation != AgentPanelConfirmation::None) {
-        const char* title =
-            snapshot.confirmation == AgentPanelConfirmation::DeleteAgent
-                ? "Delete Agent?"
-                : "Reset All Agents?";
+        const bool deleting =
+            snapshot.confirmation == AgentPanelConfirmation::DeleteAgent;
+        const char* title = deleting
+            ? "Delete Agent?"
+            : "Reset all Agents?";
         make_center_label(
             _agent_panel_root,
             title,
-            150,
+            deleting ? 142 : 140,
             &lv_font_montserrat_22,
-            kSignalWhite);
-        _agent_confirm_button = make_button(
-            "Confirm", 62, 230, 160, 54, kAlertVermilion);
-        _agent_cancel_button = make_button(
-            "Cancel", 244, 230, 160, 54, kEtchedGray);
+            agent_panel_ui::kPrimaryText);
+        if (deleting) {
+            for (size_t index = 0; index < snapshot.count; ++index) {
+                if (snapshot.rows[index].fingerprint ==
+                    snapshot.confirmation_fingerprint) {
+                    make_center_label(
+                        _agent_panel_root,
+                        snapshot.rows[index].display_name.data(),
+                        180,
+                        is_ascii_text(
+                            snapshot.rows[index].display_name.data())
+                            ? &lv_font_montserrat_18
+                            : &font_puhui_14_1,
+                        agent_panel_ui::kSecondaryText);
+                    break;
+                }
+            }
+            _agent_confirm_button = make_button(
+                _agent_panel_root,
+                "Delete",
+                82,
+                240,
+                302,
+                54,
+                agent_panel_ui::kDestructive);
+            _agent_cancel_button = make_button(
+                _agent_panel_root,
+                "Cancel",
+                133,
+                310,
+                200,
+                48,
+                agent_panel_ui::kSecondaryText,
+                false);
+        } else {
+            lv_obj_t* explanation = make_center_label(
+                _agent_panel_root,
+                "This removes every paired Agent\nand rotates credentials.",
+                178,
+                &lv_font_montserrat_14,
+                agent_panel_ui::kSecondaryText);
+            lv_obj_set_width(explanation, 302);
+            lv_obj_set_style_text_align(
+                explanation, LV_TEXT_ALIGN_CENTER, 0);
+            _agent_confirm_button = make_button(
+                _agent_panel_root,
+                "Hold to reset",
+                92,
+                250,
+                282,
+                58,
+                agent_panel_ui::kDestructive);
+            lv_obj_set_style_bg_opa(
+                _agent_confirm_button, LV_OPA_20, 0);
+            lv_obj_set_style_pad_all(_agent_confirm_button, 0, 0);
+            _agent_reset_progress = lv_obj_create(_agent_confirm_button);
+            lv_obj_set_pos(_agent_reset_progress, 0, 0);
+            lv_obj_set_size(_agent_reset_progress, 0, 58);
+            lv_obj_set_style_radius(_agent_reset_progress, 29, 0);
+            lv_obj_set_style_border_width(_agent_reset_progress, 0, 0);
+            lv_obj_set_style_bg_color(
+                _agent_reset_progress,
+                lv_color_hex(agent_panel_ui::kDestructive),
+                0);
+            lv_obj_set_style_bg_opa(
+                _agent_reset_progress, LV_OPA_COVER, 0);
+            lv_obj_clear_flag(
+                _agent_reset_progress, LV_OBJ_FLAG_SCROLLABLE);
+            lv_obj_clear_flag(
+                _agent_reset_progress, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_move_to_index(_agent_reset_progress, 0);
+            lv_obj_add_event_cb(
+                _agent_confirm_button,
+                AppCodexStatus::agent_reset_hold_event_cb,
+                LV_EVENT_ALL,
+                this);
+            _agent_cancel_button = make_button(
+                _agent_panel_root,
+                "Cancel",
+                153,
+                326,
+                160,
+                48,
+                agent_panel_ui::kSecondaryText,
+                false);
+        }
     } else if (snapshot.request.present) {
         make_center_label(
             _agent_panel_root,
-            snapshot.request.display_name.data(),
-            75,
-            &lv_font_montserrat_18,
-            kSignalWhite);
+            "PAIRING REQUEST",
+            56,
+            &lv_font_montserrat_14,
+            agent_panel_ui::kRequesting);
         make_center_label(
             _agent_panel_root,
-            snapshot.request.verification_code.data(),
-            120,
-            &lv_font_montserrat_28,
-            kBeaconViolet);
-        _agent_allow_button = make_button(
-            "Allow", 30, 200, 126, 52, kHandledGreen);
-        _agent_allow_switch_button = make_button(
-            "Allow + Switch", 170, 200, 190, 52, kBeaconViolet);
-        _agent_reject_button = make_button(
-            "Reject", 374, 200, 76, 52, kAlertVermilion);
-    } else {
-        for (size_t index = 0; index < snapshot.count; ++index) {
-            const AgentPanelRow& row = snapshot.rows[index];
-            const int y =
-                46 + static_cast<int>(index) * kAgentPanelRowHeight;
-            uint32_t row_color = 0x303238;
-            const char* state = "Offline";
-            uint32_t state_color = kEtchedGray;
-            if (row.state == AgentPanelRowState::Connected) {
-                state = "Connected";
-                state_color = kHandledGreen;
-                row_color = 0x26382F;
-            } else if (row.state == AgentPanelRowState::Requesting) {
-                state = "Requesting";
-                state_color = kBeaconViolet;
-                row_color = 0x302B43;
-            }
-            lv_obj_t* row_button = lv_button_create(_agent_panel_root);
-            _agent_row_buttons[index] = row_button;
-            lv_obj_set_size(row_button, 382, 34);
-            lv_obj_set_pos(row_button, 12, y);
-            lv_obj_set_style_radius(row_button, 6, 0);
-            lv_obj_set_style_border_width(row_button, 0, 0);
-            lv_obj_set_style_bg_color(
-                row_button, lv_color_hex(row_color), 0);
-            lv_obj_add_event_cb(
-                row_button,
-                AppCodexStatus::agent_panel_event_cb,
-                LV_EVENT_CLICKED,
-                this);
-            lv_obj_t* name = make_label(
-                row_button,
-                row.display_name.data(),
-                8,
-                4,
-                &lv_font_montserrat_14,
-                kSignalWhite);
-            lv_obj_set_width(name, 225);
-            lv_label_set_long_mode(name, LV_LABEL_LONG_MODE_DOTS);
-            lv_obj_t* state_label = make_label(
-                row_button,
-                state,
-                242,
-                4,
-                &lv_font_montserrat_14,
-                state_color);
-            lv_obj_set_width(state_label, 120);
-            lv_obj_set_style_text_align(
-                state_label, LV_TEXT_ALIGN_RIGHT, 0);
-            _agent_delete_buttons[index] = make_button(
-                "×", 402, y, 50, 34, kAlertVermilion);
+            snapshot.request.display_name.data(),
+            88,
+            is_ascii_text(snapshot.request.display_name.data())
+                ? &lv_font_montserrat_22
+                : &font_puhui_14_1,
+            agent_panel_ui::kPrimaryText);
+        make_center_label(
+            _agent_panel_root,
+            _agent_pairing_expired
+                ? "Request expired"
+                : "Match this code on your Mac",
+            124,
+            &lv_font_montserrat_14,
+            agent_panel_ui::kSecondaryText);
+        char grouped_code[8] = {};
+        const char* raw_code = snapshot.request.verification_code.data();
+        if (std::strlen(raw_code) >= 6) {
+            std::snprintf(
+                grouped_code,
+                sizeof(grouped_code),
+                "%.3s %.3s",
+                raw_code,
+                raw_code + 3);
+        } else {
+            std::snprintf(grouped_code, sizeof(grouped_code), "%s", raw_code);
         }
+        make_center_label(
+            _agent_panel_root,
+            grouped_code,
+            164,
+            &lv_font_montserrat_36,
+            _agent_pairing_expired
+                ? agent_panel_ui::kSecondaryText
+                : agent_panel_ui::kPrimaryText);
+        _agent_pairing_countdown_label = make_center_label(
+            _agent_panel_root,
+            "--s remaining",
+            210,
+            &lv_font_montserrat_14,
+            agent_panel_ui::kRequesting);
+        if (_agent_pairing_expired) {
+            _agent_dismiss_button = make_button(
+                _agent_panel_root,
+                "Dismiss",
+                133,
+                302,
+                200,
+                48,
+                agent_panel_ui::kSecondaryText,
+                false);
+        } else {
+            _agent_allow_button = make_button(
+                _agent_panel_root,
+                "Allow",
+                82,
+                302,
+                302,
+                50,
+                agent_panel_ui::kPairing,
+                false);
+            _agent_allow_switch_button = make_button(
+                _agent_panel_root,
+                "Allow + Switch",
+                82,
+                236,
+                302,
+                54,
+                agent_panel_ui::kPairing);
+            _agent_reject_button = make_button(
+                _agent_panel_root,
+                "Reject",
+                133,
+                364,
+                200,
+                46,
+                agent_panel_ui::kDestructive,
+                false);
+        }
+    } else {
         if (snapshot.count == 0) {
             make_center_label(
                 _agent_panel_root,
                 "No paired Agents",
-                175,
-                &lv_font_montserrat_18,
-                kEtchedGray);
+                192,
+                &lv_font_montserrat_20,
+                agent_panel_ui::kPrimaryText);
+            lv_obj_t* helper = make_center_label(
+                _agent_panel_root,
+                "Open StopWatch Codex Agent on a Mac to pair",
+                230,
+                &lv_font_montserrat_14,
+                agent_panel_ui::kSecondaryText);
+            lv_obj_set_width(helper, 300);
+            lv_obj_set_style_text_align(helper, LV_TEXT_ALIGN_CENTER, 0);
+        } else {
+            const int half_width = agent_panel_ui::kFocusBand.w / 2;
+            _agent_focus_band_left = lv_obj_create(_agent_panel_root);
+            lv_obj_set_pos(
+                _agent_focus_band_left,
+                agent_panel_ui::kFocusBand.x,
+                agent_panel_ui::kFocusBand.y);
+            lv_obj_set_size(
+                _agent_focus_band_left,
+                half_width,
+                agent_panel_ui::kFocusBand.h);
+            lv_obj_set_style_radius(_agent_focus_band_left, 0, 0);
+            lv_obj_set_style_border_width(_agent_focus_band_left, 0, 0);
+            lv_obj_set_style_bg_color(
+                _agent_focus_band_left,
+                lv_color_hex(agent_panel_ui::kBackground),
+                0);
+            lv_obj_set_style_bg_grad_color(
+                _agent_focus_band_left,
+                lv_color_hex(agent_panel_ui::kSelection),
+                0);
+            lv_obj_set_style_bg_grad_dir(
+                _agent_focus_band_left, LV_GRAD_DIR_HOR, 0);
+            lv_obj_set_style_bg_opa(_agent_focus_band_left, LV_OPA_30, 0);
+            lv_obj_clear_flag(
+                _agent_focus_band_left, LV_OBJ_FLAG_SCROLLABLE);
+
+            _agent_focus_band_right = lv_obj_create(_agent_panel_root);
+            lv_obj_set_pos(
+                _agent_focus_band_right,
+                agent_panel_ui::kFocusBand.x + half_width,
+                agent_panel_ui::kFocusBand.y);
+            lv_obj_set_size(
+                _agent_focus_band_right,
+                agent_panel_ui::kFocusBand.w - half_width,
+                agent_panel_ui::kFocusBand.h);
+            lv_obj_set_style_radius(_agent_focus_band_right, 0, 0);
+            lv_obj_set_style_border_width(_agent_focus_band_right, 0, 0);
+            lv_obj_set_style_bg_color(
+                _agent_focus_band_right,
+                lv_color_hex(agent_panel_ui::kSelection),
+                0);
+            lv_obj_set_style_bg_grad_color(
+                _agent_focus_band_right,
+                lv_color_hex(agent_panel_ui::kBackground),
+                0);
+            lv_obj_set_style_bg_grad_dir(
+                _agent_focus_band_right, LV_GRAD_DIR_HOR, 0);
+            lv_obj_set_style_bg_opa(_agent_focus_band_right, LV_OPA_30, 0);
+            lv_obj_clear_flag(
+                _agent_focus_band_right, LV_OBJ_FLAG_SCROLLABLE);
+
+            _agent_focus_marker = lv_obj_create(_agent_panel_root);
+            lv_obj_set_pos(
+                _agent_focus_marker,
+                agent_panel_ui::kFocusMarker.x,
+                agent_panel_ui::kFocusMarker.y);
+            lv_obj_set_size(
+                _agent_focus_marker,
+                agent_panel_ui::kFocusMarker.w,
+                agent_panel_ui::kFocusMarker.h);
+            lv_obj_set_style_radius(_agent_focus_marker, 2, 0);
+            lv_obj_set_style_border_width(_agent_focus_marker, 0, 0);
+            lv_obj_set_style_bg_color(
+                _agent_focus_marker,
+                lv_color_hex(agent_panel_ui::kSelection),
+                0);
+            lv_obj_set_style_bg_opa(
+                _agent_focus_marker, LV_OPA_COVER, 0);
+            lv_obj_clear_flag(
+                _agent_focus_marker, LV_OBJ_FLAG_SCROLLABLE);
+
+            _agent_rail = lv_obj_create(_agent_panel_root);
+            lv_obj_set_pos(
+                _agent_rail,
+                agent_panel_ui::kRailViewport.x,
+                agent_panel_ui::kRailViewport.y);
+            lv_obj_set_size(
+                _agent_rail,
+                agent_panel_ui::kRailViewport.w,
+                agent_panel_ui::kRailViewport.h);
+            lv_obj_set_style_radius(_agent_rail, 0, 0);
+            lv_obj_set_style_border_width(_agent_rail, 0, 0);
+            lv_obj_set_style_bg_opa(_agent_rail, LV_OPA_TRANSP, 0);
+            lv_obj_set_style_pad_left(_agent_rail, 0, 0);
+            lv_obj_set_style_pad_right(_agent_rail, 0, 0);
+            lv_obj_set_style_pad_top(
+                _agent_rail,
+                (agent_panel_ui::kRailViewport.h -
+                    agent_panel_ui::kRailRowHeight) /
+                    2,
+                0);
+            lv_obj_set_style_pad_bottom(
+                _agent_rail,
+                (agent_panel_ui::kRailViewport.h -
+                    agent_panel_ui::kRailRowHeight) /
+                    2,
+                0);
+            lv_obj_set_style_pad_row(_agent_rail, 0, 0);
+            lv_obj_set_scroll_dir(_agent_rail, LV_DIR_VER);
+            lv_obj_set_scroll_snap_y(
+                _agent_rail, LV_SCROLL_SNAP_CENTER);
+            lv_obj_set_style_anim_duration(_agent_rail, 160, 0);
+            lv_obj_set_scrollbar_mode(
+                _agent_rail, LV_SCROLLBAR_MODE_OFF);
+            lv_obj_set_flex_flow(_agent_rail, LV_FLEX_FLOW_COLUMN);
+            lv_obj_set_flex_align(
+                _agent_rail,
+                LV_FLEX_ALIGN_START,
+                LV_FLEX_ALIGN_START,
+                LV_FLEX_ALIGN_START);
+            lv_obj_add_event_cb(
+                _agent_rail,
+                AppCodexStatus::agent_panel_scroll_event_cb,
+                LV_EVENT_SCROLL,
+                this);
+
+            size_t initial_focus = 0;
+            bool focus_found = false;
+            for (size_t index = 0; index < snapshot.count; ++index) {
+                const AgentPanelRow& row = snapshot.rows[index];
+                if (!focus_found &&
+                    row.state == AgentPanelRowState::Requesting) {
+                    initial_focus = index;
+                    focus_found = true;
+                } else if (!focus_found &&
+                    row.state == AgentPanelRowState::Connected) {
+                    initial_focus = index;
+                }
+
+                lv_obj_t* wrapper = lv_obj_create(_agent_rail);
+                _agent_row_wrappers[index] = wrapper;
+                lv_obj_set_size(
+                    wrapper,
+                    agent_panel_ui::kRailViewport.w,
+                    agent_panel_ui::kRailRowHeight);
+                lv_obj_set_style_radius(wrapper, 0, 0);
+                lv_obj_set_style_border_width(wrapper, 0, 0);
+                lv_obj_set_style_bg_opa(wrapper, LV_OPA_TRANSP, 0);
+                lv_obj_set_style_pad_all(wrapper, 0, 0);
+                lv_obj_clear_flag(wrapper, LV_OBJ_FLAG_SCROLLABLE);
+                lv_obj_add_flag(wrapper, LV_OBJ_FLAG_SNAPPABLE);
+
+                lv_obj_t* delete_button = make_button(
+                    wrapper,
+                    "Delete",
+                    agent_panel_ui::kRailViewport.w -
+                        agent_panel_ui::kDeleteRevealWidth,
+                    7,
+                    agent_panel_ui::kDeleteRevealWidth,
+                    44,
+                    agent_panel_ui::kDestructive,
+                    false);
+                _agent_delete_buttons[index] = delete_button;
+                lv_obj_add_flag(delete_button, LV_OBJ_FLAG_HIDDEN);
+
+                lv_obj_t* row_button = lv_button_create(wrapper);
+                _agent_row_buttons[index] = row_button;
+                lv_obj_set_pos(row_button, 0, 3);
+                lv_obj_set_size(
+                    row_button,
+                    agent_panel_ui::kRailViewport.w,
+                    52);
+                lv_obj_set_style_radius(row_button, 0, 0);
+                lv_obj_set_style_border_width(row_button, 0, 0);
+                lv_obj_set_style_bg_opa(row_button, LV_OPA_TRANSP, 0);
+                lv_obj_set_style_shadow_width(row_button, 0, 0);
+                lv_obj_add_event_cb(
+                    row_button,
+                    AppCodexStatus::agent_panel_event_cb,
+                    LV_EVENT_CLICKED,
+                    this);
+                lv_obj_add_event_cb(
+                    row_button,
+                    AppCodexStatus::agent_panel_row_gesture_cb,
+                    LV_EVENT_GESTURE,
+                    this);
+
+                uint32_t state_color = agent_panel_ui::kOffline;
+                const char* state = "Offline";
+                bool filled_dot = false;
+                if (row.state == AgentPanelRowState::Connected) {
+                    state = "Connected";
+                    state_color = agent_panel_ui::kConnected;
+                    filled_dot = true;
+                } else if (row.state == AgentPanelRowState::Requesting) {
+                    state = "Switch request";
+                    state_color = agent_panel_ui::kRequesting;
+                    filled_dot = true;
+                }
+                if (_agent_switch_pending &&
+                    row.fingerprint == _agent_switch_target) {
+                    state = "Switching...";
+                    state_color = agent_panel_ui::kSelection;
+                    filled_dot = true;
+                }
+
+                lv_obj_t* dot = lv_obj_create(row_button);
+                _agent_row_dots[index] = dot;
+                lv_obj_set_pos(dot, 14, 22);
+                lv_obj_set_size(dot, 8, 8);
+                lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
+                lv_obj_set_style_border_width(dot, filled_dot ? 0 : 1, 0);
+                lv_obj_set_style_border_color(
+                    dot, lv_color_hex(state_color), 0);
+                lv_obj_set_style_bg_color(
+                    dot, lv_color_hex(state_color), 0);
+                lv_obj_set_style_bg_opa(
+                    dot, filled_dot ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+                lv_obj_clear_flag(dot, LV_OBJ_FLAG_SCROLLABLE);
+
+                _agent_row_names[index] = make_label(
+                    row_button,
+                    row.display_name.data(),
+                    32,
+                    13,
+                    is_ascii_text(row.display_name.data())
+                        ? &lv_font_montserrat_18
+                        : &font_puhui_14_1,
+                    agent_panel_ui::kPrimaryText);
+                lv_obj_set_width(_agent_row_names[index], 220);
+                lv_label_set_long_mode(
+                    _agent_row_names[index], LV_LABEL_LONG_MODE_DOTS);
+
+                _agent_row_states[index] = make_label(
+                    row_button,
+                    state,
+                    260,
+                    17,
+                    &lv_font_montserrat_14,
+                    state_color);
+                lv_obj_set_width(_agent_row_states[index], 120);
+                lv_obj_set_style_text_align(
+                    _agent_row_states[index], LV_TEXT_ALIGN_RIGHT, 0);
+            }
+
+            lv_obj_update_layout(_agent_rail);
+            if (_agent_row_wrappers[initial_focus] != nullptr) {
+                lv_obj_scroll_to_view(
+                    _agent_row_wrappers[initial_focus], LV_ANIM_OFF);
+            }
+            sync_agent_rail_focus();
+
+            _agent_reset_button = make_button(
+                _agent_panel_root,
+                "Reset all",
+                agent_panel_ui::kResetRect.x,
+                agent_panel_ui::kResetRect.y,
+                agent_panel_ui::kResetRect.w,
+                agent_panel_ui::kResetRect.h,
+                agent_panel_ui::kDestructive,
+                false);
         }
-        _agent_reset_button = make_button(
-            "Reset", 176, 386, 114, 40, kAlertVermilion);
     }
 
-    make_center_label(
-        _agent_panel_root,
-        "AGENTS  \xE2\x86\x91",
-        438,
-        &lv_font_montserrat_14,
-        kEtchedGray);
+    if (_agent_panel_notice[0] != '\0' &&
+        _agent_panel_notice_until_ms != 0) {
+        _agent_panel_notice_label = make_center_label(
+            _agent_panel_root,
+            _agent_panel_notice.data(),
+            365,
+            &lv_font_montserrat_14,
+            agent_panel_ui::kDestructive);
+    }
+
+    lv_obj_t* close_hint = lv_obj_create(_agent_panel_root);
+    lv_obj_set_pos(
+        close_hint,
+        agent_panel_ui::kCloseHint.x,
+        agent_panel_ui::kCloseHint.y);
+    lv_obj_set_size(
+        close_hint,
+        agent_panel_ui::kCloseHint.w,
+        agent_panel_ui::kCloseHint.h);
+    lv_obj_set_style_radius(close_hint, 2, 0);
+    lv_obj_set_style_border_width(close_hint, 0, 0);
+    lv_obj_set_style_bg_color(
+        close_hint, lv_color_hex(agent_panel_ui::kSecondaryText), 0);
+    lv_obj_set_style_bg_opa(close_hint, LV_OPA_50, 0);
+    lv_obj_clear_flag(close_hint, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_move_foreground(_agent_panel_root);
     if (_last_agent_touch_state == LV_INDEV_STATE_REL) {
         settle_agent_panel(true);
     }
+}
+
+void AppCodexStatus::sync_agent_rail_focus()
+{
+    if (_agent_rail == nullptr) {
+        return;
+    }
+    lv_area_t rail_coords = {};
+    lv_obj_get_coords(_agent_rail, &rail_coords);
+    const int rail_center =
+        rail_coords.y1 + agent_panel_ui::kRailViewport.h / 2;
+    const AgentPanelSnapshot snapshot = _agent_panel_model.snapshot();
+    for (size_t index = 0; index < snapshot.count; ++index) {
+        lv_obj_t* wrapper = _agent_row_wrappers[index];
+        lv_obj_t* name = _agent_row_names[index];
+        if (wrapper == nullptr || name == nullptr) {
+            continue;
+        }
+        lv_area_t row_coords = {};
+        lv_obj_get_coords(wrapper, &row_coords);
+        const int row_center = (row_coords.y1 + row_coords.y2) / 2;
+        const int delta = row_center > rail_center
+            ? row_center - rail_center
+            : rail_center - row_center;
+        const bool ascii_name =
+            is_ascii_text(snapshot.rows[index].display_name.data());
+        const lv_font_t* font = ascii_name
+            ? &lv_font_montserrat_16
+            : &font_puhui_14_1;
+        lv_opa_t opacity = LV_OPA_40;
+        if (delta <= 20) {
+            if (ascii_name) {
+                font = &lv_font_montserrat_22;
+            }
+            opacity = LV_OPA_COVER;
+        } else if (delta <= agent_panel_ui::kRailRowHeight + 20) {
+            if (ascii_name) {
+                font = &lv_font_montserrat_18;
+            }
+            opacity = LV_OPA_70;
+        }
+        lv_obj_set_style_text_font(name, font, 0);
+        lv_obj_set_style_opa(wrapper, opacity, 0);
+    }
+}
+
+void AppCodexStatus::close_agent_delete_reveal()
+{
+    const AgentPanelSnapshot snapshot = _agent_panel_model.snapshot();
+    for (size_t index = 0; index < snapshot.count; ++index) {
+        if (_agent_row_buttons[index] != nullptr) {
+            lv_obj_set_x(_agent_row_buttons[index], 0);
+        }
+        if (_agent_delete_buttons[index] != nullptr) {
+            lv_obj_add_flag(
+                _agent_delete_buttons[index], LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+    _agent_revealed_delete_index = -1;
+}
+
+void AppCodexStatus::agent_panel_scroll_event_cb(lv_event_t* event)
+{
+    auto* self =
+        static_cast<AppCodexStatus*>(lv_event_get_user_data(event));
+    if (self == nullptr) {
+        return;
+    }
+    self->close_agent_delete_reveal();
+    self->sync_agent_rail_focus();
+}
+
+void AppCodexStatus::agent_panel_row_gesture_cb(lv_event_t* event)
+{
+    auto* self =
+        static_cast<AppCodexStatus*>(lv_event_get_user_data(event));
+    lv_indev_t* indev = lv_indev_active();
+    if (self == nullptr || indev == nullptr ||
+        lv_indev_get_gesture_dir(indev) != LV_DIR_LEFT) {
+        return;
+    }
+    lv_obj_t* target =
+        static_cast<lv_obj_t*>(lv_event_get_target(event));
+    const AgentPanelSnapshot snapshot = self->_agent_panel_model.snapshot();
+    for (size_t index = 0; index < snapshot.count; ++index) {
+        if (target != self->_agent_row_buttons[index]) {
+            continue;
+        }
+        self->close_agent_delete_reveal();
+        self->_agent_revealed_delete_index = static_cast<int>(index);
+        lv_obj_clear_flag(
+            self->_agent_delete_buttons[index], LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_x(
+            self->_agent_row_buttons[index],
+            -agent_panel_ui::kDeleteRevealWidth);
+        return;
+    }
+}
+
+void AppCodexStatus::agent_reset_hold_event_cb(lv_event_t* event)
+{
+    auto* self =
+        static_cast<AppCodexStatus*>(lv_event_get_user_data(event));
+    if (self == nullptr ||
+        self->_agent_panel_model.snapshot().confirmation !=
+            AgentPanelConfirmation::ResetAll) {
+        return;
+    }
+    const lv_event_code_t code = lv_event_get_code(event);
+    if (code == LV_EVENT_PRESSED) {
+        self->_agent_reset_hold_started_ms = GetHAL().millis();
+        self->_agent_reset_hold_active = true;
+        self->_agent_reset_hold_queued = false;
+    } else if (code == LV_EVENT_RELEASED ||
+               code == LV_EVENT_PRESS_LOST) {
+        self->_agent_reset_hold_started_ms = 0;
+        self->_agent_reset_hold_active = false;
+        if (!self->_agent_reset_hold_queued &&
+            self->_agent_reset_progress != nullptr) {
+            lv_obj_set_width(self->_agent_reset_progress, 0);
+        }
+    }
+}
+
+void AppCodexStatus::update_agent_panel_runtime(uint32_t now_ms)
+{
+    if (_agent_pairing_countdown_label != nullptr) {
+        const uint64_t deadline = _secure_pairing_session.deadline_ms();
+        uint32_t remaining_seconds = 0;
+        if (deadline > now_ms) {
+            remaining_seconds = static_cast<uint32_t>(
+                (deadline - now_ms + 999U) / 1000U);
+        }
+        char countdown[24] = {};
+        std::snprintf(
+            countdown,
+            sizeof(countdown),
+            "%us remaining",
+            static_cast<unsigned>(remaining_seconds));
+        lv_label_set_text(_agent_pairing_countdown_label, countdown);
+    }
+
+    if (_agent_reset_hold_active && !_agent_reset_hold_queued) {
+        const uint32_t elapsed = now_ms - _agent_reset_hold_started_ms;
+        const uint32_t clamped = std::min(
+            elapsed, agent_panel_ui::kResetHoldMs);
+        if (_agent_reset_progress != nullptr) {
+            lv_obj_set_width(
+                _agent_reset_progress,
+                static_cast<int>(
+                    clamped * 282U / agent_panel_ui::kResetHoldMs));
+        }
+        if (elapsed >= agent_panel_ui::kResetHoldMs) {
+            _agent_reset_hold_active = false;
+            _agent_reset_hold_queued = true;
+            queue_agent_panel_decision(
+                _agent_panel_model.confirm_destructive(true));
+            _agent_panel_dirty = true;
+        }
+    }
+
+    if (_agent_panel_notice_until_ms != 0 &&
+        static_cast<int32_t>(
+            now_ms - _agent_panel_notice_until_ms) >= 0) {
+        _agent_panel_notice_until_ms = 0;
+        _agent_panel_notice = {};
+        if (_agent_panel_notice_label != nullptr) {
+            lv_obj_add_flag(
+                _agent_panel_notice_label, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+}
+
+void AppCodexStatus::show_agent_panel_notice(
+    const char* text,
+    uint32_t now_ms)
+{
+    std::snprintf(
+        _agent_panel_notice.data(),
+        _agent_panel_notice.size(),
+        "%s",
+        text == nullptr ? "" : text);
+    _agent_panel_notice_until_ms =
+        now_ms + agent_panel_ui::kNoticeDurationMs;
+    _agent_panel_dirty = true;
 }
 
 void AppCodexStatus::settle_agent_panel(bool animate)
@@ -1457,6 +2106,8 @@ void AppCodexStatus::settle_agent_panel(bool animate)
     auto& controls = GetGlobalEdgeControlService();
     if (snapshot.visible) {
         GetGlobalEdgeControlService().setEnabled(false);
+    } else {
+        close_agent_delete_reveal();
     }
     const int target_y =
         snapshot.visible ? kAgentPanelVisibleY : kAgentPanelHiddenY;
@@ -1569,6 +2220,14 @@ void AppCodexStatus::agent_panel_event_cb(lv_event_t* event)
         self->_agent_panel_model.snapshot();
     for (size_t index = 0; index < snapshot.count; ++index) {
         if (target == self->_agent_row_buttons[index]) {
+            if (self->_agent_switch_pending) {
+                return;
+            }
+            self->close_agent_delete_reveal();
+            if (self->_agent_row_wrappers[index] != nullptr) {
+                lv_obj_scroll_to_view(
+                    self->_agent_row_wrappers[index], LV_ANIM_ON);
+            }
             self->queue_agent_panel_decision(
                 AgentPanelDecision{
                     AgentPanelAction::SwitchAgent,
@@ -1576,6 +2235,7 @@ void AppCodexStatus::agent_panel_event_cb(lv_event_t* event)
             return;
         }
         if (target == self->_agent_delete_buttons[index]) {
+            self->close_agent_delete_reveal();
             self->queue_agent_panel_decision(
                 AgentPanelDecision{
                     AgentPanelAction::Delete,
@@ -1592,13 +2252,23 @@ void AppCodexStatus::agent_panel_event_cb(lv_event_t* event)
     } else if (target == self->_agent_reject_button) {
         self->queue_agent_panel_decision(
             self->_agent_panel_model.reject_pairing());
+    } else if (target == self->_agent_dismiss_button) {
+        self->clear_pairing_runtime();
+        self->_agent_panel_dirty = true;
     } else if (target == self->_agent_reset_button) {
+        self->close_agent_delete_reveal();
         self->queue_agent_panel_decision(
             self->_agent_panel_model.request_reset());
     } else if (target == self->_agent_confirm_button) {
-        self->queue_agent_panel_decision(
-            self->_agent_panel_model.confirm_destructive(true));
+        if (snapshot.confirmation ==
+            AgentPanelConfirmation::DeleteAgent) {
+            self->queue_agent_panel_decision(
+                self->_agent_panel_model.confirm_destructive(true));
+        }
     } else if (target == self->_agent_cancel_button) {
+        self->_agent_reset_hold_started_ms = 0;
+        self->_agent_reset_hold_active = false;
+        self->_agent_reset_hold_queued = false;
         self->queue_agent_panel_decision(
             self->_agent_panel_model.confirm_destructive(false));
     }
@@ -1737,6 +2407,7 @@ void AppCodexStatus::dispatch_agent_panel_decision(
             (void)secure_pairing::AgentRegistry::restore(
                 before, _agent_registry);
             set_status("AGENT ERR", kCodexRed);
+            show_agent_panel_notice("Couldn't delete", now_ms);
         }
         sync_agent_panel_registry();
         _agent_panel_dirty = true;
@@ -1779,6 +2450,7 @@ void AppCodexStatus::dispatch_agent_panel_decision(
                     before, _agent_registry);
             }
             set_status("AGENT ERR", kCodexRed);
+            show_agent_panel_notice("Couldn't reset", now_ms);
         }
         sync_agent_panel_registry();
         _agent_panel_dirty = true;
@@ -1813,6 +2485,7 @@ void AppCodexStatus::dispatch_agent_panel_decision(
         (void)secure_pairing::AgentRegistry::restore(
             before_selection, _agent_registry);
         set_status("AGENT ERR", kCodexRed);
+        show_agent_panel_notice("Couldn't switch", now_ms);
         return;
     }
     _agent_switch_target = switch_decision.fingerprint;
@@ -1878,6 +2551,7 @@ void AppCodexStatus::clear_pairing_runtime()
     _pairing_completion = PairingCompletion::None;
     _pairing_completion_transaction = 0;
     _pairing_allow_switch = false;
+    _agent_pairing_expired = false;
     _agent_panel_model.clear_pairing_request();
 }
 
@@ -2011,7 +2685,10 @@ void AppCodexStatus::process_secure_pairing(uint32_t now_ms)
             !session_is_active) {
             (void)_ble_transport->reject_pending(session_connection);
         }
-        clear_pairing_runtime();
+        _pairing_completion = PairingCompletion::None;
+        _pairing_completion_transaction = 0;
+        _pairing_allow_switch = false;
+        _agent_pairing_expired = true;
         sync_agent_panel_registry();
         _agent_panel_dirty = true;
     } else if (
@@ -2122,6 +2799,7 @@ void AppCodexStatus::process_secure_pairing(uint32_t now_ms)
                 clear_pairing_runtime();
                 continue;
             }
+            _agent_pairing_expired = false;
             _agent_panel_dirty = true;
             continue;
         }
@@ -2292,7 +2970,7 @@ void AppCodexStatus::complete_agent_switch_if_ready()
         _agent_switch_target = {};
         clear_pairing_runtime();
         sync_agent_panel_registry();
-        _agent_panel_dirty = true;
+        show_agent_panel_notice("Couldn't switch", GetHAL().millis());
     };
     const uint16_t pending = _ble_transport->pending_handle();
     if (pending == secure_pairing::kNoAgentConnection ||

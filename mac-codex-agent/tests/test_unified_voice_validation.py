@@ -62,6 +62,7 @@ EXPECTED_HOST_TESTS = (
     "secure_pairing_wire_test",
     "agent_connection_router_test",
     "agent_panel_model_test",
+    "agent_panel_ui_layout_test",
     "voice_input_crypto_test",
     "voice_input_protocol_test",
     "voice_input_session_test",
@@ -200,7 +201,7 @@ output.chmod(0o700)
 
         self.assertGreater(len(stages), 0)
         total = stages[0][1]
-        self.assertEqual(total, 53)
+        self.assertEqual(total, 54)
         self.assertEqual(len(stages), total)
         self.assertEqual([stage[0] for stage in stages], list(range(1, total + 1)))
         self.assertEqual({stage[1] for stage in stages}, {total})

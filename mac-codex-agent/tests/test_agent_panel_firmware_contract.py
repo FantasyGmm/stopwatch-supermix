@@ -23,6 +23,43 @@ class AgentPanelFirmwareContractTests(unittest.TestCase):
         self.assertIn('"Allow + Switch"', source)
         self.assertIn('"No paired Agents"', source)
         self.assertIn("LV_OBJ_FLAG_HIDDEN", source)
+        self.assertIn("_agent_row_wrappers", header)
+        self.assertIn("agent_panel_scroll_event_cb", header)
+        self.assertIn("agent_panel_row_gesture_cb", header)
+        self.assertIn("lv_obj_scroll_to_view", source)
+        self.assertIn("lv_obj_set_flex_flow", source)
+        self.assertIn("lv_obj_set_style_opa", source)
+        self.assertNotIn('make_button("×"', source)
+
+    def test_focus_rail_secondary_states_match_approved_contract(self):
+        header = (
+            ROOT / "main/apps/app_codex_status/app_codex_status.h"
+        ).read_text()
+        source = (
+            ROOT / "main/apps/app_codex_status/app_codex_status.cpp"
+        ).read_text()
+        for label in (
+            "PAIRING REQUEST",
+            "Allow + Switch",
+            "Allow",
+            "Reject",
+            "Dismiss",
+            "Delete Agent?",
+            "Reset all Agents?",
+            "Hold to reset",
+            "No paired Agents",
+            "Switching...",
+            "Couldn't switch",
+            "Couldn't delete",
+            "Couldn't reset",
+        ):
+            self.assertIn(f'"{label}"', source)
+        self.assertIn("deadline_ms()", source)
+        self.assertIn("kResetHoldMs", source)
+        self.assertIn("_agent_reset_hold_started_ms", header)
+        self.assertIn("_agent_panel_notice_until_ms", header)
+        self.assertIn("_agent_pairing_expired", header)
+        self.assertIn("LV_EVENT_PRESS_LOST", source)
 
     def test_codex_page_owns_pull_down_agent_panel(self):
         header = (
@@ -112,9 +149,9 @@ class AgentPanelFirmwareContractTests(unittest.TestCase):
             "Allow + Switch",
             "Reject",
             "Delete Agent?",
-            "Reset All Agents?",
+            "Reset all Agents?",
             "Connected",
-            "Requesting",
+            "Switch request",
             "Offline",
         ):
             self.assertIn(f'"{label}"', source)

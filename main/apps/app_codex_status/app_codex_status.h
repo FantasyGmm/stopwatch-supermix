@@ -17,6 +17,7 @@
 #include "codex_alert_carousel.h"
 #include "codex_pending_soft_glow.h"
 #include "agent_panel_model.h"
+#include "agent_panel_ui_layout.h"
 #include "agent_registry_store.h"
 #include "secure_pairing_session.h"
 #include "secure_pairing_wire.h"
@@ -71,11 +72,24 @@ private:
     lv_obj_t* _host_label        = nullptr;
     lv_obj_t* _pet_image         = nullptr;
     lv_obj_t* _agent_panel_root  = nullptr;
+    lv_obj_t* _agent_rail = nullptr;
+    lv_obj_t* _agent_focus_band_left = nullptr;
+    lv_obj_t* _agent_focus_band_right = nullptr;
+    lv_obj_t* _agent_focus_marker = nullptr;
+    lv_obj_t* _agent_count_label = nullptr;
+    lv_obj_t* _agent_panel_notice_label = nullptr;
+    lv_obj_t* _agent_pairing_countdown_label = nullptr;
+    lv_obj_t* _agent_reset_progress = nullptr;
+    std::array<lv_obj_t*, secure_pairing::kMaxAgents> _agent_row_wrappers = {};
     std::array<lv_obj_t*, secure_pairing::kMaxAgents> _agent_row_buttons = {};
     std::array<lv_obj_t*, secure_pairing::kMaxAgents> _agent_delete_buttons = {};
+    std::array<lv_obj_t*, secure_pairing::kMaxAgents> _agent_row_names = {};
+    std::array<lv_obj_t*, secure_pairing::kMaxAgents> _agent_row_states = {};
+    std::array<lv_obj_t*, secure_pairing::kMaxAgents> _agent_row_dots = {};
     lv_obj_t* _agent_allow_button = nullptr;
     lv_obj_t* _agent_allow_switch_button = nullptr;
     lv_obj_t* _agent_reject_button = nullptr;
+    lv_obj_t* _agent_dismiss_button = nullptr;
     lv_obj_t* _agent_reset_button = nullptr;
     lv_obj_t* _agent_confirm_button = nullptr;
     lv_obj_t* _agent_cancel_button = nullptr;
@@ -95,6 +109,8 @@ private:
     uint32_t _last_status_payload_ms = 0;
     uint32_t _last_trae_status_payload_ms = 0;
     uint32_t _screen_off_left_press_started_ms = 0;
+    uint32_t _agent_reset_hold_started_ms = 0;
+    uint32_t _agent_panel_notice_until_ms = 0;
     bool _wifi_started           = false;
     bool _wifi_fallback_started  = false;
     bool _ble_was_connected      = false;
@@ -105,6 +121,10 @@ private:
     lv_indev_state_t _last_page_touch_state = LV_INDEV_STATE_REL;
     lv_indev_state_t _last_agent_touch_state = LV_INDEV_STATE_REL;
     int _agent_panel_drag_start_y = 0;
+    int _agent_revealed_delete_index = -1;
+    bool _agent_reset_hold_active = false;
+    bool _agent_reset_hold_queued = false;
+    bool _agent_pairing_expired = false;
     bool _suppress_task_navigation = false;
     CodexAlertCarousel _alert_carousel;
     TraeStatusSnapshot _trae_snapshot;
@@ -123,6 +143,7 @@ private:
     bool _agent_panel_dirty = false;
     bool _agent_switch_pending = false;
     secure_pairing::AgentFingerprint _agent_switch_target = {};
+    std::array<char, 32> _agent_panel_notice = {};
     enum class PairingCompletion : uint8_t {
         None,
         Authentication,
@@ -161,6 +182,10 @@ private:
     void update_page_swipe(uint32_t now_ms);
     void update_agent_panel_touch(uint32_t now_ms);
     void render_agent_panel();
+    void update_agent_panel_runtime(uint32_t now_ms);
+    void show_agent_panel_notice(const char* text, uint32_t now_ms);
+    void sync_agent_rail_focus();
+    void close_agent_delete_reveal();
     void settle_agent_panel(bool animate);
     void queue_agent_panel_decision(const AgentPanelDecision& decision);
     bool take_agent_panel_decision(AgentPanelDecision& decision);
@@ -185,6 +210,9 @@ private:
     void complete_agent_switch_if_ready();
     bool save_agent_registry();
     static void agent_panel_event_cb(lv_event_t* event);
+    static void agent_panel_scroll_event_cb(lv_event_t* event);
+    static void agent_panel_row_gesture_cb(lv_event_t* event);
+    static void agent_reset_hold_event_cb(lv_event_t* event);
     static void agent_panel_animation_cb(void* target, int32_t y);
     void set_page(int page, bool animate);
     void update_page_indicator();
