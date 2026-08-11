@@ -55,9 +55,9 @@ git diff --check
 
 ### Current automated evidence (2026-08-12)
 
-- Full Mac Agent discovery: 804 tests passed; one read-only live Accessibility
+- Full Mac Agent discovery: 808 tests passed; one read-only live Accessibility
   probe skipped because Codex was not foreground.
-- Focused input protocol and desktop submission: 35 tests passed; the same live
+- Focused input protocol and desktop submission: 37 tests passed; the same live
   probe was the only skip.
 - Offline contract: all 50 stages were present and correctly numbered, with 54
   exact host compile/run pairs.

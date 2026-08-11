@@ -407,6 +407,14 @@ output.chmod(0o700)
             self.assertIn(safety_fact, normalized_validation)
         self.assertIn("export IDF_PATH=/path/to/esp-idf", normalized_validation)
         self.assertNotIn("/Users/luke/esp", normalized_validation)
+        self.assertIn(
+            "Full Mac Agent discovery: 808 tests passed",
+            normalized_validation,
+        )
+        self.assertIn(
+            "Focused input protocol and desktop submission: 37 tests passed",
+            normalized_validation,
+        )
 
 
 if __name__ == "__main__":
