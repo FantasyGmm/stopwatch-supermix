@@ -12,6 +12,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 from agent import (
     PAIRING_CONTROL_UUID,
     PAIRING_TX_UUID,
+    STATUS_RX_UUID,
     VOICE_NOTIFICATION_QUEUE_SIZE,
     VOICE_CONTROL_UUID,
     VOICE_TX_UUID,
@@ -578,6 +579,90 @@ class CodexStatusAgentTests(unittest.TestCase):
         self.assertGreater(client.writes, 32)
         self.assertTrue(client.assert_response)
         self.assertGreater(sleep_count, 0)
+
+    def test_status_write_uses_negotiated_characteristic_capacity(self):
+        class Characteristic:
+            max_write_without_response_size = 244
+
+        class Services:
+            def get_characteristic(self, uuid):
+                self.requested_uuid = uuid
+                return Characteristic()
+
+        class Client:
+            is_connected = True
+
+            def __init__(self):
+                self.services = Services()
+                self.frames = []
+
+            async def write_gatt_char(self, _uuid, frame, response):
+                self.frames.append((bytes(frame), response))
+
+        async def send_status():
+            client = Client()
+            transport = BleStatusTransport()
+            transport._client = client
+            await transport.send_json("x" * 1000, STATUS_MESSAGE)
+            return client
+
+        client = asyncio.run(send_status())
+
+        self.assertEqual(len(client.frames), 5)
+        self.assertEqual(client.services.requested_uuid, STATUS_RX_UUID)
+        self.assertTrue(all(len(frame) <= 244 for frame, _ in client.frames))
+        self.assertTrue(all(response for _, response in client.frames))
+
+    def test_status_write_bounds_invalid_and_oversized_capacities(self):
+        class Characteristic:
+            def __init__(self, capacity):
+                self.max_write_without_response_size = capacity
+
+        class Services:
+            def __init__(self, capacity):
+                self.capacity = capacity
+
+            def get_characteristic(self, _uuid):
+                return (
+                    None
+                    if self.capacity is None
+                    else Characteristic(self.capacity)
+                )
+
+        class Client:
+            is_connected = True
+
+            def __init__(self, capacity):
+                self.services = Services(capacity)
+                self.frames = []
+
+            async def write_gatt_char(self, _uuid, frame, response):
+                self.frames.append(bytes(frame))
+
+        for capacity, expected_max in (
+            (None, 20),
+            (-1, 20),
+            ("244", 20),
+            (999, 256),
+        ):
+            with self.subTest(capacity=capacity):
+                async def send_status():
+                    client = Client(capacity)
+                    transport = BleStatusTransport()
+                    transport._client = client
+                    await transport.send_json("x" * 1000, STATUS_MESSAGE)
+                    return client.frames
+
+                frames = asyncio.run(send_status())
+
+                self.assertLessEqual(
+                    max(len(frame) for frame in frames),
+                    expected_max,
+                )
+                if expected_max == 20:
+                    self.assertGreater(len(frames), 32)
+                else:
+                    self.assertLess(len(frames), 8)
 
 
 class BleStatusTransportVoiceTests(unittest.IsolatedAsyncioTestCase):

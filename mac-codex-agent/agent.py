@@ -42,6 +42,7 @@ PAIRING_CONTROL_UUID = "7a230007-5474-4f50-5741-544348434f44"
 PAIRING_TX_UUID = "7a230008-5474-4f50-5741-544348434f44"
 STATUS_INTERVAL_SECONDS = 2.0
 SAFE_WRITE_SIZE = 20
+MAX_STATUS_WRITE_SIZE = 256
 FRAME_BURST_SIZE = 8
 FRAME_BURST_PAUSE_SECONDS = 0.02
 MAX_WATCH_ALERTS = 8
@@ -764,7 +765,7 @@ class BleStatusTransport:
             payload.encode("utf-8"),
             message_type=message_type,
             sequence=sequence,
-            max_write_size=SAFE_WRITE_SIZE,
+            max_write_size=self._status_write_size(),
         )
         for index, frame in enumerate(frames):
             await asyncio.wait_for(
@@ -778,3 +779,24 @@ class BleStatusTransport:
                 and index + 1 < len(frames)
             ):
                 await asyncio.sleep(FRAME_BURST_PAUSE_SECONDS)
+
+    def _status_write_size(self) -> int:
+        client = self._client
+        services = getattr(client, "services", None)
+        get_characteristic = getattr(services, "get_characteristic", None)
+        if get_characteristic is None:
+            return SAFE_WRITE_SIZE
+        try:
+            characteristic = get_characteristic(STATUS_RX_UUID)
+            capacity = getattr(
+                characteristic,
+                "max_write_without_response_size",
+                None,
+            )
+        except Exception:
+            return SAFE_WRITE_SIZE
+        if isinstance(capacity, bool) or not isinstance(capacity, int):
+            return SAFE_WRITE_SIZE
+        if capacity < SAFE_WRITE_SIZE:
+            return SAFE_WRITE_SIZE
+        return min(capacity, MAX_STATUS_WRITE_SIZE)
