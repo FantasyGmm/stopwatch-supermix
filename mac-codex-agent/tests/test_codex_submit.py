@@ -195,6 +195,7 @@ class RealComposerFixture:
             (self.application_element, "AXFocusedUIElement"): self.focused,
             (self.focused, "AXRole"): "AXTextArea",
             (self.focused, "AXEnabled"): True,
+            (self.focused, "AXHidden"): False,
             (self.focused, "AXDescription"): description,
             (self.focused, "AXDOMClassList"): ("ProseMirror",),
             (self.focused, "ChromeAXNodeId"): 101,
@@ -202,12 +203,14 @@ class RealComposerFixture:
             (self.focused, "AXParent"): self.rich_text_input,
             (self.focused, "AXChildren"): (),
             (self.rich_text_input, "AXRole"): "AXGroup",
+            (self.rich_text_input, "AXHidden"): False,
             (self.rich_text_input, "AXDOMClassList"): (
                 "_RichTextInput_abcd_1",
             ),
             (self.rich_text_input, "AXChildren"): (self.focused,),
             (self.rich_text_input, "AXParent"): self.composer_body,
             (self.composer_body, "AXRole"): "AXGroup",
+            (self.composer_body, "AXHidden"): False,
             (self.composer_body, "AXDOMClassList"): (
                 "_ComposerLayoutBody_abcd_1",
             ),
@@ -223,6 +226,7 @@ class RealComposerFixture:
             (self.composer_root, "AXChildren"): (self.composer_body,),
             (self.button, "AXRole"): "AXButton",
             (self.button, "AXEnabled"): True,
+            (self.button, "AXHidden"): False,
             (self.button, "AXTitle"): "",
             (self.button, "AXDescription"): label,
             (self.button, "ChromeAXNodeId"): 202,
@@ -364,6 +368,7 @@ class PreparedCodexSubmissionTests(unittest.TestCase):
             return value if error == ApplicationServices.kAXErrorSuccess else None
 
         role = read(ApplicationServices.kAXRoleAttribute)
+        hidden = read(ApplicationServices.kAXHiddenAttribute)
         description = read(ApplicationServices.kAXDescriptionAttribute)
         classes = read("AXDOMClassList")
         try:
@@ -376,6 +381,7 @@ class PreparedCodexSubmissionTests(unittest.TestCase):
             and "ProseMirror" in class_values
         ):
             self.skipTest("focused Codex element is not the task composer")
+        self.assertIsNot(hidden, True)
 
         self.assertIn("ChromeAXNodeId", attribute_names)
         self.assertNotIn("AXChromeAXNodeId", attribute_names)
@@ -488,6 +494,38 @@ class PreparedCodexSubmissionTests(unittest.TestCase):
 
                 self.assertFalse(current.editable)
                 self.assertEqual(current.semantic, SubmitSemantic.UNKNOWN)
+
+    def test_explicitly_hidden_composer_nodes_are_rejected(self):
+        nodes = ("focused", "rich_text_input", "composer_body", "button")
+        for node_name in nodes:
+            with self.subTest(node=node_name):
+                fixture = RealComposerFixture()
+                node = getattr(fixture, node_name)
+                fixture.attributes[(node, "AXHidden")] = True
+
+                current = self.adapter(fixture).snapshot()
+
+                self.assertIsNone(self.adapter(fixture).prepare())
+                if node_name == "button":
+                    self.assertEqual(
+                        current.semantic, SubmitSemantic.UNKNOWN
+                    )
+                else:
+                    self.assertFalse(current.editable)
+
+    def test_missing_hidden_attributes_are_treated_as_visible(self):
+        fixture = RealComposerFixture()
+        for node in (
+            fixture.focused,
+            fixture.rich_text_input,
+            fixture.composer_body,
+            fixture.button,
+        ):
+            fixture.attributes.pop((node, "AXHidden"))
+
+        current = self.adapter(fixture).snapshot()
+
+        self.assertEqual(current, snapshot(SubmitSemantic.SEND))
 
     def test_non_codex_permission_and_ax_errors_fail_closed(self):
         fixture = RealComposerFixture()
@@ -661,6 +699,18 @@ class PreparedCodexSubmissionTests(unittest.TestCase):
             )),
             ("button-token", lambda fixture: fixture.attributes.__setitem__(
                 (fixture.button, "ChromeAXNodeId"), 303
+            )),
+            ("focused-hidden", lambda fixture: fixture.attributes.__setitem__(
+                (fixture.focused, "AXHidden"), True
+            )),
+            ("rich-hidden", lambda fixture: fixture.attributes.__setitem__(
+                (fixture.rich_text_input, "AXHidden"), True
+            )),
+            ("body-hidden", lambda fixture: fixture.attributes.__setitem__(
+                (fixture.composer_body, "AXHidden"), True
+            )),
+            ("button-hidden", lambda fixture: fixture.attributes.__setitem__(
+                (fixture.button, "AXHidden"), True
             )),
         )
         for name, mutate in mutation_cases:

@@ -376,6 +376,8 @@ class MacOSCodexAccessibility:
         )
 
     def _is_codex_composer(self, element: Any) -> bool:
+        if self._is_explicitly_hidden(element):
+            return False
         if self._read_attribute(
             element, ApplicationServices.kAXRoleAttribute
         ) != ApplicationServices.kAXTextAreaRole:
@@ -399,6 +401,8 @@ class MacOSCodexAccessibility:
         rich_text_input = self._read_attribute(
             focused, ApplicationServices.kAXParentAttribute
         )
+        if self._is_explicitly_hidden(rich_text_input):
+            return None
         if not self._has_class_marker(
             rich_text_input, RICH_TEXT_INPUT_CLASS_MARKER
         ):
@@ -406,6 +410,8 @@ class MacOSCodexAccessibility:
         body = self._read_attribute(
             rich_text_input, ApplicationServices.kAXParentAttribute
         )
+        if self._is_explicitly_hidden(body):
+            return None
         if not self._has_class_marker(body, COMPOSER_BODY_CLASS_MARKER):
             return None
 
@@ -438,6 +444,13 @@ class MacOSCodexAccessibility:
 
     def _has_class_marker(self, element: Any, marker: str) -> bool:
         return any(marker in token for token in self._class_tokens(element))
+
+    def _is_explicitly_hidden(self, element: Any) -> bool:
+        if element is None:
+            return False
+        return self._read_attribute(
+            element, ApplicationServices.kAXHiddenAttribute
+        ) is True
 
     def _walk_descendants(self, root: Any):
         pending = deque(((root, 0),))
@@ -483,6 +496,8 @@ class MacOSCodexAccessibility:
         if len(candidates) != 1:
             return None
         button, semantic = candidates[0]
+        if self._is_explicitly_hidden(button):
+            return None
         if self._read_attribute(
             button, ApplicationServices.kAXEnabledAttribute
         ) is not True:
