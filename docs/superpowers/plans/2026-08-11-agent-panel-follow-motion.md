@@ -141,7 +141,7 @@ git diff --check
 
 Expected: all tests and checks pass.
 
-- [ ] **Step 6: Build, commit, flash, and smoke-test**
+- [x] **Step 6: Build, commit, flash, and smoke-test**
 
 Build `build-unified-latest`, commit only the plan, source, and tests, flash the exact ESP32-S3 app image to the uniquely detected watch port without erasing NVS, and confirm the committed version reaches Launcher without panic or a reboot loop.
 
