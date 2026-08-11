@@ -273,6 +273,80 @@ class TaskAlertTrackerTests(unittest.TestCase):
         self.assertEqual(persisted["reply_metadata_retry_threads"], [])
         self.assertEqual(persisted["alerts"][-1]["last_reply"], reply)
 
+    def test_reply_metadata_upgrade_backfills_deployed_running_alert(self):
+        reply = "previous stable reply\nwith exact formatting"
+        tracker = self.tracker()
+        tracker.refresh()
+        append_event(
+            self.rollout,
+            "task_complete",
+            "2026-07-12T00:01:00Z",
+            last_agent_message=reply,
+        )
+        append_event(self.rollout, "user_message", "2026-07-12T00:01:30Z")
+        append_event(
+            self.rollout,
+            "task_started",
+            "2026-07-12T00:02:00Z",
+            turn_id="turn-running",
+        )
+        tracker.refresh()
+        saved = json.loads(self.ledger.read_text(encoding="utf-8"))
+        self.assertEqual(saved["version"], 3)
+        self.assertEqual(saved["classifier_version"], CLASSIFIER_VERSION)
+        for alert in saved["alerts"]:
+            alert.pop("last_reply", None)
+        saved.pop("reply_metadata_version", None)
+        saved.pop("reply_metadata_retry_threads", None)
+        self.ledger.write_text(json.dumps(saved), encoding="utf-8")
+
+        migrated = self.tracker().refresh()
+
+        running = next(alert for alert in migrated.alerts if alert.state == "running")
+        self.assertEqual(running.turn_id, "turn-running")
+        self.assertEqual(running.last_reply, reply)
+
+    def test_reply_metadata_upgrade_preserves_undiscovered_thread_for_retry(self):
+        reply = "reply recovered after database returns"
+        tracker = self.tracker()
+        tracker.refresh()
+        append_event(
+            self.rollout,
+            "task_complete",
+            "2026-07-12T00:01:00Z",
+            last_agent_message=reply,
+        )
+        append_event(
+            self.rollout,
+            "task_started",
+            "2026-07-12T00:02:00Z",
+            turn_id="turn-running",
+        )
+        tracker.refresh()
+        saved = json.loads(self.ledger.read_text(encoding="utf-8"))
+        for alert in saved["alerts"]:
+            alert.pop("last_reply", None)
+        saved.pop("reply_metadata_version", None)
+        saved.pop("reply_metadata_retry_threads", None)
+        self.ledger.write_text(json.dumps(saved), encoding="utf-8")
+
+        with patch(
+            "task_alerts.sqlite3.connect",
+            side_effect=sqlite3.OperationalError("database temporarily unavailable"),
+        ):
+            unavailable = self.tracker().refresh()
+
+        self.assertIsNone(unavailable.alerts[0].last_reply)
+        waiting = json.loads(self.ledger.read_text(encoding="utf-8"))
+        self.assertEqual(waiting["reply_metadata_version"], 1)
+        self.assertEqual(waiting["reply_metadata_retry_threads"], ["thread-a"])
+
+        recovered = self.tracker().refresh()
+
+        self.assertEqual(recovered.alerts[0].last_reply, reply)
+        persisted = json.loads(self.ledger.read_text(encoding="utf-8"))
+        self.assertEqual(persisted["reply_metadata_retry_threads"], [])
+
     def test_reply_metadata_upgrade_retries_incomplete_rollout(self):
         reply = "retry-safe reply"
         tracker = self.tracker()

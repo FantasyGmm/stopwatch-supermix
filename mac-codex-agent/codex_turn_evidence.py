@@ -28,6 +28,12 @@ class LatestCompletion:
 
 
 @dataclasses.dataclass(frozen=True)
+class LatestStableReply:
+    timestamp: datetime.datetime
+    last_reply: str
+
+
+@dataclasses.dataclass(frozen=True)
 class MatchingTurnAbort:
     timestamp: datetime.datetime
     turn_id: str
@@ -153,6 +159,60 @@ def matching_turn_abort(
     finally:
         stream.close()
     return None
+
+
+def latest_stable_reply(
+    path: pathlib.Path,
+    at_or_before: datetime.datetime,
+) -> Optional[LatestStableReply]:
+    if not isinstance(at_or_before, datetime.datetime):
+        raise ValueError("at_or_before must be a datetime")
+    if at_or_before.tzinfo is None:
+        at_or_before = at_or_before.replace(tzinfo=UTC)
+    at_or_before = at_or_before.astimezone(UTC)
+    try:
+        stream = pathlib.Path(path).open("rb")
+    except OSError as error:
+        raise RolloutReplayError("rollout is unreadable", retryable=True) from error
+
+    candidate = None
+    try:
+        for raw in stream:
+            if not raw.endswith(b"\n"):
+                raise RolloutReplayError(
+                    "rollout has an incomplete trailing record",
+                    retryable=True,
+                )
+            try:
+                item = json.loads(raw)
+            except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                raise RolloutReplayError(
+                    "rollout contains an invalid record"
+                ) from error
+            if not isinstance(item, dict) or item.get("type") != "event_msg":
+                continue
+            payload = item.get("payload")
+            if (
+                not isinstance(payload, dict)
+                or payload.get("type") != "task_complete"
+                or not isinstance(payload.get("last_agent_message"), str)
+            ):
+                continue
+            timestamp = _timestamp(
+                item.get("timestamp") or payload.get("timestamp")
+            )
+            if timestamp > at_or_before:
+                continue
+            if candidate is None or timestamp >= candidate.timestamp:
+                candidate = LatestStableReply(
+                    timestamp=timestamp,
+                    last_reply=payload["last_agent_message"],
+                )
+    except OSError as error:
+        raise RolloutReplayError("rollout is unreadable", retryable=True) from error
+    finally:
+        stream.close()
+    return candidate
 
 
 def latest_unsuperseded_completion(

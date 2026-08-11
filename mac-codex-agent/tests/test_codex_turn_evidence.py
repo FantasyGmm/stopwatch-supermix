@@ -234,6 +234,60 @@ class CodexTurnEvidenceTests(unittest.TestCase):
 
         self.assertIsNone(latest_unsuperseded_completion(self.rollout))
 
+    def test_latest_stable_reply_survives_user_message_and_next_turn(self):
+        reply = "稳定回复\n保留原文 🕰️"
+        self.append("2026-07-29T13:00:00Z", "task_started", turn_id="turn-a")
+        self.append(
+            "2026-07-29T13:00:01Z",
+            "task_complete",
+            turn_id="turn-a",
+            last_agent_message=reply,
+        )
+        self.append("2026-07-29T13:00:02Z", "user_message")
+        self.append("2026-07-29T13:00:03Z", "task_started", turn_id="turn-b")
+        self.append(
+            "2026-07-29T13:00:04Z",
+            "task_complete",
+            turn_id="turn-b",
+            last_agent_message="future reply",
+        )
+        lookup = getattr(codex_turn_evidence, "latest_stable_reply", None)
+
+        self.assertTrue(callable(lookup))
+        result = lookup(
+            self.rollout,
+            datetime.datetime(
+                2026, 7, 29, 13, 0, 3, tzinfo=datetime.timezone.utc
+            ),
+        )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result.last_reply, reply)
+        self.assertEqual(result.timestamp.isoformat(), "2026-07-29T13:00:01+00:00")
+
+    def test_latest_stable_reply_ignores_nonstring_completion(self):
+        self.append(
+            "2026-07-29T13:00:01Z",
+            "task_complete",
+            last_agent_message="stable reply",
+        )
+        self.append(
+            "2026-07-29T13:00:02Z",
+            "task_complete",
+            last_agent_message={"text": "not stable"},
+        )
+        lookup = getattr(codex_turn_evidence, "latest_stable_reply", None)
+
+        self.assertTrue(callable(lookup))
+        result = lookup(
+            self.rollout,
+            datetime.datetime(
+                2026, 7, 29, 13, 0, 2, tzinfo=datetime.timezone.utc
+            ),
+        )
+
+        self.assertEqual(result.last_reply, "stable reply")
+
     def test_incomplete_trailing_record_is_retryable(self):
         self.rollout.write_bytes(b'{"timestamp":"2026-07-29T13:00:00Z"')
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import re
+import threading
 from typing import Callable, Dict, Iterable, Optional, Set
 
 
@@ -77,6 +78,7 @@ class TaskRouteRegistry:
         if not callable(route_deriver):
             raise ValueError("route_deriver must be callable")
         self._route_deriver = route_deriver
+        self._lock = threading.RLock()
         self._targets: Dict[str, TaskRouteTarget] = {}
         self._collided_routes: Set[str] = set()
 
@@ -85,21 +87,26 @@ class TaskRouteRegistry:
         for target in targets:
             _validate_target(target, self._route_deriver)
             grouped.setdefault(target.route, []).append(target)
-        self._collided_routes.update(
+        collisions = {
             route
             for route, route_targets in grouped.items()
             if len(route_targets) > 1
-        )
-        self._targets = {
-            route: route_targets[0]
-            for route, route_targets in grouped.items()
-            if len(route_targets) == 1 and route not in self._collided_routes
         }
+        with self._lock:
+            self._collided_routes.update(collisions)
+            self._targets = {
+                route: route_targets[0]
+                for route, route_targets in grouped.items()
+                if len(route_targets) == 1
+                and route not in self._collided_routes
+            }
 
     def resolve(self, route: str) -> Optional[TaskRouteTarget]:
         _validate_route(route)
-        return self._targets.get(route)
+        with self._lock:
+            return self._targets.get(route)
 
     def reset(self) -> None:
-        self._targets = {}
-        self._collided_routes = set()
+        with self._lock:
+            self._targets = {}
+            self._collided_routes = set()

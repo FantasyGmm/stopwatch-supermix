@@ -2,6 +2,7 @@ import dataclasses
 import pathlib
 import re
 import sys
+import threading
 import unittest
 
 
@@ -111,6 +112,53 @@ class TaskRouteRegistryTests(unittest.TestCase):
         registry.update([first])
 
         self.assertIsNone(registry.resolve(route))
+
+    def test_collision_publication_never_exposes_tombstoned_target(self):
+        route = "01e0a1b2900f0425"
+        first = self.target(route=route)
+        second = self.target(
+            route=route,
+            thread_id="thread-collision",
+            expected_turn_id="turn-collision",
+        )
+        registry = TaskRouteRegistry(route_deriver=lambda _thread_id: route)
+        registry.update([first])
+        tombstone_published = threading.Event()
+        allow_update_to_finish = threading.Event()
+        resolver_started = threading.Event()
+        resolver_finished = threading.Event()
+        resolved = []
+
+        class PausingSet(set):
+            def update(self, values):
+                super().update(values)
+                tombstone_published.set()
+                allow_update_to_finish.wait(1.0)
+
+        registry._collided_routes = PausingSet()
+
+        updater = threading.Thread(target=registry.update, args=([first, second],))
+        updater.start()
+        self.assertTrue(tombstone_published.wait(1.0))
+
+        def resolve_route():
+            resolver_started.set()
+            resolved.append(registry.resolve(route))
+            resolver_finished.set()
+
+        resolver = threading.Thread(target=resolve_route)
+        resolver.start()
+        self.assertTrue(resolver_started.wait(1.0))
+        try:
+            self.assertFalse(resolver_finished.wait(0.05))
+        finally:
+            allow_update_to_finish.set()
+        updater.join(1.0)
+        resolver.join(1.0)
+
+        self.assertFalse(updater.is_alive())
+        self.assertFalse(resolver.is_alive())
+        self.assertEqual(resolved, [None])
 
     def test_normal_removal_does_not_tombstone_route(self):
         target = self.target()

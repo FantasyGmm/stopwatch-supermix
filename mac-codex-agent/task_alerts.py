@@ -19,6 +19,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 from completion_classifier import CLASSIFIER_VERSION, classify_completion
 from codex_turn_evidence import (
     RolloutReplayError,
+    latest_stable_reply,
     latest_unsuperseded_completion,
     matching_turn_abort,
     new_turn_signal,
@@ -581,7 +582,6 @@ class TaskAlertTracker:
             return False
 
         previous_retry_threads = sorted(retry_threads)
-        retryable_failures = set()
         changed = False
         latest_alert_by_thread = {}
         for item in self._state["alerts"]:
@@ -593,16 +593,22 @@ class TaskAlertTracker:
             if existing is None or timestamp >= existing[0]:
                 latest_alert_by_thread[thread_id] = (timestamp, item)
 
+        relevant_thread_ids = {
+            thread_id
+            for thread_id, (_timestamp, alert) in latest_alert_by_thread.items()
+            if not isinstance(alert.get("last_reply"), str)
+        }
+        if not version_changed:
+            relevant_thread_ids.intersection_update(retry_threads)
+        discovered_thread_ids = {thread.id for thread in threads}
+        retryable_failures = relevant_thread_ids - discovered_thread_ids
+
         for thread in threads:
-            if not version_changed and thread.id not in retry_threads:
+            if thread.id not in relevant_thread_ids:
                 continue
-            existing = latest_alert_by_thread.get(thread.id)
-            if existing is None or isinstance(
-                existing[1].get("last_reply"), str
-            ):
-                continue
+            existing = latest_alert_by_thread[thread.id]
             try:
-                completion = latest_unsuperseded_completion(thread.rollout_path)
+                reply = latest_stable_reply(thread.rollout_path, existing[0])
             except RolloutReplayError as error:
                 LOGGER.warning(
                     "Unable to reconcile Codex reply metadata: thread=%s",
@@ -612,16 +618,12 @@ class TaskAlertTracker:
                 if error.retryable:
                     retryable_failures.add(thread.id)
                 continue
-            if completion is None:
+            if reply is None:
                 continue
 
-            completion_time = _iso(completion.timestamp)
             alert = existing[1]
-            if alert.get("id") != "{}:{}".format(thread.id, completion_time):
-                continue
-            if isinstance(completion.last_agent_message, str):
-                alert["last_reply"] = completion.last_agent_message
-                changed = True
+            alert["last_reply"] = reply.last_reply
+            changed = True
 
         if current != REPLY_METADATA_VERSION:
             self._state["reply_metadata_version"] = REPLY_METADATA_VERSION
