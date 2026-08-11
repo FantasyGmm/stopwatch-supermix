@@ -208,7 +208,7 @@ VoiceButtonDispatchDecision VoiceButtonDispatcher::dispatch(
         right_pressed,
         action == VoiceButtonAction::Press,
         now_ms,
-        left_pressed || woke_screen || go_home ||
+        (left_pressed && right_pressed) || woke_screen || go_home ||
             action == VoiceButtonAction::CancelHome);
     if (action_sink != nullptr && codex_action != CodexButtonAction::None) {
         action_sink->handle_action(codex_action, now_ms);
