@@ -21,6 +21,7 @@
 #include "trae_status_model.h"
 #include "trae_task_carousel.h"
 #include "trae_status_page.h"
+#include "input_action_controller.h"
 #include "voice_input_controller.h"
 #include "runtime/services/shared_wifi_service.h"
 
@@ -29,7 +30,8 @@ class BleVoiceProbeController;
 struct esp_websocket_event_data;
 typedef struct esp_websocket_client* esp_websocket_client_handle_t;
 
-class AppCodexStatus : public mooncake::AppAbility {
+class AppCodexStatus : public mooncake::AppAbility,
+                       public CodexButtonActionSink {
 public:
     AppCodexStatus();
     ~AppCodexStatus() override;
@@ -96,6 +98,7 @@ private:
     StatusPageSwipeLogic _page_swipe;
     TraeCardTapLogic _trae_card_tap;
     VoiceButtonDispatcher _voice_button_dispatcher;
+    InputActionController _input_action_controller;
     bool _production_voice_ready = false;
     bool _production_voice_link_usable = false;
     uint16_t _production_voice_mtu = 23;
@@ -128,5 +131,6 @@ private:
     void update_screen_off_control(uint32_t now_ms);
     static void page_animation_cb(void* target, int32_t x);
     static void pet_timer_cb(lv_timer_t* timer);
+    void handle_action(CodexButtonAction action, uint32_t now_ms) override;
     static void websocket_event_handler(void* handler_args, esp_event_base_t base, int32_t event_id, void* event_data);
 };
