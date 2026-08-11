@@ -186,6 +186,12 @@ VoiceButtonAction VoiceButtonEdgeGate::update(
     return VoiceButtonAction::None;
 }
 
+bool VoiceButtonEdgeGate::is_suppressed() const
+{
+    return _state == State::SuppressedUntilRightRelease ||
+           _state == State::SuppressedUntilBothRelease;
+}
+
 void VoiceButtonDispatcher::reset(bool right_pressed)
 {
     _gate.reset(right_pressed);
@@ -208,8 +214,7 @@ VoiceButtonDispatchDecision VoiceButtonDispatcher::dispatch(
         right_pressed,
         action == VoiceButtonAction::Press,
         now_ms,
-        (left_pressed && right_pressed) || woke_screen || go_home ||
-            action == VoiceButtonAction::CancelHome);
+        _gate.is_suppressed() || woke_screen || go_home);
     if (action_sink != nullptr && codex_action != CodexButtonAction::None) {
         action_sink->handle_action(codex_action, now_ms);
     }
