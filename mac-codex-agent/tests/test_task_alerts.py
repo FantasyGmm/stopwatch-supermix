@@ -5,6 +5,7 @@ import sqlite3
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
@@ -1114,6 +1115,21 @@ class TaskAlertTrackerTests(unittest.TestCase):
             stream.write(b"\n")
 
         self.assertEqual(tracker.refresh().pending_count, 1)
+
+    def test_wait_for_change_watches_database_directory_and_rollout(self):
+        tracker = self.tracker()
+        tracker.refresh()
+
+        with patch("task_alerts.wait_for_path_change", return_value=True) as wait:
+            changed = tracker.wait_for_change(0.25)
+
+        self.assertTrue(changed)
+        paths, baseline, timeout = wait.call_args.args
+        self.assertIn(self.root, paths)
+        self.assertIn(self.state_db, paths)
+        self.assertIn(self.rollout, paths)
+        self.assertEqual(set(paths), set(baseline))
+        self.assertEqual(timeout, 0.25)
 
     def test_corrupt_ledger_is_moved_aside_and_baselined(self):
         self.ledger.write_text("not json", encoding="utf-8")

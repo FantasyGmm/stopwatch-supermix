@@ -63,6 +63,13 @@ class CompositeStateCollector:
     def pending_watch_notification_ids(self):
         return self._codex.pending_watch_notification_ids()
 
+    def wait_for_change(self, timeout: float) -> bool:
+        method = getattr(self._codex, "wait_for_change", None)
+        if method is None:
+            time.sleep(max(0.0, timeout))
+            return False
+        return bool(method(timeout))
+
     def mark_watch_notified(self, alert_ids) -> None:
         self._codex.mark_watch_notified(alert_ids)
 

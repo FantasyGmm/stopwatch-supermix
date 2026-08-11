@@ -420,6 +420,16 @@ class CodexStateCollector:
             return ()
         return self._alert_tracker.pending_watch_notification_ids()
 
+    def wait_for_change(self, timeout: float) -> bool:
+        if self._alert_tracker is None:
+            time.sleep(max(0.0, timeout))
+            return False
+        method = getattr(self._alert_tracker, "wait_for_change", None)
+        if method is None:
+            time.sleep(max(0.0, timeout))
+            return False
+        return bool(method(timeout))
+
     def mark_watch_notified(self, alert_ids) -> None:
         if self._alert_tracker is not None:
             self._alert_tracker.mark_watch_notified(alert_ids)

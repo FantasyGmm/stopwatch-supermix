@@ -24,6 +24,7 @@ from codex_turn_evidence import (
     new_turn_signal,
     reduce_turn_signal,
 )
+from rollout_change_watcher import capture_signatures, wait_for_path_change
 
 
 UTC = datetime.timezone.utc
@@ -255,6 +256,8 @@ class TaskAlertTracker:
         self._lock = threading.RLock()
         self._state: Optional[Dict[str, Any]] = None
         self._needs_save = False
+        self._watch_paths: Tuple[pathlib.Path, ...] = ()
+        self._watch_signatures = {}
 
     def refresh(self) -> TaskAlertSnapshot:
         with self._lock:
@@ -263,6 +266,7 @@ class TaskAlertTracker:
                 if loaded is not None:
                     self._state = loaded
             threads = self._discover_threads()
+            self._prepare_change_wait(threads)
             if self._state is None:
                 self._state = self._initial_state(threads)
                 self._save_state()
@@ -283,6 +287,22 @@ class TaskAlertTracker:
                 self._state["last_scan_at"] = _iso(self._now())
                 self._save_state()
             return self._snapshot()
+
+    def wait_for_change(self, timeout: float) -> bool:
+        with self._lock:
+            paths = self._watch_paths
+            baseline = dict(self._watch_signatures)
+        return wait_for_path_change(paths, baseline, timeout)
+
+    def _prepare_change_wait(self, threads: List[_ThreadInfo]) -> None:
+        paths = [
+            self.state_db.parent,
+            self.state_db,
+            pathlib.Path(str(self.state_db) + "-wal"),
+        ]
+        paths.extend(thread.rollout_path for thread in threads)
+        self._watch_paths = tuple(dict.fromkeys(paths))
+        self._watch_signatures = capture_signatures(self._watch_paths)
 
     def pending_watch_notification_ids(self) -> Tuple[str, ...]:
         with self._lock:
