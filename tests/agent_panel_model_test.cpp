@@ -154,8 +154,14 @@ int main()
     assert(model.touch_release() == AgentPanelAction::None);
     assert(model.snapshot().visible);
 
-    model.touch_press(220, 250);
-    model.touch_move(220, 170);
+    model.touch_press(220, 220);
+    model.touch_move(220, 140);
+    assert(model.vertical_drag_offset() == 0);
+    assert(model.touch_release() == AgentPanelAction::None);
+    assert(model.snapshot().visible);
+
+    model.touch_press(220, 54);
+    model.touch_move(220, 0);
     assert(
         model.touch_release() ==
         AgentPanelAction::Close);
@@ -172,8 +178,8 @@ int main()
     model.cancel_touch();
 
     model.set_visible(true);
-    model.touch_press(220, 250);
-    model.touch_move(220, 190);
-    assert(model.vertical_drag_offset() == -54);
+    model.touch_press(220, 54);
+    model.touch_move(220, 0);
+    assert(model.vertical_drag_offset() == -48);
     model.cancel_touch();
 }

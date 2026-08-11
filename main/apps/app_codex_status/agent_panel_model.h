@@ -107,6 +107,7 @@ private:
     AgentPanelSnapshot _snapshot = {};
     secure_pairing::AgentFingerprint _deferred_switch = {};
     bool _touch_active = false;
+    bool _panel_drag_active = false;
     int _touch_start_x = 0;
     int _touch_start_y = 0;
     int _touch_x = 0;

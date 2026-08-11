@@ -1,5 +1,7 @@
 #include "agent_panel_model.h"
 
+#include "agent_panel_ui_layout.h"
+
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -230,6 +232,9 @@ void AgentPanelModel::touch_press(int x, int y)
 {
     const bool can_start = _snapshot.visible || y <= kPanelPullStartMaxY;
     _touch_active = can_start;
+    _panel_drag_active =
+        can_start &&
+        (!_snapshot.visible || y <= agent_panel_ui::kPanelHeaderBottomY);
     _touch_start_x = x;
     _touch_start_y = y;
     _touch_x = x;
@@ -260,7 +265,8 @@ AgentPanelAction AgentPanelModel::touch_release()
         _snapshot.visible = true;
         return AgentPanelAction::Open;
     }
-    if (_snapshot.visible && dy <= -kPanelPullDistance) {
+    if (_snapshot.visible && _panel_drag_active &&
+        dy <= -kPanelPullDistance) {
         _snapshot.visible = false;
         return AgentPanelAction::Close;
     }
@@ -270,6 +276,7 @@ AgentPanelAction AgentPanelModel::touch_release()
 void AgentPanelModel::cancel_touch()
 {
     _touch_active = false;
+    _panel_drag_active = false;
 }
 
 bool AgentPanelModel::owns_touch() const
@@ -280,7 +287,7 @@ bool AgentPanelModel::owns_touch() const
 int AgentPanelModel::vertical_drag_offset() const
 {
     constexpr int kDragDeadZone = 6;
-    if (!_touch_active) {
+    if (!_touch_active || !_panel_drag_active) {
         return 0;
     }
     const int dx = _touch_x - _touch_start_x;
@@ -296,6 +303,7 @@ void AgentPanelModel::set_visible(bool visible)
 {
     _snapshot.visible = visible;
     _touch_active = false;
+    _panel_drag_active = false;
 }
 
 AgentPanelSnapshot AgentPanelModel::snapshot() const
