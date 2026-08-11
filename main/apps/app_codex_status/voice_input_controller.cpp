@@ -205,8 +205,12 @@ VoiceButtonDispatchDecision VoiceButtonDispatcher::dispatch(
     bool go_home,
     uint32_t now_ms,
     VoiceButtonSink* sink,
-    CodexButtonActionSink* action_sink)
+    CodexButtonActionSink* action_sink,
+    bool input_suppressed)
 {
+    if (input_suppressed) {
+        _gate.reset(right_pressed);
+    }
     const VoiceButtonAction action = _gate.update(
         left_pressed, right_pressed, woke_screen, go_home, now_ms);
     const CodexButtonAction codex_action = _gesture.update(
@@ -214,7 +218,7 @@ VoiceButtonDispatchDecision VoiceButtonDispatcher::dispatch(
         right_pressed,
         action == VoiceButtonAction::Press,
         now_ms,
-        _gate.is_suppressed() || woke_screen || go_home);
+        input_suppressed || _gate.is_suppressed() || woke_screen || go_home);
     if (action_sink != nullptr && codex_action != CodexButtonAction::None) {
         action_sink->handle_action(codex_action, now_ms);
     }

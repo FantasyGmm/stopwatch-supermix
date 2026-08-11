@@ -383,7 +383,8 @@ void AppCodexStatus::onRunning()
         key_event == input::KeyEvent::GoHome,
         now,
         _voice_input.get(),
-        this);
+        this,
+        GetHAL().buttonInputSuppressed());
     if (voice_decision == VoiceButtonDispatchDecision::Close) {
         _input_action_controller.disconnect();
         _voice_button_dispatcher.reset(right_pressed);

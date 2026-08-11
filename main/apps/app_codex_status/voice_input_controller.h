@@ -123,7 +123,8 @@ public:
         bool go_home,
         uint32_t now_ms,
         VoiceButtonSink* sink,
-        CodexButtonActionSink* action_sink = nullptr);
+        CodexButtonActionSink* action_sink = nullptr,
+        bool input_suppressed = false);
 
 private:
     VoiceButtonEdgeGate _gate;

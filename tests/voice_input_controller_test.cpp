@@ -959,6 +959,35 @@ void test_dispatcher_cross_release_suppression_clears_latched_second_click()
     assert(action_sink.times[0] == 1420);
 }
 
+void test_dispatcher_global_input_suppression_clears_pending_gestures()
+{
+    FakeVoiceButtonSink voice_sink;
+    FakeCodexButtonActionSink action_sink;
+    VoiceButtonDispatcher dispatcher;
+    dispatcher.reset(false);
+
+    dispatcher.dispatch(false, true, false, false, 0, &voice_sink, &action_sink);
+    dispatcher.dispatch(false, false, false, false, 20, &voice_sink, &action_sink);
+    dispatcher.dispatch(
+        false, false, false, false, 100, &voice_sink, &action_sink, true);
+    dispatcher.dispatch(
+        false, false, false, false, 320, &voice_sink, &action_sink, false);
+    assert(action_sink.actions.empty());
+
+    dispatcher.dispatch(false, true, false, false, 1000, &voice_sink, &action_sink);
+    dispatcher.dispatch(false, false, false, false, 1020, &voice_sink, &action_sink);
+    dispatcher.dispatch(false, true, false, false, 1100, &voice_sink, &action_sink);
+    dispatcher.dispatch(
+        false, true, false, false, 1120, &voice_sink, &action_sink, true);
+    dispatcher.dispatch(
+        false, false, false, false, 1140, &voice_sink, &action_sink, false);
+    dispatcher.dispatch(
+        false, false, false, false, 1500, &voice_sink, &action_sink, false);
+
+    assert(voice_sink.events.empty());
+    assert(action_sink.actions.empty());
+}
+
 void test_dispatcher_guard_handles_uint32_wraparound()
 {
     FakeVoiceButtonSink sink;
@@ -1057,6 +1086,7 @@ int main()
     test_dispatcher_a_plus_b_cancels_expiring_single_before_home_event();
     test_dispatcher_independent_a_click_preserves_pending_b_submit();
     test_dispatcher_cross_release_suppression_clears_latched_second_click();
+    test_dispatcher_global_input_suppression_clears_pending_gestures();
     test_dispatcher_guard_handles_uint32_wraparound();
     test_cancel_waits_for_inflight_producer_cleanup();
 }

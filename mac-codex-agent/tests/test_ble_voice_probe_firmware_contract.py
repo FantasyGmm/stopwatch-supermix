@@ -178,6 +178,7 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         )
         self.assertEqual(running.count("updateButtonStates"), 1)
         self.assertEqual(running.count("_voice_button_dispatcher.dispatch"), 1)
+        self.assertIn("GetHAL().buttonInputSuppressed()", running)
         self.assertNotIn("VoiceButtonAction::", running)
         self.assertNotIn("->handle_button", running)
         self.assertNotIn("->cancel_for_home", running)
