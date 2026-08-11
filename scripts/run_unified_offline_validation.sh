@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CXX="${CXX:-c++}"
 PYTHON="${PYTHON:-$ROOT/mac-codex-agent/.venv/bin/python}"
-TOTAL_STAGES=47
+TOTAL_STAGES=48
 STAGE_INDEX=0
 CONTRACT_ONLY=0
 HOST_TESTS_ONLY=0
@@ -281,6 +281,12 @@ run_host_test codex_status_model_test \
     tests/codex_status_model_test.cpp \
     main/apps/app_codex_status/codex_status_model.cpp \
     "$TRAE_CJSON_OBJECT"
+
+stage "Codex button gesture host test"
+run_host_test codex_button_gesture_test \
+    -std=c++17 -Wall -Wextra -Werror -DSTOPWATCH_HOST_TEST -I. \
+    tests/codex_button_gesture_test.cpp \
+    main/apps/app_codex_status/codex_button_gesture.cpp
 
 stage "Status page swipe and Trae card tap host tests"
 run_host_test status_page_swipe_logic_test \
