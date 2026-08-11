@@ -57,7 +57,10 @@ def _validate_metadata(
         raise ValueError("index must be less than count")
 
 
-def _canonical_aad(
+def canonical_task_detail_aad(
+    *,
+    message_type,
+    version,
     key_epoch,
     exchange_nonce,
     sequence,
@@ -66,6 +69,10 @@ def _canonical_aad(
     index,
     count,
 ):
+    if message_type != TASK_DETAIL_TYPE:
+        raise ValueError("task detail type is invalid")
+    if version != TASK_DETAIL_VERSION:
+        raise ValueError("task detail version is invalid")
     _validate_metadata(
         key_epoch,
         exchange_nonce,
@@ -77,8 +84,8 @@ def _canonical_aad(
     )
     return json.dumps(
         {
-            "type": TASK_DETAIL_TYPE,
-            "version": TASK_DETAIL_VERSION,
+            "type": message_type,
+            "version": version,
             "route": route,
             "revision": revision,
             "index": index,
@@ -110,14 +117,16 @@ def encrypt_task_detail(
         plaintext = text.encode("utf-8", errors="strict")
     except UnicodeEncodeError as error:
         raise ValueError("task detail text must be valid UTF-8") from error
-    aad = _canonical_aad(
-        key_epoch,
-        exchange_nonce,
-        sequence,
-        route,
-        revision,
-        index,
-        count,
+    aad = canonical_task_detail_aad(
+        message_type=TASK_DETAIL_TYPE,
+        version=TASK_DETAIL_VERSION,
+        key_epoch=key_epoch,
+        exchange_nonce=exchange_nonce,
+        sequence=sequence,
+        route=route,
+        revision=revision,
+        index=index,
+        count=count,
     )
     ciphertext = encrypt(
         key,
@@ -163,14 +172,16 @@ def decrypt_task_detail(key, envelope):
         ciphertext = base64.b64decode(ciphertext_text, validate=True)
     except (binascii.Error, ValueError) as error:
         raise ValueError("task detail ciphertext is invalid") from error
-    aad = _canonical_aad(
-        key_epoch,
-        exchange_nonce,
-        sequence,
-        route,
-        revision,
-        index,
-        count,
+    aad = canonical_task_detail_aad(
+        message_type=TASK_DETAIL_TYPE,
+        version=TASK_DETAIL_VERSION,
+        key_epoch=key_epoch,
+        exchange_nonce=exchange_nonce,
+        sequence=sequence,
+        route=route,
+        revision=revision,
+        index=index,
+        count=count,
     )
     plaintext = decrypt(
         key,

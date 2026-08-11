@@ -20,6 +20,7 @@ from agent import (
     CodexStatusAgent,
     WatchDiscovery,
     _compact_json_bytes,
+    _new_task_detail_nonce,
     task_detail_messages,
     _watch_codex_status,
     _watch_trae_status,
@@ -115,6 +116,39 @@ def trae_status(model="Model A", detail="Building status"):
 
 
 class CodexStatusAgentTests(unittest.TestCase):
+    def test_production_task_detail_nonce_rejects_zero(self):
+        expected = bytes.fromhex("2021222324252627")
+        with patch(
+            "agent.secrets.token_bytes",
+            side_effect=(bytes(8), expected),
+        ) as token_bytes:
+            nonce = _new_task_detail_nonce()
+
+        self.assertEqual(nonce, expected)
+        self.assertEqual(token_bytes.call_count, 2)
+
+    def test_default_status_agent_sessions_receive_distinct_random_nonces(self):
+        first = bytes.fromhex("1011121314151617")
+        second = bytes.fromhex("2021222324252627")
+        with patch(
+            "agent.secrets.token_bytes",
+            side_effect=(first, second),
+        ):
+            agents = [
+                CodexStatusAgent(
+                    collector=FakeCollector(),
+                    transport=FakeTransport(),
+                    detail_key=TEST_DETAIL_KEY,
+                    detail_key_epoch=TEST_DETAIL_EPOCH,
+                )
+                for _ in range(2)
+            ]
+
+        self.assertEqual(
+            [agent._task_detail_nonce for agent in agents],
+            [first, second],
+        )
+
     def test_sync_time_sends_current_epoch_and_timezone_offset(self):
         collector = FakeCollector()
         transport = FakeTransport()
