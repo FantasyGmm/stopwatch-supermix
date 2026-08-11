@@ -208,7 +208,8 @@ class RealComposerFixture:
             (self.composer_root, "AXChildren"): (self.composer_body,),
             (self.button, "AXRole"): "AXButton",
             (self.button, "AXEnabled"): True,
-            (self.button, "AXTitle"): label,
+            (self.button, "AXTitle"): "",
+            (self.button, "AXDescription"): label,
             (self.button, "ChromeAXNodeId"): 202,
         }
         self.create_calls = 0
@@ -247,6 +248,8 @@ class PreparedCodexSubmissionTests(unittest.TestCase):
         event_flags=None,
         posted_events=None,
         post_event_to_pid=None,
+        max_nodes=64,
+        max_depth=4,
     ):
         workspace = workspace or SequencedWorkspace(FakeApplication())
         created_events = created_events if created_events is not None else []
@@ -274,6 +277,8 @@ class PreparedCodexSubmissionTests(unittest.TestCase):
                 (event, flags)
             ),
             post_event_to_pid=post_event_to_pid,
+            max_nodes=max_nodes,
+            max_depth=max_depth,
         )
 
     def test_app_asar_composer_allowlist_covers_every_current_mode(self):
@@ -371,6 +376,27 @@ class PreparedCodexSubmissionTests(unittest.TestCase):
         self.assertFalse(current.editable)
         self.assertEqual(current.semantic, SubmitSemantic.UNKNOWN)
 
+    def test_missing_disabled_or_wrong_role_focus_is_rejected(self):
+        cases = ("missing", "disabled", "wrong-role")
+        for case in cases:
+            with self.subTest(case=case):
+                fixture = RealComposerFixture()
+                if case == "missing":
+                    fixture.attributes[
+                        (fixture.application_element, "AXFocusedUIElement")
+                    ] = None
+                elif case == "disabled":
+                    fixture.attributes[(fixture.focused, "AXEnabled")] = False
+                else:
+                    fixture.attributes[(fixture.focused, "AXRole")] = (
+                        "AXStaticText"
+                    )
+
+                current = self.adapter(fixture).snapshot()
+
+                self.assertFalse(current.editable)
+                self.assertEqual(current.semantic, SubmitSemantic.UNKNOWN)
+
     def test_non_codex_permission_and_ax_errors_fail_closed(self):
         fixture = RealComposerFixture()
         non_codex = self.adapter(
@@ -444,11 +470,48 @@ class PreparedCodexSubmissionTests(unittest.TestCase):
         second = Node("second-button")
         fixture.attributes[(second, "AXRole")] = "AXButton"
         fixture.attributes[(second, "AXEnabled")] = True
-        fixture.attributes[(second, "AXTitle")] = "Send"
+        fixture.attributes[(second, "AXTitle")] = ""
+        fixture.attributes[(second, "AXDescription")] = "Send"
         fixture.attributes[(second, "ChromeAXNodeId")] = 303
         fixture.attributes[(fixture.composer_body, "AXChildren")] += (second,)
         self.assertEqual(
             self.adapter(fixture).snapshot().semantic,
+            SubmitSemantic.UNKNOWN,
+        )
+
+    def test_same_button_with_conflicting_semantic_labels_is_rejected(self):
+        fixture = RealComposerFixture(label="Queue")
+        fixture.attributes[(fixture.button, "AXTitle")] = "Send"
+
+        current = self.adapter(fixture).snapshot()
+
+        self.assertEqual(current.semantic, SubmitSemantic.UNKNOWN)
+
+    def test_composer_button_search_respects_node_and_depth_bounds(self):
+        fixture = RealComposerFixture()
+        extras = tuple(Node("extra-{}".format(index)) for index in range(5))
+        for extra in extras:
+            fixture.attributes[(extra, "AXRole")] = "AXGroup"
+        fixture.attributes[(fixture.composer_body, "AXChildren")] = (
+            fixture.rich_text_input,
+            *extras,
+            fixture.button,
+        )
+        self.assertEqual(
+            self.adapter(fixture, max_nodes=3).snapshot().semantic,
+            SubmitSemantic.UNKNOWN,
+        )
+
+        fixture = RealComposerFixture()
+        wrapper = Node("button-wrapper")
+        fixture.attributes[(wrapper, "AXRole")] = "AXGroup"
+        fixture.attributes[(wrapper, "AXChildren")] = (fixture.button,)
+        fixture.attributes[(fixture.composer_body, "AXChildren")] = (
+            fixture.rich_text_input,
+            wrapper,
+        )
+        self.assertEqual(
+            self.adapter(fixture, max_depth=1).snapshot().semantic,
             SubmitSemantic.UNKNOWN,
         )
 
@@ -485,7 +548,7 @@ class PreparedCodexSubmissionTests(unittest.TestCase):
                 (fixture.focused, "AXValue"), "changed"
             )),
             ("semantic", lambda fixture: fixture.attributes.__setitem__(
-                (fixture.button, "AXTitle"), "Queue"
+                (fixture.button, "AXDescription"), "Queue"
             )),
             ("button-disabled", lambda fixture: fixture.attributes.__setitem__(
                 (fixture.button, "AXEnabled"), False
@@ -560,6 +623,19 @@ class PreparedCodexSubmissionTests(unittest.TestCase):
             posted,
             [(42, created[0][0]), (42, created[1][0])],
         )
+
+    def test_missing_targeted_key_event_fails_before_posting(self):
+        fixture = RealComposerFixture(label="Queue")
+        posted = []
+        adapter = self.adapter(fixture, posted_events=posted)
+        adapter._create_key_event = lambda _source, _key_code, _down: None
+
+        handled = CodexSubmitController(adapter).handle(
+            InputAction.FORCE_STEER
+        )
+
+        self.assertFalse(handled)
+        self.assertEqual(posted, [])
 
     def test_targeted_key_up_is_attempted_after_key_down_error(self):
         fixture = RealComposerFixture(label="Queue")
