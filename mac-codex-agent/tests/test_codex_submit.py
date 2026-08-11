@@ -383,13 +383,18 @@ class PreparedCodexSubmissionTests(unittest.TestCase):
         adapter = MacOSCodexAccessibility()
         current = adapter.snapshot()
         self.assertTrue(current.editable)
-        self.assertIn(
-            current.semantic,
-            (SubmitSemantic.SEND, SubmitSemantic.QUEUE, SubmitSemantic.STEER),
-        )
         prepared = adapter.prepare()
         if current.has_text:
+            self.assertIn(
+                current.semantic,
+                (
+                    SubmitSemantic.SEND,
+                    SubmitSemantic.QUEUE,
+                    SubmitSemantic.STEER,
+                ),
+            )
             self.assertIsNotNone(prepared)
+            self.assertEqual(prepared.semantic, current.semantic)
         else:
             self.assertIsNone(prepared)
 
@@ -537,6 +542,20 @@ class PreparedCodexSubmissionTests(unittest.TestCase):
         self.assertTrue(current.editable)
         self.assertFalse(current.has_text)
         self.assertIsNone(self.adapter(fixture).prepare())
+
+    def test_empty_running_composer_with_stop_button_fails_closed(self):
+        for label in ("Stop", "停止"):
+            with self.subTest(label=label):
+                fixture = RealComposerFixture(label=label, value="")
+                adapter = self.adapter(fixture)
+
+                current = adapter.snapshot()
+
+                self.assertTrue(current.codex_foreground)
+                self.assertTrue(current.editable)
+                self.assertFalse(current.has_text)
+                self.assertEqual(current.semantic, SubmitSemantic.UNKNOWN)
+                self.assertIsNone(adapter.prepare())
 
     def test_button_must_be_unique_enabled_and_have_stable_token(self):
         fixture = RealComposerFixture()
