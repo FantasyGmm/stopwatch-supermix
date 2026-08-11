@@ -16,10 +16,11 @@ audio availability do not gate click actions.
 
 - The Agent requires the existing foreground bundle to be
   `com.openai.codex`; it does not activate Codex or target a background app.
-- The focused element must match one of the 16 English and Simplified Chinese
-  composer descriptions extracted from the current Codex desktop resources,
-  plus the real `AXTextArea`, `ProseMirror`, `ChromeAXNodeId`,
-  `_RichTextInput_`, and `_ComposerLayoutBody_` Accessibility anchors.
+- The focused element must match one of the English and Simplified Chinese
+  descriptions from 16 composer resource IDs extracted from the current Codex
+  desktop resources, plus the real `AXTextArea`, `ProseMirror`,
+  `ChromeAXNodeId`, `_RichTextInput_`, and `_ComposerLayoutBody_`
+  Accessibility anchors.
 - The nearby Send, Queue, or Steer button must be unique, enabled, semantically
   recognized, and have its own stable Chromium node identifier. Empty text,
   an unknown label, missing permission, or ambiguous structure fails closed.

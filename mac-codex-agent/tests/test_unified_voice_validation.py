@@ -400,7 +400,8 @@ output.chmod(0o700)
             "AXPress",
             "Command+Shift+Return",
             "CGEventPostToPid",
-            "16 English and Simplified Chinese composer descriptions",
+            "English and Simplified Chinese descriptions from 16 composer "
+            "resource IDs",
             "same-process foreground race",
         ):
             self.assertIn(safety_fact, normalized_validation)
