@@ -106,13 +106,13 @@ Selection and connection are distinct:
 - `Offline`: gray outlined dot and `Offline` label. Tapping still selects that
   Agent as the preferred target and waits for its authenticated reconnect. It
   is not disabled.
-- `Switching`: cyan progress arc and `Switching…`; repeated row taps are ignored
+- `Switching`: cyan progress arc and `Switching...`; repeated row taps are ignored
   while the existing switch transaction is pending.
 - Switch failure: the row returns to its truthful connection state and a
-  concise `Couldn’t switch` message appears above the reset target for 2 s.
+  concise `Couldn't switch` message appears above the reset target for 2 s.
 
 When voice capture is active, the existing bounded voice cleanup finishes
-before the active connection changes. The UI stays in `Switching…` until the
+before the active connection changes. The UI stays in `Switching...` until the
 switch completes or fails.
 
 ## Gestures And Selection
@@ -127,8 +127,7 @@ switch completes or fails.
   The row first animates into the focus position over 160 ms, then the switch
   transaction starts. The focused row may be tapped again without side effects
   when it is already the active Agent.
-- Each snapped row transition produces one light haptic tick. Reduced-motion
-  behavior replaces animated travel with a 100 ms cross-fade.
+- Snapping completes in 160 ms with no looping or decorative motion.
 
 ## Deletion
 
@@ -145,7 +144,7 @@ Tapping `Delete` opens a full flat confirmation state:
 
 Confirming calls the current remove-and-rotate flow. Removing the active Agent
 disconnects it. Pairing credentials rotate exactly as they do today. Failure
-returns to the rail and shows `Couldn’t delete` without removing the row.
+returns to the rail and shows `Couldn't delete` without removing the row.
 
 Any vertical scroll, focus change, panel close, or outside tap cancels a
 revealed delete action.
@@ -163,7 +162,7 @@ a full flat confirmation state:
 The destructive action requires an uninterrupted 1.2 s hold. Progress fills
 the target from left to right; releasing early cancels it. A successful reset
 clears all stored Agents and pending requests, rotates credentials, disconnects
-the active Agent, and returns to the empty state. Failure shows `Couldn’t reset`
+the active Agent, and returns to the empty state. Failure shows `Couldn't reset`
 and preserves the existing registry.
 
 ## New Agent Pairing
@@ -225,4 +224,3 @@ state or silently mutate the registry.
   Focus Rail reference. If an automated watch capture remains unavailable, the
   user performs the same-size physical-screen review and that limitation is
   reported explicitly.
-
