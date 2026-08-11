@@ -21,6 +21,9 @@ bool valid_domain(Domain domain)
         case Domain::Audio:
         case Domain::PttEnd:
         case Domain::VoiceError:
+        case Domain::InputReady:
+        case Domain::InputSubmit:
+        case Domain::InputForceSteer:
             return true;
     }
     return false;

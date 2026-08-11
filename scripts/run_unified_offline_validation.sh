@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CXX="${CXX:-c++}"
 PYTHON="${PYTHON:-$ROOT/mac-codex-agent/.venv/bin/python}"
-TOTAL_STAGES=48
+TOTAL_STAGES=49
 STAGE_INDEX=0
 CONTRACT_ONLY=0
 HOST_TESTS_ONLY=0
@@ -401,6 +401,15 @@ run_host_test voice_input_protocol_test \
     -I"$MBEDTLS_SOURCE/include" \
     tests/voice_input_protocol_test.cpp \
     main/apps/app_codex_status/voice_input_protocol.cpp \
+    main/apps/app_codex_status/voice_input_crypto.cpp \
+    "$MBEDTLS_BUILD/library/libmbedcrypto.a"
+
+stage "Input action protocol host test"
+run_host_test input_action_protocol_test \
+    -std=c++17 -Wall -Wextra -Werror -pthread -DSTOPWATCH_HOST_TEST -I. \
+    -I"$MBEDTLS_SOURCE/include" \
+    tests/input_action_protocol_test.cpp \
+    main/apps/app_codex_status/input_action_protocol.cpp \
     main/apps/app_codex_status/voice_input_crypto.cpp \
     "$MBEDTLS_BUILD/library/libmbedcrypto.a"
 

@@ -23,6 +23,9 @@ enum class Domain : uint8_t {
     Audio = 0x12,
     PttEnd = 0x13,
     VoiceError = 0x14,
+    InputReady = 0x21,
+    InputSubmit = 0x22,
+    InputForceSteer = 0x23,
 };
 
 bool derive_nonce(
