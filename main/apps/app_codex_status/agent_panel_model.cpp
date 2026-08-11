@@ -231,10 +231,16 @@ AgentPanelDecision AgentPanelModel::confirm_destructive(bool accepted)
 void AgentPanelModel::touch_press(int x, int y)
 {
     const bool can_start = _snapshot.visible || y <= kPanelPullStartMaxY;
+    const int rail_bottom =
+        agent_panel_ui::kRailViewport.y +
+        agent_panel_ui::kRailViewport.h;
+    const bool in_panel_drag_region =
+        y <= agent_panel_ui::kPanelHeaderBottomY ||
+        y >= rail_bottom;
     _touch_active = can_start;
     _panel_drag_active =
         can_start &&
-        (!_snapshot.visible || y <= agent_panel_ui::kPanelHeaderBottomY);
+        (!_snapshot.visible || in_panel_drag_region);
     _touch_start_x = x;
     _touch_start_y = y;
     _touch_x = x;
