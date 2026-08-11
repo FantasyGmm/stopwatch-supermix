@@ -246,6 +246,67 @@ class TaskAlertTrackerTests(unittest.TestCase):
         persisted = json.loads(self.ledger.read_text(encoding="utf-8"))
         self.assertEqual(persisted["alerts"][-1]["last_reply"], reply)
 
+    def test_reply_metadata_upgrade_recovers_reply_from_unchanged_v3_ledger(self):
+        reply = "旧版账本回复\n保持原样 🕰️"
+        tracker = self.tracker()
+        tracker.refresh()
+        append_event(
+            self.rollout,
+            "task_complete",
+            "2026-07-12T00:01:00Z",
+            last_agent_message=reply,
+        )
+        tracker.refresh()
+        saved = json.loads(self.ledger.read_text(encoding="utf-8"))
+        self.assertEqual(saved["version"], 3)
+        self.assertEqual(saved["classifier_version"], CLASSIFIER_VERSION)
+        saved["alerts"][-1].pop("last_reply", None)
+        saved.pop("reply_metadata_version", None)
+        saved.pop("reply_metadata_retry_threads", None)
+        self.ledger.write_text(json.dumps(saved), encoding="utf-8")
+
+        reconciled = self.tracker().refresh()
+
+        self.assertEqual(reconciled.alerts[0].last_reply, reply)
+        persisted = json.loads(self.ledger.read_text(encoding="utf-8"))
+        self.assertEqual(persisted["reply_metadata_version"], 1)
+        self.assertEqual(persisted["reply_metadata_retry_threads"], [])
+        self.assertEqual(persisted["alerts"][-1]["last_reply"], reply)
+
+    def test_reply_metadata_upgrade_retries_incomplete_rollout(self):
+        reply = "retry-safe reply"
+        tracker = self.tracker()
+        tracker.refresh()
+        append_event(
+            self.rollout,
+            "task_complete",
+            "2026-07-12T00:01:00Z",
+            last_agent_message=reply,
+        )
+        tracker.refresh()
+        saved = json.loads(self.ledger.read_text(encoding="utf-8"))
+        saved["alerts"][-1].pop("last_reply", None)
+        saved.pop("reply_metadata_version", None)
+        saved.pop("reply_metadata_retry_threads", None)
+        self.ledger.write_text(json.dumps(saved), encoding="utf-8")
+        with self.rollout.open("ab") as stream:
+            stream.write(b'{"ignored":true}')
+
+        retrying = self.tracker().refresh()
+
+        self.assertIsNone(retrying.alerts[0].last_reply)
+        persisted = json.loads(self.ledger.read_text(encoding="utf-8"))
+        self.assertEqual(persisted["reply_metadata_version"], 1)
+        self.assertEqual(persisted["reply_metadata_retry_threads"], ["thread-a"])
+
+        with self.rollout.open("ab") as stream:
+            stream.write(b"\n")
+        recovered = self.tracker().refresh()
+
+        self.assertEqual(recovered.alerts[0].last_reply, reply)
+        persisted = json.loads(self.ledger.read_text(encoding="utf-8"))
+        self.assertEqual(persisted["reply_metadata_retry_threads"], [])
+
     def test_classifier_upgrade_does_not_resurrect_after_later_user_message(self):
         tracker = self.tracker()
         tracker.refresh()

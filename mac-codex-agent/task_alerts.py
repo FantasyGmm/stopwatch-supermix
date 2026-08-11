@@ -36,6 +36,7 @@ DEFAULT_CODEX_BINARIES = (
 )
 LEDGER_VERSION = 3
 ABORT_REDUCER_VERSION = 1
+REPLY_METADATA_VERSION = 1
 RETENTION_DAYS = 7
 MAX_DISCOVERED_THREADS = 50
 THREAD_LIST_LIMIT = 200
@@ -281,6 +282,8 @@ class TaskAlertTracker:
                 changed = True
             if self._reconcile_classifier_version(threads):
                 changed = True
+            if self._reconcile_reply_metadata_version(threads):
+                changed = True
             if self._sync_thread_metadata(threads):
                 changed = True
             if self._prune_old_alerts():
@@ -432,6 +435,8 @@ class TaskAlertTracker:
             "version": LEDGER_VERSION,
             "classifier_version": CLASSIFIER_VERSION,
             "classifier_retry_threads": [],
+            "reply_metadata_version": REPLY_METADATA_VERSION,
+            "reply_metadata_retry_threads": [],
             "abort_reducer_version": ABORT_REDUCER_VERSION,
             "abort_retry_threads": [],
             "initialized_at": now,
@@ -558,6 +563,75 @@ class TaskAlertTracker:
         next_retry_threads = sorted(retryable_failures)
         if previous_retry_threads != next_retry_threads:
             self._state["classifier_retry_threads"] = next_retry_threads
+            changed = True
+        if changed:
+            self._state["revision"] = int(self._state.get("revision", 0)) + 1
+        return changed
+
+    def _reconcile_reply_metadata_version(
+        self,
+        threads: List[_ThreadInfo],
+    ) -> bool:
+        current = self._state.get("reply_metadata_version", 0)
+        retry_threads = set(
+            self._state.get("reply_metadata_retry_threads", [])
+        )
+        version_changed = current != REPLY_METADATA_VERSION
+        if not version_changed and not retry_threads:
+            return False
+
+        previous_retry_threads = sorted(retry_threads)
+        retryable_failures = set()
+        changed = False
+        latest_alert_by_thread = {}
+        for item in self._state["alerts"]:
+            timestamp = _parse_timestamp(item.get("progress_at"))
+            thread_id = item.get("thread_id")
+            if timestamp is None or not isinstance(thread_id, str):
+                continue
+            existing = latest_alert_by_thread.get(thread_id)
+            if existing is None or timestamp >= existing[0]:
+                latest_alert_by_thread[thread_id] = (timestamp, item)
+
+        for thread in threads:
+            if not version_changed and thread.id not in retry_threads:
+                continue
+            existing = latest_alert_by_thread.get(thread.id)
+            if existing is None or isinstance(
+                existing[1].get("last_reply"), str
+            ):
+                continue
+            try:
+                completion = latest_unsuperseded_completion(thread.rollout_path)
+            except RolloutReplayError as error:
+                LOGGER.warning(
+                    "Unable to reconcile Codex reply metadata: thread=%s",
+                    thread.id,
+                    exc_info=True,
+                )
+                if error.retryable:
+                    retryable_failures.add(thread.id)
+                continue
+            if completion is None:
+                continue
+
+            completion_time = _iso(completion.timestamp)
+            alert = existing[1]
+            if alert.get("id") != "{}:{}".format(thread.id, completion_time):
+                continue
+            if isinstance(completion.last_agent_message, str):
+                alert["last_reply"] = completion.last_agent_message
+                changed = True
+
+        if current != REPLY_METADATA_VERSION:
+            self._state["reply_metadata_version"] = REPLY_METADATA_VERSION
+            changed = True
+        next_retry_threads = sorted(retryable_failures)
+        if (
+            "reply_metadata_retry_threads" not in self._state
+            or previous_retry_threads != next_retry_threads
+        ):
+            self._state["reply_metadata_retry_threads"] = next_retry_threads
             changed = True
         if changed:
             self._state["revision"] = int(self._state.get("revision", 0)) + 1
@@ -1069,6 +1143,21 @@ class TaskAlertTracker:
                 isinstance(thread_id, str) for thread_id in retry_threads
             ):
                 raise ValueError("invalid classifier retry threads")
+            reply_metadata_version = state.get("reply_metadata_version", 0)
+            if (
+                not isinstance(reply_metadata_version, int)
+                or isinstance(reply_metadata_version, bool)
+                or reply_metadata_version < 0
+            ):
+                raise ValueError("invalid reply metadata version")
+            reply_metadata_retry_threads = state.get(
+                "reply_metadata_retry_threads", []
+            )
+            if not isinstance(reply_metadata_retry_threads, list) or not all(
+                isinstance(thread_id, str)
+                for thread_id in reply_metadata_retry_threads
+            ):
+                raise ValueError("invalid reply metadata retry threads")
             abort_reducer_version = state.get("abort_reducer_version", 0)
             if (
                 not isinstance(abort_reducer_version, int)
