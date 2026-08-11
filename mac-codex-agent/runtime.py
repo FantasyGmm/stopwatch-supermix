@@ -27,6 +27,12 @@ from app_state import (
 )
 from codex_adapter import CodexStateCollector
 from combined_collector import CompositeStateCollector
+from codex_submit import CodexSubmitController, MacOSCodexAccessibility
+from input_action_protocol import (
+    ActionReplayGuard,
+    decode_action,
+    encode_ready as encode_input_ready,
+)
 from task_alerts import TaskAlertTracker
 from trae_adapter import TraeStateCollector
 from voice_audio import (
@@ -83,6 +89,10 @@ class _BleSessionContext:
     voice_key: Optional[bytes] = None
     voice_service: Optional[object] = None
     voice_failed: bool = False
+    input_nonce: Optional[bytes] = None
+    input_replay_guard: Optional[ActionReplayGuard] = None
+    input_submit_controller: Optional[object] = None
+    input_active: bool = False
     shutdown_task: Optional[asyncio.Task] = None
 
 
@@ -96,6 +106,10 @@ def _new_voice_nonce() -> bytes:
     while not any(nonce):
         nonce = secrets.token_bytes(8)
     return nonce
+
+
+def _create_submit_controller() -> CodexSubmitController:
+    return CodexSubmitController(MacOSCodexAccessibility())
 
 
 def _blackhole_receipt_present() -> bool:
@@ -163,6 +177,8 @@ class AgentRuntime:
         voice_key_loader=None,
         voice_session_factory=None,
         voice_nonce_factory=None,
+        input_nonce_factory=None,
+        submit_controller_factory=None,
     ):
         self._collector = collector
         self._transport_factory = transport_factory
@@ -173,6 +189,10 @@ class AgentRuntime:
         self._voice_key_loader = voice_key_loader or load_key_from_keychain
         self._voice_session_factory = voice_session_factory or _create_voice_session
         self._voice_nonce_factory = voice_nonce_factory or _new_voice_nonce
+        self._input_nonce_factory = input_nonce_factory or _new_voice_nonce
+        self._submit_controller_factory = (
+            submit_controller_factory or _create_submit_controller
+        )
         self._state_lock = threading.Lock()
         self._snapshot = AgentSnapshot(
             ConnectionState.SCANNING
@@ -474,6 +494,8 @@ class AgentRuntime:
             return
         context.voice_key = key
 
+        await self._prepare_input_actions(context)
+
         try:
             service = self._voice_session_factory(key)
         except Exception as error:
@@ -482,6 +504,72 @@ class AgentRuntime:
         context.voice_service = service
 
         await self._publish_voice_readiness(context)
+
+    async def _prepare_input_actions(
+        self, context: _BleSessionContext
+    ) -> None:
+        key = context.voice_key
+        if key is None:
+            return
+        try:
+            nonce = self._input_nonce_factory()
+            ready_payload = encode_input_ready(key, nonce)
+            replay_guard = ActionReplayGuard()
+            replay_guard.set_active_nonce(nonce)
+            controller = self._submit_controller_factory()
+        except Exception:
+            LOGGER.exception("Could not prepare authenticated input actions")
+            return
+
+        context.input_nonce = nonce
+        context.input_replay_guard = replay_guard
+        context.input_submit_controller = controller
+        context.input_active = True
+
+        async def handle_notification(payload: bytes) -> None:
+            if not context.input_active:
+                return
+            try:
+                packet = decode_action(key, payload, nonce)
+            except Exception as error:
+                LOGGER.warning("Ignoring invalid input action: %s", error)
+                return
+            try:
+                accepted_sequence = replay_guard.accept(
+                    nonce, packet.sequence
+                )
+            except Exception as error:
+                LOGGER.warning("Ignoring invalid input sequence: %s", error)
+                return
+            if not accepted_sequence or not context.input_active:
+                LOGGER.info(
+                    "Ignoring replayed or stale input action sequence %d",
+                    packet.sequence,
+                )
+                return
+            try:
+                accepted = await asyncio.to_thread(
+                    controller.handle, packet.action
+                )
+            except Exception:
+                LOGGER.exception("Codex input action dispatch failed")
+                return
+            LOGGER.info(
+                "Codex input action %s: %s",
+                packet.action.name.lower(),
+                "accepted" if accepted else "ignored",
+            )
+
+        try:
+            await context.transport.enable_input_actions(
+                ready_payload, handle_notification
+            )
+        except Exception:
+            context.input_active = False
+            context.input_nonce = None
+            context.input_replay_guard = None
+            context.input_submit_controller = None
+            LOGGER.exception("Could not enable authenticated input actions")
 
     async def _refresh_voice_readiness(self, context: _BleSessionContext) -> None:
         service_state = getattr(
@@ -637,6 +725,7 @@ class AgentRuntime:
         self, context: _BleSessionContext, voice_was_recording: bool
     ) -> None:
         deadline = asyncio.get_running_loop().time() + self._disconnect_timeout
+        context.input_active = False
         unavailable_payload = None
         if context.voice_key is not None:
             unavailable_payload = self._encode_unavailable_payload(
@@ -646,8 +735,17 @@ class AgentRuntime:
         retired_consumer = self._retire_voice_generation(context.transport)
         has_service = context.voice_service is not None
         future_steps = (
-            int(has_service) + int(retired_consumer is not None) + 1
+            int(has_service) + int(retired_consumer is not None) + 2
         )
+        await self._cleanup_before_deadline(
+            context.transport.disable_input_actions,
+            "Input action notification cleanup",
+            deadline,
+            future_steps + 1,
+        )
+        context.input_nonce = None
+        context.input_replay_guard = None
+        context.input_submit_controller = None
         voice_cleaned = await self._cleanup_before_deadline(
             lambda: context.transport.disable_voice(unavailable_payload),
             "Voice notification cleanup",
