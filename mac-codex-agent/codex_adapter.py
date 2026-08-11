@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable, Optional, Tuple
 
 from task_alerts import TaskAlertSnapshot
+from task_routes import route_id_for_thread
 
 
 CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
@@ -403,6 +404,7 @@ class CodexStateCollector:
             "_codex_watch_notification_ids": watch_notification_ids,
             "codex_alerts": [
                 {
+                    "route": route_id_for_thread(alert.thread_id),
                     "project": alert.project,
                     "title": alert.title,
                     "time": _format_alert_time(
@@ -410,6 +412,8 @@ class CodexStateCollector:
                     ),
                     "state": alert.state,
                     "outcome": alert.outcome,
+                    "turn_id": alert.turn_id,
+                    "last_reply": alert.last_reply,
                 }
                 for alert in alerts.alerts
             ],
