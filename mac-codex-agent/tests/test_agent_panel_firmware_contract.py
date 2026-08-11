@@ -6,6 +6,24 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
 class AgentPanelFirmwareContractTests(unittest.TestCase):
+    def test_focus_rail_uses_approved_structure_and_copy(self):
+        header = (
+            ROOT / "main/apps/app_codex_status/app_codex_status.h"
+        ).read_text()
+        source = (
+            ROOT / "main/apps/app_codex_status/app_codex_status.cpp"
+        ).read_text()
+        self.assertIn('#include "agent_panel_ui_layout.h"', header)
+        self.assertIn("_agent_rail", header)
+        self.assertIn("lv_obj_set_scroll_snap_y", source)
+        self.assertIn('"Switch request"', source)
+        self.assertIn('"%u PAIRED"', source)
+        self.assertIn('"Hold to reset"', source)
+        self.assertIn('"PAIRING REQUEST"', source)
+        self.assertIn('"Allow + Switch"', source)
+        self.assertIn('"No paired Agents"', source)
+        self.assertIn("LV_OBJ_FLAG_HIDDEN", source)
+
     def test_codex_page_owns_pull_down_agent_panel(self):
         header = (
             ROOT / "main/apps/app_codex_status/app_codex_status.h"
