@@ -174,11 +174,13 @@ class Node:
 
 
 class FakeAX:
-    def __init__(self, focused, attributes):
+    def __init__(self, focused, attributes, *, value_settable=True):
         self.application = Node()
         self.focused = focused
         self.attributes = attributes
+        self.value_settable = value_settable
         self.reads = []
+        self.settable_reads = []
 
     def create_application(self, pid):
         if pid != 42:
@@ -194,6 +196,12 @@ class FakeAX:
             raise value
         return value
 
+    def is_settable(self, element, attribute):
+        self.settable_reads.append((element, attribute))
+        if isinstance(self.value_settable, BaseException):
+            raise self.value_settable
+        return self.value_settable
+
 
 def composer_graph(*, value="draft", label="Send", label_attribute="AXTitle"):
     composer = Node()
@@ -204,6 +212,7 @@ def composer_graph(*, value="draft", label="Send", label_attribute="AXTitle"):
         (composer, "AXEnabled"): True,
         (composer, "AXValue"): value,
         (composer, "AXParent"): container,
+        (container, "AXRole"): "AXGroup",
         (container, "AXChildren"): (composer, button),
         (button, "AXRole"): "AXButton",
         (button, label_attribute): label,
@@ -226,6 +235,7 @@ class MacOSCodexAccessibilitySnapshotTests(unittest.TestCase):
             workspace=lambda: FakeWorkspace(FakeApplication(bundle_identifier)),
             create_application=fake_ax.create_application,
             read_attribute=fake_ax.read,
+            is_attribute_settable=fake_ax.is_settable,
             max_nodes=max_nodes,
             max_depth=max_depth,
         )
@@ -315,6 +325,52 @@ class MacOSCodexAccessibilitySnapshotTests(unittest.TestCase):
                 self.assertFalse(current.has_text)
                 self.assertEqual(current.semantic, SubmitSemantic.UNKNOWN)
 
+    def test_focused_text_value_must_be_settable(self):
+        for settable in (False, RuntimeError("AX settable check failed")):
+            with self.subTest(settable=settable):
+                composer, _container, _button, attributes = composer_graph()
+                fake_ax = FakeAX(
+                    composer, attributes, value_settable=settable
+                )
+
+                current = self.adapter(fake_ax).snapshot()
+
+                self.assertFalse(current.editable)
+                self.assertFalse(current.has_text)
+                self.assertEqual(current.semantic, SubmitSemantic.UNKNOWN)
+                self.assertEqual(
+                    fake_ax.settable_reads,
+                    [(composer, "AXValue")],
+                )
+
+    def test_remote_submit_button_cannot_qualify_unrelated_text_field(self):
+        search_field = Node()
+        search_group = Node()
+        window = Node()
+        composer_group = Node()
+        remote_button = Node()
+        attributes = {
+            (search_field, "AXRole"): "AXTextField",
+            (search_field, "AXEnabled"): True,
+            (search_field, "AXValue"): "search terms",
+            (search_field, "AXParent"): search_group,
+            (search_group, "AXRole"): "AXGroup",
+            (search_group, "AXChildren"): (search_field,),
+            (search_group, "AXParent"): window,
+            (window, "AXRole"): "AXWindow",
+            (window, "AXChildren"): (search_group, composer_group),
+            (composer_group, "AXRole"): "AXGroup",
+            (composer_group, "AXChildren"): (remote_button,),
+            (remote_button, "AXRole"): "AXButton",
+            (remote_button, "AXTitle"): "Send",
+        }
+
+        current = self.adapter(FakeAX(search_field, attributes)).snapshot()
+
+        self.assertTrue(current.editable)
+        self.assertTrue(current.has_text)
+        self.assertEqual(current.semantic, SubmitSemantic.UNKNOWN)
+
     def test_conflicting_or_unrecognized_button_labels_are_unknown(self):
         for conflicting in (False, True):
             with self.subTest(conflicting=conflicting):
@@ -363,7 +419,7 @@ class MacOSCodexAccessibilitySnapshotTests(unittest.TestCase):
         composer, _container, _button, attributes = composer_graph(label="Send")
 
         current = self.adapter(
-            FakeAX(composer, attributes), max_depth=1
+            FakeAX(composer, attributes), max_depth=0
         ).snapshot()
 
         self.assertEqual(current.semantic, SubmitSemantic.UNKNOWN)

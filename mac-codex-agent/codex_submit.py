@@ -25,8 +25,10 @@ SEND_LABELS = frozenset(("send", "发送"))
 QUEUE_LABELS = frozenset(("queue", "加入队列"))
 STEER_LABELS = frozenset(("steer", "调整方向"))
 
-DEFAULT_MAX_AX_NODES = 128
-DEFAULT_MAX_AX_DEPTH = 8
+NEAREST_COMPOSER_CONTAINER_PARENT_HOPS = 1
+DEFAULT_MAX_COMPOSER_NODES = 64
+DEFAULT_MAX_COMPOSER_DESCENDANT_DEPTH = 2
+COMPOSER_CONTAINER_ROLES = frozenset((ApplicationServices.kAXGroupRole,))
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -136,6 +138,15 @@ def _read_ax_attribute(element: Any, attribute: str) -> Any:
     return value
 
 
+def _is_ax_attribute_settable(element: Any, attribute: str) -> bool:
+    error, settable = ApplicationServices.AXUIElementIsAttributeSettable(
+        element, attribute, None
+    )
+    if error != ApplicationServices.kAXErrorSuccess:
+        return False
+    return bool(settable)
+
+
 class MacOSCodexAccessibility:
     """Read the focused Codex composer and synthesize qualified key taps."""
 
@@ -148,13 +159,16 @@ class MacOSCodexAccessibility:
             ApplicationServices.AXUIElementCreateApplication
         ),
         read_attribute: Callable[[Any, str], Any] = _read_ax_attribute,
+        is_attribute_settable: Callable[[Any, str], bool] = (
+            _is_ax_attribute_settable
+        ),
         create_key_event: Callable[[Any, int, bool], Any] = (
             Quartz.CGEventCreateKeyboardEvent
         ),
         set_event_flags: Callable[[Any, int], None] = Quartz.CGEventSetFlags,
         post_event: Callable[[int, Any], None] = Quartz.CGEventPost,
-        max_nodes: int = DEFAULT_MAX_AX_NODES,
-        max_depth: int = DEFAULT_MAX_AX_DEPTH,
+        max_nodes: int = DEFAULT_MAX_COMPOSER_NODES,
+        max_depth: int = DEFAULT_MAX_COMPOSER_DESCENDANT_DEPTH,
         logger: logging.Logger = _LOGGER,
     ) -> None:
         if max_nodes < 1:
@@ -165,6 +179,7 @@ class MacOSCodexAccessibility:
         self._workspace = workspace
         self._create_application = create_application
         self._read_attribute = read_attribute
+        self._is_attribute_settable = is_attribute_settable
         self._create_key_event = create_key_event
         self._set_event_flags = set_event_flags
         self._post_event = post_event
@@ -229,13 +244,30 @@ class MacOSCodexAccessibility:
             ApplicationServices.kAXTextFieldRole,
         ):
             return False
-        return self._read_attribute(
+        if self._read_attribute(
             element, ApplicationServices.kAXEnabledAttribute
-        ) is True
+        ) is not True:
+            return False
+        return self._is_attribute_settable(
+            element, ApplicationServices.kAXValueAttribute
+        )
 
     def _nearby_submit_semantic(self, focused: Any) -> SubmitSemantic:
+        container = focused
+        for _ in range(NEAREST_COMPOSER_CONTAINER_PARENT_HOPS):
+            container = self._read_attribute(
+                container, ApplicationServices.kAXParentAttribute
+            )
+            if container is None:
+                return SubmitSemantic.UNKNOWN
+        container_role = self._read_attribute(
+            container, ApplicationServices.kAXRoleAttribute
+        )
+        if container_role not in COMPOSER_CONTAINER_ROLES:
+            return SubmitSemantic.UNKNOWN
+
         semantics = set()
-        pending = deque(((focused, 0),))
+        pending = deque(((container, 0),))
         visited = set()
         while pending and len(visited) < self._max_nodes:
             element, depth = pending.popleft()
@@ -256,11 +288,6 @@ class MacOSCodexAccessibility:
 
             if depth >= self._max_depth:
                 continue
-            parent = self._read_attribute(
-                element, ApplicationServices.kAXParentAttribute
-            )
-            if parent is not None:
-                pending.append((parent, depth + 1))
             children = self._read_attribute(
                 element, ApplicationServices.kAXChildrenAttribute
             )
