@@ -83,6 +83,14 @@ _VOICE_UNAVAILABLE_REASONS = {
 }
 
 
+def _status_publication_view(status):
+    return {
+        key: value
+        for key, value in status.items()
+        if not str(key).endswith("_collected_at")
+    }
+
+
 class ActiveRekeyError(RuntimeError):
     """The watch confirmed a new epoch but active rekey did not complete."""
 
@@ -398,6 +406,7 @@ class AgentRuntime:
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._commands: Optional[asyncio.Queue] = None
         self._latest_status = {}
+        self._latest_status_publication_view = None
         self._status_generation = 0
         self._status_ready: Optional[asyncio.Event] = None
         self._status_changed: Optional[asyncio.Event] = None
@@ -654,39 +663,55 @@ class AgentRuntime:
             except Exception:
                 LOGGER.exception("Codex status collection failed")
             else:
-                first_status = not self._latest_status
-                codex = CodexSnapshot.from_status(status)
-                trae = TraeSnapshot.from_status(status)
-                with self._state_lock:
-                    previous = self._snapshot
-                    self._snapshot = dataclasses.replace(
-                        previous,
-                        voice_state=previous.voice_state,
-                        voice_detail=previous.voice_detail,
-                        codex=codex,
-                        trae=trae,
-                        changed_at=time.time(),
-                    )
+                publication_view = _status_publication_view(status)
+                first_status = self._latest_status_publication_view is None
+                status_changed = (
+                    first_status
+                    or publication_view
+                    != self._latest_status_publication_view
+                )
                 self._latest_status = status
-                self._status_generation += 1
-                if self._status_changed is not None:
-                    self._status_changed.set()
-                if first_status:
-                    LOGGER.info(
-                        "Codex status ready: model=%s effort=%s",
-                        codex.model or "--",
-                        codex.effort or "--",
-                    )
+                self._latest_status_publication_view = publication_view
+                if status_changed:
+                    codex = CodexSnapshot.from_status(status)
+                    trae = TraeSnapshot.from_status(status)
+                    with self._state_lock:
+                        previous = self._snapshot
+                        self._snapshot = dataclasses.replace(
+                            previous,
+                            voice_state=previous.voice_state,
+                            voice_detail=previous.voice_detail,
+                            codex=codex,
+                            trae=trae,
+                            changed_at=time.time(),
+                        )
+                    self._status_generation += 1
+                    if self._status_changed is not None:
+                        self._status_changed.set()
+                    if first_status:
+                        LOGGER.info(
+                            "Codex status ready: model=%s effort=%s",
+                            codex.model or "--",
+                            codex.effort or "--",
+                        )
                 if self._status_ready is not None:
                     self._status_ready.set()
             wait_for_change = getattr(self._collector, "wait_for_change", None)
             if wait_for_change is None:
                 await asyncio.sleep(self._status_interval)
             else:
-                await asyncio.to_thread(
-                    wait_for_change,
-                    self._status_interval,
-                )
+                try:
+                    await asyncio.to_thread(
+                        wait_for_change,
+                        self._status_interval,
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    LOGGER.exception(
+                        "Codex rollout watch failed; using polling fallback"
+                    )
+                    await asyncio.sleep(self._status_interval)
 
     async def _run_session(self) -> str:
         context = _BleSessionContext(self._transport_factory())
@@ -968,20 +993,23 @@ class AgentRuntime:
             remaining = deadline - asyncio.get_running_loop().time()
             if remaining <= 0:
                 return
-            event_wait = asyncio.create_task(event.wait())
-            timeout_wait = asyncio.create_task(asyncio.sleep(remaining))
+            timed_out = False
+
+            def wake_for_timeout() -> None:
+                nonlocal timed_out
+                timed_out = True
+                event.set()
+
+            timeout_handle = asyncio.get_running_loop().call_later(
+                remaining,
+                wake_for_timeout,
+            )
             try:
-                done, _ = await asyncio.wait(
-                    (event_wait, timeout_wait),
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-                if timeout_wait in done:
+                await event.wait()
+                if timed_out and self._status_generation <= sent_generation:
                     return
             finally:
-                for wait in (event_wait, timeout_wait):
-                    if not wait.done():
-                        wait.cancel()
-                    await _await_cancelled(wait)
+                timeout_handle.cancel()
 
     async def _isolate_voice_failure(
         self, context: _BleSessionContext, error: Exception

@@ -14,6 +14,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from app_state import ConnectionState, MemoryPreferences, PairingState
 from agent import BleStatusTransport, WatchDiscovery
+from combined_collector import CompositeStateCollector
 from pairing_client import (
     AuthenticationResult,
     PairingPresentation,
@@ -325,6 +326,175 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(status_messages[-1]["codex_alert_revision"], 2)
         finally:
             collector.changed.set()
+            runtime.submit(AgentCommand.STOP)
+            await asyncio.wait_for(task, 1)
+
+    async def test_unchanged_rollout_wakeup_does_not_publish_extra_status(self):
+        class CodexSource(FakeCollector):
+            def __init__(self):
+                super().__init__([{"codex_alert_revision": 1}])
+                self.changed = threading.Event()
+
+            def wait_for_change(self, timeout):
+                changed = self.changed.wait(min(timeout, 0.05))
+                self.changed.clear()
+                return changed
+
+        codex = CodexSource()
+        trae = FakeCollector([{"trae_online": False}])
+        collector = CompositeStateCollector(
+            codex,
+            trae,
+            now=time.monotonic,
+        )
+        factory = FakeTransportFactory([{}])
+        runtime = AgentRuntime(
+            collector=collector,
+            transport_factory=factory,
+            status_interval=30.0,
+            retry_delays=(0.01,),
+            disconnect_timeout=0.1,
+        )
+        task = asyncio.create_task(runtime.run())
+        try:
+            await factory.wait_for_instances(1)
+            transport = factory.instances[0]
+            await wait_for_messages(transport, 2)
+            codex.changed.set()
+            for _ in range(100):
+                if codex.calls >= 2:
+                    break
+                await asyncio.sleep(0.01)
+            else:
+                self.fail("unchanged status was not recollected")
+            await asyncio.sleep(0.05)
+
+            status_messages = [
+                payload
+                for message_type, payload in transport.messages
+                if message_type == STATUS_MESSAGE
+                and json.loads(payload).get("source") != "trae"
+            ]
+            self.assertEqual(len(status_messages), 1)
+        finally:
+            codex.changed.set()
+            runtime.submit(AgentCommand.STOP)
+            await asyncio.wait_for(task, 1)
+
+    async def test_watcher_error_falls_back_without_stopping_collection(self):
+        class FailingWaitCollector(FakeCollector):
+            def __init__(self):
+                super().__init__([{"codex_alert_revision": 1}])
+                self.wait_calls = 0
+
+            def wait_for_change(self, _timeout):
+                self.wait_calls += 1
+                if self.wait_calls == 1:
+                    raise OSError("kqueue failed")
+                time.sleep(0.01)
+                return False
+
+        collector = FailingWaitCollector()
+        runtime = AgentRuntime(
+            collector=collector,
+            status_interval=0.01,
+        )
+        task = asyncio.create_task(runtime._collect_status())
+        try:
+            for _ in range(100):
+                if collector.calls >= 2:
+                    break
+                await asyncio.sleep(0.01)
+            else:
+                self.fail("collection did not recover from the watcher error")
+            self.assertFalse(task.done())
+        finally:
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+
+    async def test_changes_during_status_write_publish_latest_revision_serially(self):
+        class BurstCollector(FakeCollector):
+            def __init__(self):
+                super().__init__(
+                    [
+                        {"codex_alert_revision": 1},
+                        {"codex_alert_revision": 2},
+                        {"codex_alert_revision": 3},
+                    ]
+                )
+                self.changed = threading.Event()
+
+            def wait_for_change(self, timeout):
+                changed = self.changed.wait(min(timeout, 0.05))
+                self.changed.clear()
+                return changed
+
+        class BlockingTransport(FakeTransport):
+            def __init__(self):
+                super().__init__()
+                self.revision_two_started = asyncio.Event()
+                self.release_revision_two = asyncio.Event()
+                self.active_status_writes = 0
+                self.max_active_status_writes = 0
+
+            async def send_json(self, payload, message_type):
+                if message_type != STATUS_MESSAGE:
+                    await super().send_json(payload, message_type)
+                    return
+                self.active_status_writes += 1
+                self.max_active_status_writes = max(
+                    self.max_active_status_writes,
+                    self.active_status_writes,
+                )
+                try:
+                    status = json.loads(payload)
+                    if status["codex_alert_revision"] == 2:
+                        self.revision_two_started.set()
+                        await self.release_revision_two.wait()
+                    await super().send_json(payload, message_type)
+                finally:
+                    self.active_status_writes -= 1
+
+        collector = BurstCollector()
+        transport = BlockingTransport()
+        runtime = AgentRuntime(
+            collector=collector,
+            transport_factory=lambda: transport,
+            status_interval=30.0,
+            retry_delays=(0.01,),
+            disconnect_timeout=0.1,
+        )
+        task = asyncio.create_task(runtime.run())
+        try:
+            await wait_for_messages(transport, 2)
+            collector.changed.set()
+            await asyncio.wait_for(transport.revision_two_started.wait(), 1)
+            collector.changed.set()
+            for _ in range(100):
+                if runtime.snapshot().codex.alert_revision == 3:
+                    break
+                await asyncio.sleep(0.01)
+            else:
+                self.fail("latest status was not collected during the write")
+            transport.release_revision_two.set()
+            for _ in range(100):
+                revisions = [
+                    json.loads(payload)["codex_alert_revision"]
+                    for message_type, payload in transport.messages
+                    if message_type == STATUS_MESSAGE
+                ]
+                if revisions[-1:] == [3]:
+                    break
+                await asyncio.sleep(0.01)
+            else:
+                self.fail("latest status was not published after the write")
+
+            self.assertEqual(revisions, [1, 2, 3])
+            self.assertEqual(transport.max_active_status_writes, 1)
+        finally:
+            collector.changed.set()
+            transport.release_revision_two.set()
             runtime.submit(AgentCommand.STOP)
             await asyncio.wait_for(task, 1)
 
@@ -1839,6 +2009,36 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
                     await task
                 except asyncio.CancelledError:
                     pass
+
+    async def test_repeated_stop_during_status_wait_preserves_cancellation(self):
+        for iteration in range(10):
+            collector = FakeCollector([{"codex_model": "gpt-stop"}])
+            factory = FakeTransportFactory([{}])
+            runtime = AgentRuntime(
+                collector=collector,
+                transport_factory=factory,
+                status_interval=0.01,
+                retry_delays=(0.01,),
+                disconnect_timeout=0.1,
+            )
+            task = asyncio.create_task(runtime.run())
+            await wait_for_codex_model(runtime, "gpt-stop")
+            await factory.wait_for_instances(1)
+            transport = factory.instances[0]
+            await transport.connected_event.wait()
+
+            runtime.submit(AgentCommand.STOP)
+            done, _ = await asyncio.wait((task,), timeout=0.2)
+            if not done:
+                transport._connected = False
+                if runtime._status_changed is not None:
+                    runtime._status_changed.set()
+                await asyncio.wait_for(task, 1)
+                self.fail(
+                    "stop cancellation was lost on iteration {}".format(
+                        iteration
+                    )
+                )
 
     async def test_collects_codex_status_while_connection_is_disabled(self):
         collector = FakeCollector(

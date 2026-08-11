@@ -247,6 +247,7 @@ import completion_classifier
 import ima_adpcm
 import menu_app
 import protocol
+import rollout_change_watcher
 import runtime
 import pairing_client
 import secure_pairing_crypto
@@ -296,6 +297,7 @@ validate_app_contents() {
         "$resources/app/voice_session.py" \
         "$resources/app/ima_adpcm.py" \
         "$resources/app/agent_identity.py" \
+        "$resources/app/rollout_change_watcher.py" \
         "$resources/app/watch_credentials.py" \
         "$resources/app/pairing_client.py" \
         "$resources/app/secure_pairing_crypto.py" \
@@ -560,6 +562,7 @@ build_staged_app() {
         combined_collector.py \
         completion_classifier.py \
         codex_turn_evidence.py \
+        rollout_change_watcher.py \
         task_alerts.py \
         trae_adapter.py \
         trae_tasks.py \

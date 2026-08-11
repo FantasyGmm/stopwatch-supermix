@@ -63,7 +63,8 @@ Logs are written to:
   Running rows are blue, and Completed rows are dimmed.
 - The optional **Trae Status** section shows Trae availability, model, effort,
   and up to four normalized task rows. Trae failures are isolated from Codex.
-- Codex status is sampled once every two seconds and shared with the watch. The
+- Codex rollout changes wake collection and watch delivery immediately. A
+  two-second heartbeat remains as recovery for a missed filesystem event. The
   menu continues updating even when the watch is disconnected or watch
   connection is disabled.
 - **Agent** shows whether the menu application is running.
@@ -204,6 +205,15 @@ reclassifies only the latest unsuperseded completion. It never resurrects a turn
 that already has a later user message. Temporarily incomplete or unreadable
 rollouts remain queued for retry, and repeated refreshes do not duplicate the
 Pending chime.
+
+On macOS, the agent waits on the state database and known rollout files using a
+bounded vnode watcher. A completed rollout therefore bypasses the normal
+heartbeat delay. The resulting status snapshot owns its exact set of
+unnotified Pending IDs: the agent sends that full status first, sends one chime
+only after the status succeeds, and acknowledges those IDs only after the
+chime succeeds. A newer ledger state cannot chime against an older displayed
+Pending count. Negotiated BLE frame sizes reduce transfer round trips; the
+validated 20-byte framing remains the compatibility fallback.
 
 The project name is derived from the conversation working directory, and the
 conversation title is refreshed through Codex's local app-server so generated

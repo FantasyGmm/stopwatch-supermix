@@ -71,6 +71,7 @@ class InstallScriptTests(unittest.TestCase):
             "combined_collector.py",
             "completion_classifier.py",
             "codex_turn_evidence.py",
+            "rollout_change_watcher.py",
             "task_alerts.py",
             "protocol.py",
             "pairing_client.py",

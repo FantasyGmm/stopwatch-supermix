@@ -23,6 +23,8 @@ Avoid decorative motion, web-dashboard ornament, delayed choreography, flashing 
 ## Design Principles
 
 - Make state changes spatially clear and immediately responsive.
+- Deliver critical workflow state through an event-driven fast path, with
+  bounded polling only as a recovery mechanism.
 - Preserve familiar controls and consistent gesture ownership.
 - Spend the limited motion budget only on feedback and navigation.
 - Prefer bounded, hardware-efficient behavior over decorative effects.

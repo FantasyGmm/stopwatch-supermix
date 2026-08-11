@@ -141,6 +141,52 @@ class CodexStatusAgentTests(unittest.TestCase):
         )
         self.assertEqual(collector.notified, ["alert-a", "alert-b"])
 
+    def test_stale_snapshot_cannot_chime_or_acknowledge_twice(self):
+        collector = FakeCollector()
+        transport = FakeTransport()
+        agent = CodexStatusAgent(collector=collector, transport=transport)
+        status = collector.get_state()
+
+        asyncio.run(agent.tick(status=status))
+        asyncio.run(agent.tick(status=status))
+
+        chimes = [
+            payload
+            for message_type, payload in transport.messages
+            if message_type == EVENT_MESSAGE and payload.get("type") == "chime"
+        ]
+        self.assertEqual(chimes, [{"type": "chime", "agent": "codex"}])
+        self.assertEqual(collector.notified, ["alert-a", "alert-b"])
+
+    def test_failed_acknowledgement_retries_without_repeating_chime(self):
+        class RetryCollector(FakeCollector):
+            def __init__(self):
+                super().__init__()
+                self.mark_calls = 0
+
+            def mark_watch_notified(self, alert_ids):
+                self.mark_calls += 1
+                if self.mark_calls == 1:
+                    raise OSError("ledger temporarily unavailable")
+                super().mark_watch_notified(alert_ids)
+
+        collector = RetryCollector()
+        transport = FakeTransport()
+        agent = CodexStatusAgent(collector=collector, transport=transport)
+        status = collector.get_state()
+
+        asyncio.run(agent.tick(status=status))
+        asyncio.run(agent.tick(status=status))
+
+        chimes = [
+            payload
+            for message_type, payload in transport.messages
+            if message_type == EVENT_MESSAGE and payload.get("type") == "chime"
+        ]
+        self.assertEqual(chimes, [{"type": "chime", "agent": "codex"}])
+        self.assertEqual(collector.mark_calls, 2)
+        self.assertEqual(collector.notified, ["alert-a", "alert-b"])
+
     def test_failed_chime_write_does_not_mark_alert_notified(self):
         collector = FakeCollector()
         transport = FakeTransport(fail_event=True)

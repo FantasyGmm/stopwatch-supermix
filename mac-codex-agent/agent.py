@@ -6,6 +6,7 @@ import dataclasses
 import datetime
 import hashlib
 import json
+import logging
 import math
 import threading
 import time
@@ -32,6 +33,7 @@ from secure_pairing_wire import (
 )
 
 
+LOGGER = logging.getLogger(__name__)
 DEVICE_NAME = "StopWatch-Codex"
 SERVICE_UUID = "7a230001-5474-4f50-5741-544348434f44"
 STATUS_RX_UUID = "7a230002-5474-4f50-5741-544348434f44"
@@ -123,6 +125,8 @@ class CodexStatusAgent:
         self._monotonic = monotonic
         self._last_trae_fingerprint = None
         self._last_trae_sent_at = None
+        self._delivered_alert_ids = set()
+        self._acknowledged_alert_ids = set()
 
     async def sync_time(self) -> None:
         payload = {
@@ -173,7 +177,12 @@ class CodexStatusAgent:
                 self._last_trae_fingerprint = fingerprint
                 self._last_trae_sent_at = now
 
-        if alert_ids:
+        new_alert_ids = tuple(
+            alert_id
+            for alert_id in alert_ids
+            if alert_id not in self._delivered_alert_ids
+        )
+        if new_alert_ids:
             await self.transport.send_json(
                 json.dumps(
                     {"type": "chime", "agent": "codex"},
@@ -181,9 +190,28 @@ class CodexStatusAgent:
                 ),
                 EVENT_MESSAGE,
             )
-            await asyncio.to_thread(
-                self.collector.mark_watch_notified, alert_ids
-            )
+            self._delivered_alert_ids.update(new_alert_ids)
+        unacknowledged_ids = tuple(
+            alert_id
+            for alert_id in alert_ids
+            if alert_id in self._delivered_alert_ids
+            and alert_id not in self._acknowledged_alert_ids
+        )
+        if unacknowledged_ids:
+            try:
+                await asyncio.to_thread(
+                    self.collector.mark_watch_notified,
+                    unacknowledged_ids,
+                )
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                LOGGER.warning(
+                    "Watch notification acknowledgement deferred: %s",
+                    type(error).__name__,
+                )
+            else:
+                self._acknowledged_alert_ids.update(unacknowledged_ids)
         return status
 
 
