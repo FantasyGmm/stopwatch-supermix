@@ -192,6 +192,11 @@ bool VoiceButtonEdgeGate::is_suppressed() const
            _state == State::SuppressedUntilBothRelease;
 }
 
+bool VoiceButtonEdgeGate::is_active() const
+{
+    return _state == State::Active;
+}
+
 void VoiceButtonDispatcher::reset(bool right_pressed)
 {
     _gate.reset(right_pressed);
@@ -208,11 +213,15 @@ VoiceButtonDispatchDecision VoiceButtonDispatcher::dispatch(
     CodexButtonActionSink* action_sink,
     bool input_suppressed)
 {
+    const bool cancel_active_voice = input_suppressed && _gate.is_active();
     if (input_suppressed) {
         _gate.reset(right_pressed);
     }
-    const VoiceButtonAction action = _gate.update(
+    VoiceButtonAction action = _gate.update(
         left_pressed, right_pressed, woke_screen, go_home, now_ms);
+    if (cancel_active_voice && action == VoiceButtonAction::None) {
+        action = VoiceButtonAction::CancelVoice;
+    }
     const CodexButtonAction codex_action = _gesture.update(
         action == VoiceButtonAction::ShortClick,
         right_pressed,

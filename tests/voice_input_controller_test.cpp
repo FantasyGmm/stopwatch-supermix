@@ -988,6 +988,32 @@ void test_dispatcher_global_input_suppression_clears_pending_gestures()
     assert(action_sink.actions.empty());
 }
 
+void test_dispatcher_global_input_suppression_cancels_active_voice_once()
+{
+    FakeVoiceButtonSink voice_sink;
+    FakeCodexButtonActionSink action_sink;
+    VoiceButtonDispatcher dispatcher;
+    constexpr uint32_t guard = VoiceButtonEdgeGate::kChordGuardMs;
+    dispatcher.reset(false);
+
+    dispatcher.dispatch(false, true, false, false, 0, &voice_sink, &action_sink);
+    dispatcher.dispatch(
+        false, true, false, false, guard, &voice_sink, &action_sink);
+    assert(voice_sink.events.size() == 1);
+    assert(std::string(voice_sink.events[0]) == "press");
+
+    assert(dispatcher.dispatch(
+               false, false, false, false, 100, &voice_sink, &action_sink, true) ==
+           VoiceButtonDispatchDecision::Continue);
+    dispatcher.dispatch(
+        false, false, false, false, 120, &voice_sink, &action_sink, false);
+
+    assert(voice_sink.events.size() == 2);
+    assert(std::string(voice_sink.events[1]) == "cancel");
+    assert(voice_sink.times[1] == 100);
+    assert(action_sink.actions.empty());
+}
+
 void test_dispatcher_guard_handles_uint32_wraparound()
 {
     FakeVoiceButtonSink sink;
@@ -1087,6 +1113,7 @@ int main()
     test_dispatcher_independent_a_click_preserves_pending_b_submit();
     test_dispatcher_cross_release_suppression_clears_latched_second_click();
     test_dispatcher_global_input_suppression_clears_pending_gestures();
+    test_dispatcher_global_input_suppression_cancels_active_voice_once();
     test_dispatcher_guard_handles_uint32_wraparound();
     test_cancel_waits_for_inflight_producer_cleanup();
 }

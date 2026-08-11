@@ -80,6 +80,7 @@ public:
         bool woke_screen,
         bool go_home,
         uint32_t now_ms);
+    bool is_active() const;
     bool is_suppressed() const;
 
 private:
