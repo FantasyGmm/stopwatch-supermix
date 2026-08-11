@@ -1,6 +1,7 @@
 import pathlib
 import sys
 import unittest
+from types import SimpleNamespace
 
 
 AGENT_ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -9,6 +10,8 @@ sys.path.insert(0, str(AGENT_ROOT))
 from codex_submit import (  # noqa: E402
     ALTERNATE_MODIFIER_FLAGS,
     CODEX_BUNDLE_IDENTIFIER,
+    COMPOSER_DESCRIPTIONS,
+    COMPOSER_DESCRIPTION_SOURCES,
     RETURN_KEY_CODE,
     CodexSubmitController,
     ComposerSnapshot,
@@ -16,24 +19,6 @@ from codex_submit import (  # noqa: E402
     SubmitSemantic,
 )
 from input_action_protocol import InputAction  # noqa: E402
-
-
-class FakeAccessibility:
-    def __init__(self, snapshot):
-        self.current_snapshot = snapshot
-        self.normal_calls = 0
-        self.alternate_calls = 0
-
-    def snapshot(self):
-        if isinstance(self.current_snapshot, BaseException):
-            raise self.current_snapshot
-        return self.current_snapshot
-
-    def normal_submit(self):
-        self.normal_calls += 1
-
-    def alternate_submit(self):
-        self.alternate_calls += 1
 
 
 def snapshot(
@@ -51,13 +36,41 @@ def snapshot(
     )
 
 
+class FakeAccessibility:
+    def __init__(self, current_snapshot):
+        self.current_snapshot = current_snapshot
+        self.normal_calls = 0
+        self.alternate_calls = 0
+        self.dispatch_error = None
+
+    def prepare(self):
+        if isinstance(self.current_snapshot, BaseException):
+            raise self.current_snapshot
+        return SimpleNamespace(
+            snapshot=self.current_snapshot,
+            semantic=getattr(
+                self.current_snapshot, "semantic", SubmitSemantic.UNKNOWN
+            ),
+        )
+
+    def normal_submit(self, _prepared):
+        if self.dispatch_error is not None:
+            raise self.dispatch_error
+        self.normal_calls += 1
+
+    def alternate_submit(self, _prepared):
+        if self.dispatch_error is not None:
+            raise self.dispatch_error
+        self.alternate_calls += 1
+
+
 class CodexSubmitControllerTests(unittest.TestCase):
     def dispatch(self, action, current_snapshot):
         accessibility = FakeAccessibility(current_snapshot)
         handled = CodexSubmitController(accessibility).handle(action)
         return handled, accessibility
 
-    def test_submit_uses_normal_action_for_every_recognized_semantic(self):
+    def test_submit_uses_normal_action_for_each_recognized_semantic(self):
         for semantic in (
             SubmitSemantic.SEND,
             SubmitSemantic.QUEUE,
@@ -67,86 +80,53 @@ class CodexSubmitControllerTests(unittest.TestCase):
                 handled, accessibility = self.dispatch(
                     InputAction.SUBMIT, snapshot(semantic)
                 )
-
                 self.assertTrue(handled)
                 self.assertEqual(accessibility.normal_calls, 1)
                 self.assertEqual(accessibility.alternate_calls, 0)
 
-    def test_force_steer_uses_normal_action_for_send_or_steer(self):
-        for semantic in (SubmitSemantic.SEND, SubmitSemantic.STEER):
+    def test_force_steer_uses_normal_for_send_and_steer_but_alternate_for_queue(self):
+        for semantic, expected in (
+            (SubmitSemantic.SEND, (1, 0)),
+            (SubmitSemantic.STEER, (1, 0)),
+            (SubmitSemantic.QUEUE, (0, 1)),
+        ):
             with self.subTest(semantic=semantic):
                 handled, accessibility = self.dispatch(
                     InputAction.FORCE_STEER, snapshot(semantic)
                 )
-
                 self.assertTrue(handled)
-                self.assertEqual(accessibility.normal_calls, 1)
-                self.assertEqual(accessibility.alternate_calls, 0)
+                self.assertEqual(
+                    (accessibility.normal_calls, accessibility.alternate_calls),
+                    expected,
+                )
 
-    def test_force_steer_uses_alternate_action_when_normal_action_queues(self):
-        handled, accessibility = self.dispatch(
-            InputAction.FORCE_STEER, snapshot(SubmitSemantic.QUEUE)
-        )
-
-        self.assertTrue(handled)
-        self.assertEqual(accessibility.normal_calls, 0)
-        self.assertEqual(accessibility.alternate_calls, 1)
-
-    def test_every_unsafe_snapshot_fails_closed(self):
-        unsafe_snapshots = (
+    def test_unsafe_malformed_unknown_and_errors_fail_closed(self):
+        cases = (
             snapshot(codex_foreground=False),
             snapshot(editable=False),
             snapshot(has_text=False),
             snapshot(SubmitSemantic.UNKNOWN),
-        )
-        for current_snapshot in unsafe_snapshots:
-            for action in (InputAction.SUBMIT, InputAction.FORCE_STEER):
-                with self.subTest(snapshot=current_snapshot, action=action):
-                    handled, accessibility = self.dispatch(action, current_snapshot)
-
-                    self.assertFalse(handled)
-                    self.assertEqual(accessibility.normal_calls, 0)
-                    self.assertEqual(accessibility.alternate_calls, 0)
-
-    def test_unknown_action_fails_closed(self):
-        handled, accessibility = self.dispatch(object(), snapshot())
-
-        self.assertFalse(handled)
-        self.assertEqual(accessibility.normal_calls, 0)
-        self.assertEqual(accessibility.alternate_calls, 0)
-
-    def test_accessibility_errors_fail_closed(self):
-        handled, accessibility = self.dispatch(
-            InputAction.SUBMIT, RuntimeError("AX unavailable")
-        )
-
-        self.assertFalse(handled)
-        self.assertEqual(accessibility.normal_calls, 0)
-
-    def test_malformed_accessibility_snapshot_fails_closed(self):
-        malformed_snapshots = (
-            object(),
             ComposerSnapshot(True, True, True, object()),
+            object(),
+            RuntimeError("AX unavailable"),
         )
-        for current_snapshot in malformed_snapshots:
-            with self.subTest(snapshot=current_snapshot):
-                handled, accessibility = self.dispatch(
-                    InputAction.SUBMIT, current_snapshot
-                )
-
+        for current in cases:
+            with self.subTest(current=current):
+                handled, accessibility = self.dispatch(InputAction.SUBMIT, current)
                 self.assertFalse(handled)
                 self.assertEqual(accessibility.normal_calls, 0)
+                self.assertEqual(accessibility.alternate_calls, 0)
 
-    def test_keyboard_dispatch_errors_fail_closed(self):
-        accessibility = FakeAccessibility(snapshot())
-
-        def fail():
-            raise RuntimeError("event posting failed")
-
-        accessibility.normal_submit = fail
-        handled = CodexSubmitController(accessibility).handle(InputAction.SUBMIT)
-
+    def test_unknown_action_and_dispatch_error_fail_closed(self):
+        handled, accessibility = self.dispatch(object(), snapshot())
         self.assertFalse(handled)
+        self.assertEqual(accessibility.normal_calls, 0)
+
+        accessibility = FakeAccessibility(snapshot())
+        accessibility.dispatch_error = RuntimeError("dispatch failed")
+        self.assertFalse(
+            CodexSubmitController(accessibility).handle(InputAction.SUBMIT)
+        )
 
 
 class FakeApplication:
@@ -161,366 +141,416 @@ class FakeApplication:
         return self._pid
 
 
-class FakeWorkspace:
-    def __init__(self, application):
-        self.application = application
+class SequencedWorkspace:
+    def __init__(self, *applications):
+        self.applications = applications
+        self.calls = 0
 
     def frontmostApplication(self):
-        return self.application
+        application = self.applications[
+            min(self.calls, len(self.applications) - 1)
+        ]
+        self.calls += 1
+        return application
 
 
 class Node:
-    pass
+    """An AX wrapper whose equality/hash represent the underlying AX node."""
+
+    def __init__(self, token):
+        self.token = token
+
+    def __eq__(self, other):
+        return isinstance(other, Node) and self.token == other.token
+
+    def __hash__(self):
+        return hash(self.token)
 
 
-class FakeAX:
-    def __init__(self, focused, attributes, *, value_settable=True):
-        self.application = Node()
-        self.focused = focused
-        self.attributes = attributes
-        self.value_settable = value_settable
-        self.reads = []
-        self.settable_reads = []
+class RealComposerFixture:
+    def __init__(self, *, description="Do anything", label="Send", value="hello"):
+        self.application_element = Node("application")
+        self.focused = Node("focused")
+        self.rich_text_input = Node("rich-text-input")
+        self.composer_body = Node("composer-body")
+        self.composer_root = Node("composer-root")
+        self.button = Node("button")
+        self.attributes = {
+            (self.application_element, "AXFocusedUIElement"): self.focused,
+            (self.focused, "AXRole"): "AXTextArea",
+            (self.focused, "AXEnabled"): True,
+            (self.focused, "AXDescription"): description,
+            (self.focused, "AXDOMClassList"): ("ProseMirror",),
+            (self.focused, "AXChromeAXNodeId"): 101,
+            (self.focused, "AXValue"): value,
+            (self.focused, "AXParent"): self.rich_text_input,
+            (self.focused, "AXChildren"): (),
+            (self.rich_text_input, "AXRole"): "AXGroup",
+            (self.rich_text_input, "AXDOMClassList"): (
+                "_RichTextInput_abcd_1",
+            ),
+            (self.rich_text_input, "AXChildren"): (self.focused,),
+            (self.rich_text_input, "AXParent"): self.composer_body,
+            (self.composer_body, "AXRole"): "AXGroup",
+            (self.composer_body, "AXDOMClassList"): (
+                "_ComposerLayoutBody_abcd_1",
+            ),
+            (self.composer_body, "AXChildren"): (
+                self.rich_text_input,
+                self.button,
+            ),
+            (self.composer_body, "AXParent"): self.composer_root,
+            (self.composer_root, "AXRole"): "AXGroup",
+            (self.composer_root, "AXDOMClassList"): (
+                "_ComposerLayoutRoot_abcd_1",
+            ),
+            (self.composer_root, "AXChildren"): (self.composer_body,),
+            (self.button, "AXRole"): "AXButton",
+            (self.button, "AXEnabled"): True,
+            (self.button, "AXTitle"): label,
+            (self.button, "AXChromeAXNodeId"): 202,
+        }
+        self.create_calls = 0
+        self.before_revalidation = None
+        self.actions = []
+        self.action_result = 0
 
-    def create_application(self, pid):
-        if pid != 42:
-            raise AssertionError("unexpected pid")
-        return self.application
+    def create_application(self, _pid):
+        self.create_calls += 1
+        if self.create_calls == 2 and self.before_revalidation is not None:
+            self.before_revalidation()
+        return self.application_element
 
     def read(self, element, attribute):
-        self.reads.append((element, attribute))
-        if element is self.application and attribute == "AXFocusedUIElement":
-            return self.focused
         value = self.attributes.get((element, attribute))
         if isinstance(value, BaseException):
             raise value
         return value
 
     def is_settable(self, element, attribute):
-        self.settable_reads.append((element, attribute))
-        if isinstance(self.value_settable, BaseException):
-            raise self.value_settable
-        return self.value_settable
+        return element == self.focused and attribute == "AXValue"
+
+    def perform_action(self, element, action):
+        self.actions.append((element, action))
+        return self.action_result
 
 
-def composer_graph(*, value="draft", label="Send", label_attribute="AXTitle"):
-    composer = Node()
-    container = Node()
-    button = Node()
-    attributes = {
-        (composer, "AXRole"): "AXTextArea",
-        (composer, "AXEnabled"): True,
-        (composer, "AXValue"): value,
-        (composer, "AXParent"): container,
-        (container, "AXRole"): "AXGroup",
-        (container, "AXChildren"): (composer, button),
-        (button, "AXRole"): "AXButton",
-        (button, label_attribute): label,
-    }
-    return composer, container, button, attributes
-
-
-class MacOSCodexAccessibilitySnapshotTests(unittest.TestCase):
+class PreparedCodexSubmissionTests(unittest.TestCase):
     def adapter(
         self,
-        fake_ax,
+        fixture,
         *,
-        bundle_identifier=CODEX_BUNDLE_IDENTIFIER,
+        workspace=None,
         trusted=lambda: True,
-        max_nodes=64,
-        max_depth=6,
+        created_events=None,
+        event_flags=None,
+        posted_events=None,
+        post_event_to_pid=None,
     ):
+        workspace = workspace or SequencedWorkspace(FakeApplication())
+        created_events = created_events if created_events is not None else []
+        event_flags = event_flags if event_flags is not None else []
+        posted_events = posted_events if posted_events is not None else []
+
+        def create_event(_source, key_code, down):
+            event = Node("key-down" if down else "key-up")
+            created_events.append((event, key_code, down))
+            return event
+
+        if post_event_to_pid is None:
+            post_event_to_pid = lambda pid, event: posted_events.append(
+                (pid, event)
+            )
         return MacOSCodexAccessibility(
             trusted=trusted,
-            workspace=lambda: FakeWorkspace(FakeApplication(bundle_identifier)),
-            create_application=fake_ax.create_application,
-            read_attribute=fake_ax.read,
-            is_attribute_settable=fake_ax.is_settable,
-            max_nodes=max_nodes,
-            max_depth=max_depth,
+            workspace=lambda: workspace,
+            create_application=fixture.create_application,
+            read_attribute=fixture.read,
+            is_attribute_settable=fixture.is_settable,
+            perform_action=fixture.perform_action,
+            create_key_event=create_event,
+            set_event_flags=lambda event, flags: event_flags.append(
+                (event, flags)
+            ),
+            post_event_to_pid=post_event_to_pid,
         )
 
-    def test_non_codex_foreground_never_reads_accessibility_tree(self):
-        composer, _container, _button, attributes = composer_graph()
-        fake_ax = FakeAX(composer, attributes)
-
-        current = self.adapter(
-            fake_ax, bundle_identifier="com.apple.TextEdit"
-        ).snapshot()
-
-        self.assertEqual(current, snapshot(codex_foreground=False, editable=False,
-                                           has_text=False,
-                                           semantic=SubmitSemantic.UNKNOWN))
-        self.assertEqual(fake_ax.reads, [])
-
-    def test_missing_accessibility_permission_fails_closed(self):
-        composer, _container, _button, attributes = composer_graph()
-        fake_ax = FakeAX(composer, attributes)
-
-        current = self.adapter(fake_ax, trusted=lambda: False).snapshot()
-
+    def test_app_asar_composer_allowlist_covers_every_current_mode(self):
+        expected_ids = {
+            "chatgptConversations.composer.placeholder",
+            "homePage.composer.placeholder.askAnything.v2",
+            "composer.placeholder.cloudFollowUp.directFollowUp",
+            "composer.placeholder.cloudFollowUp.local",
+            "composer.placeholder.cloudFollowUp.workingTree",
+            "composer.placeholder.goal",
+            "composer.placeholder.localFollowUp.cloud",
+            "composer.placeholder.localFollowUp.locally",
+            "composer.placeholder.localFollowUp.locallyWithAgents",
+            "composer.placeholder.newTask.cloud",
+            "composer.placeholder.newTask.doAnything",
+            "composer.placeholder.newTask.locally.chatgptDesktop",
+            "composer.placeholder.newTask.locally.v2",
+            "composer.placeholder.plan",
+            "composer.placeholder.workWithChatGPT",
+            "composer.placeholder.working",
+        }
+        self.assertEqual(set(COMPOSER_DESCRIPTION_SOURCES), expected_ids)
         self.assertEqual(
-            current,
-            snapshot(editable=False, has_text=False,
-                     semantic=SubmitSemantic.UNKNOWN),
+            COMPOSER_DESCRIPTIONS,
+            frozenset(
+                value
+                for pair in COMPOSER_DESCRIPTION_SOURCES.values()
+                for value in pair
+            ),
         )
-        self.assertEqual(fake_ax.reads, [])
 
-    def test_focused_editable_nonempty_composer_and_english_labels(self):
+    def test_real_two_level_composer_recognizes_en_zh_and_follow_up(self):
         cases = (
-            ("Send", SubmitSemantic.SEND),
-            ("Queue", SubmitSemantic.QUEUE),
-            ("Steer", SubmitSemantic.STEER),
+            ("Do anything", "Send", SubmitSemantic.SEND),
+            ("随心输入", "发送", SubmitSemantic.SEND),
+            ("Ask for follow-up changes", "Queue", SubmitSemantic.QUEUE),
+            ("提出后续变更要求", "加入队列", SubmitSemantic.QUEUE),
+            ("Do anything", "Steer", SubmitSemantic.STEER),
+            ("随心输入", "调整方向", SubmitSemantic.STEER),
         )
-        for label, semantic in cases:
-            with self.subTest(label=label):
-                composer, _container, _button, attributes = composer_graph(
-                    label=label
+        for description, label, semantic in cases:
+            with self.subTest(description=description, label=label):
+                fixture = RealComposerFixture(
+                    description=description, label=label
                 )
-
-                current = self.adapter(FakeAX(composer, attributes)).snapshot()
-
+                current = self.adapter(fixture).snapshot()
                 self.assertEqual(current, snapshot(semantic))
 
-    def test_simplified_chinese_labels_and_all_supported_attributes(self):
-        cases = (
-            ("发送", "AXTitle", SubmitSemantic.SEND),
-            ("加入队列", "AXDescription", SubmitSemantic.QUEUE),
-            ("调整方向", "AXHelp", SubmitSemantic.STEER),
+    def test_optional_composer_root_can_be_omitted(self):
+        fixture = RealComposerFixture()
+        fixture.attributes[(fixture.composer_body, "AXParent")] = None
+        self.assertEqual(
+            self.adapter(fixture).snapshot().semantic,
+            SubmitSemantic.SEND,
         )
-        for label, attribute, semantic in cases:
-            with self.subTest(label=label, attribute=attribute):
-                composer, _container, _button, attributes = composer_graph(
-                    label=label, label_attribute=attribute
-                )
 
-                current = self.adapter(FakeAX(composer, attributes)).snapshot()
+    def test_feedback_textarea_with_local_send_button_is_rejected(self):
+        fixture = RealComposerFixture(description="Share details")
+        current = self.adapter(fixture).snapshot()
+        self.assertFalse(current.editable)
+        self.assertEqual(current.semantic, SubmitSemantic.UNKNOWN)
 
-                self.assertEqual(current, snapshot(semantic))
+    def test_non_codex_permission_and_ax_errors_fail_closed(self):
+        fixture = RealComposerFixture()
+        non_codex = self.adapter(
+            fixture,
+            workspace=SequencedWorkspace(
+                FakeApplication("com.apple.TextEdit")
+            ),
+        ).snapshot()
+        self.assertFalse(non_codex.codex_foreground)
+        self.assertEqual(fixture.create_calls, 0)
 
-    def test_text_must_be_nonempty_after_trimming(self):
-        composer, _container, _button, attributes = composer_graph(value=" \n\t ")
+        no_permission = self.adapter(fixture, trusted=lambda: False).snapshot()
+        self.assertTrue(no_permission.codex_foreground)
+        self.assertFalse(no_permission.editable)
 
-        current = self.adapter(FakeAX(composer, attributes)).snapshot()
+        fixture.attributes[(fixture.focused, "AXRole")] = RuntimeError(
+            "AX read failed"
+        )
+        self.assertFalse(self.adapter(fixture).snapshot().editable)
 
+    def test_text_must_be_settable_and_have_stable_focused_token(self):
+        fixture = RealComposerFixture()
+        adapter = self.adapter(fixture)
+        adapter._is_attribute_settable = lambda _element, _attribute: False
+        self.assertFalse(adapter.snapshot().editable)
+
+        fixture = RealComposerFixture()
+        adapter = self.adapter(fixture)
+
+        def fail_settable(_element, _attribute):
+            raise RuntimeError("AX settable check failed")
+
+        adapter._is_attribute_settable = fail_settable
+        self.assertFalse(adapter.snapshot().editable)
+
+        fixture = RealComposerFixture()
+        fixture.attributes.pop((fixture.focused, "AXChromeAXNodeId"))
+        self.assertIsNone(self.adapter(fixture).prepare())
+
+    def test_placeholder_subtree_makes_real_ax_value_empty(self):
+        fixture = RealComposerFixture(
+            description="随心输入", value="\n随心输入"
+        )
+        placeholder = Node("placeholder")
+        fixture.attributes[(placeholder, "AXDOMClassList")] = (
+            "_placeholder_abcd_1",
+        )
+        fixture.attributes[(fixture.focused, "AXChildren")] = (placeholder,)
+
+        current = self.adapter(fixture).snapshot()
         self.assertTrue(current.editable)
         self.assertFalse(current.has_text)
-        self.assertEqual(current.semantic, SubmitSemantic.SEND)
+        self.assertIsNone(self.adapter(fixture).prepare())
 
-    def test_missing_or_non_editable_focused_element_fails_closed(self):
-        cases = []
-        composer, _container, _button, attributes = composer_graph()
-        attributes[(composer, "AXEnabled")] = False
-        cases.append((composer, attributes))
-        composer, _container, _button, attributes = composer_graph()
-        attributes[(composer, "AXRole")] = "AXStaticText"
-        cases.append((composer, attributes))
-        cases.append((None, {}))
-
-        for focused, attributes in cases:
-            with self.subTest(focused=focused):
-                current = self.adapter(FakeAX(focused, attributes)).snapshot()
-
-                self.assertFalse(current.editable)
-                self.assertFalse(current.has_text)
-                self.assertEqual(current.semantic, SubmitSemantic.UNKNOWN)
-
-    def test_focused_text_value_must_be_settable(self):
-        for settable in (False, RuntimeError("AX settable check failed")):
-            with self.subTest(settable=settable):
-                composer, _container, _button, attributes = composer_graph()
-                fake_ax = FakeAX(
-                    composer, attributes, value_settable=settable
-                )
-
-                current = self.adapter(fake_ax).snapshot()
-
-                self.assertFalse(current.editable)
-                self.assertFalse(current.has_text)
-                self.assertEqual(current.semantic, SubmitSemantic.UNKNOWN)
-                self.assertEqual(
-                    fake_ax.settable_reads,
-                    [(composer, "AXValue")],
-                )
-
-    def test_remote_submit_button_cannot_qualify_unrelated_text_field(self):
-        search_field = Node()
-        search_group = Node()
-        window = Node()
-        composer_group = Node()
-        remote_button = Node()
-        attributes = {
-            (search_field, "AXRole"): "AXTextField",
-            (search_field, "AXEnabled"): True,
-            (search_field, "AXValue"): "search terms",
-            (search_field, "AXParent"): search_group,
-            (search_group, "AXRole"): "AXGroup",
-            (search_group, "AXChildren"): (search_field,),
-            (search_group, "AXParent"): window,
-            (window, "AXRole"): "AXWindow",
-            (window, "AXChildren"): (search_group, composer_group),
-            (composer_group, "AXRole"): "AXGroup",
-            (composer_group, "AXChildren"): (remote_button,),
-            (remote_button, "AXRole"): "AXButton",
-            (remote_button, "AXTitle"): "Send",
-        }
-
-        current = self.adapter(FakeAX(search_field, attributes)).snapshot()
-
-        self.assertTrue(current.editable)
-        self.assertTrue(current.has_text)
-        self.assertEqual(current.semantic, SubmitSemantic.UNKNOWN)
-
-    def test_conflicting_or_unrecognized_button_labels_are_unknown(self):
-        for conflicting in (False, True):
-            with self.subTest(conflicting=conflicting):
-                composer, container, button, attributes = composer_graph(
-                    label="Submit message"
-                )
-                if conflicting:
-                    second_button = Node()
-                    attributes[(second_button, "AXRole")] = "AXButton"
-                    attributes[(second_button, "AXTitle")] = "Queue"
-                    attributes[(button, "AXTitle")] = "Send"
-                    attributes[(container, "AXChildren")] = (
-                        composer,
-                        button,
-                        second_button,
-                    )
-
-                current = self.adapter(FakeAX(composer, attributes)).snapshot()
-
-                self.assertEqual(current.semantic, SubmitSemantic.UNKNOWN)
-
-    def test_traversal_is_cycle_safe_and_respects_node_limit(self):
-        composer, container, _button, attributes = composer_graph(label="unknown")
-        extra_nodes = [Node() for _ in range(10)]
-        semantic_button = Node()
-        attributes[(container, "AXChildren")] = tuple(
-            [composer, container, *extra_nodes, semantic_button]
-        )
-        for node in extra_nodes:
-            attributes[(node, "AXRole")] = "AXGroup"
-        attributes[(semantic_button, "AXRole")] = "AXButton"
-        attributes[(semantic_button, "AXTitle")] = "Send"
-        fake_ax = FakeAX(composer, attributes)
-
-        current = self.adapter(fake_ax, max_nodes=4, max_depth=3).snapshot()
-
-        self.assertEqual(current.semantic, SubmitSemantic.UNKNOWN)
-        visited = {
-            element
-            for element, attribute in fake_ax.reads
-            if attribute == "AXRole"
-        }
-        self.assertLessEqual(len(visited), 4)
-
-    def test_traversal_respects_depth_limit(self):
-        composer, _container, _button, attributes = composer_graph(label="Send")
-
-        current = self.adapter(
-            FakeAX(composer, attributes), max_depth=0
-        ).snapshot()
-
-        self.assertEqual(current.semantic, SubmitSemantic.UNKNOWN)
-
-    def test_ax_read_exception_fails_closed(self):
-        composer, _container, _button, attributes = composer_graph()
-        attributes[(composer, "AXRole")] = RuntimeError("AX read failed")
-
-        current = self.adapter(FakeAX(composer, attributes)).snapshot()
-
+    def test_button_must_be_unique_enabled_and_have_stable_token(self):
+        fixture = RealComposerFixture()
+        fixture.attributes[(fixture.button, "AXEnabled")] = False
         self.assertEqual(
-            current,
-            snapshot(editable=False, has_text=False,
-                     semantic=SubmitSemantic.UNKNOWN),
+            self.adapter(fixture).snapshot().semantic,
+            SubmitSemantic.UNKNOWN,
         )
 
+        fixture = RealComposerFixture()
+        fixture.attributes.pop((fixture.button, "AXChromeAXNodeId"))
+        self.assertEqual(
+            self.adapter(fixture).snapshot().semantic,
+            SubmitSemantic.UNKNOWN,
+        )
 
-class MacOSCodexAccessibilityKeyboardTests(unittest.TestCase):
-    def adapter_and_events(self):
+        fixture = RealComposerFixture()
+        second = Node("second-button")
+        fixture.attributes[(second, "AXRole")] = "AXButton"
+        fixture.attributes[(second, "AXEnabled")] = True
+        fixture.attributes[(second, "AXTitle")] = "Send"
+        fixture.attributes[(second, "AXChromeAXNodeId")] = 303
+        fixture.attributes[(fixture.composer_body, "AXChildren")] += (second,)
+        self.assertEqual(
+            self.adapter(fixture).snapshot().semantic,
+            SubmitSemantic.UNKNOWN,
+        )
+
+    def test_normal_and_force_send_or_steer_revalidate_then_ax_press(self):
+        cases = (
+            (InputAction.SUBMIT, "Send"),
+            (InputAction.SUBMIT, "Queue"),
+            (InputAction.FORCE_STEER, "Send"),
+            (InputAction.FORCE_STEER, "Steer"),
+        )
+        for action, label in cases:
+            with self.subTest(action=action, label=label):
+                fixture = RealComposerFixture(label=label)
+                handled = CodexSubmitController(self.adapter(fixture)).handle(action)
+                self.assertTrue(handled)
+                self.assertEqual(
+                    fixture.actions,
+                    [(fixture.button, "AXPress")],
+                )
+                self.assertEqual(fixture.create_calls, 2)
+
+    def test_target_change_between_prepare_and_dispatch_fails_closed(self):
+        mutation_cases = (
+            ("focus", lambda fixture: fixture.attributes.__setitem__(
+                (fixture.application_element, "AXFocusedUIElement"), Node("other")
+            )),
+            ("focus-token", lambda fixture: fixture.attributes.__setitem__(
+                (fixture.focused, "AXChromeAXNodeId"), 999
+            )),
+            ("value-clear", lambda fixture: fixture.attributes.__setitem__(
+                (fixture.focused, "AXValue"), ""
+            )),
+            ("value-change", lambda fixture: fixture.attributes.__setitem__(
+                (fixture.focused, "AXValue"), "changed"
+            )),
+            ("semantic", lambda fixture: fixture.attributes.__setitem__(
+                (fixture.button, "AXTitle"), "Queue"
+            )),
+            ("button-disabled", lambda fixture: fixture.attributes.__setitem__(
+                (fixture.button, "AXEnabled"), False
+            )),
+            ("button-token", lambda fixture: fixture.attributes.__setitem__(
+                (fixture.button, "AXChromeAXNodeId"), 303
+            )),
+        )
+        for name, mutate in mutation_cases:
+            with self.subTest(case=name):
+                fixture = RealComposerFixture()
+                fixture.before_revalidation = lambda f=fixture, m=mutate: m(f)
+                handled = CodexSubmitController(self.adapter(fixture)).handle(
+                    InputAction.SUBMIT
+                )
+                self.assertFalse(handled)
+                self.assertEqual(fixture.actions, [])
+
+        for name, applications in (
+            (
+                "app-switch",
+                (FakeApplication(), FakeApplication("com.apple.TextEdit")),
+            ),
+            (
+                "pid-change",
+                (FakeApplication(pid=42), FakeApplication(pid=43)),
+            ),
+        ):
+            with self.subTest(case=name):
+                fixture = RealComposerFixture()
+                handled = CodexSubmitController(
+                    self.adapter(fixture, workspace=SequencedWorkspace(*applications))
+                ).handle(InputAction.SUBMIT)
+                self.assertFalse(handled)
+                self.assertEqual(fixture.actions, [])
+
+    def test_ax_press_error_fails_closed_without_keyboard_fallback(self):
+        fixture = RealComposerFixture()
+        fixture.action_result = -1
+        posted = []
+        handled = CodexSubmitController(
+            self.adapter(fixture, posted_events=posted)
+        ).handle(InputAction.SUBMIT)
+        self.assertFalse(handled)
+        self.assertEqual(posted, [])
+
+    def test_force_queue_posts_complete_modified_return_to_captured_pid(self):
+        fixture = RealComposerFixture(label="Queue")
         created = []
         flags = []
         posted = []
-
-        def create_event(source, key_code, down):
-            event = object()
-            created.append((event, source, key_code, down))
-            return event
-
-        adapter = MacOSCodexAccessibility(
-            create_key_event=create_event,
-            set_event_flags=lambda event, value: flags.append((event, value)),
-            post_event=lambda tap, event: posted.append((tap, event)),
+        adapter = self.adapter(
+            fixture,
+            created_events=created,
+            event_flags=flags,
+            posted_events=posted,
         )
-        return adapter, created, flags, posted
 
-    def test_normal_submit_posts_complete_return_key_tap(self):
-        adapter, created, flags, posted = self.adapter_and_events()
+        handled = CodexSubmitController(adapter).handle(InputAction.FORCE_STEER)
 
-        adapter.normal_submit()
-
+        self.assertTrue(handled)
+        self.assertEqual(fixture.actions, [])
         self.assertEqual(
-            [(source, key_code, down) for _, source, key_code, down in created],
-            [(None, RETURN_KEY_CODE, True), (None, RETURN_KEY_CODE, False)],
+            [(key_code, down) for _, key_code, down in created],
+            [(RETURN_KEY_CODE, True), (RETURN_KEY_CODE, False)],
         )
-        self.assertEqual(flags, [])
-        self.assertEqual([event for _, event in posted], [created[0][0], created[1][0]])
-
-    def test_alternate_submit_posts_complete_modified_return_key_tap(self):
-        adapter, created, flags, posted = self.adapter_and_events()
-
-        adapter.alternate_submit()
-
-        self.assertEqual(
-            [(source, key_code, down) for _, source, key_code, down in created],
-            [(None, RETURN_KEY_CODE, True), (None, RETURN_KEY_CODE, False)],
-        )
-        self.assertEqual(len(flags), 2)
-        self.assertEqual(flags[0][0], created[0][0])
-        self.assertEqual(flags[1][0], created[1][0])
         self.assertEqual(
             [value for _, value in flags],
             [ALTERNATE_MODIFIER_FLAGS, ALTERNATE_MODIFIER_FLAGS],
         )
-        self.assertEqual([event for _, event in posted], [created[0][0], created[1][0]])
+        self.assertEqual(
+            posted,
+            [(42, created[0][0]), (42, created[1][0])],
+        )
 
-    def test_key_up_is_attempted_if_key_down_post_raises(self):
-        created = []
-        post_attempts = []
+    def test_targeted_key_up_is_attempted_after_key_down_error(self):
+        fixture = RealComposerFixture(label="Queue")
+        attempts = []
 
-        def create_event(_source, _key_code, down):
-            event = "down" if down else "up"
-            created.append(event)
-            return event
-
-        def post_event(_tap, event):
-            post_attempts.append(event)
-            if event == "down":
+        def post_event(pid, event):
+            attempts.append((pid, event.token))
+            if event.token == "key-down":
                 raise RuntimeError("post failed")
 
-        adapter = MacOSCodexAccessibility(
-            create_key_event=create_event,
-            post_event=post_event,
+        handled = CodexSubmitController(
+            self.adapter(fixture, post_event_to_pid=post_event)
+        ).handle(InputAction.FORCE_STEER)
+
+        self.assertFalse(handled)
+        self.assertEqual(attempts, [(42, "key-down"), (42, "key-up")])
+
+    def test_equal_ax_wrappers_break_cycles_without_hiding_button(self):
+        fixture = RealComposerFixture()
+        equal_body_wrapper = Node("composer-body")
+        fixture.attributes[(fixture.composer_body, "AXChildren")] = (
+            equal_body_wrapper,
+            fixture.rich_text_input,
+            fixture.button,
         )
-
-        with self.assertRaises(RuntimeError):
-            adapter.normal_submit()
-
-        self.assertEqual(created, ["down", "up"])
-        self.assertEqual(post_attempts, ["down", "up"])
-
-    def test_missing_keyboard_event_raises_before_posting(self):
-        posted = []
-        adapter = MacOSCodexAccessibility(
-            create_key_event=lambda _source, _key_code, _down: None,
-            post_event=lambda tap, event: posted.append((tap, event)),
-        )
-
-        with self.assertRaises(RuntimeError):
-            adapter.normal_submit()
-
-        self.assertEqual(posted, [])
+        current = self.adapter(fixture).snapshot()
+        self.assertEqual(current.semantic, SubmitSemantic.SEND)
 
 
 if __name__ == "__main__":
