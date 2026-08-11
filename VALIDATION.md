@@ -39,10 +39,13 @@ audio availability do not gate click actions.
 Run these without physically pressing the watch button or invoking `AXPress`:
 
 ```bash
+export IDF_PATH=/path/to/esp-idf
+source "$IDF_PATH/export.sh"
 ./mac-codex-agent/.venv/bin/python -m unittest discover \
   -s mac-codex-agent/tests -v
 ./scripts/run_unified_offline_validation.sh --contract
-./scripts/run_unified_offline_validation.sh --host-tests-only
+IDF_PATH="$IDF_PATH" ./scripts/run_unified_offline_validation.sh \
+  --host-tests-only
 ./mac-codex-agent/.venv/bin/python -m unittest \
   mac-codex-agent/tests/test_input_action_protocol.py \
   mac-codex-agent/tests/test_codex_submit.py -v
@@ -58,8 +61,8 @@ git diff --check
   probe was the only skip.
 - Offline contract: all 50 stages were present and correctly numbered, with 54
   exact host compile/run pairs.
-- Real host execution: all 50 stages passed with
-  `IDF_PATH=/Users/luke/esp/esp-idf`.
+- Real host execution: all 50 stages passed with `IDF_PATH` pointing at a local
+  ESP-IDF 5.5.4 checkout.
 - Firmware clean build: configuration stopped before application-source
   compilation because the local dependency set does not provide the required
   `CODEC_UAC_SUPPORT` option introduced by `espressif/usb_host_uac`. This is an

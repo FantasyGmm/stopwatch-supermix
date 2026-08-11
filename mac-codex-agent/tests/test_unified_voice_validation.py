@@ -405,6 +405,8 @@ output.chmod(0o700)
             "same-process foreground race",
         ):
             self.assertIn(safety_fact, normalized_validation)
+        self.assertIn("export IDF_PATH=/path/to/esp-idf", normalized_validation)
+        self.assertNotIn("/Users/luke/esp", normalized_validation)
 
 
 if __name__ == "__main__":
