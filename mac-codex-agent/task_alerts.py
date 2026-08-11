@@ -188,6 +188,8 @@ class TaskAlert:
     state: str
     watch_notified: bool
     outcome: str
+    turn_id: Optional[str] = None
+    last_reply: Optional[str] = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -544,6 +546,8 @@ class TaskAlertTracker:
                 "handled_at": completion_time if next_state == "completed" else None,
                 "watch_notified": next_notified,
             }
+            if isinstance(completion.last_agent_message, str):
+                updates["last_reply"] = completion.last_agent_message
             if any(alert.get(key) != value for key, value in updates.items()):
                 alert.update(updates)
                 changed = True
@@ -703,6 +707,19 @@ class TaskAlertTracker:
             alert_id = "{}:{}".format(thread.id, timestamp_text)
             if any(entry.get("id") == alert_id for entry in self._state["alerts"]):
                 return signal_changed
+            latest_reply = None
+            latest_reply_at = None
+            for entry in self._state["alerts"]:
+                progress = _parse_timestamp(entry.get("progress_at"))
+                if (
+                    entry.get("thread_id") == thread.id
+                    and isinstance(entry.get("last_reply"), str)
+                    and progress is not None
+                    and progress < timestamp
+                    and (latest_reply_at is None or progress >= latest_reply_at)
+                ):
+                    latest_reply = entry["last_reply"]
+                    latest_reply_at = progress
             alert = {
                 "id": alert_id,
                 "thread_id": thread.id,
@@ -716,6 +733,8 @@ class TaskAlertTracker:
             }
             if isinstance(turn_id, str) and turn_id:
                 alert["turn_id"] = turn_id
+            if isinstance(latest_reply, str):
+                alert["last_reply"] = latest_reply
             self._state["alerts"].append(alert)
             self._state["revision"] = int(self._state.get("revision", 0)) + 1
             return True
@@ -747,6 +766,7 @@ class TaskAlertTracker:
             )
             outcome = classification.outcome
             state = "pending" if outcome == "waiting" else "completed"
+            last_reply = payload.get("last_agent_message")
             running = []
             for entry in self._state["alerts"]:
                 progress = _parse_timestamp(entry.get("progress_at"))
@@ -759,39 +779,43 @@ class TaskAlertTracker:
                     running.append((progress, entry))
             if running:
                 target = max(running, key=lambda candidate: candidate[0])[1]
-                target.update(
-                    {
-                        "id": "{}:{}".format(thread.id, timestamp_text),
-                        "project": thread.project,
-                        "title": thread.title,
-                        "progress_at": timestamp_text,
-                        "handled_at": timestamp_text if state == "completed" else None,
-                        "state": state,
-                        "watch_notified": state != "pending",
-                        "outcome": outcome,
-                        "reason": classification.reason,
-                    }
-                )
+                updates = {
+                    "id": "{}:{}".format(thread.id, timestamp_text),
+                    "project": thread.project,
+                    "title": thread.title,
+                    "progress_at": timestamp_text,
+                    "handled_at": timestamp_text if state == "completed" else None,
+                    "state": state,
+                    "watch_notified": state != "pending",
+                    "outcome": outcome,
+                    "reason": classification.reason,
+                }
+                if isinstance(last_reply, str):
+                    updates["last_reply"] = last_reply
+                target.update(updates)
             else:
                 alert_id = "{}:{}".format(thread.id, timestamp_text)
                 if any(
                     entry.get("id") == alert_id for entry in self._state["alerts"]
                 ):
                     return False
-                self._state["alerts"].append(
-                    {
-                        "id": alert_id,
-                        "thread_id": thread.id,
-                        "project": thread.project,
-                        "title": thread.title,
-                        "progress_at": timestamp_text,
-                        "handled_at": timestamp_text if state == "completed" else None,
-                        "state": state,
-                        "watch_notified": state != "pending",
-                        "outcome": outcome,
-                        "reason": classification.reason,
-                    }
-                )
+                alert = {
+                    "id": alert_id,
+                    "thread_id": thread.id,
+                    "project": thread.project,
+                    "title": thread.title,
+                    "progress_at": timestamp_text,
+                    "handled_at": timestamp_text if state == "completed" else None,
+                    "state": state,
+                    "watch_notified": state != "pending",
+                    "outcome": outcome,
+                    "reason": classification.reason,
+                }
+                if isinstance(turn_id, str) and turn_id:
+                    alert["turn_id"] = turn_id
+                if isinstance(last_reply, str):
+                    alert["last_reply"] = last_reply
+                self._state["alerts"].append(alert)
             if (
                 thread.id in signals
                 and signals[thread.id].get("turn_id") == turn_id
@@ -963,6 +987,16 @@ class TaskAlertTracker:
                     state=state,
                     watch_notified=bool(item.get("watch_notified", False)),
                     outcome=outcome,
+                    turn_id=(
+                        item.get("turn_id")
+                        if isinstance(item.get("turn_id"), str)
+                        else None
+                    ),
+                    last_reply=(
+                        item.get("last_reply")
+                        if isinstance(item.get("last_reply"), str)
+                        else None
+                    ),
                 )
             )
         priority = {"pending": 0, "running": 1, "completed": 2}
