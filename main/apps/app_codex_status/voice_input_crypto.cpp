@@ -5,10 +5,6 @@
 #include <algorithm>
 #include <mutex>
 
-#if defined(ESP_PLATFORM)
-#include "voice_input_device_key.h"
-#endif
-
 namespace voice_input::crypto {
 namespace {
 
@@ -63,15 +59,14 @@ bool derive_nonce(
     return true;
 }
 
-CcmContext::CcmContext(const Key& key) : _impl(std::make_unique<Impl>())
+CcmContext::CcmContext() : _impl(std::make_unique<Impl>())
 {
     mbedtls_ccm_init(&_impl->context);
-    ++_impl->key_setup_count;
-    _impl->ready = mbedtls_ccm_setkey(
-                 &_impl->context,
-                 MBEDTLS_CIPHER_ID_AES,
-                 key.data(),
-                 key.size() * 8U) == 0;
+}
+
+CcmContext::CcmContext(const Key& key) : CcmContext()
+{
+    set_key(key);
 }
 
 CcmContext::~CcmContext()
@@ -81,7 +76,30 @@ CcmContext::~CcmContext()
 
 bool CcmContext::ready() const
 {
+    std::lock_guard<std::mutex> lock(_impl->mutex);
     return _impl->ready;
+}
+
+bool CcmContext::set_key(const Key& key)
+{
+    std::lock_guard<std::mutex> lock(_impl->mutex);
+    mbedtls_ccm_free(&_impl->context);
+    mbedtls_ccm_init(&_impl->context);
+    ++_impl->key_setup_count;
+    _impl->ready = mbedtls_ccm_setkey(
+                       &_impl->context,
+                       MBEDTLS_CIPHER_ID_AES,
+                       key.data(),
+                       key.size() * 8U) == 0;
+    return _impl->ready;
+}
+
+void CcmContext::clear()
+{
+    std::lock_guard<std::mutex> lock(_impl->mutex);
+    mbedtls_ccm_free(&_impl->context);
+    mbedtls_ccm_init(&_impl->context);
+    _impl->ready = false;
 }
 
 bool CcmContext::encrypt(
@@ -98,7 +116,7 @@ bool CcmContext::encrypt(
 {
     output_size = 0;
     Nonce nonce = {};
-    if (!_impl->ready || !derive_nonce(domain, exchange_nonce, sequence, nonce) ||
+    if (!derive_nonce(domain, exchange_nonce, sequence, nonce) ||
         (aad_size != 0 && aad == nullptr) ||
         (plaintext_size != 0 && plaintext == nullptr) || output == nullptr ||
         output_capacity < plaintext_size + kTagSize) {
@@ -106,6 +124,9 @@ bool CcmContext::encrypt(
     }
 
     std::lock_guard<std::mutex> lock(_impl->mutex);
+    if (!_impl->ready) {
+        return false;
+    }
     ++_impl->active_operations;
     _impl->max_concurrent_operations = std::max(
         _impl->max_concurrent_operations, _impl->active_operations);
@@ -142,7 +163,7 @@ bool CcmContext::decrypt(
 {
     output_size = 0;
     Nonce nonce = {};
-    if (!_impl->ready || !derive_nonce(domain, exchange_nonce, sequence, nonce) ||
+    if (!derive_nonce(domain, exchange_nonce, sequence, nonce) ||
         (aad_size != 0 && aad == nullptr) || ciphertext == nullptr ||
         ciphertext_size < kTagSize || output == nullptr ||
         output_capacity < ciphertext_size - kTagSize) {
@@ -151,6 +172,9 @@ bool CcmContext::decrypt(
     const size_t plaintext_size = ciphertext_size - kTagSize;
 
     std::lock_guard<std::mutex> lock(_impl->mutex);
+    if (!_impl->ready) {
+        return false;
+    }
     ++_impl->active_operations;
     _impl->max_concurrent_operations = std::max(
         _impl->max_concurrent_operations, _impl->active_operations);
@@ -185,13 +209,5 @@ uint32_t CcmContext::max_concurrent_operations() const
     std::lock_guard<std::mutex> lock(_impl->mutex);
     return _impl->max_concurrent_operations;
 }
-
-#if defined(ESP_PLATFORM)
-CcmContext& device_context()
-{
-    static CcmContext context(generated::kDeviceKey);
-    return context;
-}
-#endif
 
 }  // namespace voice_input::crypto

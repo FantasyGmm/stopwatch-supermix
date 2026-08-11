@@ -21,6 +21,8 @@
 #include <runtime/display/global_display_protection_service.h>
 #include <wifi_manager.h>
 #include <esp_websocket_client.h>
+#include <esp_random.h>
+#include <mbedtls/sha256.h>
 #include <mooncake_log.h>
 #include <algorithm>
 #include <array>
@@ -51,6 +53,35 @@ constexpr uint32_t kTraeStatusStaleMs    = 15000;
 constexpr uint32_t kScreenOffHoldMs      = 2000;
 constexpr int kPageWidth                 = 466;
 constexpr int kPageCount                 = 2;
+constexpr int kAgentPanelHiddenY         = -430;
+constexpr int kAgentPanelVisibleY        = 0;
+
+bool fill_agent_entropy(void*, uint8_t* output, size_t size)
+{
+    if (output == nullptr || size == 0) {
+        return false;
+    }
+    esp_fill_random(output, size);
+    return std::any_of(output, output + size, [](uint8_t byte) {
+        return byte != 0;
+    });
+}
+
+bool agent_fingerprint(
+    const secure_pairing::IdentityPublicKey& public_key,
+    secure_pairing::AgentFingerprint& output)
+{
+    std::array<uint8_t, 32> digest = {};
+    if (mbedtls_sha256(
+            public_key.data(),
+            public_key.size(),
+            digest.data(),
+            0) != 0) {
+        return false;
+    }
+    std::copy_n(digest.begin(), output.size(), output.begin());
+    return true;
+}
 
 bool is_ascii_text(const char* text)
 {
@@ -299,8 +330,24 @@ void AppCodexStatus::onOpen()
     _trae_carousel.reset();
     _page_swipe.cancel();
     _trae_card_tap.cancel();
+    _agent_panel_model = {};
+    _agent_panel_dirty = false;
+    _agent_switch_pending = false;
+    _agent_switch_target = {};
+    _agent_reset_hold_started_ms = 0;
+    _agent_panel_notice_until_ms = 0;
+    _agent_reset_hold_active = false;
+    _agent_reset_hold_queued = false;
+    _agent_pairing_expired = false;
+    _agent_panel_notice = {};
+    clear_pairing_runtime();
+    {
+        std::lock_guard<std::mutex> decision_lock(_agent_decision_mutex);
+        _pending_agent_decision = {};
+    }
     _current_page = 0;
     _last_page_touch_state = LV_INDEV_STATE_REL;
+    _last_agent_touch_state = LV_INDEV_STATE_REL;
     _server_host     = Settings("codex_status").GetString("host", kDefaultServerHost);
     _transport_mode  = Settings("codex_status").GetString("transport", "auto");
     _ble_name        = Settings("codex_status").GetString("ble_name", kDefaultBleName);
@@ -308,6 +355,30 @@ void AppCodexStatus::onOpen()
         _transport_mode = "auto";
     }
     _ble_wait_started_ms = now;
+
+    _agent_registry_ready = false;
+    _agent_registry_backend =
+        std::make_unique<secure_pairing::NvsRegistryStorageBackend>();
+    if (_agent_registry_backend->ready()) {
+        _agent_registry_store =
+            std::make_unique<secure_pairing::AgentRegistryStore>(
+                *_agent_registry_backend);
+        const secure_pairing::StoreResult loaded =
+            _agent_registry_store->load(_agent_registry);
+        if (loaded == secure_pairing::StoreResult::Ok) {
+            _agent_registry_ready = true;
+        } else if (loaded == secure_pairing::StoreResult::NotFound &&
+                   secure_pairing::AgentRegistry::initialize(
+                       fill_agent_entropy,
+                       nullptr,
+                       _agent_registry) ==
+                       secure_pairing::RegistryResult::Ok &&
+                   _agent_registry_store->save(_agent_registry) ==
+                       secure_pairing::StoreResult::Ok) {
+            _agent_registry_ready = true;
+        }
+    }
+    sync_agent_panel_registry();
 
     {
         LvglLockGuard lock;
@@ -322,7 +393,20 @@ void AppCodexStatus::onOpen()
                 _voice_probe.reset();
             }
             _voice_input = std::make_unique<VoiceInputController>();
-            (void)_voice_input->initialize();
+            _voice_input->set_notification_transport(_ble_transport.get());
+            if (!_voice_input->initialize()) {
+                _voice_input.reset();
+            }
+            if (_agent_registry_ready) {
+                (void)_ble_transport->set_voice_credential(
+                    _agent_registry.master_key(),
+                    _agent_registry.key_epoch());
+                if (_voice_input) {
+                    (void)_voice_input->set_credential(
+                        _agent_registry.master_key(),
+                        _agent_registry.key_epoch());
+                }
+            }
             set_status("BLE PAIR", kTextDim);
             set_host_text(_ble_name.c_str());
         } else {
@@ -379,7 +463,19 @@ void AppCodexStatus::onRunning()
     {
         LvglLockGuard lock;
         sync_display_protection_presentation();
-        update_page_swipe(now);
+        if (_agent_panel_dirty) {
+            render_agent_panel();
+            _agent_panel_dirty = false;
+        }
+        update_agent_panel_runtime(now);
+        update_agent_panel_touch(now);
+        if (_agent_panel_model.owns_touch()) {
+            _page_swipe.cancel();
+            _trae_card_tap.cancel();
+            _last_page_touch_state = LV_INDEV_STATE_REL;
+        } else {
+            update_page_swipe(now);
+        }
         bool alert_changed = false;
         if (_current_page == 0 && key_event == input::KeyEvent::GoPrevious) {
             alert_changed = _alert_carousel.step(-1, now);
@@ -401,8 +497,15 @@ void AppCodexStatus::onRunning()
             render_trae_status();
         }
     }
+    AgentPanelDecision agent_decision = {};
+    while (take_agent_panel_decision(agent_decision)) {
+        dispatch_agent_panel_decision(agent_decision, now);
+    }
+    complete_agent_switch_if_ready();
+
     bool ble_connected = _ble_transport && _ble_transport->connected();
     if (_ble_transport) {
+        process_secure_pairing(now);
         _ble_transport->poll(now);
         ble_connected = _ble_transport && _ble_transport->connected();
         if (_voice_input) {
@@ -414,6 +517,8 @@ void AppCodexStatus::onRunning()
                 _production_voice_link_usable = false;
                 _production_voice_mtu = 23;
                 _voice_input->handle_connection_epoch(connection_epoch);
+                sync_agent_panel_registry();
+                _agent_panel_dirty = true;
             }
             CodexProductionVoiceControl production_control;
             while (_ble_transport->take_production_voice_control(production_control)) {
@@ -431,26 +536,6 @@ void AppCodexStatus::onRunning()
                 _production_voice_link_usable = production_link_usable;
                 _production_voice_mtu = voice_mtu;
                 _voice_input->set_ready(production_link_usable, voice_mtu);
-            }
-            _voice_input->poll(now);
-            voice_input::Notification notification;
-            while (_voice_input->take_notification(notification)) {
-                const CodexBleNotifyResult result = _ble_transport->notify_voice(
-                    notification.bytes.data(), notification.size);
-                VoiceNotificationSendResult send_result =
-                    VoiceNotificationSendResult::PermanentFailure;
-                if (result == CodexBleNotifyResult::Accepted) {
-                    send_result = VoiceNotificationSendResult::Accepted;
-                } else if (result == CodexBleNotifyResult::Congested) {
-                    send_result = VoiceNotificationSendResult::Congested;
-                }
-                _voice_input->record_notification_result(
-                    notification,
-                    send_result,
-                    now);
-                if (result != CodexBleNotifyResult::Accepted) {
-                    break;
-                }
             }
         }
         if (_voice_probe) {
@@ -558,8 +643,15 @@ void AppCodexStatus::onClose()
         _ble_transport->stop();
         _ble_transport.reset();
     }
+    _agent_registry_store.reset();
+    _agent_registry_backend.reset();
+    _agent_registry_ready = false;
+    _agent_switch_pending = false;
+    _agent_switch_target = {};
+    clear_pairing_runtime();
 
     LvglLockGuard lock;
+    GetGlobalEdgeControlService().setEnabled(true);
     destroy_view();
     _alert_carousel.reset();
     _trae_carousel.reset();
@@ -693,7 +785,7 @@ void AppCodexStatus::create_view()
         kPendingLabelX,
         kStateLabelY,
         kStateLabelWidth,
-        &MontserratBold16,
+        &MontserratBold22,
         kAlertVermilion,
         LV_TEXT_ALIGN_CENTER
     );
@@ -713,7 +805,7 @@ void AppCodexStatus::create_view()
         kRunningLabelX,
         kStateLabelY,
         kStateLabelWidth,
-        &MontserratBold16,
+        &MontserratBold22,
         kRunningCyan,
         LV_TEXT_ALIGN_CENTER
     );
@@ -785,11 +877,32 @@ void AppCodexStatus::create_view()
     lv_obj_set_style_text_align(_battery_label, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(_battery_label, LV_ALIGN_TOP_MID, 0, kBatteryY);
     update_battery();
+
+    _agent_panel_root = lv_obj_create(_panel);
+    lv_obj_set_size(_agent_panel_root, 466, 466);
+    lv_obj_set_pos(
+        _agent_panel_root,
+        0,
+        _agent_panel_model.snapshot().visible
+            ? kAgentPanelVisibleY
+            : kAgentPanelHiddenY);
+    lv_obj_set_style_radius(_agent_panel_root, 0, 0);
+    lv_obj_set_style_border_width(_agent_panel_root, 0, 0);
+    lv_obj_set_style_pad_all(_agent_panel_root, 0, 0);
+    lv_obj_set_style_bg_color(
+        _agent_panel_root,
+        lv_color_hex(agent_panel_ui::kBackground),
+        0);
+    lv_obj_set_style_bg_opa(_agent_panel_root, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(_agent_panel_root, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_move_foreground(_agent_panel_root);
+    render_agent_panel();
 }
 
 void AppCodexStatus::destroy_view()
 {
     lv_anim_delete(this, page_animation_cb);
+    lv_anim_delete(this, agent_panel_animation_cb);
     _page_swipe.cancel();
     _trae_card_tap.cancel();
     _last_page_touch_state = LV_INDEV_STATE_REL;
@@ -833,6 +946,37 @@ void AppCodexStatus::destroy_view()
     _status_label   = nullptr;
     _host_label     = nullptr;
     _pet_image      = nullptr;
+    _agent_panel_root = nullptr;
+    _agent_rail = nullptr;
+    _agent_focus_band_left = nullptr;
+    _agent_focus_band_right = nullptr;
+    _agent_focus_marker = nullptr;
+    _agent_count_label = nullptr;
+    _agent_panel_notice_label = nullptr;
+    _agent_pairing_countdown_label = nullptr;
+    _agent_reset_progress = nullptr;
+    _agent_pairing_countdown_label = nullptr;
+    _agent_reset_progress = nullptr;
+    _agent_row_wrappers = {};
+    _agent_row_buttons = {};
+    _agent_delete_buttons = {};
+    _agent_row_names = {};
+    _agent_row_states = {};
+    _agent_row_dots = {};
+    _agent_allow_button = nullptr;
+    _agent_allow_switch_button = nullptr;
+    _agent_reject_button = nullptr;
+    _agent_dismiss_button = nullptr;
+    _agent_reset_button = nullptr;
+    _agent_confirm_button = nullptr;
+    _agent_cancel_button = nullptr;
+    _agent_revealed_delete_index = -1;
+    _agent_reset_hold_started_ms = 0;
+    _agent_panel_notice_until_ms = 0;
+    _agent_reset_hold_active = false;
+    _agent_reset_hold_queued = false;
+    _agent_pairing_expired = false;
+    _agent_panel_notice = {};
     _pet_frame      = 0;
 }
 
@@ -1171,6 +1315,1726 @@ void AppCodexStatus::render_trae_status()
         _trae_stale,
         bluetooth_connected
     );
+}
+
+void AppCodexStatus::render_agent_panel()
+{
+    if (_agent_panel_root == nullptr) {
+        return;
+    }
+    const AgentPanelSnapshot snapshot = _agent_panel_model.snapshot();
+    if (snapshot.confirmation != AgentPanelConfirmation::ResetAll) {
+        _agent_reset_hold_started_ms = 0;
+        _agent_reset_hold_active = false;
+        _agent_reset_hold_queued = false;
+    }
+    lv_obj_clean(_agent_panel_root);
+    _agent_rail = nullptr;
+    _agent_focus_band_left = nullptr;
+    _agent_focus_band_right = nullptr;
+    _agent_focus_marker = nullptr;
+    _agent_count_label = nullptr;
+    _agent_panel_notice_label = nullptr;
+    _agent_row_wrappers = {};
+    _agent_row_buttons = {};
+    _agent_delete_buttons = {};
+    _agent_row_names = {};
+    _agent_row_states = {};
+    _agent_row_dots = {};
+    _agent_allow_button = nullptr;
+    _agent_allow_switch_button = nullptr;
+    _agent_reject_button = nullptr;
+    _agent_dismiss_button = nullptr;
+    _agent_reset_button = nullptr;
+    _agent_confirm_button = nullptr;
+    _agent_cancel_button = nullptr;
+    _agent_revealed_delete_index = -1;
+
+    lv_obj_t* drag_handle = lv_obj_create(_agent_panel_root);
+    lv_obj_set_pos(
+        drag_handle,
+        agent_panel_ui::kDragHandle.x,
+        agent_panel_ui::kDragHandle.y);
+    lv_obj_set_size(
+        drag_handle,
+        agent_panel_ui::kDragHandle.w,
+        agent_panel_ui::kDragHandle.h);
+    lv_obj_set_style_radius(drag_handle, 2, 0);
+    lv_obj_set_style_border_width(drag_handle, 0, 0);
+    lv_obj_set_style_bg_color(
+        drag_handle, lv_color_hex(agent_panel_ui::kSecondaryText), 0);
+    lv_obj_set_style_bg_opa(drag_handle, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(drag_handle, LV_OBJ_FLAG_SCROLLABLE);
+
+    make_center_label(
+        _agent_panel_root,
+        "AGENTS",
+        34,
+        &lv_font_montserrat_16,
+        agent_panel_ui::kPrimaryText);
+
+    if (snapshot.confirmation == AgentPanelConfirmation::None &&
+        !snapshot.request.present) {
+        char count_text[24] = {};
+        std::snprintf(
+            count_text,
+            sizeof(count_text),
+            "%u PAIRED",
+            static_cast<unsigned>(snapshot.count));
+        _agent_count_label = make_center_label(
+            _agent_panel_root,
+            count_text,
+            58,
+            &lv_font_montserrat_14,
+            agent_panel_ui::kSecondaryText);
+    }
+
+    auto make_button = [this](
+                           lv_obj_t* parent,
+                           const char* text,
+                           int x,
+                           int y,
+                           int width,
+                           int height,
+                           uint32_t color,
+                           bool filled = true) {
+        lv_obj_t* button = lv_button_create(parent);
+        lv_obj_set_size(button, width, height);
+        lv_obj_set_pos(button, x, y);
+        lv_obj_set_style_radius(button, height / 2, 0);
+        lv_obj_set_style_border_width(button, filled ? 0 : 1, 0);
+        lv_obj_set_style_border_color(button, lv_color_hex(color), 0);
+        lv_obj_set_style_bg_color(button, lv_color_hex(color), 0);
+        lv_obj_set_style_bg_opa(
+            button, filled ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+        lv_obj_t* label = lv_label_create(button);
+        lv_label_set_text(label, text);
+        lv_obj_set_style_text_font(label, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(
+            label,
+            lv_color_hex(
+                filled
+                    ? agent_panel_ui::kPrimaryText
+                    : color),
+            0);
+        lv_obj_center(label);
+        lv_obj_add_event_cb(
+            button,
+            AppCodexStatus::agent_panel_event_cb,
+            LV_EVENT_CLICKED,
+            this);
+        return button;
+    };
+
+    if (snapshot.confirmation != AgentPanelConfirmation::None) {
+        const bool deleting =
+            snapshot.confirmation == AgentPanelConfirmation::DeleteAgent;
+        const char* title = deleting
+            ? "Delete Agent?"
+            : "Reset all Agents?";
+        make_center_label(
+            _agent_panel_root,
+            title,
+            deleting ? 142 : 140,
+            &lv_font_montserrat_22,
+            agent_panel_ui::kPrimaryText);
+        if (deleting) {
+            for (size_t index = 0; index < snapshot.count; ++index) {
+                if (snapshot.rows[index].fingerprint ==
+                    snapshot.confirmation_fingerprint) {
+                    make_center_label(
+                        _agent_panel_root,
+                        snapshot.rows[index].display_name.data(),
+                        180,
+                        is_ascii_text(
+                            snapshot.rows[index].display_name.data())
+                            ? &lv_font_montserrat_18
+                            : &font_puhui_14_1,
+                        agent_panel_ui::kSecondaryText);
+                    break;
+                }
+            }
+            _agent_confirm_button = make_button(
+                _agent_panel_root,
+                "Delete",
+                82,
+                240,
+                302,
+                54,
+                agent_panel_ui::kDestructive);
+            _agent_cancel_button = make_button(
+                _agent_panel_root,
+                "Cancel",
+                133,
+                310,
+                200,
+                48,
+                agent_panel_ui::kSecondaryText,
+                false);
+        } else {
+            lv_obj_t* explanation = make_center_label(
+                _agent_panel_root,
+                "This removes every paired Agent\nand rotates credentials.",
+                178,
+                &lv_font_montserrat_14,
+                agent_panel_ui::kSecondaryText);
+            lv_obj_set_width(explanation, 302);
+            lv_obj_set_style_text_align(
+                explanation, LV_TEXT_ALIGN_CENTER, 0);
+            _agent_confirm_button = make_button(
+                _agent_panel_root,
+                "Hold to reset",
+                92,
+                250,
+                282,
+                58,
+                agent_panel_ui::kDestructive);
+            lv_obj_set_style_bg_opa(
+                _agent_confirm_button, LV_OPA_20, 0);
+            lv_obj_set_style_pad_all(_agent_confirm_button, 0, 0);
+            _agent_reset_progress = lv_obj_create(_agent_confirm_button);
+            lv_obj_set_pos(_agent_reset_progress, 0, 0);
+            lv_obj_set_size(_agent_reset_progress, 0, 58);
+            lv_obj_set_style_radius(_agent_reset_progress, 29, 0);
+            lv_obj_set_style_border_width(_agent_reset_progress, 0, 0);
+            lv_obj_set_style_bg_color(
+                _agent_reset_progress,
+                lv_color_hex(agent_panel_ui::kDestructive),
+                0);
+            lv_obj_set_style_bg_opa(
+                _agent_reset_progress, LV_OPA_COVER, 0);
+            lv_obj_clear_flag(
+                _agent_reset_progress, LV_OBJ_FLAG_SCROLLABLE);
+            lv_obj_clear_flag(
+                _agent_reset_progress, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_move_to_index(_agent_reset_progress, 0);
+            lv_obj_add_event_cb(
+                _agent_confirm_button,
+                AppCodexStatus::agent_reset_hold_event_cb,
+                LV_EVENT_ALL,
+                this);
+            _agent_cancel_button = make_button(
+                _agent_panel_root,
+                "Cancel",
+                153,
+                326,
+                160,
+                48,
+                agent_panel_ui::kSecondaryText,
+                false);
+        }
+    } else if (snapshot.request.present) {
+        make_center_label(
+            _agent_panel_root,
+            "PAIRING REQUEST",
+            56,
+            &lv_font_montserrat_14,
+            agent_panel_ui::kRequesting);
+        make_center_label(
+            _agent_panel_root,
+            snapshot.request.display_name.data(),
+            88,
+            is_ascii_text(snapshot.request.display_name.data())
+                ? &lv_font_montserrat_22
+                : &font_puhui_14_1,
+            agent_panel_ui::kPrimaryText);
+        make_center_label(
+            _agent_panel_root,
+            _agent_pairing_expired
+                ? "Request expired"
+                : "Match this code on your Mac",
+            124,
+            &lv_font_montserrat_14,
+            agent_panel_ui::kSecondaryText);
+        char grouped_code[8] = {};
+        const char* raw_code = snapshot.request.verification_code.data();
+        if (std::strlen(raw_code) >= 6) {
+            std::snprintf(
+                grouped_code,
+                sizeof(grouped_code),
+                "%.3s %.3s",
+                raw_code,
+                raw_code + 3);
+        } else {
+            std::snprintf(grouped_code, sizeof(grouped_code), "%s", raw_code);
+        }
+        make_center_label(
+            _agent_panel_root,
+            grouped_code,
+            164,
+            &lv_font_montserrat_36,
+            _agent_pairing_expired
+                ? agent_panel_ui::kSecondaryText
+                : agent_panel_ui::kPrimaryText);
+        _agent_pairing_countdown_label = make_center_label(
+            _agent_panel_root,
+            "--s remaining",
+            210,
+            &lv_font_montserrat_14,
+            agent_panel_ui::kRequesting);
+        if (_agent_pairing_expired) {
+            _agent_dismiss_button = make_button(
+                _agent_panel_root,
+                "Dismiss",
+                133,
+                302,
+                200,
+                48,
+                agent_panel_ui::kSecondaryText,
+                false);
+        } else {
+            _agent_allow_button = make_button(
+                _agent_panel_root,
+                "Allow",
+                82,
+                302,
+                302,
+                50,
+                agent_panel_ui::kPairing,
+                false);
+            _agent_allow_switch_button = make_button(
+                _agent_panel_root,
+                "Allow + Switch",
+                82,
+                236,
+                302,
+                54,
+                agent_panel_ui::kPairing);
+            _agent_reject_button = make_button(
+                _agent_panel_root,
+                "Reject",
+                133,
+                364,
+                200,
+                46,
+                agent_panel_ui::kDestructive,
+                false);
+        }
+    } else {
+        if (snapshot.count == 0) {
+            make_center_label(
+                _agent_panel_root,
+                "No paired Agents",
+                192,
+                &lv_font_montserrat_20,
+                agent_panel_ui::kPrimaryText);
+            lv_obj_t* helper = make_center_label(
+                _agent_panel_root,
+                "Open StopWatch Codex Agent on a Mac to pair",
+                230,
+                &lv_font_montserrat_14,
+                agent_panel_ui::kSecondaryText);
+            lv_obj_set_width(helper, 300);
+            lv_obj_set_style_text_align(helper, LV_TEXT_ALIGN_CENTER, 0);
+        } else {
+            const int half_width = agent_panel_ui::kFocusBand.w / 2;
+            _agent_focus_band_left = lv_obj_create(_agent_panel_root);
+            lv_obj_set_pos(
+                _agent_focus_band_left,
+                agent_panel_ui::kFocusBand.x,
+                agent_panel_ui::kFocusBand.y);
+            lv_obj_set_size(
+                _agent_focus_band_left,
+                half_width,
+                agent_panel_ui::kFocusBand.h);
+            lv_obj_set_style_radius(_agent_focus_band_left, 0, 0);
+            lv_obj_set_style_border_width(_agent_focus_band_left, 0, 0);
+            lv_obj_set_style_bg_color(
+                _agent_focus_band_left,
+                lv_color_hex(agent_panel_ui::kBackground),
+                0);
+            lv_obj_set_style_bg_grad_color(
+                _agent_focus_band_left,
+                lv_color_hex(agent_panel_ui::kSelection),
+                0);
+            lv_obj_set_style_bg_grad_dir(
+                _agent_focus_band_left, LV_GRAD_DIR_HOR, 0);
+            lv_obj_set_style_bg_opa(_agent_focus_band_left, LV_OPA_30, 0);
+            lv_obj_clear_flag(
+                _agent_focus_band_left, LV_OBJ_FLAG_SCROLLABLE);
+
+            _agent_focus_band_right = lv_obj_create(_agent_panel_root);
+            lv_obj_set_pos(
+                _agent_focus_band_right,
+                agent_panel_ui::kFocusBand.x + half_width,
+                agent_panel_ui::kFocusBand.y);
+            lv_obj_set_size(
+                _agent_focus_band_right,
+                agent_panel_ui::kFocusBand.w - half_width,
+                agent_panel_ui::kFocusBand.h);
+            lv_obj_set_style_radius(_agent_focus_band_right, 0, 0);
+            lv_obj_set_style_border_width(_agent_focus_band_right, 0, 0);
+            lv_obj_set_style_bg_color(
+                _agent_focus_band_right,
+                lv_color_hex(agent_panel_ui::kSelection),
+                0);
+            lv_obj_set_style_bg_grad_color(
+                _agent_focus_band_right,
+                lv_color_hex(agent_panel_ui::kBackground),
+                0);
+            lv_obj_set_style_bg_grad_dir(
+                _agent_focus_band_right, LV_GRAD_DIR_HOR, 0);
+            lv_obj_set_style_bg_opa(_agent_focus_band_right, LV_OPA_30, 0);
+            lv_obj_clear_flag(
+                _agent_focus_band_right, LV_OBJ_FLAG_SCROLLABLE);
+
+            _agent_focus_marker = lv_obj_create(_agent_panel_root);
+            lv_obj_set_pos(
+                _agent_focus_marker,
+                agent_panel_ui::kFocusMarker.x,
+                agent_panel_ui::kFocusMarker.y);
+            lv_obj_set_size(
+                _agent_focus_marker,
+                agent_panel_ui::kFocusMarker.w,
+                agent_panel_ui::kFocusMarker.h);
+            lv_obj_set_style_radius(_agent_focus_marker, 2, 0);
+            lv_obj_set_style_border_width(_agent_focus_marker, 0, 0);
+            lv_obj_set_style_bg_color(
+                _agent_focus_marker,
+                lv_color_hex(agent_panel_ui::kSelection),
+                0);
+            lv_obj_set_style_bg_opa(
+                _agent_focus_marker, LV_OPA_COVER, 0);
+            lv_obj_clear_flag(
+                _agent_focus_marker, LV_OBJ_FLAG_SCROLLABLE);
+
+            _agent_rail = lv_obj_create(_agent_panel_root);
+            lv_obj_set_pos(
+                _agent_rail,
+                agent_panel_ui::kRailViewport.x,
+                agent_panel_ui::kRailViewport.y);
+            lv_obj_set_size(
+                _agent_rail,
+                agent_panel_ui::kRailViewport.w,
+                agent_panel_ui::kRailViewport.h);
+            lv_obj_set_style_radius(_agent_rail, 0, 0);
+            lv_obj_set_style_border_width(_agent_rail, 0, 0);
+            lv_obj_set_style_bg_opa(_agent_rail, LV_OPA_TRANSP, 0);
+            lv_obj_set_style_pad_left(_agent_rail, 0, 0);
+            lv_obj_set_style_pad_right(_agent_rail, 0, 0);
+            lv_obj_set_style_pad_top(
+                _agent_rail,
+                (agent_panel_ui::kRailViewport.h -
+                    agent_panel_ui::kRailRowHeight) /
+                    2,
+                0);
+            lv_obj_set_style_pad_bottom(
+                _agent_rail,
+                (agent_panel_ui::kRailViewport.h -
+                    agent_panel_ui::kRailRowHeight) /
+                    2,
+                0);
+            lv_obj_set_style_pad_row(_agent_rail, 0, 0);
+            lv_obj_set_scroll_dir(_agent_rail, LV_DIR_VER);
+            lv_obj_set_scroll_snap_y(
+                _agent_rail, LV_SCROLL_SNAP_CENTER);
+            lv_obj_set_style_anim_duration(_agent_rail, 160, 0);
+            lv_obj_set_scrollbar_mode(
+                _agent_rail, LV_SCROLLBAR_MODE_OFF);
+            lv_obj_set_flex_flow(_agent_rail, LV_FLEX_FLOW_COLUMN);
+            lv_obj_set_flex_align(
+                _agent_rail,
+                LV_FLEX_ALIGN_START,
+                LV_FLEX_ALIGN_START,
+                LV_FLEX_ALIGN_START);
+            lv_obj_add_event_cb(
+                _agent_rail,
+                AppCodexStatus::agent_panel_scroll_event_cb,
+                LV_EVENT_SCROLL,
+                this);
+
+            size_t initial_focus = 0;
+            bool focus_found = false;
+            for (size_t index = 0; index < snapshot.count; ++index) {
+                const AgentPanelRow& row = snapshot.rows[index];
+                if (!focus_found &&
+                    row.state == AgentPanelRowState::Requesting) {
+                    initial_focus = index;
+                    focus_found = true;
+                } else if (!focus_found &&
+                    row.state == AgentPanelRowState::Connected) {
+                    initial_focus = index;
+                }
+
+                lv_obj_t* wrapper = lv_obj_create(_agent_rail);
+                _agent_row_wrappers[index] = wrapper;
+                lv_obj_set_size(
+                    wrapper,
+                    agent_panel_ui::kRailViewport.w,
+                    agent_panel_ui::kRailRowHeight);
+                lv_obj_set_style_radius(wrapper, 0, 0);
+                lv_obj_set_style_border_width(wrapper, 0, 0);
+                lv_obj_set_style_bg_opa(wrapper, LV_OPA_TRANSP, 0);
+                lv_obj_set_style_pad_all(wrapper, 0, 0);
+                lv_obj_clear_flag(wrapper, LV_OBJ_FLAG_SCROLLABLE);
+                lv_obj_add_flag(wrapper, LV_OBJ_FLAG_SNAPPABLE);
+
+                lv_obj_t* delete_button = make_button(
+                    wrapper,
+                    "Delete",
+                    agent_panel_ui::kRailViewport.w -
+                        agent_panel_ui::kDeleteRevealWidth,
+                    7,
+                    agent_panel_ui::kDeleteRevealWidth,
+                    44,
+                    agent_panel_ui::kDestructive,
+                    false);
+                _agent_delete_buttons[index] = delete_button;
+                lv_obj_add_flag(delete_button, LV_OBJ_FLAG_HIDDEN);
+
+                lv_obj_t* row_button = lv_button_create(wrapper);
+                _agent_row_buttons[index] = row_button;
+                lv_obj_set_pos(row_button, 0, 3);
+                lv_obj_set_size(
+                    row_button,
+                    agent_panel_ui::kRailViewport.w,
+                    52);
+                lv_obj_set_style_radius(row_button, 0, 0);
+                lv_obj_set_style_border_width(row_button, 0, 0);
+                lv_obj_set_style_bg_opa(row_button, LV_OPA_TRANSP, 0);
+                lv_obj_set_style_shadow_width(row_button, 0, 0);
+                lv_obj_add_event_cb(
+                    row_button,
+                    AppCodexStatus::agent_panel_event_cb,
+                    LV_EVENT_CLICKED,
+                    this);
+                lv_obj_add_event_cb(
+                    row_button,
+                    AppCodexStatus::agent_panel_row_gesture_cb,
+                    LV_EVENT_GESTURE,
+                    this);
+
+                uint32_t state_color = agent_panel_ui::kOffline;
+                const char* state = "Offline";
+                bool filled_dot = false;
+                if (row.state == AgentPanelRowState::Connected) {
+                    state = "Connected";
+                    state_color = agent_panel_ui::kConnected;
+                    filled_dot = true;
+                } else if (row.state == AgentPanelRowState::Requesting) {
+                    state = "Switch request";
+                    state_color = agent_panel_ui::kRequesting;
+                    filled_dot = true;
+                }
+                if (_agent_switch_pending &&
+                    row.fingerprint == _agent_switch_target) {
+                    state = "Switching...";
+                    state_color = agent_panel_ui::kSelection;
+                    filled_dot = true;
+                }
+
+                lv_obj_t* dot = lv_obj_create(row_button);
+                _agent_row_dots[index] = dot;
+                lv_obj_set_pos(dot, 14, 22);
+                lv_obj_set_size(dot, 8, 8);
+                lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
+                lv_obj_set_style_border_width(dot, filled_dot ? 0 : 1, 0);
+                lv_obj_set_style_border_color(
+                    dot, lv_color_hex(state_color), 0);
+                lv_obj_set_style_bg_color(
+                    dot, lv_color_hex(state_color), 0);
+                lv_obj_set_style_bg_opa(
+                    dot, filled_dot ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+                lv_obj_clear_flag(dot, LV_OBJ_FLAG_SCROLLABLE);
+
+                _agent_row_names[index] = make_label(
+                    row_button,
+                    row.display_name.data(),
+                    32,
+                    13,
+                    is_ascii_text(row.display_name.data())
+                        ? &lv_font_montserrat_18
+                        : &font_puhui_14_1,
+                    agent_panel_ui::kPrimaryText);
+                lv_obj_set_width(_agent_row_names[index], 220);
+                lv_label_set_long_mode(
+                    _agent_row_names[index], LV_LABEL_LONG_MODE_DOTS);
+
+                _agent_row_states[index] = make_label(
+                    row_button,
+                    state,
+                    260,
+                    17,
+                    &lv_font_montserrat_14,
+                    state_color);
+                lv_obj_set_width(_agent_row_states[index], 120);
+                lv_obj_set_style_text_align(
+                    _agent_row_states[index], LV_TEXT_ALIGN_RIGHT, 0);
+            }
+
+            lv_obj_update_layout(_agent_rail);
+            if (_agent_row_wrappers[initial_focus] != nullptr) {
+                lv_obj_scroll_to_view(
+                    _agent_row_wrappers[initial_focus], LV_ANIM_OFF);
+            }
+            sync_agent_rail_focus();
+
+            _agent_reset_button = make_button(
+                _agent_panel_root,
+                "Reset all",
+                agent_panel_ui::kResetRect.x,
+                agent_panel_ui::kResetRect.y,
+                agent_panel_ui::kResetRect.w,
+                agent_panel_ui::kResetRect.h,
+                agent_panel_ui::kDestructive,
+                false);
+        }
+    }
+
+    if (_agent_panel_notice[0] != '\0' &&
+        _agent_panel_notice_until_ms != 0) {
+        _agent_panel_notice_label = make_center_label(
+            _agent_panel_root,
+            _agent_panel_notice.data(),
+            365,
+            &lv_font_montserrat_14,
+            agent_panel_ui::kDestructive);
+    }
+
+    lv_obj_t* close_hint = lv_obj_create(_agent_panel_root);
+    lv_obj_set_pos(
+        close_hint,
+        agent_panel_ui::kCloseHint.x,
+        agent_panel_ui::kCloseHint.y);
+    lv_obj_set_size(
+        close_hint,
+        agent_panel_ui::kCloseHint.w,
+        agent_panel_ui::kCloseHint.h);
+    lv_obj_set_style_radius(close_hint, 2, 0);
+    lv_obj_set_style_border_width(close_hint, 0, 0);
+    lv_obj_set_style_bg_color(
+        close_hint, lv_color_hex(agent_panel_ui::kSecondaryText), 0);
+    lv_obj_set_style_bg_opa(close_hint, LV_OPA_50, 0);
+    lv_obj_clear_flag(close_hint, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_move_foreground(_agent_panel_root);
+    if (_last_agent_touch_state == LV_INDEV_STATE_REL) {
+        settle_agent_panel(true);
+    }
+}
+
+void AppCodexStatus::sync_agent_rail_focus()
+{
+    if (_agent_rail == nullptr) {
+        return;
+    }
+    lv_area_t rail_coords = {};
+    lv_obj_get_coords(_agent_rail, &rail_coords);
+    const int rail_center =
+        rail_coords.y1 + agent_panel_ui::kRailViewport.h / 2;
+    const AgentPanelSnapshot snapshot = _agent_panel_model.snapshot();
+    for (size_t index = 0; index < snapshot.count; ++index) {
+        lv_obj_t* wrapper = _agent_row_wrappers[index];
+        lv_obj_t* name = _agent_row_names[index];
+        if (wrapper == nullptr || name == nullptr) {
+            continue;
+        }
+        lv_area_t row_coords = {};
+        lv_obj_get_coords(wrapper, &row_coords);
+        const int row_center = (row_coords.y1 + row_coords.y2) / 2;
+        const int delta = row_center > rail_center
+            ? row_center - rail_center
+            : rail_center - row_center;
+        const bool ascii_name =
+            is_ascii_text(snapshot.rows[index].display_name.data());
+        const lv_font_t* font = ascii_name
+            ? &lv_font_montserrat_16
+            : &font_puhui_14_1;
+        lv_opa_t opacity = LV_OPA_40;
+        if (delta <= 20) {
+            if (ascii_name) {
+                font = &lv_font_montserrat_22;
+            }
+            opacity = LV_OPA_COVER;
+        } else if (delta <= agent_panel_ui::kRailRowHeight + 20) {
+            if (ascii_name) {
+                font = &lv_font_montserrat_18;
+            }
+            opacity = LV_OPA_70;
+        }
+        lv_obj_set_style_text_font(name, font, 0);
+        lv_obj_set_style_opa(wrapper, opacity, 0);
+    }
+}
+
+void AppCodexStatus::close_agent_delete_reveal()
+{
+    const AgentPanelSnapshot snapshot = _agent_panel_model.snapshot();
+    for (size_t index = 0; index < snapshot.count; ++index) {
+        if (_agent_row_buttons[index] != nullptr) {
+            lv_obj_set_x(_agent_row_buttons[index], 0);
+        }
+        if (_agent_delete_buttons[index] != nullptr) {
+            lv_obj_add_flag(
+                _agent_delete_buttons[index], LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+    _agent_revealed_delete_index = -1;
+}
+
+void AppCodexStatus::agent_panel_scroll_event_cb(lv_event_t* event)
+{
+    auto* self =
+        static_cast<AppCodexStatus*>(lv_event_get_user_data(event));
+    if (self == nullptr) {
+        return;
+    }
+    self->close_agent_delete_reveal();
+    self->sync_agent_rail_focus();
+}
+
+void AppCodexStatus::agent_panel_row_gesture_cb(lv_event_t* event)
+{
+    auto* self =
+        static_cast<AppCodexStatus*>(lv_event_get_user_data(event));
+    lv_indev_t* indev = lv_indev_active();
+    if (self == nullptr || indev == nullptr ||
+        lv_indev_get_gesture_dir(indev) != LV_DIR_LEFT) {
+        return;
+    }
+    lv_obj_t* target =
+        static_cast<lv_obj_t*>(lv_event_get_target(event));
+    const AgentPanelSnapshot snapshot = self->_agent_panel_model.snapshot();
+    for (size_t index = 0; index < snapshot.count; ++index) {
+        if (target != self->_agent_row_buttons[index]) {
+            continue;
+        }
+        self->close_agent_delete_reveal();
+        self->_agent_revealed_delete_index = static_cast<int>(index);
+        lv_obj_clear_flag(
+            self->_agent_delete_buttons[index], LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_x(
+            self->_agent_row_buttons[index],
+            -agent_panel_ui::kDeleteRevealWidth);
+        return;
+    }
+}
+
+void AppCodexStatus::agent_reset_hold_event_cb(lv_event_t* event)
+{
+    auto* self =
+        static_cast<AppCodexStatus*>(lv_event_get_user_data(event));
+    if (self == nullptr ||
+        self->_agent_panel_model.snapshot().confirmation !=
+            AgentPanelConfirmation::ResetAll) {
+        return;
+    }
+    const lv_event_code_t code = lv_event_get_code(event);
+    if (code == LV_EVENT_PRESSED) {
+        self->_agent_reset_hold_started_ms = GetHAL().millis();
+        self->_agent_reset_hold_active = true;
+        self->_agent_reset_hold_queued = false;
+    } else if (code == LV_EVENT_RELEASED ||
+               code == LV_EVENT_PRESS_LOST) {
+        self->_agent_reset_hold_started_ms = 0;
+        self->_agent_reset_hold_active = false;
+        if (!self->_agent_reset_hold_queued &&
+            self->_agent_reset_progress != nullptr) {
+            lv_obj_set_width(self->_agent_reset_progress, 0);
+        }
+    }
+}
+
+void AppCodexStatus::update_agent_panel_runtime(uint32_t now_ms)
+{
+    if (_agent_pairing_countdown_label != nullptr) {
+        const uint64_t deadline = _secure_pairing_session.deadline_ms();
+        uint32_t remaining_seconds = 0;
+        if (deadline > now_ms) {
+            remaining_seconds = static_cast<uint32_t>(
+                (deadline - now_ms + 999U) / 1000U);
+        }
+        char countdown[24] = {};
+        std::snprintf(
+            countdown,
+            sizeof(countdown),
+            "%us remaining",
+            static_cast<unsigned>(remaining_seconds));
+        lv_label_set_text(_agent_pairing_countdown_label, countdown);
+    }
+
+    if (_agent_reset_hold_active && !_agent_reset_hold_queued) {
+        const uint32_t elapsed = now_ms - _agent_reset_hold_started_ms;
+        const uint32_t clamped = std::min(
+            elapsed, agent_panel_ui::kResetHoldMs);
+        if (_agent_reset_progress != nullptr) {
+            lv_obj_set_width(
+                _agent_reset_progress,
+                static_cast<int>(
+                    clamped * 282U / agent_panel_ui::kResetHoldMs));
+        }
+        if (elapsed >= agent_panel_ui::kResetHoldMs) {
+            _agent_reset_hold_active = false;
+            _agent_reset_hold_queued = true;
+            queue_agent_panel_decision(
+                _agent_panel_model.confirm_destructive(true));
+            _agent_panel_dirty = true;
+        }
+    }
+
+    if (_agent_panel_notice_until_ms != 0 &&
+        static_cast<int32_t>(
+            now_ms - _agent_panel_notice_until_ms) >= 0) {
+        _agent_panel_notice_until_ms = 0;
+        _agent_panel_notice = {};
+        if (_agent_panel_notice_label != nullptr) {
+            lv_obj_add_flag(
+                _agent_panel_notice_label, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+}
+
+void AppCodexStatus::show_agent_panel_notice(
+    const char* text,
+    uint32_t now_ms)
+{
+    std::snprintf(
+        _agent_panel_notice.data(),
+        _agent_panel_notice.size(),
+        "%s",
+        text == nullptr ? "" : text);
+    _agent_panel_notice_until_ms =
+        now_ms + agent_panel_ui::kNoticeDurationMs;
+    _agent_panel_dirty = true;
+}
+
+void AppCodexStatus::settle_agent_panel(bool animate)
+{
+    if (_agent_panel_root == nullptr) {
+        return;
+    }
+    const AgentPanelSnapshot snapshot = _agent_panel_model.snapshot();
+    auto& controls = GetGlobalEdgeControlService();
+    if (snapshot.visible) {
+        GetGlobalEdgeControlService().setEnabled(false);
+    } else {
+        close_agent_delete_reveal();
+    }
+    const int target_y =
+        snapshot.visible ? kAgentPanelVisibleY : kAgentPanelHiddenY;
+    const int current_y = lv_obj_get_y(_agent_panel_root);
+
+    lv_anim_delete(this, agent_panel_animation_cb);
+    if (!animate || current_y == target_y) {
+        lv_obj_set_y(_agent_panel_root, target_y);
+        controls.setEnabled(!snapshot.visible);
+        return;
+    }
+    GetGlobalEdgeControlService().setEnabled(false);
+
+    lv_anim_t animation;
+    lv_anim_init(&animation);
+    lv_anim_set_var(&animation, this);
+    lv_anim_set_exec_cb(&animation, agent_panel_animation_cb);
+    lv_anim_set_values(&animation, current_y, target_y);
+    lv_anim_set_duration(&animation, 180);
+    lv_anim_set_path_cb(&animation, lv_anim_path_ease_out);
+    lv_anim_start(&animation);
+}
+
+void AppCodexStatus::agent_panel_animation_cb(void* target, int32_t y)
+{
+    auto* self = static_cast<AppCodexStatus*>(target);
+    if (self != nullptr && self->_agent_panel_root != nullptr) {
+        lv_obj_set_y(self->_agent_panel_root, y);
+        if (y <= kAgentPanelHiddenY) {
+            GetGlobalEdgeControlService().setEnabled(true);
+        }
+    }
+}
+
+void AppCodexStatus::update_agent_panel_touch(uint32_t now_ms)
+{
+    (void)now_ms;
+    lv_indev_t* indev = GetHAL().lvTouchpad;
+    if (indev == nullptr || _screen_off ||
+        GetGlobalDisplayProtectionService().touchInputSuppressed()) {
+        _agent_panel_model.cancel_touch();
+        if (_last_agent_touch_state == LV_INDEV_STATE_PR) {
+            settle_agent_panel(true);
+        }
+        _last_agent_touch_state = LV_INDEV_STATE_REL;
+        return;
+    }
+    auto& controls = GetGlobalEdgeControlService();
+    if (controls.ownsTouch() || controls.lastReleaseConsumed()) {
+        _agent_panel_model.cancel_touch();
+        if (_last_agent_touch_state == LV_INDEV_STATE_PR) {
+            settle_agent_panel(true);
+        }
+        _last_agent_touch_state = LV_INDEV_STATE_REL;
+        return;
+    }
+    const lv_indev_state_t state = lv_indev_get_state(indev);
+    lv_point_t point = {};
+    lv_indev_get_point(indev, &point);
+    auto apply_drag_position = [this]() {
+        if (_agent_panel_root == nullptr ||
+            !_agent_panel_model.owns_touch()) {
+            return;
+        }
+        lv_obj_set_y(
+            _agent_panel_root,
+            std::clamp(
+                _agent_panel_drag_start_y +
+                    _agent_panel_model.vertical_drag_offset(),
+                kAgentPanelHiddenY,
+                kAgentPanelVisibleY));
+    };
+    if (state == LV_INDEV_STATE_PR) {
+        if (_last_agent_touch_state == LV_INDEV_STATE_REL) {
+            if (_agent_panel_root != nullptr &&
+                !_agent_panel_model.snapshot().visible &&
+                lv_obj_get_y(_agent_panel_root) > kAgentPanelHiddenY) {
+                _agent_panel_model.set_visible(true);
+            }
+            _agent_panel_model.touch_press(point.x, point.y);
+            if (_agent_panel_model.owns_touch() &&
+                _agent_panel_root != nullptr) {
+                lv_anim_delete(this, agent_panel_animation_cb);
+                _agent_panel_drag_start_y =
+                    lv_obj_get_y(_agent_panel_root);
+            }
+        } else {
+            _agent_panel_model.touch_move(point.x, point.y);
+            apply_drag_position();
+        }
+    } else if (_last_agent_touch_state == LV_INDEV_STATE_PR) {
+        _agent_panel_model.touch_move(point.x, point.y);
+        apply_drag_position();
+        (void)_agent_panel_model.touch_release();
+        settle_agent_panel(true);
+    }
+    _last_agent_touch_state = state;
+}
+
+void AppCodexStatus::agent_panel_event_cb(lv_event_t* event)
+{
+    auto* self =
+        static_cast<AppCodexStatus*>(lv_event_get_user_data(event));
+    if (self == nullptr) {
+        return;
+    }
+    lv_obj_t* target =
+        static_cast<lv_obj_t*>(lv_event_get_target(event));
+    const AgentPanelSnapshot snapshot =
+        self->_agent_panel_model.snapshot();
+    for (size_t index = 0; index < snapshot.count; ++index) {
+        if (target == self->_agent_row_buttons[index]) {
+            if (self->_agent_switch_pending) {
+                return;
+            }
+            self->close_agent_delete_reveal();
+            if (self->_agent_row_wrappers[index] != nullptr) {
+                lv_obj_scroll_to_view(
+                    self->_agent_row_wrappers[index], LV_ANIM_ON);
+            }
+            self->queue_agent_panel_decision(
+                AgentPanelDecision{
+                    AgentPanelAction::SwitchAgent,
+                    snapshot.rows[index].fingerprint});
+            return;
+        }
+        if (target == self->_agent_delete_buttons[index]) {
+            self->close_agent_delete_reveal();
+            self->queue_agent_panel_decision(
+                AgentPanelDecision{
+                    AgentPanelAction::Delete,
+                    snapshot.rows[index].fingerprint});
+            return;
+        }
+    }
+    if (target == self->_agent_allow_button) {
+        self->queue_agent_panel_decision(
+            self->_agent_panel_model.allow_pairing(false));
+    } else if (target == self->_agent_allow_switch_button) {
+        self->queue_agent_panel_decision(
+            self->_agent_panel_model.allow_pairing(true));
+    } else if (target == self->_agent_reject_button) {
+        self->queue_agent_panel_decision(
+            self->_agent_panel_model.reject_pairing());
+    } else if (target == self->_agent_dismiss_button) {
+        self->clear_pairing_runtime();
+        self->_agent_panel_dirty = true;
+    } else if (target == self->_agent_reset_button) {
+        self->close_agent_delete_reveal();
+        self->queue_agent_panel_decision(
+            self->_agent_panel_model.request_reset());
+    } else if (target == self->_agent_confirm_button) {
+        if (snapshot.confirmation ==
+            AgentPanelConfirmation::DeleteAgent) {
+            self->queue_agent_panel_decision(
+                self->_agent_panel_model.confirm_destructive(true));
+        }
+    } else if (target == self->_agent_cancel_button) {
+        self->_agent_reset_hold_started_ms = 0;
+        self->_agent_reset_hold_active = false;
+        self->_agent_reset_hold_queued = false;
+        self->queue_agent_panel_decision(
+            self->_agent_panel_model.confirm_destructive(false));
+    }
+}
+
+void AppCodexStatus::queue_agent_panel_decision(
+    const AgentPanelDecision& decision)
+{
+    if (decision.action == AgentPanelAction::None) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(_agent_decision_mutex);
+    if (_pending_agent_decision.action == AgentPanelAction::None) {
+        _pending_agent_decision = decision;
+    }
+}
+
+bool AppCodexStatus::take_agent_panel_decision(
+    AgentPanelDecision& decision)
+{
+    std::lock_guard<std::mutex> lock(_agent_decision_mutex);
+    if (_pending_agent_decision.action == AgentPanelAction::None) {
+        return false;
+    }
+    decision = _pending_agent_decision;
+    _pending_agent_decision = {};
+    return true;
+}
+
+void AppCodexStatus::dispatch_agent_panel_decision(
+    const AgentPanelDecision& decision,
+    uint32_t now_ms)
+{
+    if (decision.action == AgentPanelAction::Delete) {
+        (void)_agent_panel_model.request_delete(decision.fingerprint);
+        _agent_panel_dirty = true;
+        return;
+    }
+    if (decision.action == AgentPanelAction::ResetAll) {
+        (void)_agent_panel_model.request_reset();
+        _agent_panel_dirty = true;
+        return;
+    }
+    if (decision.action == AgentPanelAction::Reject) {
+        if (_ble_transport) {
+            const uint16_t handle = _ble_transport->pending_handle();
+            if (handle != secure_pairing::kNoAgentConnection) {
+                const uint32_t transaction =
+                    _secure_pairing_session.presentation().transaction_id;
+                if (_secure_pairing_session.state() ==
+                        secure_pairing::PairingState::AwaitingConfirmation &&
+                    _agent_registry_store != nullptr) {
+                    (void)_secure_pairing_session.confirm_pairing(
+                        false,
+                        _agent_registry,
+                        *_agent_registry_store,
+                        fill_agent_entropy,
+                        nullptr,
+                        now_ms);
+                    if (transaction != 0) {
+                        (void)send_pairing_empty(
+                            handle,
+                            secure_pairing::WireMessageType::Rejected,
+                            transaction);
+                    }
+                }
+                (void)_ble_transport->reject_pending(handle);
+            }
+        }
+        clear_pairing_runtime();
+        _agent_panel_dirty = true;
+        return;
+    }
+    if (decision.action == AgentPanelAction::AllowPairing ||
+        decision.action == AgentPanelAction::AllowAndSwitch) {
+        const uint16_t handle = _ble_transport
+                                    ? _ble_transport->pending_handle()
+                                    : secure_pairing::kNoAgentConnection;
+        if (_agent_registry_store == nullptr ||
+            handle == secure_pairing::kNoAgentConnection ||
+            _secure_pairing_session.state() !=
+                secure_pairing::PairingState::AwaitingConfirmation ||
+            _secure_pairing_session.confirm_pairing(
+                true,
+                _agent_registry,
+                *_agent_registry_store,
+                fill_agent_entropy,
+                nullptr,
+                now_ms) != secure_pairing::SessionResult::Ok ||
+            !send_pairing_credential(
+                handle,
+                _secure_pairing_session.presentation().credential)) {
+            set_status("PAIR ERR", kCodexRed);
+            return;
+        }
+        _pairing_allow_switch =
+            decision.action == AgentPanelAction::AllowAndSwitch;
+        _agent_panel_model.clear_pairing_request();
+        sync_agent_panel_registry();
+        _agent_panel_dirty = true;
+        set_status("PAIRING", kBeaconViolet);
+        return;
+    }
+    if (decision.action == AgentPanelAction::ConfirmDelete &&
+        _agent_registry_ready) {
+        const auto before = _agent_registry.snapshot();
+        if (_agent_registry.remove_and_rotate(
+                decision.fingerprint,
+                fill_agent_entropy,
+                nullptr) == secure_pairing::RegistryResult::Ok &&
+            save_agent_registry()) {
+            if (_ble_transport) {
+                (void)_ble_transport->set_voice_credential(
+                    _agent_registry.master_key(),
+                    _agent_registry.key_epoch());
+                if (_ble_transport->connected()) {
+                    const bool removing_active =
+                        _ble_transport->active_fingerprint() ==
+                        decision.fingerprint;
+                    if (removing_active) {
+                        (void)_ble_transport->request_active_disconnect(true);
+                    }
+                }
+                const uint16_t pending = _ble_transport->pending_handle();
+                if (pending != secure_pairing::kNoAgentConnection) {
+                    (void)_ble_transport->reject_pending(pending);
+                }
+            }
+            clear_pairing_runtime();
+            if (_voice_input) {
+                (void)_voice_input->set_credential(
+                    _agent_registry.master_key(),
+                    _agent_registry.key_epoch());
+            }
+        } else {
+            (void)secure_pairing::AgentRegistry::restore(
+                before, _agent_registry);
+            set_status("AGENT ERR", kCodexRed);
+            show_agent_panel_notice("Couldn't delete", now_ms);
+        }
+        sync_agent_panel_registry();
+        _agent_panel_dirty = true;
+        return;
+    }
+    if (decision.action == AgentPanelAction::ConfirmReset) {
+        const bool had_registry = _agent_registry_ready;
+        const auto before = _agent_registry.snapshot();
+        secure_pairing::RegistryResult reset_result =
+            secure_pairing::RegistryResult::InvalidRecord;
+        if (had_registry) {
+            reset_result = _agent_registry.reset_all(
+                fill_agent_entropy, nullptr);
+        } else {
+            reset_result = secure_pairing::AgentRegistry::initialize(
+                fill_agent_entropy, nullptr, _agent_registry);
+        }
+        if (reset_result == secure_pairing::RegistryResult::Ok &&
+            save_agent_registry()) {
+            _agent_registry_ready = true;
+            if (_voice_input) {
+                (void)_voice_input->set_credential(
+                    _agent_registry.master_key(),
+                    _agent_registry.key_epoch());
+            }
+            if (_ble_transport) {
+                (void)_ble_transport->set_voice_credential(
+                    _agent_registry.master_key(),
+                    _agent_registry.key_epoch());
+                (void)_ble_transport->request_active_disconnect(true);
+                const uint16_t pending = _ble_transport->pending_handle();
+                if (pending != secure_pairing::kNoAgentConnection) {
+                    (void)_ble_transport->reject_pending(pending);
+                }
+            }
+            clear_pairing_runtime();
+        } else {
+            if (had_registry) {
+                (void)secure_pairing::AgentRegistry::restore(
+                    before, _agent_registry);
+            }
+            set_status("AGENT ERR", kCodexRed);
+            show_agent_panel_notice("Couldn't reset", now_ms);
+        }
+        sync_agent_panel_registry();
+        _agent_panel_dirty = true;
+        return;
+    }
+    if (decision.action != AgentPanelAction::SwitchAgent ||
+        !_agent_registry_ready) {
+        _agent_panel_dirty = true;
+        return;
+    }
+
+    AgentPanelDecision switch_decision =
+        _agent_panel_model.request_switch(
+            decision.fingerprint,
+            _voice_input != nullptr &&
+                _voice_input->ui_state() == VoiceInputUiState::Active);
+    if (_agent_panel_model.snapshot().switch_waiting_for_voice &&
+        _voice_input != nullptr) {
+        _voice_input->cancel_for_home(now_ms);
+        switch_decision =
+            _agent_panel_model.voice_cleanup_complete();
+    }
+    if (switch_decision.action != AgentPanelAction::SwitchAgent) {
+        return;
+    }
+    const auto before_selection = _agent_registry.snapshot();
+    if (_agent_registry.select(
+            switch_decision.fingerprint,
+            static_cast<int64_t>(now_ms)) !=
+            secure_pairing::RegistryResult::Ok ||
+        !save_agent_registry()) {
+        (void)secure_pairing::AgentRegistry::restore(
+            before_selection, _agent_registry);
+        set_status("AGENT ERR", kCodexRed);
+        show_agent_panel_notice("Couldn't switch", now_ms);
+        return;
+    }
+    _agent_switch_target = switch_decision.fingerprint;
+    _agent_switch_pending = true;
+    if (_ble_transport) {
+        if (_ble_transport->active_fingerprint() ==
+            _agent_switch_target) {
+            _agent_switch_pending = false;
+        } else if (_ble_transport->connected()) {
+            (void)_ble_transport->request_active_disconnect();
+        }
+    }
+    complete_agent_switch_if_ready();
+    sync_agent_panel_registry();
+    _agent_panel_dirty = true;
+}
+
+bool AppCodexStatus::send_pairing_empty(
+    uint16_t connection_handle,
+    secure_pairing::WireMessageType type,
+    uint32_t transaction_id)
+{
+    if (!_ble_transport ||
+        connection_handle == secure_pairing::kNoAgentConnection) {
+        return false;
+    }
+    std::array<uint8_t, secure_pairing::kMaxPairingWireFrameSize> encoded = {};
+    size_t encoded_size = 0;
+    return secure_pairing::encode_empty_wire_frame(
+               type,
+               transaction_id,
+               encoded.data(),
+               encoded.size(),
+               encoded_size) &&
+           _ble_transport->notify_pairing(
+               connection_handle, encoded.data(), encoded_size) ==
+               CodexBleNotifyResult::Accepted;
+}
+
+bool AppCodexStatus::send_pairing_credential(
+    uint16_t connection_handle,
+    const secure_pairing::CredentialEnvelope& envelope)
+{
+    if (!_ble_transport ||
+        connection_handle == secure_pairing::kNoAgentConnection) {
+        return false;
+    }
+    std::array<uint8_t, secure_pairing::kMaxPairingWireFrameSize> encoded = {};
+    size_t encoded_size = 0;
+    return secure_pairing::encode_credential_envelope(
+               envelope,
+               encoded.data(),
+               encoded.size(),
+               encoded_size) &&
+           _ble_transport->notify_pairing(
+               connection_handle, encoded.data(), encoded_size) ==
+               CodexBleNotifyResult::Accepted;
+}
+
+void AppCodexStatus::clear_pairing_runtime()
+{
+    _secure_pairing_session.reset();
+    _pairing_completion = PairingCompletion::None;
+    _pairing_completion_transaction = 0;
+    _pairing_allow_switch = false;
+    _agent_pairing_expired = false;
+    _agent_panel_model.clear_pairing_request();
+}
+
+void AppCodexStatus::complete_authenticated_pending(
+    uint16_t connection_handle,
+    PairingCompletion completion,
+    uint32_t transaction_id,
+    bool allow_switch)
+{
+    if (!_ble_transport) {
+        return;
+    }
+    const auto reject_and_clear = [this, connection_handle]() {
+        (void)_ble_transport->reject_pending(connection_handle);
+        clear_pairing_runtime();
+        sync_agent_panel_registry();
+        _agent_panel_dirty = true;
+    };
+    const secure_pairing::WireMessageType response =
+        completion == PairingCompletion::Authentication
+            ? secure_pairing::WireMessageType::AuthenticationOk
+            : secure_pairing::WireMessageType::CredentialAckOk;
+    if (_ble_transport->is_active_handle(connection_handle)) {
+        if (_ble_transport->active_fingerprint() !=
+                _secure_pairing_session.authenticated_fingerprint() ||
+            !send_pairing_empty(
+                connection_handle, response, transaction_id)) {
+            (void)send_pairing_empty(
+                connection_handle,
+                secure_pairing::WireMessageType::Error,
+                transaction_id);
+        }
+        clear_pairing_runtime();
+        sync_agent_panel_registry();
+        _agent_panel_dirty = true;
+        return;
+    }
+    if (!_ble_transport->authorize_pending(
+            connection_handle,
+            _secure_pairing_session.authenticated_fingerprint())) {
+        (void)send_pairing_empty(
+            connection_handle,
+            secure_pairing::WireMessageType::Error,
+            transaction_id);
+        reject_and_clear();
+        return;
+    }
+    sync_agent_panel_registry();
+    _agent_panel_dirty = true;
+    const auto select_and_save = [this](
+                                     const secure_pairing::AgentFingerprint&
+                                         fingerprint) {
+        const auto before = _agent_registry.snapshot();
+        if (_agent_registry.select(
+                fingerprint,
+                static_cast<int64_t>(GetHAL().millis())) ==
+                secure_pairing::RegistryResult::Ok &&
+            save_agent_registry()) {
+            return true;
+        }
+        (void)secure_pairing::AgentRegistry::restore(before, _agent_registry);
+        return false;
+    };
+
+    const secure_pairing::AgentFingerprint fingerprint =
+        _secure_pairing_session.authenticated_fingerprint();
+
+    if (!_ble_transport->connected()) {
+        const bool is_selected =
+            allow_switch || !_agent_registry.has_last_selected() ||
+            _agent_registry.last_selected() == fingerprint;
+        if (!is_selected) {
+            (void)send_pairing_empty(
+                connection_handle, response, transaction_id);
+            reject_and_clear();
+            return;
+        }
+        if (!select_and_save(fingerprint)) {
+            (void)send_pairing_empty(
+                connection_handle,
+                secure_pairing::WireMessageType::Error,
+                transaction_id);
+            reject_and_clear();
+            return;
+        }
+        if (send_pairing_empty(connection_handle, response, transaction_id) &&
+            _ble_transport->promote_pending(connection_handle)) {
+            clear_pairing_runtime();
+            sync_agent_panel_registry();
+            _agent_panel_dirty = true;
+        } else {
+            reject_and_clear();
+        }
+        return;
+    }
+
+    if (allow_switch) {
+        if (!select_and_save(fingerprint)) {
+            (void)send_pairing_empty(
+                connection_handle,
+                secure_pairing::WireMessageType::Error,
+                transaction_id);
+            reject_and_clear();
+            return;
+        }
+        _pairing_completion = completion;
+        _pairing_completion_transaction = transaction_id;
+        _agent_switch_target =
+            _secure_pairing_session.authenticated_fingerprint();
+        _agent_switch_pending = true;
+        (void)_ble_transport->request_active_disconnect();
+        return;
+    }
+
+    (void)send_pairing_empty(connection_handle, response, transaction_id);
+    reject_and_clear();
+}
+
+void AppCodexStatus::process_secure_pairing(uint32_t now_ms)
+{
+    if (!_ble_transport || !_agent_registry_ready) {
+        return;
+    }
+    const uint16_t session_connection =
+        _secure_pairing_session.connection_handle();
+    const bool session_is_active =
+        session_connection != secure_pairing::kNoAgentConnection &&
+        _ble_transport->is_active_handle(session_connection);
+    if (_secure_pairing_session.expire(now_ms)) {
+        if (session_connection != secure_pairing::kNoAgentConnection &&
+            !session_is_active) {
+            (void)_ble_transport->reject_pending(session_connection);
+        }
+        _pairing_completion = PairingCompletion::None;
+        _pairing_completion_transaction = 0;
+        _pairing_allow_switch = false;
+        _agent_pairing_expired = true;
+        sync_agent_panel_registry();
+        _agent_panel_dirty = true;
+    } else if (
+        session_connection != secure_pairing::kNoAgentConnection &&
+        _ble_transport->pending_handle() != session_connection &&
+        !session_is_active) {
+        clear_pairing_runtime();
+        sync_agent_panel_registry();
+        _agent_panel_dirty = true;
+    }
+    CodexPairingFrame queued = {};
+    while (_ble_transport->take_pairing_frame(queued)) {
+        secure_pairing::WireFrameView frame = {};
+        if (!secure_pairing::decode_wire_frame(
+                queued.data.data(), queued.length, frame)) {
+            continue;
+        }
+        if (frame.type == secure_pairing::WireMessageType::DiscoveryRequest) {
+            std::array<uint8_t, secure_pairing::kMaxPairingWireFrameSize>
+                response = {};
+            size_t response_size = 0;
+            secure_pairing::crypto::PublicKey watch_identity_public = {};
+            if (frame.payload_size == 0 &&
+                _agent_registry.watch_identity_public(watch_identity_public) &&
+                secure_pairing::encode_discovery_response(
+                    frame.transaction_id,
+                    _agent_registry.watch_id(),
+                    _agent_registry.key_epoch(),
+                    watch_identity_public,
+                    response.data(),
+                    response.size(),
+                    response_size)) {
+                (void)_ble_transport->notify_pairing(
+                    queued.connection_handle,
+                    response.data(),
+                    response_size);
+            }
+            continue;
+        }
+
+        if (frame.type == secure_pairing::WireMessageType::PairingRequest) {
+            if (_ble_transport->is_active_handle(
+                    queued.connection_handle)) {
+                (void)send_pairing_empty(
+                    queued.connection_handle,
+                    secure_pairing::WireMessageType::Error,
+                    frame.transaction_id);
+                continue;
+            }
+            secure_pairing::PairingRequest request = {};
+            secure_pairing::AgentFingerprint fingerprint = {};
+            if (!secure_pairing::decode_pairing_request(
+                    frame, queued.connection_handle, request) ||
+                !agent_fingerprint(
+                    request.agent_identity_public, fingerprint)) {
+                (void)send_pairing_empty(
+                    queued.connection_handle,
+                    secure_pairing::WireMessageType::Error,
+                    frame.transaction_id);
+                continue;
+            }
+            const secure_pairing::SessionResult request_result =
+                _secure_pairing_session.request_pairing(
+                    request,
+                    _agent_registry,
+                    fill_agent_entropy,
+                    nullptr,
+                    now_ms);
+            if (request_result != secure_pairing::SessionResult::Ok) {
+                (void)send_pairing_empty(
+                    queued.connection_handle,
+                    secure_pairing::WireMessageType::Error,
+                    frame.transaction_id);
+                if (request_result == secure_pairing::SessionResult::Cooldown) {
+                    (void)_ble_transport->reject_pending(
+                        queued.connection_handle);
+                }
+                continue;
+            }
+            (void)_ble_transport->note_pairing_activity(
+                queued.connection_handle, now_ms);
+            const auto& presentation =
+                _secure_pairing_session.presentation();
+            secure_pairing::AgentName display_name = {};
+            std::copy_n(
+                request.agent_name.begin(),
+                request.agent_name_size,
+                display_name.begin());
+            std::array<uint8_t, secure_pairing::kMaxPairingWireFrameSize>
+                response = {};
+            size_t response_size = 0;
+            if (!secure_pairing::encode_pairing_offer(
+                    presentation,
+                    response.data(),
+                    response.size(),
+                    response_size) ||
+                _ble_transport->notify_pairing(
+                    queued.connection_handle,
+                    response.data(),
+                    response_size) != CodexBleNotifyResult::Accepted ||
+                !_agent_panel_model.show_pairing_request(
+                    display_name,
+                    request.agent_name_size,
+                    fingerprint,
+                    presentation.verification_code.data())) {
+                (void)_ble_transport->reject_pending(
+                    queued.connection_handle);
+                clear_pairing_runtime();
+                continue;
+            }
+            _agent_pairing_expired = false;
+            _agent_panel_dirty = true;
+            continue;
+        }
+
+        if (frame.type == secure_pairing::WireMessageType::PairingConfirm) {
+            bool accepted = false;
+            if (queued.connection_handle !=
+                    _secure_pairing_session.connection_handle() ||
+                !secure_pairing::decode_pairing_confirmation(frame, accepted) ||
+                frame.transaction_id !=
+                    _secure_pairing_session.presentation().transaction_id) {
+                (void)send_pairing_empty(
+                    queued.connection_handle,
+                    secure_pairing::WireMessageType::Error,
+                    frame.transaction_id);
+            } else if (!accepted) {
+                if (_agent_registry_store) {
+                    (void)_secure_pairing_session.confirm_pairing(
+                        false,
+                        _agent_registry,
+                        *_agent_registry_store,
+                        fill_agent_entropy,
+                        nullptr,
+                        now_ms);
+                }
+                (void)send_pairing_empty(
+                    queued.connection_handle,
+                    secure_pairing::WireMessageType::Rejected,
+                    frame.transaction_id);
+                (void)_ble_transport->reject_pending(
+                    queued.connection_handle);
+                clear_pairing_runtime();
+            }
+            continue;
+        }
+
+        if (frame.type ==
+            secure_pairing::WireMessageType::AuthenticationRequest) {
+            secure_pairing::AuthenticationRequest request = {};
+            if (!secure_pairing::decode_authentication_request(
+                    frame, queued.connection_handle, request)) {
+                (void)send_pairing_empty(
+                    queued.connection_handle,
+                    secure_pairing::WireMessageType::Error,
+                    frame.transaction_id);
+                continue;
+            }
+            const secure_pairing::SessionResult request_result =
+                _secure_pairing_session.request_authentication(
+                    request,
+                    _agent_registry,
+                    fill_agent_entropy,
+                    nullptr,
+                    now_ms);
+            if (request_result != secure_pairing::SessionResult::Ok) {
+                (void)send_pairing_empty(
+                    queued.connection_handle,
+                    secure_pairing::WireMessageType::Error,
+                    frame.transaction_id);
+                if (request_result == secure_pairing::SessionResult::Cooldown) {
+                    (void)_ble_transport->reject_pending(
+                        queued.connection_handle);
+                }
+                continue;
+            }
+            (void)_ble_transport->note_pairing_activity(
+                queued.connection_handle, now_ms);
+            std::array<uint8_t, secure_pairing::kMaxPairingWireFrameSize>
+                response = {};
+            size_t response_size = 0;
+            if (secure_pairing::encode_authentication_challenge_wire(
+                    _secure_pairing_session.authentication_challenge(),
+                    _secure_pairing_session.watch_challenge_signature(),
+                    _secure_pairing_session.watch_challenge_signature_size(),
+                    response.data(),
+                    response.size(),
+                    response_size)) {
+                (void)_ble_transport->notify_pairing(
+                    queued.connection_handle,
+                    response.data(),
+                    response_size);
+            }
+            continue;
+        }
+
+        if (frame.type ==
+            secure_pairing::WireMessageType::AuthenticationProof) {
+            const uint8_t* signature = nullptr;
+            size_t signature_size = 0;
+            if (queued.connection_handle !=
+                    _secure_pairing_session.connection_handle() ||
+                frame.transaction_id !=
+                    _secure_pairing_session.presentation().transaction_id ||
+                _agent_registry_store == nullptr ||
+                !secure_pairing::decode_authentication_proof(
+                    frame, signature, signature_size) ||
+                _secure_pairing_session.authenticate(
+                    signature,
+                    signature_size,
+                    _agent_registry,
+                    *_agent_registry_store,
+                    fill_agent_entropy,
+                    nullptr,
+                    now_ms) != secure_pairing::SessionResult::Ok) {
+                (void)send_pairing_empty(
+                    queued.connection_handle,
+                    secure_pairing::WireMessageType::Error,
+                    frame.transaction_id);
+                continue;
+            }
+            if (_secure_pairing_session.state() ==
+                secure_pairing::PairingState::AwaitingCredentialAck) {
+                (void)send_pairing_credential(
+                    queued.connection_handle,
+                    _secure_pairing_session.presentation().credential);
+            } else {
+                complete_authenticated_pending(
+                    queued.connection_handle,
+                    PairingCompletion::Authentication,
+                    frame.transaction_id,
+                    false);
+            }
+            continue;
+        }
+
+        if (frame.type == secure_pairing::WireMessageType::CredentialAck) {
+            const uint8_t* proof = nullptr;
+            size_t proof_size = 0;
+            const auto purpose =
+                _secure_pairing_session.presentation().credential.purpose;
+            if (queued.connection_handle !=
+                    _secure_pairing_session.connection_handle() ||
+                !secure_pairing::decode_credential_ack_wire(
+                    frame, proof, proof_size) ||
+                _secure_pairing_session.acknowledge_credential(
+                    frame.transaction_id,
+                    proof,
+                    proof_size,
+                    now_ms) != secure_pairing::SessionResult::Ok) {
+                (void)send_pairing_empty(
+                    queued.connection_handle,
+                    secure_pairing::WireMessageType::Error,
+                    frame.transaction_id);
+                continue;
+            }
+            const bool newly_paired =
+                purpose == secure_pairing::CredentialPurpose::Pairing;
+            complete_authenticated_pending(
+                queued.connection_handle,
+                PairingCompletion::CredentialAck,
+                frame.transaction_id,
+                newly_paired && _pairing_allow_switch);
+        }
+    }
+}
+
+void AppCodexStatus::complete_agent_switch_if_ready()
+{
+    if (!_agent_switch_pending || !_ble_transport ||
+        _ble_transport->connected()) {
+        return;
+    }
+    const auto clear_failed_switch = [this](uint16_t rejected_handle) {
+        if (rejected_handle != secure_pairing::kNoAgentConnection) {
+            (void)_ble_transport->reject_pending(rejected_handle);
+        }
+        _agent_switch_pending = false;
+        _agent_switch_target = {};
+        clear_pairing_runtime();
+        sync_agent_panel_registry();
+        show_agent_panel_notice("Couldn't switch", GetHAL().millis());
+    };
+    const uint16_t pending = _ble_transport->pending_handle();
+    if (pending == secure_pairing::kNoAgentConnection ||
+        _ble_transport->pending_fingerprint() != _agent_switch_target) {
+        clear_failed_switch(secure_pairing::kNoAgentConnection);
+        return;
+    }
+    if (_pairing_completion != PairingCompletion::None &&
+        _ble_transport->pending_fingerprint() == _agent_switch_target) {
+        const secure_pairing::WireMessageType response =
+            _pairing_completion == PairingCompletion::Authentication
+                ? secure_pairing::WireMessageType::AuthenticationOk
+                : secure_pairing::WireMessageType::CredentialAckOk;
+        if (!send_pairing_empty(
+                pending, response, _pairing_completion_transaction)) {
+            clear_failed_switch(pending);
+            return;
+        }
+    }
+    if (_ble_transport->promote_pending(pending)) {
+        _agent_switch_pending = false;
+        _agent_switch_target = {};
+        _pairing_completion = PairingCompletion::None;
+        _pairing_completion_transaction = 0;
+        _pairing_allow_switch = false;
+        _secure_pairing_session.reset();
+        sync_agent_panel_registry();
+        _agent_panel_dirty = true;
+    } else {
+        clear_failed_switch(pending);
+    }
+}
+
+void AppCodexStatus::sync_agent_panel_registry()
+{
+    const secure_pairing::AgentFingerprint active =
+        _ble_transport
+            ? _ble_transport->active_fingerprint()
+            : secure_pairing::AgentFingerprint{};
+    const secure_pairing::AgentFingerprint pending =
+        _ble_transport
+            ? _ble_transport->pending_fingerprint()
+            : secure_pairing::AgentFingerprint{};
+    const bool has_active = std::any_of(
+        active.begin(), active.end(), [](uint8_t byte) {
+            return byte != 0;
+        });
+    const bool has_pending = std::any_of(
+        pending.begin(), pending.end(), [](uint8_t byte) {
+            return byte != 0;
+        });
+    if (_agent_registry_ready) {
+        _agent_panel_model.sync_registry(
+            _agent_registry,
+            has_active ? &active : nullptr,
+            has_pending ? &pending : nullptr);
+    }
+}
+
+bool AppCodexStatus::save_agent_registry()
+{
+    return _agent_registry_store != nullptr &&
+           _agent_registry_store->save(_agent_registry) ==
+               secure_pairing::StoreResult::Ok;
 }
 
 void AppCodexStatus::update_page_swipe(uint32_t now_ms)

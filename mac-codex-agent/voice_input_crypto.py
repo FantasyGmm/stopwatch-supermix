@@ -45,6 +45,11 @@ def _validate_key(key: bytes) -> None:
         raise ValueError(f"key must be {KEY_BYTES} bytes")
 
 
+def validate_key_epoch(key_epoch: int) -> None:
+    if not isinstance(key_epoch, int) or not 1 <= key_epoch <= 0xFFFFFFFF:
+        raise ValueError("key epoch must be 1..4294967295")
+
+
 def derive_nonce(domain: int, exchange_nonce: bytes, sequence: int) -> bytes:
     if domain not in DOMAINS:
         raise ValueError("unknown voice nonce domain")

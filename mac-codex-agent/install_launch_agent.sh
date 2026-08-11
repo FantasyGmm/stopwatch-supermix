@@ -27,9 +27,8 @@ PUBLISH_HAD_PRIOR=0
 PUBLISH_ROLLBACK_REQUIRED=0
 PUBLISH_LOCK_OWNED=0
 
-# Task 10 intentionally owns external device-key provisioning because
-# Task 10 creates the protocol/header provisioning script. Packaging never
-# receives, generates, logs, or bundles device-key material or a key header.
+# Production voice keys are created and rotated by the watch registry at
+# runtime. Packaging never receives, generates, logs, or bundles key material.
 
 verify_driver_package() {
     local package_path="$1"
@@ -184,7 +183,7 @@ validate_no_key_material() {
         return 1
     fi
     if grep -R -I -q -E \
-        '(^|[^0-9a-f])[0-9a-f]{32}([^0-9a-f]|$)' \
+        '(^|[^0-9A-Za-z+/])[0-9A-Fa-f]{32}([^0-9A-Za-z+/]|$)' \
         "$app_path/Contents/Resources" \
         "$app_path/Contents/MacOS" \
         "$app_path/Contents/Info.plist"; then
@@ -233,12 +232,14 @@ import sys
 import AppKit
 import ApplicationServices
 import Quartz
+import Security
 import bleak
 import certifi
 import cryptography
 import PIL
 from cryptography.hazmat.primitives.ciphers.aead import AESCCM
 import agent
+import agent_identity
 import app_state
 import codex_adapter
 import combined_collector
@@ -246,7 +247,12 @@ import completion_classifier
 import ima_adpcm
 import menu_app
 import protocol
+import rollout_change_watcher
 import runtime
+import pairing_client
+import secure_pairing_crypto
+import secure_pairing_protocol
+import secure_pairing_wire
 import sitecustomize
 import task_alerts
 import trae_adapter
@@ -257,6 +263,7 @@ import voice_input_crypto
 import voice_input_protocol
 import voice_session
 import voice_shortcut
+import watch_credentials
 
 app_root = pathlib.Path(os.environ["PYTHONHOME"]).resolve().parents[4]
 external = []
@@ -289,6 +296,13 @@ validate_app_contents() {
         "$resources/app/voice_input_protocol.py" \
         "$resources/app/voice_session.py" \
         "$resources/app/ima_adpcm.py" \
+        "$resources/app/agent_identity.py" \
+        "$resources/app/rollout_change_watcher.py" \
+        "$resources/app/watch_credentials.py" \
+        "$resources/app/pairing_client.py" \
+        "$resources/app/secure_pairing_crypto.py" \
+        "$resources/app/secure_pairing_protocol.py" \
+        "$resources/app/secure_pairing_wire.py" \
         "$resources/site-packages/AppKit/__init__.py" \
         "$resources/site-packages/Quartz/__init__.py" \
         "$resources/site-packages/bleak/__init__.py" \
@@ -543,20 +557,27 @@ build_staged_app() {
         runtime.py \
         app_state.py \
         agent.py \
+        agent_identity.py \
         codex_adapter.py \
         combined_collector.py \
         completion_classifier.py \
         codex_turn_evidence.py \
+        rollout_change_watcher.py \
         task_alerts.py \
         trae_adapter.py \
         trae_tasks.py \
         protocol.py \
+        pairing_client.py \
+        secure_pairing_crypto.py \
+        secure_pairing_protocol.py \
+        secure_pairing_wire.py \
         voice_driver.py \
         voice_shortcut.py \
         voice_audio.py \
         voice_input_crypto.py \
         voice_input_protocol.py \
         voice_session.py \
+        watch_credentials.py \
         ima_adpcm.py; do
         cp "$ROOT_DIR/$module" "$STAGING_CODE/$module"
     done
@@ -586,6 +607,17 @@ main() {
     python3 -m venv "$BUILD_VENV"
     "$BUILD_VENV/bin/python" -m pip install --upgrade pip
     "$BUILD_VENV/bin/python" -m pip install -r "$ROOT_DIR/requirements.txt"
+    PILLOW_VERSION="$(
+        "$BUILD_VENV/bin/python" -c \
+            'import importlib.metadata; print(importlib.metadata.version("Pillow"))'
+    )"
+    ARCHFLAGS="-arch arm64 -arch x86_64" \
+        "$BUILD_VENV/bin/python" -m pip install \
+        --force-reinstall \
+        --no-cache-dir \
+        --no-deps \
+        --no-binary=Pillow \
+        "Pillow==$PILLOW_VERSION"
     CFFI_VERSION="$(
         "$BUILD_VENV/bin/python" -c \
             'import importlib.metadata; print(importlib.metadata.version("cffi"))'

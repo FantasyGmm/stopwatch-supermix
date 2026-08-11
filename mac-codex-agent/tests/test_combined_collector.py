@@ -13,6 +13,7 @@ class FakeSource:
         self.values = list(values)
         self.pending_calls = 0
         self.marked = []
+        self.waits = []
 
     def get_state(self):
         value = self.values.pop(0) if len(self.values) > 1 else self.values[0]
@@ -26,6 +27,10 @@ class FakeSource:
 
     def mark_watch_notified(self, alert_ids):
         self.marked.append(tuple(alert_ids))
+
+    def wait_for_change(self, timeout):
+        self.waits.append(timeout)
+        return True
 
 
 class Clock:
@@ -106,6 +111,17 @@ class CompositeStateCollectorTests(unittest.TestCase):
         self.assertEqual(codex.marked, [("codex-alert",)])
         self.assertEqual(trae.pending_calls, 0)
         self.assertEqual(trae.marked, [])
+
+    def test_change_wait_delegates_only_to_codex(self):
+        codex = FakeSource([{"codex_model": "gpt"}])
+        trae = FakeSource([{"trae_model": "Model"}])
+        collector = CompositeStateCollector(codex, trae)
+
+        changed = collector.wait_for_change(0.25)
+
+        self.assertTrue(changed)
+        self.assertEqual(codex.waits, [0.25])
+        self.assertEqual(trae.waits, [])
 
 
 if __name__ == "__main__":

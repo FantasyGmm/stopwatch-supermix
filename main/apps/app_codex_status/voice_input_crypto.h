@@ -33,6 +33,7 @@ bool derive_nonce(
 
 class CcmContext {
 public:
+    CcmContext();
     explicit CcmContext(const Key& key);
     ~CcmContext();
 
@@ -40,6 +41,8 @@ public:
     CcmContext& operator=(const CcmContext&) = delete;
 
     bool ready() const;
+    bool set_key(const Key& key);
+    void clear();
     bool encrypt(
         Domain domain,
         const ExchangeNonce& exchange_nonce,
@@ -70,9 +73,5 @@ private:
     struct Impl;
     std::unique_ptr<Impl> _impl;
 };
-
-#if defined(ESP_PLATFORM)
-CcmContext& device_context();
-#endif
 
 }  // namespace voice_input::crypto

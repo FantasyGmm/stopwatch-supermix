@@ -70,6 +70,235 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         self.assertIn("event->mtu.value", source)
         self.assertIn("negotiated_mtu - 3", source)
 
+    def test_pending_pairing_timeout_tracks_activity_with_a_hard_cap(self):
+        source = (
+            ROOT / "main/apps/app_codex_status/codex_ble_transport.cpp"
+        ).read_text()
+        self.assertIn("kPendingAuthenticationIdleTimeoutMs", source)
+        self.assertIn("kPendingAuthenticationMaxLifetimeMs", source)
+        pairing_enqueue = source.split(
+            "bool CodexBleTransport::enqueue_pairing_frame_from_ble", 1
+        )[1].split("bool CodexBleTransport::handle_gap_connected", 1)[0]
+        self.assertNotIn("note_pending_activity", pairing_enqueue)
+        self.assertIn("note_pairing_activity", source)
+        app_source = (
+            ROOT / "main/apps/app_codex_status/app_codex_status.cpp"
+        ).read_text()
+        running = app_source.split("void AppCodexStatus::onRunning", 1)[1].split(
+            "void AppCodexStatus::onClose", 1
+        )[0]
+        self.assertLess(
+            running.index("process_secure_pairing(now)"),
+            running.index("_ble_transport->poll(now)"),
+        )
+        pairing = app_source.split(
+            "void AppCodexStatus::process_secure_pairing", 1
+        )[1].split("void AppCodexStatus::complete_agent_switch_if_ready", 1)[0]
+        self.assertIn("note_pairing_activity", pairing)
+
+    def test_rejected_pending_disconnect_is_retried_until_gap_confirms(self):
+        source = (
+            ROOT / "main/apps/app_codex_status/codex_ble_transport.cpp"
+        ).read_text()
+        poll = source.split("void CodexBleTransport::poll", 1)[1].split(
+            "bool CodexBleTransport::connected", 1
+        )[0]
+        disconnect = source.split(
+            "void CodexBleTransport::handle_gap_disconnected", 1
+        )[1].split("void CodexBleTransport::handle_subscription", 1)[0]
+        self.assertIn("disconnecting_handle", poll)
+        self.assertIn("ble_gap_terminate", poll)
+        self.assertIn("AgentConnectionRole::Disconnecting", disconnect)
+
+    def test_rejected_new_connection_disconnect_is_retried_until_gap_confirms(self):
+        header = (
+            ROOT / "main/apps/app_codex_status/codex_ble_transport.h"
+        ).read_text()
+        source = (
+            ROOT / "main/apps/app_codex_status/codex_ble_transport.cpp"
+        ).read_text()
+        poll = source.split("void CodexBleTransport::poll", 1)[1].split(
+            "bool CodexBleTransport::connected", 1
+        )[0]
+        connected = source.split(
+            "bool CodexBleTransport::handle_gap_connected", 1
+        )[1].split("void CodexBleTransport::handle_gap_disconnected", 1)[0]
+        disconnected = source.split(
+            "void CodexBleTransport::handle_gap_disconnected", 1
+        )[1].split("void CodexBleTransport::handle_subscription", 1)[0]
+        self.assertIn("_rejected_disconnect_handle", header)
+        self.assertIn("_rejected_disconnect_mutex", header)
+        self.assertIn("_rejected_disconnect_handle", poll)
+        self.assertIn("lock_guard<std::mutex>", poll)
+        self.assertIn("ble_gap_terminate", poll)
+        self.assertIn("AgentConnectionAdmission::RejectedFull", connected)
+        self.assertIn(
+            "_rejected_disconnect_handle = connection_handle", connected
+        )
+        self.assertIn("lock_guard<std::mutex>", disconnected)
+        self.assertIn("_rejected_disconnect_handle", disconnected)
+
+    def test_active_agent_can_rekey_without_losing_production_access(self):
+        router = (
+            ROOT / "main/apps/app_codex_status/agent_connection_router.cpp"
+        ).read_text()
+        transport_header = (
+            ROOT / "main/apps/app_codex_status/codex_ble_transport.h"
+        ).read_text()
+        app = (
+            ROOT / "main/apps/app_codex_status/app_codex_status.cpp"
+        ).read_text()
+        runtime = (ROOT / "mac-codex-agent/runtime.py").read_text()
+        self.assertIn("AgentConnectionRole::Active", router.split(
+            "surface == AgentGattSurface::Pairing", 1
+        )[1].split("bool AgentConnectionRouter::update_mtu", 1)[0])
+        self.assertIn("is_active_handle", transport_header)
+        pairing = app.split(
+            "void AppCodexStatus::process_secure_pairing", 1
+        )[1].split("void AppCodexStatus::complete_agent_switch_if_ready", 1)[0]
+        self.assertIn("is_active_handle", pairing)
+        self.assertIn("refresh_if_needed", runtime)
+        self.assertIn("_refresh_secure_credential", runtime)
+        self.assertNotIn(
+            "connection->pairing_subscribed = false",
+            router.split("bool AgentConnectionRouter::promote_pending", 1)[1]
+            .split("bool AgentConnectionRouter::reject_pending", 1)[0],
+        )
+
+        for message_type in (
+            "PairingConfirm",
+            "AuthenticationProof",
+            "CredentialAck",
+        ):
+            handler = pairing.split(
+                f"WireMessageType::{message_type}", 1
+            )[1].split("continue;", 1)[0]
+            self.assertIn("connection_handle()", handler)
+            self.assertIn("queued.connection_handle", handler)
+
+    def test_rekey_disconnect_keeps_status_available_unless_identity_revoked(self):
+        header = (
+            ROOT / "main/apps/app_codex_status/codex_ble_transport.h"
+        ).read_text()
+        source = (
+            ROOT / "main/apps/app_codex_status/codex_ble_transport.cpp"
+        ).read_text()
+        self.assertIn("request_active_disconnect(bool revoke_production", header)
+        self.assertIn("_active_production_revoked_token", header)
+        authorization = source.split(
+            "bool CodexBleTransport::authorize_gatt", 1
+        )[1].split("bool CodexBleTransport::authorize_pending", 1)[0]
+        self.assertIn("_active_production_revoked_token.load()", authorization)
+        self.assertNotIn("_active_disconnect_token.load()", authorization)
+
+    def test_revoked_active_cannot_receive_outbound_voice(self):
+        header = (
+            ROOT / "main/apps/app_codex_status/codex_ble_transport.h"
+        ).read_text()
+        source = (
+            ROOT / "main/apps/app_codex_status/codex_ble_transport.cpp"
+        ).read_text()
+        send = source.split(
+            "VoiceNotificationSendResult CodexBleTransport::send_voice_notification",
+            1,
+        )[1].split(
+            "CodexBleNotifyResult CodexBleTransport::notify_voice_for_link", 1
+        )[0]
+        self.assertIn("_voice_link_mutex", header)
+        self.assertIn("_voice_link_mutex", send)
+        self.assertIn("_active_production_revoked_token.load()", send)
+        self.assertIn("notification.connection_generation", send)
+        self.assertIn("link.generation", send)
+
+    def test_forced_capture_worker_failure_cannot_duplicate_transmitter(self):
+        header = (
+            ROOT / "main/apps/app_codex_status/voice_input_controller.h"
+        ).read_text()
+        source = (
+            ROOT / "main/apps/app_codex_status/voice_input_controller.cpp"
+        ).read_text()
+        stop_capture = source.split(
+            "void VoiceInputController::stop_capture_bounded", 1
+        )[1].split("bool VoiceInputController::wait_transmitter_idle_bounded", 1)[0]
+
+        self.assertIn("_producer_worker_failed", header)
+        self.assertIn("_producer_worker_failed = true", stop_capture)
+        self.assertNotIn("_initialized = false", stop_capture)
+        self.assertNotIn("vTaskDelete", stop_capture)
+        self.assertIn("esp_restart()", stop_capture)
+
+    def test_voice_start_state_is_published_before_transmitter_wakeup(self):
+        source = (
+            ROOT / "main/apps/app_codex_status/voice_input_controller.cpp"
+        ).read_text()
+        start = source.split("bool VoiceInputController::start_session", 1)[1].split(
+            "bool VoiceInputController::prepare_begin", 1
+        )[0]
+        prepare_begin = source.split(
+            "bool VoiceInputController::prepare_begin", 1
+        )[1].split("bool VoiceInputController::prepare_audio", 1)[0]
+
+        self.assertNotIn("wake_transmitter", prepare_begin)
+        self.assertLess(start.index("_producer_running = true"), start.index("wake_transmitter()"))
+        self.assertLess(
+            start.index("_ui_state = VoiceInputUiState::Active"),
+            start.index("wake_transmitter()"),
+        )
+
+    def test_voice_worker_timeout_uses_fail_stop_not_forced_task_delete(self):
+        source = (
+            ROOT / "main/apps/app_codex_status/voice_input_controller.cpp"
+        ).read_text()
+        wait_tx = source.split(
+            "bool VoiceInputController::wait_transmitter_idle_bounded", 1
+        )[1].split("void VoiceInputController::stop_transmitter_bounded", 1)[0]
+
+        self.assertNotIn("vTaskDelete", wait_tx)
+        self.assertIn("esp_restart()", wait_tx)
+
+    def test_generation_bound_disconnect_holds_voice_link_lock_through_terminate(self):
+        source = (
+            ROOT / "main/apps/app_codex_status/codex_ble_transport.cpp"
+        ).read_text()
+        request = source.split(
+            "bool CodexBleTransport::request_active_disconnect", 1
+        )[1].split("bool CodexBleTransport::is_active_handle", 1)[0]
+        poll = source.split("void CodexBleTransport::poll", 1)[1].split(
+            "bool CodexBleTransport::connected", 1
+        )[0]
+
+        reject = source.split(
+            "bool CodexBleTransport::reject_pending", 1
+        )[1].split("bool CodexBleTransport::request_active_disconnect", 1)[0]
+
+        self.assertIn("serialize_connection_termination", request)
+        self.assertIn("serialize_connection_termination", reject)
+        self.assertGreaterEqual(
+            poll.count("serialize_connection_termination"), 2
+        )
+        self.assertIn("_voice_link_mutex", request)
+        self.assertIn("_voice_link_mutex", reject)
+        self.assertIn("ble_gap_terminate", request)
+        self.assertIn("ble_gap_terminate", reject)
+
+    def test_disconnect_retry_is_bound_to_original_active_generation(self):
+        header = (
+            ROOT / "main/apps/app_codex_status/codex_ble_transport.h"
+        ).read_text()
+        source = (
+            ROOT / "main/apps/app_codex_status/codex_ble_transport.cpp"
+        ).read_text()
+        poll = source.split("void CodexBleTransport::poll", 1)[1].split(
+            "bool CodexBleTransport::connected", 1
+        )[0]
+        request = source.split(
+            "bool CodexBleTransport::request_active_disconnect", 1
+        )[1].split("uint16_t CodexBleTransport::pending_handle", 1)[0]
+        self.assertIn("_active_disconnect_token", header)
+        self.assertIn("active_connection_token", request)
+        self.assertIn("active_connection_token", poll)
+        self.assertNotIn("active_handle()", poll.split("_active_disconnect_token", 1)[1])
+
     def test_production_voice_control_is_authenticated_and_separate_from_probe(self):
         header = (ROOT / "main/apps/app_codex_status/codex_ble_transport.h").read_text()
         source = (ROOT / "main/apps/app_codex_status/codex_ble_transport.cpp").read_text()
@@ -84,7 +313,49 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         self.assertIn("_production_voice_connection_epoch", app_header)
         disconnect = source.split("void CodexBleTransport::handle_gap_disconnected", 1)[1]
         self.assertIn("_production_control_guard.reset()", disconnect)
-        self.assertIn("_connection_epoch.fetch_add", disconnect)
+        self.assertIn("_connection_router.disconnected", disconnect)
+        self.assertIn("active_generation", source)
+
+    def test_production_voice_uses_runtime_key_and_strict_epoch(self):
+        transport_header = (
+            ROOT / "main/apps/app_codex_status/codex_ble_transport.h"
+        ).read_text()
+        transport_source = (
+            ROOT / "main/apps/app_codex_status/codex_ble_transport.cpp"
+        ).read_text()
+        controller_header = (
+            ROOT / "main/apps/app_codex_status/voice_input_controller.h"
+        ).read_text()
+        controller_source = (
+            ROOT / "main/apps/app_codex_status/voice_input_controller.cpp"
+        ).read_text()
+        crypto_header = (
+            ROOT / "main/apps/app_codex_status/voice_input_crypto.h"
+        ).read_text()
+        protocol_header = (
+            ROOT / "main/apps/app_codex_status/voice_input_protocol.h"
+        ).read_text()
+
+        self.assertIn("kProtocolVersion = 4", protocol_header)
+        self.assertIn("uint32_t key_epoch", protocol_header)
+        self.assertIn("uint32_t expected_key_epoch", protocol_header)
+        self.assertIn("set_voice_credential", transport_header)
+        self.assertIn("clear_voice_credential", transport_header)
+        self.assertIn("_production_voice_key_epoch", transport_header)
+        self.assertIn("_production_voice_key_epoch.load", transport_source)
+        self.assertIn("set_credential", controller_header)
+        self.assertIn("clear_credential", controller_header)
+        self.assertIn("_key_epoch", controller_header)
+        self.assertIn("_crypto->set_key", controller_source)
+        self.assertIn("_crypto->clear", controller_source)
+        self.assertIn("bool set_key", crypto_header)
+        self.assertIn("void clear", crypto_header)
+
+        production = "\n".join(
+            (transport_header, transport_source, controller_header, controller_source)
+        )
+        self.assertNotIn("device_context", production)
+        self.assertNotIn("generated::kDeviceKey", production)
 
     def test_app_routes_button_edges_after_wake_and_cancels_before_home(self):
         header = (ROOT / "main/apps/app_codex_status/app_codex_status.h").read_text()
@@ -158,10 +429,43 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         self.assertIn("VoiceCapturePipeline", header)
         self.assertIn("VoiceInputSession", header)
         self.assertIn("kProducerStackBytes = 8192", source)
-        self.assertIn("kMaxBufferedAudioMs = 300", source)
+        self.assertIn("kMaxBufferedAudioMs = 1000", source)
         self.assertIn("encode_notification", source)
         self.assertIn("take_notification", source)
         self.assertIn("cancel_for_home", source)
+
+    def test_production_voice_delivery_is_not_driven_by_codex_ui_loop(self):
+        app = (ROOT / "main/apps/app_codex_status/app_codex_status.cpp").read_text()
+        controller = (
+            ROOT / "main/apps/app_codex_status/voice_input_controller.cpp"
+        ).read_text()
+        running = app.split("void AppCodexStatus::onRunning()", 1)[1].split(
+            "void AppCodexStatus::onClose()", 1
+        )[0]
+        production_voice = running.split("if (_voice_input)", 1)[1].split(
+            "if (_voice_probe)", 1
+        )[0]
+
+        self.assertNotIn("take_notification", production_voice)
+        self.assertNotIn("record_notification_result", production_voice)
+        self.assertNotIn("notify_voice(", production_voice)
+        self.assertIn("transmitter_loop", controller)
+        self.assertIn("xTaskCreate", controller)
+
+    def test_capture_completion_is_published_before_transmitter_wakeup(self):
+        controller = (
+            ROOT / "main/apps/app_codex_status/voice_input_controller.cpp"
+        ).read_text()
+        producer = controller.split(
+            "void VoiceInputController::producer_step", 1
+        )[1].split("bool VoiceInputController::start_session", 1)[0]
+
+        self.assertIn(
+            "active_guard.completed = true;\n"
+            "    _producer_running = false;\n"
+            "    wake_transmitter();",
+            producer,
+        )
 
     def test_gap_security_outcomes_are_logged_for_physical_diagnosis(self):
         source = (ROOT / "main/apps/app_codex_status/codex_ble_transport.cpp").read_text()

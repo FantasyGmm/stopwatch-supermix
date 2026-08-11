@@ -17,6 +17,7 @@ class FakeAlertTracker:
     def __init__(self, snapshot):
         self.snapshot = snapshot
         self.notified = []
+        self.waits = []
 
     def refresh(self):
         return self.snapshot
@@ -30,6 +31,10 @@ class FakeAlertTracker:
 
     def mark_watch_notified(self, alert_ids):
         self.notified.extend(alert_ids)
+
+    def wait_for_change(self, timeout):
+        self.waits.append(timeout)
+        return True
 
 
 def create_thread_state_db(path, rows):
@@ -58,6 +63,15 @@ def running_alert(thread_id, timestamp):
 
 
 class CodexStateCollectorTests(unittest.TestCase):
+    def test_wait_for_change_delegates_to_alert_tracker(self):
+        tracker = FakeAlertTracker(TaskAlertSnapshot())
+        collector = CodexStateCollector(alert_tracker=tracker)
+
+        changed = collector.wait_for_change(0.25)
+
+        self.assertTrue(changed)
+        self.assertEqual(tracker.waits, [0.25])
+
     def collector_for_running_models(self, root, alerts, rows):
         state_db = root / "state.sqlite"
         create_thread_state_db(state_db, rows)
@@ -467,6 +481,10 @@ class CodexStateCollectorTests(unittest.TestCase):
         self.assertEqual(snapshot["codex_alert_completed"], 1)
         self.assertNotIn("codex_alert_handled", snapshot)
         self.assertEqual(snapshot["codex_alert_revision"], 4)
+        self.assertEqual(
+            snapshot["_codex_watch_notification_ids"],
+            ("thread-a:1",),
+        )
         self.assertEqual(
             snapshot["codex_alerts"],
             [

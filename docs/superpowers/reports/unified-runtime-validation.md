@@ -2,6 +2,11 @@
 
 Date: 2026-07-22
 
+> The secure multi-Agent pairing follow-up is documented in
+> [multi-agent-secure-pairing-validation.md](multi-agent-secure-pairing-validation.md).
+> Its automated gates pass; flashing and physical pairing remain pending until
+> a watch USB port and verified full-Flash backup are available.
+
 - Automated tests and unified build: Passed
 - Targeted hardware startup/lifecycle: Passed
 - Audible TTS after jitter-buffer fix: Passed by user observation

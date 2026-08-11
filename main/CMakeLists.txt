@@ -44,7 +44,4 @@ idf_component_register(
         "hal/utils/config_ap/assets/badge_config_ap.html"
 )
 
-include(cmake/voice_key_build.cmake)
-stopwatch_configure_voice_key(${COMPONENT_LIB})
-
 include(cmake/unified_assets.cmake)

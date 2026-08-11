@@ -382,6 +382,11 @@ class CodexStateCollector:
             else TaskAlertSnapshot()
         )
         self._apply_running_model_selection(status, alerts)
+        watch_notification_ids = tuple(
+            alert.id
+            for alert in alerts.alerts
+            if alert.state == "pending" and not alert.watch_notified
+        )
         five_hour_used = quota.get("five_hour_used_pct")
         week_used = quota.get("week_used_pct")
         return {
@@ -395,6 +400,7 @@ class CodexStateCollector:
             "codex_alert_running": alerts.running_count,
             "codex_alert_completed": alerts.completed_count,
             "codex_alert_revision": alerts.revision,
+            "_codex_watch_notification_ids": watch_notification_ids,
             "codex_alerts": [
                 {
                     "project": alert.project,
@@ -413,6 +419,16 @@ class CodexStateCollector:
         if self._alert_tracker is None:
             return ()
         return self._alert_tracker.pending_watch_notification_ids()
+
+    def wait_for_change(self, timeout: float) -> bool:
+        if self._alert_tracker is None:
+            time.sleep(max(0.0, timeout))
+            return False
+        method = getattr(self._alert_tracker, "wait_for_change", None)
+        if method is None:
+            time.sleep(max(0.0, timeout))
+            return False
+        return bool(method(timeout))
 
     def mark_watch_notified(self, alert_ids) -> None:
         if self._alert_tracker is not None:

@@ -10,25 +10,31 @@ import re
 import secrets
 import subprocess
 import threading
+import time
 from typing import Callable, List, Optional, Sequence
 
 from agent import (
     STATUS_INTERVAL_SECONDS,
     BleStatusTransport,
     CodexStatusAgent,
+    WatchDiscovery,
 )
+from agent_identity import AgentIdentityStore
 from app_state import (
     AgentSnapshot,
     CodexSnapshot,
     ConnectionState,
+    PairingState,
     Preferences,
     TraeSnapshot,
     UserDefaultsPreferences,
 )
 from codex_adapter import CodexStateCollector
 from combined_collector import CompositeStateCollector
+from pairing_client import PairingClient, WatchCredential
 from task_alerts import TaskAlertTracker
 from trae_adapter import TraeStateCollector
+from watch_credentials import WatchCredentialStore
 from voice_audio import (
     VoiceAudioBridge,
     VoiceAudioDeviceNotFound,
@@ -40,7 +46,6 @@ from voice_driver import (
     DriverState,
     detect_driver_state,
 )
-from voice_input_crypto import load_key_from_keychain
 from voice_input_protocol import (
     ACCESSIBILITY_REQUIRED,
     DRIVER_REQUIRED,
@@ -61,6 +66,7 @@ from voice_shortcut import (
 LOGGER = logging.getLogger(__name__)
 DEFAULT_RETRY_DELAYS = (1.0, 2.0, 4.0, 8.0, 16.0, 30.0)
 VOICE_TARGET_BPS = 8192
+VOICE_KEY_EPOCH = 1
 _VOICE_SECRET_HEX = re.compile(
     r"(?i)(?<![0-9a-f])[0-9a-f]{32,}(?![0-9a-f])"
 )
@@ -77,10 +83,24 @@ _VOICE_UNAVAILABLE_REASONS = {
 }
 
 
+def _status_publication_view(status):
+    return {
+        key: value
+        for key, value in status.items()
+        if not str(key).endswith("_collected_at")
+    }
+
+
+class ActiveRekeyError(RuntimeError):
+    """The watch confirmed a new epoch but active rekey did not complete."""
+
+
 @dataclasses.dataclass
 class _BleSessionContext:
     transport: object
+    credential: Optional[WatchCredential] = None
     voice_key: Optional[bytes] = None
+    voice_key_epoch: int = VOICE_KEY_EPOCH
     voice_service: Optional[object] = None
     voice_failed: bool = False
     shutdown_task: Optional[asyncio.Task] = None
@@ -89,6 +109,198 @@ class _BleSessionContext:
 @dataclasses.dataclass(frozen=True)
 class VoiceSetupToken:
     revision: int
+
+
+class SecureConnectionAuthorizer:
+    """Authenticate a known watch or enroll an unknown watch before use."""
+
+    def __init__(
+        self,
+        identity_store=None,
+        credential_store=None,
+        pairing_client=None,
+    ):
+        self._identity_store = identity_store or AgentIdentityStore()
+        self._credential_store = credential_store or WatchCredentialStore()
+        self._pairing_client = pairing_client or PairingClient(
+            self._credential_store
+        )
+        self._state_lock = threading.Lock()
+        self._current_watch_id: Optional[bytes] = None
+
+    async def authorize(self, transport, publish) -> WatchCredential:
+        identity = await _run_in_daemon_thread(
+            self._identity_store.load_or_create
+        )
+        discovery = await transport.discover_watch()
+        if (
+            not isinstance(discovery, WatchDiscovery)
+            or not isinstance(discovery.watch_id, bytes)
+            or len(discovery.watch_id) != 16
+            or not any(discovery.watch_id)
+            or not isinstance(discovery.key_epoch, int)
+            or isinstance(discovery.key_epoch, bool)
+            or discovery.key_epoch <= 0
+            or not isinstance(discovery.watch_identity_public, bytes)
+            or len(discovery.watch_identity_public) != 33
+            or not any(discovery.watch_identity_public)
+        ):
+            raise ValueError("watch discovery response is invalid")
+        with self._state_lock:
+            self._current_watch_id = discovery.watch_id
+        watch_suffix = discovery.watch_id.hex()[-4:].upper()
+        try:
+            credential = await _run_in_daemon_thread(
+                lambda: self._credential_store.load(discovery.watch_id)
+            )
+            if credential is None:
+                publish(
+                    PairingState.REQUESTING,
+                    "",
+                    watch_suffix,
+                    identity.display_name,
+                )
+                presentation = await self._pairing_client.request_pairing(
+                    transport,
+                    identity.private_key,
+                    identity.display_name,
+                )
+                if presentation.watch_id != discovery.watch_id:
+                    raise ValueError("pairing response belongs to another watch")
+                publish(
+                    PairingState.AWAITING_CONFIRMATION,
+                    presentation.verification_code,
+                    watch_suffix,
+                    identity.display_name,
+                )
+                result = await self._pairing_client.confirm_pairing(True)
+                if not result.paired or result.credential is None:
+                    raise PermissionError("pairing was rejected on watch")
+                credential = result.credential
+            else:
+                if (
+                    credential.watch_identity_public
+                    != discovery.watch_identity_public
+                ):
+                    raise PermissionError(
+                        "watch identity does not match Keychain"
+                    )
+                state = (
+                    PairingState.REKEYING
+                    if credential.key_epoch != discovery.key_epoch
+                    else PairingState.AUTHENTICATING
+                )
+                publish(state, "", watch_suffix, identity.display_name)
+                result = await self._pairing_client.authenticate(
+                    transport,
+                    identity.private_key,
+                    credential,
+                    identity.display_name,
+                )
+                if not result.authenticated:
+                    raise PermissionError("Agent authentication was rejected")
+                credential = result.credential
+
+            if (
+                credential.watch_id != discovery.watch_id
+                or credential.key_epoch != discovery.key_epoch
+                or credential.watch_identity_public
+                != discovery.watch_identity_public
+            ):
+                raise ValueError("watch credential epoch is not current")
+        except Exception:
+            publish(
+                PairingState.ERROR,
+                "",
+                watch_suffix,
+                identity.display_name,
+            )
+            raise
+        publish(
+            PairingState.PAIRED,
+            "",
+            watch_suffix,
+            identity.display_name,
+        )
+        return credential
+
+    async def refresh_if_needed(
+        self,
+        transport,
+        credential: WatchCredential,
+        publish,
+    ) -> WatchCredential:
+        watch_suffix = credential.watch_id.hex()[-4:].upper()
+        try:
+            discovery = await transport.discover_watch()
+        except Exception as error:
+            LOGGER.warning("Active watch epoch check failed: %s", error)
+            return credential
+        identity = await _run_in_daemon_thread(
+            self._identity_store.load_or_create
+        )
+        try:
+            if (
+                not isinstance(discovery, WatchDiscovery)
+                or discovery.watch_id != credential.watch_id
+                or discovery.watch_identity_public
+                != credential.watch_identity_public
+                or not isinstance(discovery.key_epoch, int)
+                or isinstance(discovery.key_epoch, bool)
+                or discovery.key_epoch <= 0
+            ):
+                raise PermissionError(
+                    "active watch identity does not match Keychain"
+                )
+            if discovery.key_epoch == credential.key_epoch:
+                return credential
+            if discovery.key_epoch < credential.key_epoch:
+                raise PermissionError("watch credential epoch rolled back")
+            publish(
+                PairingState.REKEYING,
+                "",
+                watch_suffix,
+                identity.display_name,
+            )
+            result = await self._pairing_client.authenticate(
+                transport,
+                identity.private_key,
+                credential,
+                identity.display_name,
+            )
+            updated = result.credential
+            if (
+                not result.authenticated
+                or not result.rekeyed
+                or updated.watch_id != credential.watch_id
+                or updated.key_epoch != discovery.key_epoch
+                or updated.watch_identity_public
+                != credential.watch_identity_public
+            ):
+                raise PermissionError("active Agent rekey was rejected")
+            publish(
+                PairingState.PAIRED,
+                "",
+                watch_suffix,
+                identity.display_name,
+            )
+            return updated
+        except Exception as error:
+            publish(
+                PairingState.ERROR,
+                "",
+                watch_suffix,
+                identity.display_name,
+            )
+            raise ActiveRekeyError(str(error)) from error
+
+    def forget_current_watch(self) -> bool:
+        with self._state_lock:
+            watch_id = self._current_watch_id
+        if watch_id is None:
+            return False
+        self._credential_store.forget(watch_id)
+        return True
 
 
 def _new_voice_nonce() -> bytes:
@@ -112,7 +324,10 @@ def _blackhole_receipt_present() -> bool:
     return result.returncode == 0
 
 
-def _create_voice_session(key: bytes) -> VoiceSessionService:
+def _create_voice_session(
+    key: bytes,
+    key_epoch: int = VOICE_KEY_EPOCH,
+) -> VoiceSessionService:
     bridge = VoiceAudioBridge()
     route = VoiceAudioRoute(bridge)
     shortcut = FnShortcutController()
@@ -140,6 +355,7 @@ def _create_voice_session(key: bytes) -> VoiceSessionService:
         route,
         shortcut,
         key,
+        key_epoch=key_epoch,
         readiness_checker=readiness,
     )
 
@@ -163,6 +379,7 @@ class AgentRuntime:
         voice_key_loader=None,
         voice_session_factory=None,
         voice_nonce_factory=None,
+        secure_authorizer=None,
     ):
         self._collector = collector
         self._transport_factory = transport_factory
@@ -170,9 +387,12 @@ class AgentRuntime:
         self._status_interval = status_interval
         self._retry_delays = tuple(retry_delays) or (1.0,)
         self._disconnect_timeout = disconnect_timeout
-        self._voice_key_loader = voice_key_loader or load_key_from_keychain
+        # Kept only as an explicit test/development injection. Production must
+        # receive the voice key from the authenticated watch credential.
+        self._voice_key_loader = voice_key_loader
         self._voice_session_factory = voice_session_factory or _create_voice_session
         self._voice_nonce_factory = voice_nonce_factory or _new_voice_nonce
+        self._secure_authorizer = secure_authorizer
         self._state_lock = threading.Lock()
         self._snapshot = AgentSnapshot(
             ConnectionState.SCANNING
@@ -186,12 +406,23 @@ class AgentRuntime:
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._commands: Optional[asyncio.Queue] = None
         self._latest_status = {}
+        self._latest_status_publication_view = None
+        self._status_generation = 0
         self._status_ready: Optional[asyncio.Event] = None
+        self._status_changed: Optional[asyncio.Event] = None
         self._voice_refresh_requested = threading.Event()
 
     def snapshot(self) -> AgentSnapshot:
         with self._state_lock:
             return self._snapshot
+
+    def set_agent_name(self, display_name: str) -> None:
+        with self._state_lock:
+            self._snapshot = dataclasses.replace(
+                self._snapshot,
+                agent_name=display_name,
+                changed_at=time.time(),
+            )
 
     def submit(self, command: AgentCommand) -> None:
         with self._command_lock:
@@ -237,14 +468,12 @@ class AgentRuntime:
     def _transition(self, state: ConnectionState, detail: str = "") -> None:
         with self._state_lock:
             previous = self._snapshot
-            snapshot = AgentSnapshot(
-                state,
-                self._connection_enabled,
-                detail,
-                voice_state=previous.voice_state,
-                voice_detail=previous.voice_detail,
-                codex=previous.codex,
-                trae=previous.trae,
+            snapshot = dataclasses.replace(
+                previous,
+                state=state,
+                connection_enabled=self._connection_enabled,
+                detail=detail,
+                changed_at=time.time(),
             )
             self._snapshot = snapshot
         if previous.state is not state or previous.detail != detail:
@@ -255,13 +484,11 @@ class AgentRuntime:
         with self._state_lock:
             previous = self._snapshot
             self._voice_revision += 1
-            self._snapshot = AgentSnapshot(
-                previous.state,
-                previous.connection_enabled,
-                previous.detail,
+            self._snapshot = dataclasses.replace(
+                previous,
                 voice_state=state,
                 voice_detail=detail,
-                codex=previous.codex,
+                changed_at=time.time(),
             )
         if previous.voice_state is not state or previous.voice_detail != detail:
             LOGGER.info(
@@ -285,13 +512,11 @@ class AgentRuntime:
             ):
                 return False
             self._voice_revision += 1
-            self._snapshot = AgentSnapshot(
-                previous.state,
-                previous.connection_enabled,
-                previous.detail,
+            self._snapshot = dataclasses.replace(
+                previous,
                 voice_state=state,
                 voice_detail=detail,
-                codex=previous.codex,
+                changed_at=time.time(),
             )
         LOGGER.info(
             "Voice state: %s%s",
@@ -300,10 +525,35 @@ class AgentRuntime:
         )
         return True
 
+    def _transition_pairing(
+        self,
+        state: PairingState,
+        verification_code: str = "",
+        watch_identity_suffix: str = "",
+        agent_name: str = "",
+    ) -> None:
+        with self._state_lock:
+            previous = self._snapshot
+            self._snapshot = dataclasses.replace(
+                previous,
+                pairing_state=state,
+                verification_code=(
+                    verification_code
+                    if len(verification_code) == 6
+                    and verification_code.isascii()
+                    and verification_code.isdigit()
+                    else ""
+                ),
+                watch_identity_suffix=watch_identity_suffix,
+                agent_name=agent_name or previous.agent_name,
+                changed_at=time.time(),
+            )
+
     async def run(self) -> None:
         loop = asyncio.get_running_loop()
         commands: asyncio.Queue = asyncio.Queue()
         self._status_ready = asyncio.Event()
+        self._status_changed = asyncio.Event()
         collector_task = asyncio.create_task(self._collect_status())
         with self._command_lock:
             self._loop = loop
@@ -371,6 +621,13 @@ class AgentRuntime:
                 except Exception as error:
                     state = _state_for_error(error)
                     self._transition(state, str(error))
+                    if self.snapshot().pairing_state in (
+                        PairingState.REQUESTING,
+                        PairingState.AWAITING_CONFIRMATION,
+                        PairingState.AUTHENTICATING,
+                        PairingState.REKEYING,
+                    ):
+                        self._transition_pairing(PairingState.ERROR)
                     LOGGER.exception("BLE session failed")
 
                 delay = self._retry_delays[min(retry_index, len(self._retry_delays) - 1)]
@@ -391,6 +648,7 @@ class AgentRuntime:
             collector_task.cancel()
             await _await_cancelled(collector_task)
             self._status_ready = None
+            self._status_changed = None
             with self._command_lock:
                 self._loop = None
                 self._commands = None
@@ -405,30 +663,55 @@ class AgentRuntime:
             except Exception:
                 LOGGER.exception("Codex status collection failed")
             else:
-                first_status = not self._latest_status
-                codex = CodexSnapshot.from_status(status)
-                trae = TraeSnapshot.from_status(status)
-                with self._state_lock:
-                    previous = self._snapshot
-                    self._snapshot = AgentSnapshot(
-                        previous.state,
-                        previous.connection_enabled,
-                        previous.detail,
-                        voice_state=previous.voice_state,
-                        voice_detail=previous.voice_detail,
-                        codex=codex,
-                        trae=trae,
-                    )
+                publication_view = _status_publication_view(status)
+                first_status = self._latest_status_publication_view is None
+                status_changed = (
+                    first_status
+                    or publication_view
+                    != self._latest_status_publication_view
+                )
                 self._latest_status = status
-                if first_status:
-                    LOGGER.info(
-                        "Codex status ready: model=%s effort=%s",
-                        codex.model or "--",
-                        codex.effort or "--",
-                    )
+                self._latest_status_publication_view = publication_view
+                if status_changed:
+                    codex = CodexSnapshot.from_status(status)
+                    trae = TraeSnapshot.from_status(status)
+                    with self._state_lock:
+                        previous = self._snapshot
+                        self._snapshot = dataclasses.replace(
+                            previous,
+                            voice_state=previous.voice_state,
+                            voice_detail=previous.voice_detail,
+                            codex=codex,
+                            trae=trae,
+                            changed_at=time.time(),
+                        )
+                    self._status_generation += 1
+                    if self._status_changed is not None:
+                        self._status_changed.set()
+                    if first_status:
+                        LOGGER.info(
+                            "Codex status ready: model=%s effort=%s",
+                            codex.model or "--",
+                            codex.effort or "--",
+                        )
                 if self._status_ready is not None:
                     self._status_ready.set()
-            await asyncio.sleep(self._status_interval)
+            wait_for_change = getattr(self._collector, "wait_for_change", None)
+            if wait_for_change is None:
+                await asyncio.sleep(self._status_interval)
+            else:
+                try:
+                    await asyncio.to_thread(
+                        wait_for_change,
+                        self._status_interval,
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    LOGGER.exception(
+                        "Codex rollout watch failed; using polling fallback"
+                    )
+                    await asyncio.sleep(self._status_interval)
 
     async def _run_session(self) -> str:
         context = _BleSessionContext(self._transport_factory())
@@ -440,6 +723,13 @@ class AgentRuntime:
             )
             if not connected:
                 return "not_found"
+            if self._secure_authorizer is not None:
+                credential = await self._secure_authorizer.authorize(
+                    transport, self._transition_pairing
+                )
+                context.credential = credential
+                context.voice_key = credential.master_key
+                context.voice_key_epoch = credential.key_epoch
             self._transition(ConnectionState.CONNECTED)
             status_agent = CodexStatusAgent(self._collector, transport)
             await status_agent.sync_time()
@@ -453,9 +743,13 @@ class AgentRuntime:
                 failure = self._voice_failure(context)
                 if failure is not None:
                     await self._isolate_voice_failure(context, failure)
+                sent_generation = self._status_generation
                 await status_agent.tick(status=dict(self._latest_status))
+                await self._refresh_secure_credential(context)
                 failure = await self._wait_for_status_interval(
-                    transport, ignore_voice_failure=context.voice_failed
+                    transport,
+                    ignore_voice_failure=context.voice_failed,
+                    sent_generation=sent_generation,
                 )
                 if failure is not None:
                     await self._isolate_voice_failure(context, failure)
@@ -466,16 +760,90 @@ class AgentRuntime:
             )
             await self._await_session_shutdown(context, voice_was_recording)
 
-    async def _prepare_voice(self, context: _BleSessionContext) -> None:
-        try:
-            key = await _run_in_daemon_thread(self._voice_key_loader)
-        except Exception as error:
-            self._transition_voice(VoiceState.ERROR, str(error))
+    async def _refresh_secure_credential(
+        self, context: _BleSessionContext
+    ) -> None:
+        if self._secure_authorizer is None or context.credential is None:
             return
-        context.voice_key = key
+        refresh = getattr(self._secure_authorizer, "refresh_if_needed", None)
+        if refresh is None:
+            return
+        try:
+            updated = await refresh(
+                context.transport,
+                context.credential,
+                self._transition_pairing,
+            )
+        except ActiveRekeyError as error:
+            if not context.voice_failed:
+                await self._isolate_voice_failure(context, error)
+            LOGGER.exception("Active Agent rekey failed; status remains active")
+            return
+        except Exception as error:
+            LOGGER.warning(
+                "Active Agent epoch check deferred; existing voice remains active: %s",
+                error,
+            )
+            return
+        if updated == context.credential:
+            return
+        await self._replace_voice_credential(context, updated)
+
+    async def _replace_voice_credential(
+        self,
+        context: _BleSessionContext,
+        credential: WatchCredential,
+    ) -> None:
+        retired_consumer = self._retire_voice_generation(context.transport)
+        await self._disable_voice(context.transport, None)
+        if context.voice_service is not None:
+            cleaned = await self._cleanup_voice_service(
+                context.voice_service,
+                self._disconnect_timeout,
+                "Voice session rekey cleanup",
+            )
+            if not cleaned:
+                context.voice_failed = True
+                self._transition_voice(
+                    VoiceState.ERROR,
+                    "Voice session could not restart after rekey",
+                )
+                return
+            context.voice_service = None
+        if retired_consumer is not None:
+            await self._bounded_cleanup(
+                _await_voice_consumer(retired_consumer),
+                "Voice rekey consumer cleanup",
+            )
+        context.credential = credential
+        context.voice_key = credential.master_key
+        context.voice_key_epoch = credential.key_epoch
+        context.voice_failed = False
+        await self._prepare_voice(context)
+
+    async def _prepare_voice(self, context: _BleSessionContext) -> None:
+        key = context.voice_key
+        if key is None:
+            if self._voice_key_loader is None:
+                self._transition_voice(
+                    VoiceState.ERROR,
+                    "Secure watch credential is required",
+                )
+                return
+            try:
+                key = await _run_in_daemon_thread(self._voice_key_loader)
+            except Exception as error:
+                self._transition_voice(VoiceState.ERROR, str(error))
+                return
+            context.voice_key = key
 
         try:
-            service = self._voice_session_factory(key)
+            if self._secure_authorizer is None:
+                service = self._voice_session_factory(key)
+            else:
+                service = self._voice_session_factory(
+                    key, key_epoch=context.voice_key_epoch
+                )
         except Exception as error:
             await self._isolate_voice_failure(context, error)
             return
@@ -515,7 +883,11 @@ class AgentRuntime:
             reason = _VOICE_UNAVAILABLE_REASONS.get(
                 state, INITIALIZATION_FAILED
             )
-            payload = self._encode_unavailable_payload(key, reason)
+            payload = self._encode_unavailable_payload(
+                key,
+                reason,
+                context.voice_key_epoch,
+            )
             await self._disable_voice(transport, payload)
             return
 
@@ -530,7 +902,10 @@ class AgentRuntime:
 
         try:
             ready_payload = encode_ready(
-                key, self._voice_nonce_factory(), VOICE_TARGET_BPS
+                key,
+                self._voice_nonce_factory(),
+                VOICE_TARGET_BPS,
+                key_epoch=context.voice_key_epoch,
             )
         except Exception as error:
             await self._isolate_voice_failure(context, error)
@@ -540,10 +915,18 @@ class AgentRuntime:
         except Exception as error:
             await self._isolate_voice_failure(context, error)
 
-    def _encode_unavailable_payload(self, key: bytes, reason: int):
+    def _encode_unavailable_payload(
+        self,
+        key: bytes,
+        reason: int,
+        key_epoch: int = VOICE_KEY_EPOCH,
+    ):
         try:
             return encode_unavailable(
-                key, self._voice_nonce_factory(), reason
+                key,
+                self._voice_nonce_factory(),
+                reason,
+                key_epoch=key_epoch,
             )
         except Exception as error:
             self._transition_voice(VoiceState.ERROR, str(error))
@@ -571,13 +954,20 @@ class AgentRuntime:
         return None
 
     async def _wait_for_status_interval(
-        self, transport, ignore_voice_failure: bool = False
+        self,
+        transport,
+        ignore_voice_failure: bool = False,
+        sent_generation: Optional[int] = None,
     ):
+        if sent_generation is not None and self._status_changed is not None:
+            status_wait = self._wait_for_status_change(sent_generation)
+        else:
+            status_wait = asyncio.sleep(self._status_interval)
         failure = getattr(transport, "voice_failure", None)
         if failure is None or ignore_voice_failure:
-            await asyncio.sleep(self._status_interval)
+            await status_wait
             return None
-        sleep_task = asyncio.create_task(asyncio.sleep(self._status_interval))
+        sleep_task = asyncio.create_task(status_wait)
         try:
             done, _ = await asyncio.wait(
                 (sleep_task, failure), return_when=asyncio.FIRST_COMPLETED
@@ -590,6 +980,37 @@ class AgentRuntime:
                 sleep_task.cancel()
             await _await_cancelled(sleep_task)
 
+    async def _wait_for_status_change(self, sent_generation: int) -> None:
+        event = self._status_changed
+        if event is None:
+            await asyncio.sleep(self._status_interval)
+            return
+        deadline = asyncio.get_running_loop().time() + self._status_interval
+        while self._status_generation <= sent_generation:
+            event.clear()
+            if self._status_generation > sent_generation:
+                return
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                return
+            timed_out = False
+
+            def wake_for_timeout() -> None:
+                nonlocal timed_out
+                timed_out = True
+                event.set()
+
+            timeout_handle = asyncio.get_running_loop().call_later(
+                remaining,
+                wake_for_timeout,
+            )
+            try:
+                await event.wait()
+                if timed_out and self._status_generation <= sent_generation:
+                    return
+            finally:
+                timeout_handle.cancel()
+
     async def _isolate_voice_failure(
         self, context: _BleSessionContext, error: Exception
     ) -> None:
@@ -599,7 +1020,9 @@ class AgentRuntime:
         unavailable_payload = None
         if context.voice_key is not None:
             unavailable_payload = self._encode_unavailable_payload(
-                context.voice_key, INITIALIZATION_FAILED
+                context.voice_key,
+                INITIALIZATION_FAILED,
+                context.voice_key_epoch,
             )
         await self._disable_voice(context.transport, unavailable_payload)
         if context.voice_service is not None:
@@ -640,7 +1063,9 @@ class AgentRuntime:
         unavailable_payload = None
         if context.voice_key is not None:
             unavailable_payload = self._encode_unavailable_payload(
-                context.voice_key, INITIALIZATION_FAILED
+                context.voice_key,
+                INITIALIZATION_FAILED,
+                context.voice_key_epoch,
             )
 
         retired_consumer = self._retire_voice_generation(context.transport)
@@ -842,10 +1267,23 @@ class AgentController:
         self,
         preferences: Optional[Preferences] = None,
         runtime: Optional[AgentRuntime] = None,
+        identity_store=None,
+        credential_store=None,
+        secure_authorizer=None,
     ):
         self._preferences = preferences or UserDefaultsPreferences()
         self._collector = None
+        self._identity_store = identity_store
+        self._secure_authorizer = secure_authorizer
         if runtime is None:
+            self._identity_store = self._identity_store or AgentIdentityStore()
+            credential_store = credential_store or WatchCredentialStore()
+            self._secure_authorizer = self._secure_authorizer or (
+                SecureConnectionAuthorizer(
+                    identity_store=self._identity_store,
+                    credential_store=credential_store,
+                )
+            )
             self._collector = CompositeStateCollector(
                 CodexStateCollector(alert_tracker=TaskAlertTracker()),
                 TraeStateCollector(),
@@ -853,8 +1291,16 @@ class AgentController:
             runtime = AgentRuntime(
                 collector=self._collector,
                 connection_enabled=self._preferences.connection_enabled(),
+                secure_authorizer=self._secure_authorizer,
             )
         self._runtime = runtime
+        if self._identity_store is not None:
+            try:
+                self._runtime.set_agent_name(
+                    self._identity_store.load_or_create().display_name
+                )
+            except Exception:
+                LOGGER.warning("Agent name is unavailable from Keychain")
         self._thread: Optional[threading.Thread] = None
         self._stop_lock = threading.Lock()
 
@@ -880,6 +1326,22 @@ class AgentController:
 
     def reconnect(self) -> None:
         self._runtime.submit(AgentCommand.RECONNECT)
+
+    def rename_agent(self, value: str) -> str:
+        if self._identity_store is None:
+            raise RuntimeError("Agent identity store is unavailable")
+        display_name = self._identity_store.rename(value)
+        self._runtime.set_agent_name(display_name)
+        self._runtime.submit(AgentCommand.RECONNECT)
+        return display_name
+
+    def forget_current_watch(self) -> bool:
+        if self._secure_authorizer is None:
+            return False
+        forgotten = self._secure_authorizer.forget_current_watch()
+        if forgotten:
+            self._runtime.submit(AgentCommand.RECONNECT)
+        return forgotten
 
     def refresh_voice_readiness(self) -> None:
         self._runtime.refresh_voice_readiness()

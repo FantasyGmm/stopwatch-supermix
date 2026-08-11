@@ -8,6 +8,7 @@
 #include <mooncake.h>
 #include <lvgl.h>
 #include <memory>
+#include <array>
 #include <atomic>
 #include <mutex>
 #include <cstdint>
@@ -15,6 +16,11 @@
 #include <esp_event_base.h>
 #include "codex_alert_carousel.h"
 #include "codex_pending_soft_glow.h"
+#include "agent_panel_model.h"
+#include "agent_panel_ui_layout.h"
+#include "agent_registry_store.h"
+#include "secure_pairing_session.h"
+#include "secure_pairing_wire.h"
 #include "status_message_router.h"
 #include "status_page_swipe_logic.h"
 #include "trae_card_tap_logic.h"
@@ -65,6 +71,28 @@ private:
     lv_obj_t* _status_label      = nullptr;
     lv_obj_t* _host_label        = nullptr;
     lv_obj_t* _pet_image         = nullptr;
+    lv_obj_t* _agent_panel_root  = nullptr;
+    lv_obj_t* _agent_rail = nullptr;
+    lv_obj_t* _agent_focus_band_left = nullptr;
+    lv_obj_t* _agent_focus_band_right = nullptr;
+    lv_obj_t* _agent_focus_marker = nullptr;
+    lv_obj_t* _agent_count_label = nullptr;
+    lv_obj_t* _agent_panel_notice_label = nullptr;
+    lv_obj_t* _agent_pairing_countdown_label = nullptr;
+    lv_obj_t* _agent_reset_progress = nullptr;
+    std::array<lv_obj_t*, secure_pairing::kMaxAgents> _agent_row_wrappers = {};
+    std::array<lv_obj_t*, secure_pairing::kMaxAgents> _agent_row_buttons = {};
+    std::array<lv_obj_t*, secure_pairing::kMaxAgents> _agent_delete_buttons = {};
+    std::array<lv_obj_t*, secure_pairing::kMaxAgents> _agent_row_names = {};
+    std::array<lv_obj_t*, secure_pairing::kMaxAgents> _agent_row_states = {};
+    std::array<lv_obj_t*, secure_pairing::kMaxAgents> _agent_row_dots = {};
+    lv_obj_t* _agent_allow_button = nullptr;
+    lv_obj_t* _agent_allow_switch_button = nullptr;
+    lv_obj_t* _agent_reject_button = nullptr;
+    lv_obj_t* _agent_dismiss_button = nullptr;
+    lv_obj_t* _agent_reset_button = nullptr;
+    lv_obj_t* _agent_confirm_button = nullptr;
+    lv_obj_t* _agent_cancel_button = nullptr;
     lv_timer_t* _pet_timer       = nullptr;
     esp_websocket_client_handle_t _ws_client = nullptr;
     std::unique_ptr<CodexBleTransport> _ble_transport;
@@ -81,6 +109,8 @@ private:
     uint32_t _last_status_payload_ms = 0;
     uint32_t _last_trae_status_payload_ms = 0;
     uint32_t _screen_off_left_press_started_ms = 0;
+    uint32_t _agent_reset_hold_started_ms = 0;
+    uint32_t _agent_panel_notice_until_ms = 0;
     bool _wifi_started           = false;
     bool _wifi_fallback_started  = false;
     bool _ble_was_connected      = false;
@@ -89,6 +119,12 @@ private:
     bool _trae_stale             = false;
     int _current_page            = 0;
     lv_indev_state_t _last_page_touch_state = LV_INDEV_STATE_REL;
+    lv_indev_state_t _last_agent_touch_state = LV_INDEV_STATE_REL;
+    int _agent_panel_drag_start_y = 0;
+    int _agent_revealed_delete_index = -1;
+    bool _agent_reset_hold_active = false;
+    bool _agent_reset_hold_queued = false;
+    bool _agent_pairing_expired = false;
     bool _suppress_task_navigation = false;
     CodexAlertCarousel _alert_carousel;
     TraeStatusSnapshot _trae_snapshot;
@@ -96,6 +132,28 @@ private:
     StatusPageSwipeLogic _page_swipe;
     TraeCardTapLogic _trae_card_tap;
     VoiceButtonDispatcher _voice_button_dispatcher;
+    AgentPanelModel _agent_panel_model;
+    secure_pairing::AgentRegistry _agent_registry;
+    secure_pairing::SecurePairingSession _secure_pairing_session;
+    std::unique_ptr<secure_pairing::NvsRegistryStorageBackend>
+        _agent_registry_backend;
+    std::unique_ptr<secure_pairing::AgentRegistryStore>
+        _agent_registry_store;
+    bool _agent_registry_ready = false;
+    bool _agent_panel_dirty = false;
+    bool _agent_switch_pending = false;
+    secure_pairing::AgentFingerprint _agent_switch_target = {};
+    std::array<char, 32> _agent_panel_notice = {};
+    enum class PairingCompletion : uint8_t {
+        None,
+        Authentication,
+        CredentialAck,
+    };
+    PairingCompletion _pairing_completion = PairingCompletion::None;
+    uint32_t _pairing_completion_transaction = 0;
+    bool _pairing_allow_switch = false;
+    std::mutex _agent_decision_mutex;
+    AgentPanelDecision _pending_agent_decision = {};
     bool _production_voice_ready = false;
     bool _production_voice_link_usable = false;
     uint16_t _production_voice_mtu = 23;
@@ -122,6 +180,40 @@ private:
     void render_trae_status();
     void sync_pending_glow();
     void update_page_swipe(uint32_t now_ms);
+    void update_agent_panel_touch(uint32_t now_ms);
+    void render_agent_panel();
+    void update_agent_panel_runtime(uint32_t now_ms);
+    void show_agent_panel_notice(const char* text, uint32_t now_ms);
+    void sync_agent_rail_focus();
+    void close_agent_delete_reveal();
+    void settle_agent_panel(bool animate);
+    void queue_agent_panel_decision(const AgentPanelDecision& decision);
+    bool take_agent_panel_decision(AgentPanelDecision& decision);
+    void dispatch_agent_panel_decision(
+        const AgentPanelDecision& decision,
+        uint32_t now_ms);
+    void sync_agent_panel_registry();
+    void process_secure_pairing(uint32_t now_ms);
+    bool send_pairing_empty(
+        uint16_t connection_handle,
+        secure_pairing::WireMessageType type,
+        uint32_t transaction_id);
+    bool send_pairing_credential(
+        uint16_t connection_handle,
+        const secure_pairing::CredentialEnvelope& envelope);
+    void complete_authenticated_pending(
+        uint16_t connection_handle,
+        PairingCompletion completion,
+        uint32_t transaction_id,
+        bool allow_switch);
+    void clear_pairing_runtime();
+    void complete_agent_switch_if_ready();
+    bool save_agent_registry();
+    static void agent_panel_event_cb(lv_event_t* event);
+    static void agent_panel_scroll_event_cb(lv_event_t* event);
+    static void agent_panel_row_gesture_cb(lv_event_t* event);
+    static void agent_reset_hold_event_cb(lv_event_t* event);
+    static void agent_panel_animation_cb(void* target, int32_t y);
     void set_page(int page, bool animate);
     void update_page_indicator();
     void sync_display_protection_presentation();

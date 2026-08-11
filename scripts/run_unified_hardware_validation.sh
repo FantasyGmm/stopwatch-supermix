@@ -9,6 +9,21 @@ BUILD_DIR="$ROOT/build-unified"
 OUTPUT_DIR="$ROOT/build-unified/hardware-validation"
 DRY_RUN=0
 
+SECURE_ACCEPTANCE_CHECKS=(
+    "two-agent-enrollment"
+    "non-interrupting-pairing"
+    "active-agent-switch"
+    "signed-agent-rename"
+    "online-rekey"
+    "offline-rekey"
+    "old-epoch-rejection"
+    "eight-agent-limit"
+    "reset-all-agents"
+    "mandarin-voice-input"
+    "assistant-recovery"
+    "ble-memory-stability"
+)
+
 usage() {
     echo "Usage: $0 --port PORT --backup FILE [--build-dir DIR] [--output-dir DIR] [--dry-run]" >&2
 }
@@ -51,6 +66,8 @@ while (( $# > 0 )); do
     esac
 done
 
+SECURE_ACCEPTANCE_FILE="$OUTPUT_DIR/secure-pairing-acceptance.md"
+
 if [[ -z "$PORT" || -z "$BACKUP" ]]; then
     echo "Both --port and --backup are required" >&2
     usage
@@ -75,6 +92,36 @@ wait_for_port() {
     done
     echo "Watch port did not reappear: $PORT" >&2
     return 1
+}
+
+print_secure_acceptance_plan() {
+    echo "HARDWARE STEP secure-multi-agent-acceptance"
+    echo "Evidence checklist: $SECURE_ACCEPTANCE_FILE"
+    printf 'MANUAL CHECK %s\n' "${SECURE_ACCEPTANCE_CHECKS[@]}"
+}
+
+write_secure_acceptance_checklist() {
+    local check
+    local commit
+    local timestamp
+    commit="$(git -C "$ROOT" rev-parse HEAD)"
+    timestamp="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+    {
+        echo "# Secure Multi-Agent Pairing Acceptance"
+        echo
+        echo "- Generated: $timestamp"
+        echo "- Source commit: \`$commit\`"
+        echo "- Device port: \`$PORT\`"
+        echo "- Secret material: intentionally not recorded"
+        echo
+        echo "Record only pass/fail, observed key epochs, and non-secret notes."
+        echo "Do not record verification codes, keys, public-key packets, or ciphertext."
+        echo
+        for check in "${SECURE_ACCEPTANCE_CHECKS[@]}"; do
+            echo "- [ ] $check — result/notes:"
+        done
+    } >"$SECURE_ACCEPTANCE_FILE"
+    print_secure_acceptance_plan
 }
 
 if (( DRY_RUN )); then
@@ -103,6 +150,7 @@ if (( DRY_RUN )); then
     print_python_step validate_product_smoke.py --port "$PORT" \
         --summary "$OUTPUT_DIR/final-product-smoke.json" \
         --log "$OUTPUT_DIR/final-product-smoke.log"
+    print_secure_acceptance_plan
     exit 0
 fi
 
@@ -141,4 +189,7 @@ echo "HARDWARE STEP final-product-smoke"
     --summary "$OUTPUT_DIR/final-product-smoke.json" \
     --log "$OUTPUT_DIR/final-product-smoke.log"
 
-echo "Unified hardware release validation passed. Evidence: $OUTPUT_DIR"
+write_secure_acceptance_checklist
+
+echo "Automated hardware release validation passed. Evidence: $OUTPUT_DIR"
+echo "Complete the secure multi-Agent checklist before release acceptance."

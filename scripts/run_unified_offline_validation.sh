@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CXX="${CXX:-c++}"
 PYTHON="${PYTHON:-$ROOT/mac-codex-agent/.venv/bin/python}"
-TOTAL_STAGES=47
+TOTAL_STAGES=54
 STAGE_INDEX=0
 CONTRACT_ONLY=0
 HOST_TESTS_ONLY=0
@@ -92,21 +92,8 @@ if [[ "$CONTRACT_ONLY" -eq 0 ]]; then
     fi
 
     if [[ "$HOST_TESTS_ONLY" -eq 0 ]]; then
-        export STOPWATCH_VOICE_KEY_FILE="$HOST_TEST_DIR/device-key.hex"
         export STOPWATCH_BUILD_DIR="$HOST_TEST_DIR/firmware-build"
         export STOPWATCH_SDKCONFIG="$HOST_TEST_DIR/sdkconfig.unified"
-        (
-            umask 077
-            "$PYTHON" - <<'PY'
-import os
-import pathlib
-import secrets
-
-path = pathlib.Path(os.environ["STOPWATCH_VOICE_KEY_FILE"])
-path.write_text(secrets.token_hex(16) + "\n", encoding="ascii")
-PY
-        )
-
         if ! command -v idf.py >/dev/null 2>&1; then
             IDF_EXPORT="${IDF_PATH:-$HOME/esp/esp-idf-v5.5.4}/export.sh"
             if [[ ! -f "$IDF_EXPORT" ]]; then
@@ -380,6 +367,70 @@ run_host_test voice_probe_crypto_test \
     tests/voice_probe_crypto_test.cpp \
     main/apps/app_codex_status/voice_probe_crypto.cpp \
     "$MBEDTLS_BUILD/library/libmbedcrypto.a"
+
+stage "Secure Agent pairing protocol and crypto host tests"
+run_host_test secure_pairing_crypto_test \
+    -std=c++17 -Wall -Wextra -Werror -DSTOPWATCH_HOST_TEST -I. \
+    -I"$MBEDTLS_SOURCE/include" \
+    tests/secure_pairing_crypto_test.cpp \
+    main/apps/app_codex_status/secure_pairing_crypto.cpp \
+    "$MBEDTLS_BUILD/library/libmbedcrypto.a"
+run_host_test secure_pairing_protocol_test \
+    -std=c++17 -Wall -Wextra -Werror -DSTOPWATCH_HOST_TEST -I. \
+    -I"$MBEDTLS_SOURCE/include" \
+    tests/secure_pairing_protocol_test.cpp \
+    main/apps/app_codex_status/secure_pairing_protocol.cpp \
+    main/apps/app_codex_status/secure_pairing_crypto.cpp \
+    "$MBEDTLS_BUILD/library/libmbedcrypto.a"
+
+stage "Authorized Agent registry host test"
+run_host_test agent_registry_test \
+    -std=c++17 -Wall -Wextra -Werror -DSTOPWATCH_HOST_TEST -I. \
+    -I"$MBEDTLS_SOURCE/include" \
+    tests/agent_registry_test.cpp \
+    main/apps/app_codex_status/agent_registry.cpp \
+    main/apps/app_codex_status/agent_registry_store.cpp \
+    main/apps/app_codex_status/secure_pairing_crypto.cpp \
+    "$MBEDTLS_BUILD/library/libmbedcrypto.a"
+
+stage "Secure Agent pairing session host test"
+run_host_test secure_pairing_session_test \
+    -std=c++17 -Wall -Wextra -Werror -DSTOPWATCH_HOST_TEST -I. \
+    -I"$MBEDTLS_SOURCE/include" \
+    tests/secure_pairing_session_test.cpp \
+    main/apps/app_codex_status/secure_pairing_session.cpp \
+    main/apps/app_codex_status/secure_pairing_protocol.cpp \
+    main/apps/app_codex_status/secure_pairing_crypto.cpp \
+    main/apps/app_codex_status/agent_registry.cpp \
+    main/apps/app_codex_status/agent_registry_store.cpp \
+    "$MBEDTLS_BUILD/library/libmbedcrypto.a"
+
+stage "Secure Agent pairing wire host test"
+run_host_test secure_pairing_wire_test \
+    -std=c++17 -Wall -Wextra -Werror -Imain \
+    tests/secure_pairing_wire_test.cpp \
+    main/apps/app_codex_status/secure_pairing_wire.cpp
+
+stage "Agent connection router host test"
+run_host_test agent_connection_router_test \
+    -std=c++17 -Wall -Wextra -Werror -pthread -I. \
+    tests/agent_connection_router_test.cpp \
+    main/apps/app_codex_status/agent_connection_router.cpp
+
+stage "Agent panel model host test"
+run_host_test agent_panel_model_test \
+    -std=c++17 -Wall -Wextra -Werror -DSTOPWATCH_HOST_TEST -I. \
+    -I"$MBEDTLS_SOURCE/include" \
+    tests/agent_panel_model_test.cpp \
+    main/apps/app_codex_status/agent_panel_model.cpp \
+    main/apps/app_codex_status/agent_registry.cpp \
+    main/apps/app_codex_status/secure_pairing_crypto.cpp \
+    "$MBEDTLS_BUILD/library/libmbedcrypto.a"
+
+stage "Agent panel UI layout host test"
+run_host_test agent_panel_ui_layout_test \
+    -std=c++17 -Wall -Wextra -Werror -I. \
+    tests/agent_panel_ui_layout_test.cpp
 
 stage "Production voice crypto host test"
 run_host_test voice_input_crypto_test \

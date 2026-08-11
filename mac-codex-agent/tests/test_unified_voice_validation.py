@@ -55,6 +55,14 @@ EXPECTED_HOST_TESTS = (
     "trae_status_ui_layout_test",
     "ble_voice_probe_protocol_test",
     "voice_probe_crypto_test",
+    "secure_pairing_crypto_test",
+    "secure_pairing_protocol_test",
+    "agent_registry_test",
+    "secure_pairing_session_test",
+    "secure_pairing_wire_test",
+    "agent_connection_router_test",
+    "agent_panel_model_test",
+    "agent_panel_ui_layout_test",
     "voice_input_crypto_test",
     "voice_input_protocol_test",
     "voice_input_session_test",
@@ -193,7 +201,7 @@ output.chmod(0o700)
 
         self.assertGreater(len(stages), 0)
         total = stages[0][1]
-        self.assertEqual(total, 47)
+        self.assertEqual(total, 54)
         self.assertEqual(len(stages), total)
         self.assertEqual([stage[0] for stage in stages], list(range(1, total + 1)))
         self.assertEqual({stage[1] for stage in stages}, {total})
@@ -220,6 +228,43 @@ output.chmod(0o700)
             "voice_probe_crypto_test": {
                 "tests/voice_probe_crypto_test.cpp",
                 "main/apps/app_codex_status/voice_probe_crypto.cpp",
+            },
+            "secure_pairing_crypto_test": {
+                "tests/secure_pairing_crypto_test.cpp",
+                "main/apps/app_codex_status/secure_pairing_crypto.cpp",
+            },
+            "secure_pairing_protocol_test": {
+                "tests/secure_pairing_protocol_test.cpp",
+                "main/apps/app_codex_status/secure_pairing_protocol.cpp",
+                "main/apps/app_codex_status/secure_pairing_crypto.cpp",
+            },
+            "agent_registry_test": {
+                "tests/agent_registry_test.cpp",
+                "main/apps/app_codex_status/agent_registry.cpp",
+                "main/apps/app_codex_status/agent_registry_store.cpp",
+                "main/apps/app_codex_status/secure_pairing_crypto.cpp",
+            },
+            "secure_pairing_session_test": {
+                "tests/secure_pairing_session_test.cpp",
+                "main/apps/app_codex_status/secure_pairing_session.cpp",
+                "main/apps/app_codex_status/secure_pairing_protocol.cpp",
+                "main/apps/app_codex_status/secure_pairing_crypto.cpp",
+                "main/apps/app_codex_status/agent_registry.cpp",
+                "main/apps/app_codex_status/agent_registry_store.cpp",
+            },
+            "secure_pairing_wire_test": {
+                "tests/secure_pairing_wire_test.cpp",
+                "main/apps/app_codex_status/secure_pairing_wire.cpp",
+            },
+            "agent_connection_router_test": {
+                "tests/agent_connection_router_test.cpp",
+                "main/apps/app_codex_status/agent_connection_router.cpp",
+            },
+            "agent_panel_model_test": {
+                "tests/agent_panel_model_test.cpp",
+                "main/apps/app_codex_status/agent_panel_model.cpp",
+                "main/apps/app_codex_status/agent_registry.cpp",
+                "main/apps/app_codex_status/secure_pairing_crypto.cpp",
             },
             "voice_input_crypto_test": {
                 "tests/voice_input_crypto_test.cpp",
@@ -327,9 +372,11 @@ output.chmod(0o700)
             "90 ms",
             "A+B",
             "wake press",
-            "STOPWATCH_VOICE_KEY_FILE",
+            "six-digit",
+            "eight Agents",
+            "remove-legacy-voice-key",
             "com.stopwatch.codex-agent.voice",
-            "account: `StopWatch-Codex`",
+            "account `StopWatch-Codex`",
             "AES-128-CCM",
             "version 3",
             "version 2",

@@ -63,7 +63,8 @@ Logs are written to:
   Running rows are blue, and Completed rows are dimmed.
 - The optional **Trae Status** section shows Trae availability, model, effort,
   and up to four normalized task rows. Trae failures are isolated from Codex.
-- Codex status is sampled once every two seconds and shared with the watch. The
+- Codex rollout changes wake collection and watch delivery immediately. A
+  two-second heartbeat remains as recovery for a missed filesystem event. The
   menu continues updating even when the watch is disconnected or watch
   connection is disabled.
 - **Agent** shows whether the menu application is running.
@@ -90,10 +91,10 @@ then use its **Voice Input** row:
   reports `Voice Input: Restart Required` if macOS has installed the receipt
   but Core Audio cannot see the device yet; restart the Mac once.
 - `Voice Input: Accessibility Required`: use the menu action to open
-  Accessibility settings and allow **StopWatch Codex Agent** to send the Fn
-  shortcut.
+  Accessibility settings and allow **StopWatch Codex Agent** to send the left
+  Option shortcut.
 - `Voice Input: Typeless Not Running`: start Typeless and confirm Typeless is
-  configured to start and stop dictation with Fn.
+  configured to start and stop dictation with left Option.
 - `Voice Input: Ready`: open Codex on the watch and wait for the normal BLE
   connection before speaking.
 - `Voice Input: Error`: release the right button, inspect **Open Log**, and use
@@ -113,42 +114,38 @@ synchronization continue even when voice input is unavailable.
 
 ## Voice Key And Security
 
-Production voice uses one random 16-byte key shared by this Mac Agent and this
-watch. Provision it before the production firmware build:
+Production firmware has no compiled voice key and does not read
+`STOPWATCH_VOICE_KEY_FILE`. On first boot the watch creates its registry and a
+random 16-byte master voice key at epoch one. A new Mac uses P-256 ECDH and a
+six-digit verification code; compare the code on both devices and approve the
+request physically on the watch. The watch can authorize up to eight Agents.
+
+Each Agent stores an independent P-256 signing identity and per-watch
+credential in macOS Keychain. Authorized Agents share the watch master key to
+save watch storage. Pull down on the watch Codex page to switch the active
+Agent. A new pairing request remains pending and does not interrupt the active
+Agent. Use **Agent Name...** in the menu app to edit the name shown on the
+watch; reconnect authentication signs the requested name before it is stored.
+
+Removing an Agent on the watch rotates the master key and increments its epoch.
+Connected Agents update immediately; an authorized offline Agent signs a fresh
+challenge and receives the current key on its next connection. A removed Agent
+cannot authenticate or obtain the rotated key. Reset All Agents clears the
+registry, rotates again, and requires physical enrollment for every Mac.
+
+For one migration release, remove the obsolete fixed Keychain item with:
 
 ```bash
-PYTHON="$PWD/mac-codex-agent/.venv/bin/python"
-"$PYTHON" scripts/provision_voice_key.py provision
-./scripts/build_unified_candidate.sh --clean
+mac-codex-agent/.venv/bin/python \
+  scripts/provision_voice_key.py remove-legacy-voice-key
 ```
 
-The default external key file is:
-
-```text
-~/Library/Application Support/StopWatch Codex Agent/device-key.hex
-```
-
-It contains exactly 32 lowercase hexadecimal characters and must have mode
-`0600`. `STOPWATCH_VOICE_KEY_FILE` overrides this path for an intentionally
-isolated build or test. The provision command imports the same key into macOS
-Keychain under:
-
-```text
-service: `com.stopwatch.codex-agent.voice`
-account: `StopWatch-Codex`
-```
-
-The firmware build generates its ignored key header inside the selected build
-directory. The key is excluded from Git, the app bundle, command-line
-arguments, logs, status snapshots, validation reports, and diagnostic probe
-keys. A missing, malformed, or non-`0600` file fails the firmware build.
-
-Reinstalling the app does not copy or rotate the key. After reinstalling macOS
-or deleting the Keychain item, rerun the provision command with the same key
-file. Key rotation requires replacing the external key with a new mode-`0600`
-value, rerunning provisioning, rebuilding the firmware, and reflashing the
-watch; the old Agent/watch pair cannot communicate by voice after only one side
-is changed. The app bundle itself does not need rebuilding for a key rotation.
+The cleanup command can delete only service
+`com.stopwatch.codex-agent.voice`, account `StopWatch-Codex`; it never creates,
+imports, or prints a key. Existing watches must be flashed once with this
+firmware because older firmware cannot perform secure runtime enrollment.
+If every Agent credential is lost, use **Reset All Agents** on the watch and
+enroll each Mac again physically; a former credential is not a recovery bypass.
 
 The production boundary is application-layer AES-128-CCM protocol version 3.
 The clear packet header is authenticated, audio is encrypted with an 8-byte
@@ -165,8 +162,8 @@ flash encryption is a separate feature and is not enabled or validated here.
   Agent never restarts the Mac or starts itself.
 - **Accessibility Required**: grant Accessibility to **StopWatch Codex Agent**,
   not to a separately selected Python executable, then refresh or reconnect.
-- **Typeless Not Running**: open Typeless, set its shortcut to Fn, and leave it
-  running before holding the watch button.
+- **Typeless Not Running**: open Typeless, set its shortcut to left Option, and
+  leave it running before holding the watch button.
 - **Voice Error**: release the button first. Open the Agent log and check audio
   routing, key mismatch, authentication, queue, and shortcut errors. The prior
   default input should already have been restored.
@@ -208,6 +205,15 @@ reclassifies only the latest unsuperseded completion. It never resurrects a turn
 that already has a later user message. Temporarily incomplete or unreadable
 rollouts remain queued for retry, and repeated refreshes do not duplicate the
 Pending chime.
+
+On macOS, the agent waits on the state database and known rollout files using a
+bounded vnode watcher. A completed rollout therefore bypasses the normal
+heartbeat delay. The resulting status snapshot owns its exact set of
+unnotified Pending IDs: the agent sends that full status first, sends one chime
+only after the status succeeds, and acknowledges those IDs only after the
+chime succeeds. A newer ledger state cannot chime against an older displayed
+Pending count. Negotiated BLE frame sizes reduce transfer round trips; the
+validated 20-byte framing remains the compatibility fallback.
 
 The project name is derived from the conversation working directory, and the
 conversation title is refreshed through Codex's local app-server so generated

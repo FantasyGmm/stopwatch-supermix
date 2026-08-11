@@ -1,3 +1,4 @@
+import dataclasses
 import pathlib
 import sys
 import unittest
@@ -10,6 +11,7 @@ from app_state import (
     CodexSnapshot,
     ConnectionState,
     MemoryPreferences,
+    PairingState,
     TraeSnapshot,
     present,
 )
@@ -34,6 +36,40 @@ class AppStateTests(unittest.TestCase):
         self.assertFalse(view.connection_checked)
         self.assertFalse(view.reconnect_enabled)
         self.assertEqual(view.symbol_name, "bolt.horizontal.circle")
+
+    def test_pairing_presentation_contains_only_display_safe_fields(self):
+        snapshot = AgentSnapshot(
+            ConnectionState.CONNECTING,
+            True,
+            agent_name="Desk Agent",
+            pairing_state=PairingState.AWAITING_CONFIRMATION,
+            verification_code="482731",
+            watch_identity_suffix="7A2F",
+        )
+
+        view = present(snapshot)
+
+        self.assertEqual(view.agent_text, "Agent: Desk Agent")
+        self.assertEqual(view.pairing_text, "Pairing: Confirm on Watch")
+        self.assertEqual(view.verification_text, "Verification Code: 482731")
+        self.assertEqual(view.watch_identity_text, "Watch: · 7A2F")
+        snapshot_fields = {field.name for field in dataclasses.fields(snapshot)}
+        presentation_fields = {field.name for field in dataclasses.fields(view)}
+        for forbidden in ("master_key", "private_key", "credential"):
+            self.assertNotIn(forbidden, snapshot_fields)
+            self.assertNotIn(forbidden, presentation_fields)
+
+    def test_invalid_verification_code_is_never_presented(self):
+        view = present(
+            AgentSnapshot(
+                ConnectionState.CONNECTING,
+                True,
+                pairing_state=PairingState.AWAITING_CONFIRMATION,
+                verification_code="secret-key-material",
+            )
+        )
+
+        self.assertEqual(view.verification_text, "Verification Code: --")
 
     def test_every_state_has_a_stable_label(self):
         labels = {
