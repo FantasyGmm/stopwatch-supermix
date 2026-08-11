@@ -362,6 +362,9 @@ void AppCodexStatus::onRunning()
     if (_key_manager) {
         key_event = _key_manager->update(false);
     }
+    if (key_event == input::KeyEvent::GoNext) {
+        key_event = input::KeyEvent::None;
+    }
 
     if (woke_screen) {
         _suppress_task_navigation = true;
@@ -395,8 +398,6 @@ void AppCodexStatus::onRunning()
         bool alert_changed = false;
         if (_current_page == 0 && key_event == input::KeyEvent::GoPrevious) {
             alert_changed = _alert_carousel.step(-1, now);
-        } else if (_current_page == 0 && key_event == input::KeyEvent::GoNext) {
-            alert_changed = _alert_carousel.step(1, now);
         } else {
             alert_changed = _alert_carousel.update(now);
         }

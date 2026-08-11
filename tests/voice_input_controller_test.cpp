@@ -901,6 +901,21 @@ void test_dispatcher_wake_and_home_clear_pending_click()
     assert(action_sink.actions.empty());
 }
 
+void test_dispatcher_a_plus_b_cancels_expiring_single_before_home_event()
+{
+    FakeVoiceButtonSink voice_sink;
+    FakeCodexButtonActionSink action_sink;
+    VoiceButtonDispatcher dispatcher;
+    dispatcher.reset(false);
+
+    dispatcher.dispatch(false, true, false, false, 0, &voice_sink, &action_sink);
+    dispatcher.dispatch(false, false, false, false, 20, &voice_sink, &action_sink);
+    dispatcher.dispatch(true, true, false, false, 320, &voice_sink, &action_sink);
+
+    assert(voice_sink.events.empty());
+    assert(action_sink.actions.empty());
+}
+
 void test_dispatcher_guard_handles_uint32_wraparound()
 {
     FakeVoiceButtonSink sink;
@@ -996,6 +1011,7 @@ int main()
     test_dispatcher_double_click_emits_only_force_steer();
     test_dispatcher_second_click_hold_cancels_pending_submit_and_starts_voice();
     test_dispatcher_wake_and_home_clear_pending_click();
+    test_dispatcher_a_plus_b_cancels_expiring_single_before_home_event();
     test_dispatcher_guard_handles_uint32_wraparound();
     test_cancel_waits_for_inflight_producer_cleanup();
 }
