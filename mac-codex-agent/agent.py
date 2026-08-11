@@ -47,6 +47,8 @@ MAX_STATUS_WRITE_SIZE = 256
 FRAME_BURST_SIZE = 8
 FRAME_BURST_PAUSE_SECONDS = 0.02
 MAX_WATCH_ALERTS = 8
+MAX_CODEX_MODEL_LENGTH = 64
+MAX_CODEX_EFFORT_LENGTH = 32
 MAX_PROJECT_LENGTH = 32
 MAX_TITLE_LENGTH = 48
 MAX_TASK_DETAIL_BYTES = 12 * 1024
@@ -57,17 +59,6 @@ MAX_TRAE_TASK_COUNT = 65535
 MAX_TRAE_REVISION = 2147483647
 MAX_TRAE_MESSAGE_SIZE = 1024
 TRAE_HEARTBEAT_SECONDS = 6.0
-_CODEX_STATUS_KEYS = (
-    "codex_model",
-    "codex_effort",
-    "codex_5h_left_pct",
-    "codex_week_left_pct",
-    "codex_alert_pending",
-    "codex_alert_running",
-    "codex_alert_completed",
-    "codex_alert_revision",
-    "codex_alerts",
-)
 VOICE_AUDIO_FRAME_MS = 20
 VOICE_STARTUP_BUFFER_MS = 10_000
 VOICE_NOTIFICATION_QUEUE_SIZE = (
@@ -77,6 +68,14 @@ GATT_OPERATION_TIMEOUT_SECONDS = 5.0
 PAIRING_CONFIRM_TIMEOUT_SECONDS = 65.0
 PAIRING_RESPONSE_QUEUE_SIZE = 8
 _TASK_ROUTE_PATTERN = re.compile(r"^[0-9a-f]{16}$")
+_CODEX_NUMERIC_LIMITS = {
+    "codex_5h_left_pct": 100,
+    "codex_week_left_pct": 100,
+    "codex_alert_pending": 65535,
+    "codex_alert_running": 65535,
+    "codex_alert_completed": 65535,
+    "codex_alert_revision": 2147483647,
+}
 
 
 @dataclasses.dataclass(frozen=True)
@@ -223,11 +222,26 @@ class CodexStatusAgent:
 
 
 def _watch_codex_status(status: Mapping[str, object]):
-    result = {
-        key: status[key]
-        for key in _CODEX_STATUS_KEYS
-        if key in status and key != "codex_alerts"
-    }
+    result = {}
+    if "codex_model" in status:
+        result["codex_model"] = _bounded_text(
+            status.get("codex_model"), MAX_CODEX_MODEL_LENGTH
+        )
+    if "codex_effort" in status:
+        result["codex_effort"] = _bounded_text(
+            status.get("codex_effort"), MAX_CODEX_EFFORT_LENGTH
+        )
+    for key, maximum in _CODEX_NUMERIC_LIMITS.items():
+        if key not in status:
+            continue
+        value = status.get(key)
+        if value is None and key in (
+            "codex_5h_left_pct",
+            "codex_week_left_pct",
+        ):
+            result[key] = None
+        else:
+            result[key] = min(_nonnegative_integer(value), maximum)
     alerts = status.get("codex_alerts")
     if isinstance(alerts, list):
         active_alerts = [
@@ -235,13 +249,15 @@ def _watch_codex_status(status: Mapping[str, object]):
             for item in alerts
             if isinstance(item, dict)
             and item.get("state") in ("pending", "running")
+            and isinstance(item.get("route"), str)
+            and _TASK_ROUTE_PATTERN.fullmatch(item["route"]) is not None
         ]
         active_alerts.sort(
             key=lambda item: 0 if item.get("state") == "pending" else 1
         )
         result["codex_alerts"] = [
             {
-                "route": str(item.get("route") or ""),
+                "route": item["route"],
                 "project": str(item.get("project") or "")[:MAX_PROJECT_LENGTH],
                 "title": str(item.get("title") or "")[:MAX_TITLE_LENGTH],
                 "state": str(item.get("state") or ""),
@@ -252,6 +268,17 @@ def _watch_codex_status(status: Mapping[str, object]):
             _compact_json_bytes(result)
         ) > MAX_MESSAGE_SIZE:
             result["codex_alerts"].pop()
+    if len(_compact_json_bytes(result)) > MAX_MESSAGE_SIZE:
+        result.pop("codex_effort", None)
+        result.pop("codex_model", None)
+    if len(_compact_json_bytes(result)) > MAX_MESSAGE_SIZE:
+        result = {
+            key: result[key]
+            for key in _CODEX_NUMERIC_LIMITS
+            if key in result
+        }
+        if isinstance(alerts, list):
+            result["codex_alerts"] = []
     return result
 
 
@@ -260,8 +287,7 @@ def _bounded_task_detail(text: str) -> str:
     if len(encoded) <= MAX_TASK_DETAIL_BYTES:
         return text
     marker = TASK_DETAIL_TRUNCATION_MARKER
-    prefix_bytes = MAX_TASK_DETAIL_BYTES - len(marker.encode("utf-8"))
-    prefix = encoded[:prefix_bytes].decode("utf-8", errors="ignore")
+    prefix = encoded[:MAX_TASK_DETAIL_BYTES].decode("utf-8", errors="ignore")
     return prefix + marker
 
 
@@ -311,7 +337,7 @@ def _task_detail_chunks(
 
 
 def task_detail_messages(status, max_size=MAX_MESSAGE_SIZE):
-    """Return detail payloads; bounded reply text is at most 12 KiB UTF-8."""
+    """Return detail payloads with at most 12 KiB of reply plus a marker."""
     if not isinstance(status, Mapping):
         return []
     revision_value = status.get("codex_alert_revision")
