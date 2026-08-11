@@ -420,9 +420,21 @@ class MacOSCodexAccessibility:
         classes = self._read_attribute(element, AX_DOM_CLASS_LIST_ATTRIBUTE)
         if isinstance(classes, str):
             return tuple(classes.split())
-        if isinstance(classes, (list, tuple)):
-            return tuple(value for value in classes if isinstance(value, str))
-        return ()
+        return tuple(
+            value
+            for value in self._collection_values(classes)
+            if isinstance(value, str)
+        )
+
+    @staticmethod
+    def _collection_values(value: Any) -> tuple[Any, ...]:
+        if isinstance(value, (str, bytes, bytearray)):
+            return ()
+        try:
+            iterator = iter(value)
+        except TypeError:
+            return ()
+        return tuple(iterator)
 
     def _has_class_marker(self, element: Any, marker: str) -> bool:
         return any(marker in token for token in self._class_tokens(element))
@@ -441,8 +453,10 @@ class MacOSCodexAccessibility:
             children = self._read_attribute(
                 element, ApplicationServices.kAXChildrenAttribute
             )
-            if isinstance(children, (list, tuple)):
-                pending.extend((child, depth + 1) for child in children)
+            pending.extend(
+                (child, depth + 1)
+                for child in self._collection_values(children)
+            )
 
     def _has_placeholder(self, focused: Any) -> bool:
         for element in self._walk_descendants(focused):

@@ -168,6 +168,21 @@ class Node:
         return hash(self.token)
 
 
+class NSArrayLike:
+    """PyObjC-style iterable that is deliberately not a list or tuple."""
+
+    def __init__(self, values):
+        self._values = tuple(values)
+
+    def __iter__(self):
+        return iter(self._values)
+
+
+class ExplodingNSArrayLike:
+    def __iter__(self):
+        raise RuntimeError("bridged collection failed during iteration")
+
+
 class RealComposerFixture:
     def __init__(self, *, description="Do anything", label="Send", value="hello"):
         self.application_element = Node("application")
@@ -345,6 +360,39 @@ class PreparedCodexSubmissionTests(unittest.TestCase):
         self.assertIn("ChromeAXNodeId", attribute_names)
         self.assertNotIn("AXChromeAXNodeId", attribute_names)
 
+        def read(attribute):
+            error, value = ApplicationServices.AXUIElementCopyAttributeValue(
+                focused, attribute, None
+            )
+            return value if error == ApplicationServices.kAXErrorSuccess else None
+
+        role = read(ApplicationServices.kAXRoleAttribute)
+        description = read(ApplicationServices.kAXDescriptionAttribute)
+        classes = read("AXDOMClassList")
+        try:
+            class_values = tuple(classes)
+        except TypeError:
+            class_values = ()
+        if not (
+            role == ApplicationServices.kAXTextAreaRole
+            and description in COMPOSER_DESCRIPTIONS
+            and "ProseMirror" in class_values
+        ):
+            self.skipTest("focused Codex element is not the task composer")
+
+        adapter = MacOSCodexAccessibility()
+        current = adapter.snapshot()
+        self.assertTrue(current.editable)
+        self.assertIn(
+            current.semantic,
+            (SubmitSemantic.SEND, SubmitSemantic.QUEUE, SubmitSemantic.STEER),
+        )
+        prepared = adapter.prepare()
+        if current.has_text:
+            self.assertIsNotNone(prepared)
+        else:
+            self.assertIsNone(prepared)
+
     def test_real_two_level_composer_recognizes_en_zh_and_follow_up(self):
         cases = (
             ("Do anything", "Send", SubmitSemantic.SEND),
@@ -361,6 +409,45 @@ class PreparedCodexSubmissionTests(unittest.TestCase):
                 )
                 current = self.adapter(fixture).snapshot()
                 self.assertEqual(current, snapshot(semantic))
+
+    def test_bridged_nsarray_classes_and_children_are_normalized(self):
+        fixture = RealComposerFixture()
+        for element in (
+            fixture.focused,
+            fixture.rich_text_input,
+            fixture.composer_body,
+            fixture.composer_root,
+        ):
+            key = (element, "AXDOMClassList")
+            fixture.attributes[key] = NSArrayLike(fixture.attributes[key])
+        for element in (
+            fixture.focused,
+            fixture.rich_text_input,
+            fixture.composer_body,
+            fixture.composer_root,
+        ):
+            key = (element, "AXChildren")
+            fixture.attributes[key] = NSArrayLike(fixture.attributes[key])
+
+        current = self.adapter(fixture).snapshot()
+
+        self.assertEqual(current, snapshot(SubmitSemantic.SEND))
+
+    def test_exceptional_bridged_collection_fails_closed(self):
+        for attribute in ("AXDOMClassList", "AXChildren"):
+            with self.subTest(attribute=attribute):
+                fixture = RealComposerFixture()
+                target = (
+                    fixture.focused
+                    if attribute == "AXDOMClassList"
+                    else fixture.composer_body
+                )
+                fixture.attributes[(target, attribute)] = ExplodingNSArrayLike()
+
+                current = self.adapter(fixture).snapshot()
+
+                self.assertFalse(current.editable)
+                self.assertEqual(current.semantic, SubmitSemantic.UNKNOWN)
 
     def test_optional_composer_root_can_be_omitted(self):
         fixture = RealComposerFixture()
