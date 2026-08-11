@@ -398,7 +398,9 @@ class AgentRuntime:
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._commands: Optional[asyncio.Queue] = None
         self._latest_status = {}
+        self._status_generation = 0
         self._status_ready: Optional[asyncio.Event] = None
+        self._status_changed: Optional[asyncio.Event] = None
         self._voice_refresh_requested = threading.Event()
 
     def snapshot(self) -> AgentSnapshot:
@@ -542,6 +544,7 @@ class AgentRuntime:
         loop = asyncio.get_running_loop()
         commands: asyncio.Queue = asyncio.Queue()
         self._status_ready = asyncio.Event()
+        self._status_changed = asyncio.Event()
         collector_task = asyncio.create_task(self._collect_status())
         with self._command_lock:
             self._loop = loop
@@ -636,6 +639,7 @@ class AgentRuntime:
             collector_task.cancel()
             await _await_cancelled(collector_task)
             self._status_ready = None
+            self._status_changed = None
             with self._command_lock:
                 self._loop = None
                 self._commands = None
@@ -664,6 +668,9 @@ class AgentRuntime:
                         changed_at=time.time(),
                     )
                 self._latest_status = status
+                self._status_generation += 1
+                if self._status_changed is not None:
+                    self._status_changed.set()
                 if first_status:
                     LOGGER.info(
                         "Codex status ready: model=%s effort=%s",
@@ -672,7 +679,14 @@ class AgentRuntime:
                     )
                 if self._status_ready is not None:
                     self._status_ready.set()
-            await asyncio.sleep(self._status_interval)
+            wait_for_change = getattr(self._collector, "wait_for_change", None)
+            if wait_for_change is None:
+                await asyncio.sleep(self._status_interval)
+            else:
+                await asyncio.to_thread(
+                    wait_for_change,
+                    self._status_interval,
+                )
 
     async def _run_session(self) -> str:
         context = _BleSessionContext(self._transport_factory())
@@ -704,10 +718,13 @@ class AgentRuntime:
                 failure = self._voice_failure(context)
                 if failure is not None:
                     await self._isolate_voice_failure(context, failure)
+                sent_generation = self._status_generation
                 await status_agent.tick(status=dict(self._latest_status))
                 await self._refresh_secure_credential(context)
                 failure = await self._wait_for_status_interval(
-                    transport, ignore_voice_failure=context.voice_failed
+                    transport,
+                    ignore_voice_failure=context.voice_failed,
+                    sent_generation=sent_generation,
                 )
                 if failure is not None:
                     await self._isolate_voice_failure(context, failure)
@@ -912,13 +929,20 @@ class AgentRuntime:
         return None
 
     async def _wait_for_status_interval(
-        self, transport, ignore_voice_failure: bool = False
+        self,
+        transport,
+        ignore_voice_failure: bool = False,
+        sent_generation: Optional[int] = None,
     ):
+        if sent_generation is not None and self._status_changed is not None:
+            status_wait = self._wait_for_status_change(sent_generation)
+        else:
+            status_wait = asyncio.sleep(self._status_interval)
         failure = getattr(transport, "voice_failure", None)
         if failure is None or ignore_voice_failure:
-            await asyncio.sleep(self._status_interval)
+            await status_wait
             return None
-        sleep_task = asyncio.create_task(asyncio.sleep(self._status_interval))
+        sleep_task = asyncio.create_task(status_wait)
         try:
             done, _ = await asyncio.wait(
                 (sleep_task, failure), return_when=asyncio.FIRST_COMPLETED
@@ -930,6 +954,24 @@ class AgentRuntime:
             if not sleep_task.done():
                 sleep_task.cancel()
             await _await_cancelled(sleep_task)
+
+    async def _wait_for_status_change(self, sent_generation: int) -> None:
+        event = self._status_changed
+        if event is None:
+            await asyncio.sleep(self._status_interval)
+            return
+        deadline = asyncio.get_running_loop().time() + self._status_interval
+        while self._status_generation <= sent_generation:
+            event.clear()
+            if self._status_generation > sent_generation:
+                return
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                return
+            try:
+                await asyncio.wait_for(event.wait(), remaining)
+            except asyncio.TimeoutError:
+                return
 
     async def _isolate_voice_failure(
         self, context: _BleSessionContext, error: Exception

@@ -276,6 +276,61 @@ async def wait_for_messages(transport, count):
 
 
 class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_rollout_change_publishes_before_long_heartbeat(self):
+        class ChangeCollector(FakeCollector):
+            def __init__(self):
+                super().__init__(
+                    [
+                        {"codex_alert_revision": 1, "codex_alert_pending": 0},
+                        {"codex_alert_revision": 2, "codex_alert_pending": 1},
+                    ]
+                )
+                self.changed = threading.Event()
+                self.stopping = False
+
+            def wait_for_change(self, timeout):
+                if self.stopping:
+                    return False
+                changed = self.changed.wait(timeout)
+                self.changed.clear()
+                return changed
+
+        collector = ChangeCollector()
+        factory = FakeTransportFactory([{}])
+        runtime = AgentRuntime(
+            collector=collector,
+            transport_factory=factory,
+            status_interval=30.0,
+            retry_delays=(0.01,),
+        )
+        task = asyncio.create_task(runtime.run())
+        try:
+            await factory.wait_for_instances(1)
+            transport = factory.instances[0]
+            await wait_for_messages(transport, 2)
+            started = asyncio.get_running_loop().time()
+            collector.changed.set()
+            published = False
+            for _ in range(50):
+                status_messages = [
+                    json.loads(payload)
+                    for message_type, payload in transport.messages
+                    if message_type == STATUS_MESSAGE
+                ]
+                if len(status_messages) >= 2:
+                    published = True
+                    break
+                await asyncio.sleep(0.01)
+
+            self.assertTrue(published)
+            self.assertLess(asyncio.get_running_loop().time() - started, 1.0)
+            self.assertEqual(status_messages[-1]["codex_alert_revision"], 2)
+        finally:
+            collector.stopping = True
+            collector.changed.set()
+            runtime.submit(AgentCommand.STOP)
+            await asyncio.wait_for(task, 1)
+
     async def test_keychain_load_failure_publishes_forgettable_pairing_error(self):
         watch_id = bytes(range(16))
         watch_identity_public = public_key_bytes(
