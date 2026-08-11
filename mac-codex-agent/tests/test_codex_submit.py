@@ -9,6 +9,7 @@ sys.path.insert(0, str(AGENT_ROOT))
 
 from codex_submit import (  # noqa: E402
     ALTERNATE_MODIFIER_FLAGS,
+    AX_CHROME_NODE_ID_ATTRIBUTE,
     CODEX_BUNDLE_IDENTIFIER,
     COMPOSER_DESCRIPTIONS,
     COMPOSER_DESCRIPTION_SOURCES,
@@ -181,7 +182,7 @@ class RealComposerFixture:
             (self.focused, "AXEnabled"): True,
             (self.focused, "AXDescription"): description,
             (self.focused, "AXDOMClassList"): ("ProseMirror",),
-            (self.focused, "AXChromeAXNodeId"): 101,
+            (self.focused, "ChromeAXNodeId"): 101,
             (self.focused, "AXValue"): value,
             (self.focused, "AXParent"): self.rich_text_input,
             (self.focused, "AXChildren"): (),
@@ -208,7 +209,7 @@ class RealComposerFixture:
             (self.button, "AXRole"): "AXButton",
             (self.button, "AXEnabled"): True,
             (self.button, "AXTitle"): label,
-            (self.button, "AXChromeAXNodeId"): 202,
+            (self.button, "ChromeAXNodeId"): 202,
         }
         self.create_calls = 0
         self.before_revalidation = None
@@ -304,6 +305,41 @@ class PreparedCodexSubmissionTests(unittest.TestCase):
             ),
         )
 
+    def test_chromium_node_id_attribute_uses_real_ax_literal(self):
+        self.assertEqual(AX_CHROME_NODE_ID_ATTRIBUTE, "ChromeAXNodeId")
+        self.assertNotEqual(AX_CHROME_NODE_ID_ATTRIBUTE, "AXChromeAXNodeId")
+
+    def test_live_codex_focused_node_exposes_real_chromium_attribute(self):
+        import ApplicationServices
+        from AppKit import NSWorkspace
+
+        if not ApplicationServices.AXIsProcessTrustedWithOptions(None):
+            self.skipTest("Accessibility permission is unavailable")
+        application = NSWorkspace.sharedWorkspace().frontmostApplication()
+        if (
+            application is None
+            or application.bundleIdentifier() != CODEX_BUNDLE_IDENTIFIER
+        ):
+            self.skipTest("Codex is not the foreground application")
+        ax_application = ApplicationServices.AXUIElementCreateApplication(
+            application.processIdentifier()
+        )
+        error, focused = ApplicationServices.AXUIElementCopyAttributeValue(
+            ax_application,
+            ApplicationServices.kAXFocusedUIElementAttribute,
+            None,
+        )
+        if error != ApplicationServices.kAXErrorSuccess or focused is None:
+            self.skipTest("Codex has no focused Accessibility element")
+        error, attribute_names = (
+            ApplicationServices.AXUIElementCopyAttributeNames(focused, None)
+        )
+        if error != ApplicationServices.kAXErrorSuccess:
+            self.skipTest("Could not read focused Accessibility attributes")
+
+        self.assertIn("ChromeAXNodeId", attribute_names)
+        self.assertNotIn("AXChromeAXNodeId", attribute_names)
+
     def test_real_two_level_composer_recognizes_en_zh_and_follow_up(self):
         cases = (
             ("Do anything", "Send", SubmitSemantic.SEND),
@@ -371,7 +407,7 @@ class PreparedCodexSubmissionTests(unittest.TestCase):
         self.assertFalse(adapter.snapshot().editable)
 
         fixture = RealComposerFixture()
-        fixture.attributes.pop((fixture.focused, "AXChromeAXNodeId"))
+        fixture.attributes.pop((fixture.focused, "ChromeAXNodeId"))
         self.assertIsNone(self.adapter(fixture).prepare())
 
     def test_placeholder_subtree_makes_real_ax_value_empty(self):
@@ -398,7 +434,7 @@ class PreparedCodexSubmissionTests(unittest.TestCase):
         )
 
         fixture = RealComposerFixture()
-        fixture.attributes.pop((fixture.button, "AXChromeAXNodeId"))
+        fixture.attributes.pop((fixture.button, "ChromeAXNodeId"))
         self.assertEqual(
             self.adapter(fixture).snapshot().semantic,
             SubmitSemantic.UNKNOWN,
@@ -409,7 +445,7 @@ class PreparedCodexSubmissionTests(unittest.TestCase):
         fixture.attributes[(second, "AXRole")] = "AXButton"
         fixture.attributes[(second, "AXEnabled")] = True
         fixture.attributes[(second, "AXTitle")] = "Send"
-        fixture.attributes[(second, "AXChromeAXNodeId")] = 303
+        fixture.attributes[(second, "ChromeAXNodeId")] = 303
         fixture.attributes[(fixture.composer_body, "AXChildren")] += (second,)
         self.assertEqual(
             self.adapter(fixture).snapshot().semantic,
@@ -440,7 +476,7 @@ class PreparedCodexSubmissionTests(unittest.TestCase):
                 (fixture.application_element, "AXFocusedUIElement"), Node("other")
             )),
             ("focus-token", lambda fixture: fixture.attributes.__setitem__(
-                (fixture.focused, "AXChromeAXNodeId"), 999
+                (fixture.focused, "ChromeAXNodeId"), 999
             )),
             ("value-clear", lambda fixture: fixture.attributes.__setitem__(
                 (fixture.focused, "AXValue"), ""
@@ -455,7 +491,7 @@ class PreparedCodexSubmissionTests(unittest.TestCase):
                 (fixture.button, "AXEnabled"), False
             )),
             ("button-token", lambda fixture: fixture.attributes.__setitem__(
-                (fixture.button, "AXChromeAXNodeId"), 303
+                (fixture.button, "ChromeAXNodeId"), 303
             )),
         )
         for name, mutate in mutation_cases:
