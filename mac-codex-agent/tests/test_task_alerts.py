@@ -907,6 +907,45 @@ class TaskAlertTrackerTests(unittest.TestCase):
         self.assertEqual(alert.turn_id, "turn-next")
         self.assertEqual(alert.last_reply, "最新回复\n原样保留")
 
+    def test_new_running_alert_ignores_newer_other_thread_reply(self):
+        rollout_b = self.root / "rollout-b.jsonl"
+        rollout_b.touch()
+        add_thread(
+            self.state_db,
+            "thread-b",
+            "/workspace/OtherProject",
+            "Other task",
+            rollout_b,
+            2,
+        )
+        tracker = self.tracker()
+        tracker.refresh()
+        append_event(
+            self.rollout,
+            "task_complete",
+            "2026-07-12T00:02:00Z",
+            last_agent_message="thread-a stable reply",
+        )
+        append_event(
+            rollout_b,
+            "task_complete",
+            "2026-07-12T00:02:30Z",
+            last_agent_message="newer thread-b reply",
+        )
+        append_event(
+            self.rollout,
+            "task_started",
+            "2026-07-12T00:03:00Z",
+            turn_id="turn-next",
+        )
+
+        by_thread = {
+            alert.thread_id: alert for alert in tracker.refresh().alerts
+        }
+
+        self.assertEqual(by_thread["thread-a"].last_reply, "thread-a stable reply")
+        self.assertEqual(by_thread["thread-b"].last_reply, "newer thread-b reply")
+
     def test_nonstring_completion_reply_is_not_persisted_or_coerced(self):
         tracker = self.tracker()
         tracker.refresh()
@@ -923,6 +962,28 @@ class TaskAlertTrackerTests(unittest.TestCase):
         saved = json.loads(self.ledger.read_text(encoding="utf-8"))
         self.assertNotIn("last_reply", saved["alerts"][-1])
 
+    def test_nonstring_completion_reply_content_is_not_logged(self):
+        tracker = self.tracker()
+        tracker.refresh()
+        append_event(
+            self.rollout,
+            "task_complete",
+            "2026-07-12T00:02:30Z",
+            last_agent_message={"text": "SECRET_REPLY_CONTENT"},
+        )
+
+        with self.assertLogs("task_alerts", level="INFO") as captured:
+            tracker.refresh()
+
+        self.assertEqual(
+            captured.output,
+            [
+                "INFO:task_alerts:Task alert classified: "
+                "thread=thread-a outcome=completed reason=completion_only"
+            ],
+        )
+        self.assertNotIn("SECRET_REPLY_CONTENT", "\n".join(captured.output))
+
     def test_ledger_without_turn_or_reply_keys_remains_compatible(self):
         tracker = self.tracker()
         tracker.refresh()
@@ -938,14 +999,39 @@ class TaskAlertTrackerTests(unittest.TestCase):
                 "state": "running",
                 "watch_notified": True,
                 "outcome": "running",
+                "unrelated_alert_metadata": {"preserve": True},
+            },
+            {
+                "id": "thread-unrelated:2026-07-12T00:01:00Z",
+                "thread_id": "thread-unrelated",
+                "project": "OtherProject",
+                "title": "Unrelated alert",
+                "progress_at": "2026-07-12T00:01:00Z",
+                "handled_at": "2026-07-12T00:01:00Z",
+                "state": "completed",
+                "watch_notified": True,
+                "outcome": "completed",
             }
         ]
-        self.ledger.write_text(json.dumps(saved), encoding="utf-8")
+        saved["unrelated_ledger_metadata"] = {
+            "preserve": ["contents", "and", "formatting"]
+        }
+        before = json.dumps(
+            saved,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        self.ledger.write_bytes(before)
 
-        alert = self.tracker().refresh().alerts[0]
+        snapshot = self.tracker().refresh()
+        alert = next(
+            item for item in snapshot.alerts if item.thread_id == "thread-a"
+        )
 
         self.assertIsNone(alert.turn_id)
         self.assertIsNone(alert.last_reply)
+        self.assertEqual(self.ledger.read_bytes(), before)
+        self.assertEqual(json.loads(self.ledger.read_bytes()), saved)
 
     def test_waiting_outcome_is_persisted_across_restart(self):
         tracker = self.tracker()
