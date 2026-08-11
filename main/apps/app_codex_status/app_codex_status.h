@@ -104,6 +104,7 @@ private:
     int _current_page            = 0;
     lv_indev_state_t _last_page_touch_state = LV_INDEV_STATE_REL;
     lv_indev_state_t _last_agent_touch_state = LV_INDEV_STATE_REL;
+    int _agent_panel_drag_start_y = 0;
     bool _suppress_task_navigation = false;
     CodexAlertCarousel _alert_carousel;
     TraeStatusSnapshot _trae_snapshot;
@@ -160,6 +161,7 @@ private:
     void update_page_swipe(uint32_t now_ms);
     void update_agent_panel_touch(uint32_t now_ms);
     void render_agent_panel();
+    void settle_agent_panel(bool animate);
     void queue_agent_panel_decision(const AgentPanelDecision& decision);
     bool take_agent_panel_decision(AgentPanelDecision& decision);
     void dispatch_agent_panel_decision(
@@ -183,6 +185,7 @@ private:
     void complete_agent_switch_if_ready();
     bool save_agent_registry();
     static void agent_panel_event_cb(lv_event_t* event);
+    static void agent_panel_animation_cb(void* target, int32_t y);
     void set_page(int page, bool animate);
     void update_page_indicator();
     void sync_display_protection_presentation();

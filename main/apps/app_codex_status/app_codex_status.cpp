@@ -894,6 +894,7 @@ void AppCodexStatus::create_view()
 void AppCodexStatus::destroy_view()
 {
     lv_anim_delete(this, page_animation_cb);
+    lv_anim_delete(this, agent_panel_animation_cb);
     _page_swipe.cancel();
     _trae_card_tap.cancel();
     _last_page_touch_state = LV_INDEV_STATE_REL;
@@ -1292,10 +1293,6 @@ void AppCodexStatus::render_agent_panel()
         return;
     }
     const AgentPanelSnapshot snapshot = _agent_panel_model.snapshot();
-    GetGlobalEdgeControlService().setEnabled(!snapshot.visible);
-    lv_obj_set_y(
-        _agent_panel_root,
-        snapshot.visible ? kAgentPanelVisibleY : kAgentPanelHiddenY);
     lv_obj_clean(_agent_panel_root);
     _agent_row_buttons = {};
     _agent_delete_buttons = {};
@@ -1446,6 +1443,52 @@ void AppCodexStatus::render_agent_panel()
         &lv_font_montserrat_14,
         kEtchedGray);
     lv_obj_move_foreground(_agent_panel_root);
+    if (_last_agent_touch_state == LV_INDEV_STATE_REL) {
+        settle_agent_panel(true);
+    }
+}
+
+void AppCodexStatus::settle_agent_panel(bool animate)
+{
+    if (_agent_panel_root == nullptr) {
+        return;
+    }
+    const AgentPanelSnapshot snapshot = _agent_panel_model.snapshot();
+    auto& controls = GetGlobalEdgeControlService();
+    if (snapshot.visible) {
+        GetGlobalEdgeControlService().setEnabled(false);
+    }
+    const int target_y =
+        snapshot.visible ? kAgentPanelVisibleY : kAgentPanelHiddenY;
+    const int current_y = lv_obj_get_y(_agent_panel_root);
+
+    lv_anim_delete(this, agent_panel_animation_cb);
+    if (!animate || current_y == target_y) {
+        lv_obj_set_y(_agent_panel_root, target_y);
+        controls.setEnabled(!snapshot.visible);
+        return;
+    }
+    GetGlobalEdgeControlService().setEnabled(false);
+
+    lv_anim_t animation;
+    lv_anim_init(&animation);
+    lv_anim_set_var(&animation, this);
+    lv_anim_set_exec_cb(&animation, agent_panel_animation_cb);
+    lv_anim_set_values(&animation, current_y, target_y);
+    lv_anim_set_duration(&animation, 180);
+    lv_anim_set_path_cb(&animation, lv_anim_path_ease_out);
+    lv_anim_start(&animation);
+}
+
+void AppCodexStatus::agent_panel_animation_cb(void* target, int32_t y)
+{
+    auto* self = static_cast<AppCodexStatus*>(target);
+    if (self != nullptr && self->_agent_panel_root != nullptr) {
+        lv_obj_set_y(self->_agent_panel_root, y);
+        if (y <= kAgentPanelHiddenY) {
+            GetGlobalEdgeControlService().setEnabled(true);
+        }
+    }
 }
 
 void AppCodexStatus::update_agent_panel_touch(uint32_t now_ms)
@@ -1455,32 +1498,60 @@ void AppCodexStatus::update_agent_panel_touch(uint32_t now_ms)
     if (indev == nullptr || _screen_off ||
         GetGlobalDisplayProtectionService().touchInputSuppressed()) {
         _agent_panel_model.cancel_touch();
+        if (_last_agent_touch_state == LV_INDEV_STATE_PR) {
+            settle_agent_panel(true);
+        }
         _last_agent_touch_state = LV_INDEV_STATE_REL;
         return;
     }
     auto& controls = GetGlobalEdgeControlService();
     if (controls.ownsTouch() || controls.lastReleaseConsumed()) {
         _agent_panel_model.cancel_touch();
+        if (_last_agent_touch_state == LV_INDEV_STATE_PR) {
+            settle_agent_panel(true);
+        }
         _last_agent_touch_state = LV_INDEV_STATE_REL;
         return;
     }
     const lv_indev_state_t state = lv_indev_get_state(indev);
     lv_point_t point = {};
     lv_indev_get_point(indev, &point);
+    auto apply_drag_position = [this]() {
+        if (_agent_panel_root == nullptr ||
+            !_agent_panel_model.owns_touch()) {
+            return;
+        }
+        lv_obj_set_y(
+            _agent_panel_root,
+            std::clamp(
+                _agent_panel_drag_start_y +
+                    _agent_panel_model.vertical_drag_offset(),
+                kAgentPanelHiddenY,
+                kAgentPanelVisibleY));
+    };
     if (state == LV_INDEV_STATE_PR) {
         if (_last_agent_touch_state == LV_INDEV_STATE_REL) {
+            if (_agent_panel_root != nullptr &&
+                !_agent_panel_model.snapshot().visible &&
+                lv_obj_get_y(_agent_panel_root) > kAgentPanelHiddenY) {
+                _agent_panel_model.set_visible(true);
+            }
             _agent_panel_model.touch_press(point.x, point.y);
+            if (_agent_panel_model.owns_touch() &&
+                _agent_panel_root != nullptr) {
+                lv_anim_delete(this, agent_panel_animation_cb);
+                _agent_panel_drag_start_y =
+                    lv_obj_get_y(_agent_panel_root);
+            }
         } else {
             _agent_panel_model.touch_move(point.x, point.y);
+            apply_drag_position();
         }
     } else if (_last_agent_touch_state == LV_INDEV_STATE_PR) {
         _agent_panel_model.touch_move(point.x, point.y);
-        const AgentPanelAction action =
-            _agent_panel_model.touch_release();
-        if (action == AgentPanelAction::Open ||
-            action == AgentPanelAction::Close) {
-            render_agent_panel();
-        }
+        apply_drag_position();
+        (void)_agent_panel_model.touch_release();
+        settle_agent_panel(true);
     }
     _last_agent_touch_state = state;
 }

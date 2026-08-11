@@ -277,6 +277,21 @@ bool AgentPanelModel::owns_touch() const
     return _touch_active || _snapshot.visible;
 }
 
+int AgentPanelModel::vertical_drag_offset() const
+{
+    constexpr int kDragDeadZone = 6;
+    if (!_touch_active) {
+        return 0;
+    }
+    const int dx = _touch_x - _touch_start_x;
+    const int dy = _touch_y - _touch_start_y;
+    if (std::abs(dy) <= std::abs(dx) ||
+        std::abs(dy) <= kDragDeadZone) {
+        return 0;
+    }
+    return dy > 0 ? dy - kDragDeadZone : dy + kDragDeadZone;
+}
+
 void AgentPanelModel::set_visible(bool visible)
 {
     _snapshot.visible = visible;

@@ -92,6 +92,7 @@ public:
     AgentPanelAction touch_release();
     void cancel_touch();
     bool owns_touch() const;
+    int vertical_drag_offset() const;
     void set_visible(bool visible);
 
     AgentPanelSnapshot snapshot() const;

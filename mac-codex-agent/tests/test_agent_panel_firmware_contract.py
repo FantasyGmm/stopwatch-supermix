@@ -43,11 +43,47 @@ class AgentPanelFirmwareContractTests(unittest.TestCase):
             "void AppCodexStatus::create_view()", 1
         )[0]
 
-        self.assertIn(
+        self.assertNotIn(
             "GetGlobalEdgeControlService().setEnabled(!snapshot.visible)",
             render,
         )
+        self.assertIn(
+            "GetGlobalEdgeControlService().setEnabled(false)", render
+        )
         self.assertIn("GetGlobalEdgeControlService().setEnabled(true)", close)
+
+    def test_panel_follows_drag_and_settles_without_rebuild(self):
+        source = (
+            ROOT / "main/apps/app_codex_status/app_codex_status.cpp"
+        ).read_text()
+        destroy = source.split(
+            "void AppCodexStatus::destroy_view()", 1
+        )[1].split("void AppCodexStatus::update_battery()", 1)[0]
+        settle = source.partition(
+            "void AppCodexStatus::settle_agent_panel(bool animate)"
+        )[2].partition("void AppCodexStatus::update_agent_panel_touch")[0]
+        touch = source.split(
+            "void AppCodexStatus::update_agent_panel_touch", 1
+        )[1].split("void AppCodexStatus::agent_panel_event_cb", 1)[0]
+
+        self.assertIn("lv_anim_set_duration(&animation, 180)", settle)
+        self.assertIn("lv_anim_path_ease_out", settle)
+        self.assertIn("agent_panel_animation_cb", settle)
+        self.assertIn(
+            "lv_anim_delete(this, agent_panel_animation_cb)", destroy
+        )
+        self.assertIn("_agent_panel_model.vertical_drag_offset()", touch)
+        self.assertIn("std::clamp", touch)
+        self.assertIn("settle_agent_panel(true)", touch)
+        self.assertNotIn("render_agent_panel();", touch)
+        self.assertIn("y <= kAgentPanelHiddenY", settle)
+        self.assertIn("_agent_panel_model.set_visible(true)", touch)
+        self.assertEqual(
+            touch.count(
+                "if (_last_agent_touch_state == LV_INDEV_STATE_PR)"
+            ),
+            3,
+        )
 
     def test_panel_has_request_switch_delete_and_reset_controls(self):
         source = (
