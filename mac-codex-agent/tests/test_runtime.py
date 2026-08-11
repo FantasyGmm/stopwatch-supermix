@@ -315,6 +315,11 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         )
         self.keychain_patch.start()
         self.addCleanup(self.keychain_patch.stop)
+        self.accessibility_patch = patch(
+            "runtime._is_accessibility_trusted", return_value=True
+        )
+        self.accessibility_patch.start()
+        self.addCleanup(self.accessibility_patch.stop)
 
     async def test_setup_failure_publishes_sanitized_error_without_changing_ble(self):
         runtime = AgentRuntime(
@@ -666,6 +671,122 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 ready = transport.input_payloads[0][1]
                 self.assertEqual(decode_input_ready(key, ready), nonce)
 
+    async def test_missing_accessibility_overrides_driver_and_blocks_input_dispatch(
+        self,
+    ):
+        key = bytes(range(16))
+        nonce = b"inputax1"
+        action = encode_action(key, InputAction.SUBMIT, 1, 124, nonce)
+        factory = FakeTransportFactory([{}])
+
+        class VoiceSession:
+            state = VoiceState.DRIVER_REQUIRED
+
+            async def prepare(self):
+                return self.state
+
+            async def disconnect(self):
+                pass
+
+        class SubmitController:
+            def __init__(self):
+                self.actions = []
+
+            def handle(self, submitted_action):
+                self.actions.append(submitted_action)
+                return True
+
+        controller = SubmitController()
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            transport_factory=factory,
+            voice_key_loader=lambda: key,
+            voice_session_factory=lambda _key: VoiceSession(),
+            input_nonce_factory=lambda: nonce,
+            submit_controller_factory=lambda: controller,
+            accessibility_checker=lambda: False,
+            status_interval=30,
+        )
+
+        session = asyncio.create_task(runtime._run_session())
+        await factory.wait_for_instances(1)
+        transport = factory.instances[0]
+        await asyncio.wait_for(transport.input_enable_started.wait(), 1)
+        for _ in range(100):
+            if (
+                runtime.snapshot().voice_state
+                is VoiceState.ACCESSIBILITY_REQUIRED
+            ):
+                break
+            await asyncio.sleep(0.01)
+        else:
+            self.fail("Accessibility-required state was not published")
+
+        self.assertEqual(transport.input_disable_count, 0)
+        self.assertIsNotNone(transport.input_handler)
+        await transport.input_handler(action)
+        self.assertEqual(controller.actions, [])
+        control = decode_control(key, transport.voice_payloads[0][1])
+        self.assertEqual(control.kind, UNAVAILABLE)
+        self.assertEqual(control.reason, ACCESSIBILITY_REQUIRED)
+
+        session.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await session
+
+    async def test_accessibility_recovery_refresh_restores_ready_voice(self):
+        key = bytes(range(16))
+        permission = {"available": False}
+        factory = FakeTransportFactory([{}])
+
+        class VoiceSession:
+            state = VoiceState.READY
+
+            async def prepare(self):
+                return self.state
+
+            async def disconnect(self):
+                pass
+
+            async def handle(self, _payload):
+                pass
+
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            transport_factory=factory,
+            voice_key_loader=lambda: key,
+            voice_session_factory=lambda _key: VoiceSession(),
+            voice_nonce_factory=lambda: b"voiceax1",
+            input_nonce_factory=lambda: b"inputax2",
+            accessibility_checker=lambda: permission["available"],
+            status_interval=0.01,
+        )
+
+        session = asyncio.create_task(runtime._run_session())
+        await factory.wait_for_instances(1)
+        transport = factory.instances[0]
+        for _ in range(100):
+            if (
+                runtime.snapshot().voice_state
+                is VoiceState.ACCESSIBILITY_REQUIRED
+            ):
+                break
+            await asyncio.sleep(0.01)
+        else:
+            self.fail("Accessibility-required state was not published")
+
+        permission["available"] = True
+        runtime.refresh_voice_readiness()
+        await asyncio.wait_for(transport.voice_enable_started.wait(), 1)
+
+        self.assertIs(runtime.snapshot().voice_state, VoiceState.READY)
+        self.assertTrue(
+            any(item[0] == "ready" for item in transport.voice_payloads)
+        )
+        session.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await session
+
     async def test_input_decoder_rejects_duplicate_out_of_order_old_nonce_and_malformed(self):
         key = bytes(range(16))
         nonce = b"input002"
@@ -923,6 +1044,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
                     voice_key_loader=lambda: key,
                     voice_session_factory=lambda _key: VoiceSession(),
                     voice_nonce_factory=lambda: b"12345678",
+                    accessibility_checker=lambda: True,
                     status_interval=0.01,
                 )
 

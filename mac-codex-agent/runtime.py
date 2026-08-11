@@ -93,6 +93,7 @@ class _BleSessionContext:
     input_replay_guard: Optional[ActionReplayGuard] = None
     input_submit_controller: Optional[object] = None
     input_active: bool = False
+    accessibility_available: bool = True
     shutdown_task: Optional[asyncio.Task] = None
 
 
@@ -179,6 +180,7 @@ class AgentRuntime:
         voice_nonce_factory=None,
         input_nonce_factory=None,
         submit_controller_factory=None,
+        accessibility_checker=None,
     ):
         self._collector = collector
         self._transport_factory = transport_factory
@@ -192,6 +194,9 @@ class AgentRuntime:
         self._input_nonce_factory = input_nonce_factory or _new_voice_nonce
         self._submit_controller_factory = (
             submit_controller_factory or _create_submit_controller
+        )
+        self._accessibility_checker = (
+            accessibility_checker or _is_accessibility_trusted
         )
         self._state_lock = threading.Lock()
         self._snapshot = AgentSnapshot(
@@ -493,6 +498,7 @@ class AgentRuntime:
             self._transition_voice(VoiceState.ERROR, str(error))
             return
         context.voice_key = key
+        context.accessibility_available = self._accessibility_is_available()
 
         await self._prepare_input_actions(context)
 
@@ -547,6 +553,15 @@ class AgentRuntime:
                     packet.sequence,
                 )
                 return
+            context.accessibility_available = (
+                self._accessibility_is_available()
+            )
+            if not context.accessibility_available:
+                self._transition_voice(VoiceState.ACCESSIBILITY_REQUIRED)
+                LOGGER.info(
+                    "Ignoring input action: Accessibility permission is required"
+                )
+                return
             try:
                 accepted = await asyncio.to_thread(
                     controller.handle, packet.action
@@ -581,8 +596,15 @@ class AgentRuntime:
             context.voice_failed
             or context.voice_key is None
             or context.voice_service is None
-            or service_state
-            not in (VoiceState.DRIVER_REQUIRED, VoiceState.RESTART_REQUIRED)
+            or (
+                service_state
+                not in (
+                    VoiceState.DRIVER_REQUIRED,
+                    VoiceState.RESTART_REQUIRED,
+                )
+                and self.snapshot().voice_state
+                is not VoiceState.ACCESSIBILITY_REQUIRED
+            )
         ):
             return
         await self._publish_voice_readiness(context)
@@ -597,6 +619,10 @@ class AgentRuntime:
         except Exception as error:
             await self._isolate_voice_failure(context, error)
             return
+
+        context.accessibility_available = self._accessibility_is_available()
+        if not context.accessibility_available:
+            state = VoiceState.ACCESSIBILITY_REQUIRED
 
         self._transition_voice(state)
         if state is not VoiceState.READY:
@@ -627,6 +653,13 @@ class AgentRuntime:
             await transport.enable_voice(ready_payload, handle_notification)
         except Exception as error:
             await self._isolate_voice_failure(context, error)
+
+    def _accessibility_is_available(self) -> bool:
+        try:
+            return bool(self._accessibility_checker())
+        except Exception:
+            LOGGER.exception("Could not inspect Accessibility permission")
+            return False
 
     def _encode_unavailable_payload(self, key: bytes, reason: int):
         try:
