@@ -968,10 +968,20 @@ class AgentRuntime:
             remaining = deadline - asyncio.get_running_loop().time()
             if remaining <= 0:
                 return
+            event_wait = asyncio.create_task(event.wait())
+            timeout_wait = asyncio.create_task(asyncio.sleep(remaining))
             try:
-                await asyncio.wait_for(event.wait(), remaining)
-            except asyncio.TimeoutError:
-                return
+                done, _ = await asyncio.wait(
+                    (event_wait, timeout_wait),
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if timeout_wait in done:
+                    return
+            finally:
+                for wait in (event_wait, timeout_wait):
+                    if not wait.done():
+                        wait.cancel()
+                    await _await_cancelled(wait)
 
     async def _isolate_voice_failure(
         self, context: _BleSessionContext, error: Exception

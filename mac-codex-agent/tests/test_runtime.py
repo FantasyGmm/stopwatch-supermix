@@ -286,12 +286,9 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
                     ]
                 )
                 self.changed = threading.Event()
-                self.stopping = False
 
             def wait_for_change(self, timeout):
-                if self.stopping:
-                    return False
-                changed = self.changed.wait(timeout)
+                changed = self.changed.wait(min(timeout, 0.05))
                 self.changed.clear()
                 return changed
 
@@ -302,6 +299,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             transport_factory=factory,
             status_interval=30.0,
             retry_delays=(0.01,),
+            disconnect_timeout=0.1,
         )
         task = asyncio.create_task(runtime.run())
         try:
@@ -326,7 +324,6 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.assertLess(asyncio.get_running_loop().time() - started, 1.0)
             self.assertEqual(status_messages[-1]["codex_alert_revision"], 2)
         finally:
-            collector.stopping = True
             collector.changed.set()
             runtime.submit(AgentCommand.STOP)
             await asyncio.wait_for(task, 1)
