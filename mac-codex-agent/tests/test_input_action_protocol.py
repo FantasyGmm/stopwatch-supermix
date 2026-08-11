@@ -98,6 +98,25 @@ class InputActionProtocolTests(unittest.TestCase):
             with self.subTest(operation=operation), self.assertRaises(ValueError):
                 operation()
 
+    def test_encode_rejects_boolean_and_non_integer_numeric_fields(self):
+        invalid_operations = (
+            lambda: encode_action(
+                TEST_KEY, InputAction.SUBMIT, True, 0, TEST_NONCE
+            ),
+            lambda: encode_action(
+                TEST_KEY, InputAction.SUBMIT, 1.0, 0, TEST_NONCE
+            ),
+            lambda: encode_action(
+                TEST_KEY, InputAction.SUBMIT, 1, False, TEST_NONCE
+            ),
+            lambda: encode_action(
+                TEST_KEY, InputAction.SUBMIT, 1, 1.0, TEST_NONCE
+            ),
+        )
+        for operation in invalid_operations:
+            with self.subTest(operation=operation), self.assertRaises(ValueError):
+                operation()
+
     def test_ready_rejects_wrong_version_kind_reserved_length_tag_and_nonce(self):
         mutations = {
             "version": (0, 1),
@@ -178,6 +197,14 @@ class InputActionProtocolTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             guard.set_active_nonce(bytes(8))
+
+    def test_replay_guard_rejects_boolean_and_non_integer_sequences(self):
+        guard = ActionReplayGuard()
+        guard.set_active_nonce(TEST_NONCE)
+
+        for sequence in (True, False, 1.0):
+            with self.subTest(sequence=sequence), self.assertRaises(ValueError):
+                guard.accept(TEST_NONCE, sequence)
 
 
 if __name__ == "__main__":

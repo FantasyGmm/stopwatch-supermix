@@ -58,9 +58,17 @@ def _validate_action_values(
         valid_action = InputAction(action)
     except (TypeError, ValueError):
         raise ValueError("unknown input action") from None
-    if not 1 <= sequence <= 0xFFFFFFFF:
+    if (
+        isinstance(sequence, bool)
+        or not isinstance(sequence, int)
+        or not 1 <= sequence <= 0xFFFFFFFF
+    ):
         raise ValueError("sequence must be 1..4294967295")
-    if not 0 <= watch_ms <= 0xFFFFFFFF:
+    if (
+        isinstance(watch_ms, bool)
+        or not isinstance(watch_ms, int)
+        or not 0 <= watch_ms <= 0xFFFFFFFF
+    ):
         raise ValueError("watch_ms must be 0..4294967295")
     _validate_nonce(connection_nonce)
     return valid_action
@@ -159,6 +167,8 @@ class ActionReplayGuard:
             self._last_sequence = 0
 
     def accept(self, connection_nonce: bytes, sequence: int) -> bool:
+        if isinstance(sequence, bool) or not isinstance(sequence, int):
+            raise ValueError("sequence must be a non-boolean integer")
         if (
             connection_nonce != self._active_nonce
             or not 1 <= sequence <= 0xFFFFFFFF
