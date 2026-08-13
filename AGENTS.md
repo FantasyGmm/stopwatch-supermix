@@ -176,10 +176,11 @@ explicitly changes the decision.
 
 ### Pinned microphone mode
 
-- The page order is Codex status → pinned microphone → TRAE. One left swipe
+- The page order is pinned microphone ← Codex status → TRAE. One right swipe
   from the Codex status page reaches the microphone switch directly.
-- Pinned mode reuses the existing authenticated encrypted Begin/Audio/End
-  voice session. Do not create a second GATT audio protocol or Mac route.
+- Pinned mode reuses the authenticated encrypted audio transport, but it is an
+  external-microphone session, not push-to-talk. The Mac keeps the virtual
+  microphone route fed and must not start or stop Typeless for this mode.
 - Once enabled, capture continues without holding the upper-right button and
   survives page navigation and display-off.
 - The latch is session-only. Home/app close, BLE disconnect, Agent/credential
@@ -398,6 +399,27 @@ explicitly changes the decision.
   round-screen component.
 - Treat physical appearance as an acceptance criterion. Inspect actual
   centering, clipping, contrast, glow, animation, and legibility on the AMOLED.
+- Never equate successful compilation, coordinate-string contract tests, or a
+  browser mockup with a faithful firmware UI. Before calling watch UI complete,
+  capture or inspect the running AMOLED at the same state as the locked design
+  and compare it region by region: geometry, type size/weight, color, icon,
+  control state, and circular-safe-area clipping.
+- When implementing from an approved design, keep that exact artifact as the
+  sole visual source of truth. Do not silently redesign, substitute a nearby
+  symbol, compress spacing, or shrink typography to fit available assets.
+- Missing fonts or icons are implementation blockers, not permission to
+  degrade. Add or generate the required glyph asset first. In particular, do
+  not use `LV_SYMBOL_AUDIO` as a microphone: it is a music-note glyph and may
+  also be absent from the selected firmware font.
+- A UI verification must cover the actual rendered states, not just object
+  presence in source: default/off, active, unavailable/error, and navigation
+  position. If an automatic framebuffer capture is unavailable, use a named
+  physical screenshot packet and user confirmation before accepting fidelity.
+- The pinned-microphone miss is the concrete warning: the approved centered
+  beacon specified a large Chinese title, readable state, and central microphone
+  glyph, while the first firmware reused a 14 px Chinese font and an unverified
+  audio symbol. Tests and flashing passed, but the visual result did not. This
+  class of mismatch must be caught before flashing, not after user inspection.
 - Decide gesture ownership before interpreting thresholds. A global edge
   brightness/volume recognizer must not steal a drag from an already visible
   Agent panel or child page.
@@ -579,3 +601,33 @@ explicitly changes the decision.
 - Avoid a long process narrative unless it helps diagnose a remaining issue.
   For small changes, a concise root cause, change, real validation result, and
   commit/file reference are enough.
+
+## 14. Formal Release Convergence
+
+- The currently deployed watch firmware is a release candidate: release/size
+  optimization, INFO maximum logging, assertions enabled, and
+  `CONFIG_STOPWATCH_DEBUG_COMMANDS=y`. It is not a traditional Debug build,
+  but it still contains development diagnostics.
+- Treat the user's phrase “简化成正式版” (or an equivalent request to produce
+  the formal production build) as the trigger for this established scope; do
+  not ask the user to redefine it.
+- Disable USB development control commands and ensure no debug command parser
+  or control surface remains reachable in the production image.
+- Remove temporary UI labels, diagnostic markers, one-off instrumentation,
+  performance timestamps, counters, and high-frequency lifecycle logs that
+  were added only for development or fault isolation.
+- Reduce or remove nonessential INFO logs and keep only low-frequency,
+  privacy-safe operational evidence needed to diagnose boot/reset/crash,
+  authentication, BLE connection, storage migration, and unrecoverable voice
+  or transport failures.
+- Retain firmware/protocol/build identifiers, security validation, recovery
+  state, NVS schema/migration markers, critical error codes, and other data
+  required for compatibility, safe failure, or field diagnosis.
+- Before deleting a label, command, or log, search for firmware, Mac Agent,
+  test, script, validation, and compatibility consumers. Update or remove
+  development-only consumers deliberately; do not break production contracts.
+- Produce the formal build from the production configuration, then run the
+  complete host/contract suite, clean release build and capacity gates,
+  package/hash checks, boot validation, and physical smoke acceptance before
+  flashing. Report exactly which diagnostics were removed and which minimal
+  field diagnostics remain.

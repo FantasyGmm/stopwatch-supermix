@@ -11,14 +11,15 @@ watch-to-Mac microphone session without holding the upper-right button.
 
 ## Navigation
 
-The Codex app page order is:
+The Codex app page order from left to right is:
 
-1. Codex status;
-2. Pinned microphone;
+1. Pinned microphone;
+2. Codex status;
 3. TRAE status.
 
-A left swipe moves forward and a right swipe moves backward. Navigation does
-not wrap. The existing fast-swipe and long-drag thresholds remain unchanged.
+A right swipe from Codex reveals pinned microphone; a left swipe from Codex
+reveals TRAE. Navigation does not wrap. The existing fast-swipe and long-drag
+thresholds remain unchanged.
 The page strip becomes 1398 pixels wide and the global indicator shows three
 positions.
 
@@ -29,8 +30,10 @@ existing Codex palette:
 
 - black instrument background;
 - centered `CODEX` and `固定麦克风` labels;
-- microphone glyph, status, divider, switch, and active page indicator aligned
-  on `x=233`;
+- `CODEX` at 14 px, `固定麦克风` at 24 px, and state at 22 px;
+- a real 62 × 82 px microphone drawn from LVGL geometry rather than a font
+  symbol; the microphone, status, divider, switch, and active page indicator
+  are aligned on `x=233`;
 - off state uses etched gray, `已关闭`, and a left-positioned switch knob;
 - active state uses a violet/cyan beacon, mint `收音中`,
   `MAC · CONTINUOUS AUDIO`, and a right-positioned switch knob;
@@ -43,22 +46,27 @@ change, but animation is not required for meaning.
 
 ## Voice Semantics
 
-Pinned mode reuses the production encrypted voice session and audio pipeline.
-It does not add a second audio protocol, GATT service, or Mac audio route.
+Pinned mode reuses the production encrypted voice transport, capture pipeline,
+and existing Mac virtual-microphone route. It does not add a second GATT
+service. A protocol-authenticated session-mode field distinguishes pinned
+external microphone from push-to-talk.
 
 Turning the switch on is equivalent to one sustained voice press:
 
 1. require the authenticated production voice link to be ready;
 2. start exactly one existing voice session;
 3. continue capture and encrypted BLE audio delivery until stopped;
-4. display `收音中` only when the voice controller reports recording.
+4. display `收音中` only when the voice controller reports recording;
+5. on the Mac, start and feed the virtual microphone route without invoking
+   the Typeless shortcut.
 
 Turning the switch off requests the existing graceful voice end and returns to
 the ready/off state after the terminal notification is handled.
 
-The pinned latch is owned by the watch UI, not the Mac Agent. The Mac continues
-to process the existing Begin/Audio/End sequence and therefore needs no new
-persistent-mode wire state.
+The pinned latch is owned by the watch UI. The Mac reads the authenticated
+session mode from Begin: push-to-talk arms the route and Typeless shortcut;
+external microphone arms only the route. End and error clean up only resources
+armed by that session.
 
 ## Interaction With the Upper-Right Button
 
@@ -98,7 +106,7 @@ switch, or disconnect. The user must explicitly enable it again.
 
 Focused automated coverage must prove:
 
-- three-page forward/backward swipe boundaries and no wrap;
+- fixed microphone ← Codex → TRAE swipe boundaries and no wrap;
 - pinned start emits one Begin and keeps producing audio without button hold;
 - pinned stop emits one graceful End;
 - duplicate start/stop is idempotent;
@@ -106,8 +114,10 @@ Focused automated coverage must prove:
 - page navigation preserves the session;
 - Home/app close, disconnect, epoch change, unavailable link, suppression, and
   error clear the latch and stop/cancel exactly once;
-- the page strip, third page, three indicators, approved labels, geometry,
-  colors, and switch states are wired into the firmware.
+- the page strip, three indicators, exact type sizes, geometric microphone,
+  approved labels, geometry, colors, and switch states are wired into firmware;
+- PTT Begin still arms Typeless, while external-microphone Begin never calls
+  the shortcut and remains available when Typeless is not running.
 
 Acceptance requires a real watch-to-Mac trial: enable the switch, speak without
 holding the button, verify continuous Mac input, navigate away and back, then
