@@ -39,6 +39,7 @@ LV_FONT_DECLARE(font_puhui_14_1)
 namespace {
 
 constexpr EdgeControlRect kTaskDeckTouchExclusion = {183, 423, 283, 465};
+constexpr EdgeControlRect kTaskModeTouchExclusion = {0, 0, 465, 465};
 
 using namespace codex_status_ui;
 
@@ -306,7 +307,7 @@ void AppCodexStatus::onCreate()
 void AppCodexStatus::onOpen()
 {
     mclog::tagInfo(getAppInfo().name, "on open");
-    GetGlobalEdgeControlService().setTouchExclusion(kTaskDeckTouchExclusion);
+    sync_task_edge_exclusion(CodexTaskFocusMode::Status);
 
     const uint32_t now = GetHAL().millis();
     _key_manager     = std::make_unique<input::KeyManager>();
@@ -320,17 +321,27 @@ void AppCodexStatus::onOpen()
         DisplayProtectionState::ScreenOff;
     _trae_stale = false;
     _suppress_task_navigation = false;
-    _task_focus_mode = CodexTaskFocusMode::Status;
-    _task_focus_deck.reset();
-    _task_detail_store.reset();
-    _task_detail_crypto = std::make_unique<voice_input::crypto::CcmContext>();
-    _task_detail_key_epoch = 0;
-    _task_voice_ready_applied = false;
+    {
+        std::lock_guard<std::mutex> task_lock(_task_state_mutex);
+        _task_focus_mode = CodexTaskFocusMode::Status;
+        _task_focus_deck.reset();
+        _task_detail_store.reset();
+        _task_detail_crypto =
+            std::make_unique<voice_input::crypto::CcmContext>();
+        _task_detail_key_epoch = 0;
+    }
+    {
+        std::lock_guard<std::mutex> controller_lock(_task_controller_mutex);
+        _task_voice_ready_applied = false;
+    }
     GetHAL().updateButtonStates();
     _voice_button_dispatcher.reset(GetHAL().btnB.isPressed());
     _production_voice_ready = false;
-    _production_voice_link_usable = false;
-    _production_voice_mtu = 23;
+    {
+        std::lock_guard<std::mutex> controller_lock(_task_controller_mutex);
+        _production_voice_link_usable = false;
+        _production_voice_mtu = 23;
+    }
     _production_voice_connection_epoch = 0;
     _voice_status.store(VoiceInputUiState::Off);
     _ws_connected    = false;
@@ -387,7 +398,7 @@ void AppCodexStatus::onOpen()
         }
     }
     sync_agent_panel_registry();
-    sync_task_detail_credential();
+    (void)sync_task_detail_credential();
 
     {
         LvglLockGuard lock;
@@ -401,15 +412,22 @@ void AppCodexStatus::onOpen()
             if (!_voice_probe->initialize()) {
                 _voice_probe.reset();
             }
-            _voice_input = std::make_unique<VoiceInputController>();
-            _voice_input->set_notification_transport(_ble_transport.get());
-            if (!_voice_input->initialize()) {
-                _voice_input.reset();
+            {
+                std::lock_guard<std::mutex> controller_lock(
+                    _task_controller_mutex);
+                _voice_input = std::make_unique<VoiceInputController>();
+                _voice_input->set_notification_transport(
+                    _ble_transport.get());
+                if (!_voice_input->initialize()) {
+                    _voice_input.reset();
+                }
             }
             if (_agent_registry_ready) {
                 (void)_ble_transport->set_voice_credential(
                     _agent_registry.master_key(),
                     _agent_registry.key_epoch());
+                std::lock_guard<std::mutex> controller_lock(
+                    _task_controller_mutex);
                 if (_voice_input) {
                     (void)_voice_input->set_credential(
                         _agent_registry.master_key(),
@@ -484,7 +502,9 @@ void AppCodexStatus::onRunning()
             _trae_card_tap.cancel();
             _last_page_touch_state = LV_INDEV_STATE_REL;
         } else {
-            if (_task_focus_mode != CodexTaskFocusMode::Status &&
+            const CodexTaskFocusMode task_mode =
+                snapshot_task_focus_state().mode;
+            if (task_mode != CodexTaskFocusMode::Status &&
                 _agent_panel_model.snapshot().visible) {
                 cancel_task_focus_touch();
                 _page_swipe.cancel();
@@ -493,7 +513,7 @@ void AppCodexStatus::onRunning()
                 sync_task_focus_visibility();
             } else {
                 sync_task_focus_visibility();
-                if (_task_focus_mode == CodexTaskFocusMode::Status) {
+                if (task_mode == CodexTaskFocusMode::Status) {
                     update_page_swipe(now);
                 } else {
                     _page_swipe.cancel();
@@ -540,35 +560,57 @@ void AppCodexStatus::onRunning()
         if (connection_epoch != _production_voice_connection_epoch) {
             _production_voice_connection_epoch = connection_epoch;
             _production_voice_ready = false;
-            _production_voice_link_usable = false;
-            _production_voice_mtu = 23;
-            _task_detail_store.reset_connection();
-            _task_voice_ready_applied = false;
-            if (_voice_input) {
-                _voice_input->handle_connection_epoch(connection_epoch);
+            {
+                std::lock_guard<std::mutex> controller_lock(
+                    _task_controller_mutex);
+                _production_voice_link_usable = false;
+                _production_voice_mtu = 23;
+            }
+            {
+                std::lock_guard<std::mutex> task_lock(_task_state_mutex);
+                _task_detail_store.reset_connection();
+            }
+            {
+                std::lock_guard<std::mutex> controller_lock(
+                    _task_controller_mutex);
+                _task_voice_ready_applied = false;
+            }
+            {
+                std::lock_guard<std::mutex> controller_lock(
+                    _task_controller_mutex);
+                if (_voice_input) {
+                    _voice_input->handle_connection_epoch(connection_epoch);
+                }
             }
             sync_agent_panel_registry();
             _agent_panel_dirty = true;
         }
-        if (_voice_input) {
-            CodexProductionVoiceControl production_control;
-            while (_ble_transport->take_production_voice_control(production_control)) {
-                _production_voice_ready =
-                    production_control.control.kind == voice_input::ControlKind::Ready;
-            }
-            const uint16_t voice_mtu = _ble_transport->negotiated_mtu();
-            const bool production_link_usable =
-                ble_connected && _production_voice_ready &&
-                _ble_transport->voice_subscribed() &&
-                _ble_transport->voice_notification_limit() >=
-                    voice_input::kAudioCharacteristicValueSize;
-            if (production_link_usable != _production_voice_link_usable ||
-                voice_mtu != _production_voice_mtu) {
-                _production_voice_link_usable = production_link_usable;
-                _production_voice_mtu = voice_mtu;
-                sync_task_voice_readiness();
+        CodexProductionVoiceControl production_control;
+        while (_ble_transport->take_production_voice_control(
+                   production_control)) {
+            _production_voice_ready =
+                production_control.control.kind ==
+                voice_input::ControlKind::Ready;
+        }
+        const uint16_t voice_mtu = _ble_transport->negotiated_mtu();
+        const bool production_link_usable =
+            ble_connected && _production_voice_ready &&
+            _ble_transport->voice_subscribed() &&
+            _ble_transport->voice_notification_limit() >=
+                voice_input::kAudioCharacteristicValueSize;
+        {
+            std::lock_guard<std::mutex> controller_lock(
+                _task_controller_mutex);
+            const bool readiness_changed =
+                production_link_usable != _production_voice_link_usable ||
+                voice_mtu != _production_voice_mtu;
+            _production_voice_link_usable = production_link_usable;
+            _production_voice_mtu = voice_mtu;
+            if (readiness_changed) {
+                _task_voice_ready_applied = false;
             }
         }
+        sync_task_voice_readiness();
         if (_voice_probe) {
             CodexBleVoiceControl control;
             while (_ble_transport->take_voice_control(control)) {
@@ -608,11 +650,22 @@ void AppCodexStatus::onRunning()
             render_trae_status();
         } else if (!ble_connected && _ble_was_connected) {
             _production_voice_ready = false;
-            if (_voice_input) {
-                _voice_input->handle_disconnect();
+            {
+                std::lock_guard<std::mutex> controller_lock(
+                    _task_controller_mutex);
+                if (_voice_input) {
+                    _voice_input->handle_disconnect();
+                }
             }
-            _task_detail_store.reset_connection();
-            _task_voice_ready_applied = false;
+            {
+                std::lock_guard<std::mutex> task_lock(_task_state_mutex);
+                _task_detail_store.reset_connection();
+            }
+            {
+                std::lock_guard<std::mutex> controller_lock(
+                    _task_controller_mutex);
+                _task_voice_ready_applied = false;
+            }
             if (_voice_probe) {
                 _voice_probe->handle_disconnect();
             }
@@ -652,13 +705,18 @@ void AppCodexStatus::onRunning()
         update_battery();
     }
 
-    _voice_status.store(
-        _voice_input ? _voice_input->ui_state() : VoiceInputUiState::Off);
+    {
+        std::lock_guard<std::mutex> controller_lock(_task_controller_mutex);
+        _voice_status.store(
+            _voice_input ? _voice_input->ui_state() : VoiceInputUiState::Off);
+    }
     {
         LvglLockGuard lock;
         if (_task_focus_view != nullptr) {
+            const CodexTaskFocusMode task_mode =
+                snapshot_task_focus_state().mode;
             _task_focus_view->set_recording(
-                _task_focus_mode == CodexTaskFocusMode::TaskDetail &&
+                task_mode == CodexTaskFocusMode::TaskDetail &&
                 _voice_status.load() == VoiceInputUiState::Active);
         }
     }
@@ -672,14 +730,20 @@ void AppCodexStatus::onClose()
     GetGlobalEdgeControlService().setTouchExclusion(std::nullopt);
 
     _key_manager.reset();
-    if (_voice_input) {
-        (void)_voice_input->set_task_route(0);
+    {
+        std::lock_guard<std::mutex> controller_lock(_task_controller_mutex);
+        if (_voice_input) {
+            (void)_voice_input->set_task_route(0);
+        }
     }
     stop_network_fallback();
-    if (_voice_input) {
-        _voice_status.store(VoiceInputUiState::Off);
-        _voice_input->shutdown();
-        _voice_input.reset();
+    {
+        std::lock_guard<std::mutex> controller_lock(_task_controller_mutex);
+        if (_voice_input) {
+            _voice_status.store(VoiceInputUiState::Off);
+            _voice_input->shutdown();
+            _voice_input.reset();
+        }
     }
     if (_voice_probe) {
         _voice_probe->shutdown();
@@ -695,15 +759,21 @@ void AppCodexStatus::onClose()
     _agent_switch_pending = false;
     _agent_switch_target = {};
     clear_pairing_runtime();
-    _task_focus_mode = CodexTaskFocusMode::Status;
-    _task_focus_deck.reset();
-    _task_detail_store.reset();
-    if (_task_detail_crypto) {
-        _task_detail_crypto->clear();
-        _task_detail_crypto.reset();
+    {
+        std::lock_guard<std::mutex> task_lock(_task_state_mutex);
+        _task_focus_mode = CodexTaskFocusMode::Status;
+        _task_focus_deck.reset();
+        _task_detail_store.reset();
+        if (_task_detail_crypto) {
+            _task_detail_crypto->clear();
+            _task_detail_crypto.reset();
+        }
+        _task_detail_key_epoch = 0;
     }
-    _task_detail_key_epoch = 0;
-    _task_voice_ready_applied = false;
+    {
+        std::lock_guard<std::mutex> controller_lock(_task_controller_mutex);
+        _task_voice_ready_applied = false;
+    }
 
     LvglLockGuard lock;
     GetGlobalEdgeControlService().setEnabled(true);
@@ -1244,26 +1314,41 @@ bool AppCodexStatus::handle_status_json(const char* data, int length, const char
         return applied;
     }
     if (kind == CodexMessageKind::TaskDetail) {
-        sync_task_detail_credential();
-        if (!_agent_registry_ready || _task_detail_crypto == nullptr ||
-            !_task_detail_crypto->ready()) {
-            return false;
-        }
+        const bool credential_cleared_detail =
+            sync_task_detail_credential();
         CodexTaskDetailChunk chunk;
-        if (!decrypt_codex_task_detail(
-                snapshot.task_detail,
-                _task_detail_key_epoch,
-                *_task_detail_crypto,
-                chunk) ||
-            !_task_detail_store.accept(chunk)) {
-            mclog::tagWarn(getAppInfo().name, "task detail rejected");
-            return false;
+        bool accepted = false;
+        bool render_detail = false;
+        {
+            std::lock_guard<std::mutex> task_lock(_task_state_mutex);
+            accepted = _agent_registry_ready &&
+                _task_detail_crypto != nullptr &&
+                _task_detail_crypto->ready() &&
+                decrypt_codex_task_detail(
+                    snapshot.task_detail,
+                    _task_detail_key_epoch,
+                    *_task_detail_crypto,
+                    chunk) &&
+                _task_detail_store.accept(chunk);
+            render_detail =
+                _task_focus_mode == CodexTaskFocusMode::TaskDetail &&
+                ((credential_cleared_detail) ||
+                 (accepted &&
+                  chunk.route == _task_focus_deck.selected_route() &&
+                  _task_detail_store.find(chunk.route) != nullptr));
         }
-        if (_task_focus_mode == CodexTaskFocusMode::TaskDetail &&
-            chunk.route == _task_focus_deck.selected_route() &&
-            _task_detail_store.find(chunk.route) != nullptr) {
+        if (credential_cleared_detail) {
+            std::lock_guard<std::mutex> controller_lock(
+                _task_controller_mutex);
+            _task_voice_ready_applied = false;
+        }
+        if (render_detail) {
             LvglLockGuard lock;
             render_task_focus_detail();
+        }
+        if (!accepted) {
+            mclog::tagWarn(getAppInfo().name, "task detail rejected");
+            return false;
         }
         return true;
     }
@@ -1273,6 +1358,26 @@ bool AppCodexStatus::handle_status_json(const char* data, int length, const char
     copy_short(model, sizeof(model), snapshot.model.c_str());
     uppercase_short(effort, sizeof(effort), snapshot.effort.c_str());
 
+    bool task_list_changed = false;
+    {
+        std::lock_guard<std::mutex> task_lock(_task_state_mutex);
+        const uint64_t previous_selected_route =
+            _task_focus_deck.selected_route();
+        task_list_changed = _task_focus_deck.apply(snapshot);
+        if (task_list_changed) {
+            std::vector<uint64_t> routes;
+            routes.reserve(_task_focus_deck.count());
+            for (const CodexTaskAlert& task : _task_focus_deck.tasks()) {
+                routes.push_back(task.route);
+            }
+            _task_detail_store.retain_routes(routes);
+            if (_task_focus_mode == CodexTaskFocusMode::TaskDetail &&
+                previous_selected_route != 0 &&
+                previous_selected_route != _task_focus_deck.selected_route()) {
+                _task_focus_mode = CodexTaskFocusMode::TaskDeck;
+            }
+        }
+    }
     {
         LvglLockGuard lock;
         if (_model_value != nullptr && model[0] != '\0') {
@@ -1286,23 +1391,12 @@ bool AppCodexStatus::handle_status_json(const char* data, int length, const char
         if (_alert_carousel.apply(snapshot, GetHAL().millis())) {
             render_alert();
         }
-        const uint64_t previous_selected_route =
-            _task_focus_deck.selected_route();
-        if (_task_focus_deck.apply(snapshot)) {
-            std::vector<uint64_t> routes;
-            routes.reserve(_task_focus_deck.count());
-            for (const CodexTaskAlert& task : _task_focus_deck.tasks()) {
-                routes.push_back(task.route);
-            }
-            _task_detail_store.retain_routes(routes);
-            if (_task_focus_mode == CodexTaskFocusMode::TaskDetail &&
-                previous_selected_route != 0 &&
-                previous_selected_route != _task_focus_deck.selected_route()) {
-                _task_focus_mode = CodexTaskFocusMode::TaskDeck;
-            }
-            sync_task_voice_route();
-            render_task_focus();
-        }
+    }
+    if (task_list_changed) {
+        sync_task_voice_route();
+        sync_task_edge_exclusion(snapshot_task_focus_state().mode);
+        LvglLockGuard lock;
+        render_task_focus();
     }
     _last_status_payload_ms = GetHAL().millis();
     set_status(live_status, kCodexBlue);
@@ -1840,13 +1934,25 @@ void AppCodexStatus::dispatch_agent_panel_decision(
                 }
             }
             clear_pairing_runtime();
-            if (_voice_input) {
-                (void)_voice_input->set_credential(
-                    _agent_registry.master_key(),
-                    _agent_registry.key_epoch());
+            {
+                std::lock_guard<std::mutex> controller_lock(
+                    _task_controller_mutex);
+                if (_voice_input) {
+                    (void)_voice_input->set_credential(
+                        _agent_registry.master_key(),
+                        _agent_registry.key_epoch());
+                }
+                _task_voice_ready_applied = false;
             }
-            sync_task_detail_credential();
+            const bool credential_cleared_detail =
+                sync_task_detail_credential();
             sync_task_voice_route();
+            if (credential_cleared_detail &&
+                snapshot_task_focus_state().mode ==
+                    CodexTaskFocusMode::TaskDetail) {
+                LvglLockGuard lock;
+                render_task_focus_detail();
+            }
         } else {
             (void)secure_pairing::AgentRegistry::restore(
                 before, _agent_registry);
@@ -1871,10 +1977,15 @@ void AppCodexStatus::dispatch_agent_panel_decision(
         if (reset_result == secure_pairing::RegistryResult::Ok &&
             save_agent_registry()) {
             _agent_registry_ready = true;
-            if (_voice_input) {
-                (void)_voice_input->set_credential(
-                    _agent_registry.master_key(),
-                    _agent_registry.key_epoch());
+            {
+                std::lock_guard<std::mutex> controller_lock(
+                    _task_controller_mutex);
+                if (_voice_input) {
+                    (void)_voice_input->set_credential(
+                        _agent_registry.master_key(),
+                        _agent_registry.key_epoch());
+                }
+                _task_voice_ready_applied = false;
             }
             if (_ble_transport) {
                 (void)_ble_transport->set_voice_credential(
@@ -1887,8 +1998,15 @@ void AppCodexStatus::dispatch_agent_panel_decision(
                 }
             }
             clear_pairing_runtime();
-            sync_task_detail_credential();
+            const bool credential_cleared_detail =
+                sync_task_detail_credential();
             sync_task_voice_route();
+            if (credential_cleared_detail &&
+                snapshot_task_focus_state().mode ==
+                    CodexTaskFocusMode::TaskDetail) {
+                LvglLockGuard lock;
+                render_task_focus_detail();
+            }
         } else {
             if (had_registry) {
                 (void)secure_pairing::AgentRegistry::restore(
@@ -1906,14 +2024,20 @@ void AppCodexStatus::dispatch_agent_panel_decision(
         return;
     }
 
+    bool voice_active = false;
+    {
+        std::lock_guard<std::mutex> controller_lock(_task_controller_mutex);
+        voice_active = _voice_input != nullptr &&
+            _voice_input->ui_state() == VoiceInputUiState::Active;
+    }
     AgentPanelDecision switch_decision =
         _agent_panel_model.request_switch(
-            decision.fingerprint,
-            _voice_input != nullptr &&
-                _voice_input->ui_state() == VoiceInputUiState::Active);
-    if (_agent_panel_model.snapshot().switch_waiting_for_voice &&
-        _voice_input != nullptr) {
-        _voice_input->cancel_for_home(now_ms);
+            decision.fingerprint, voice_active);
+    if (_agent_panel_model.snapshot().switch_waiting_for_voice) {
+        std::lock_guard<std::mutex> controller_lock(_task_controller_mutex);
+        if (_voice_input != nullptr) {
+            _voice_input->cancel_for_home(now_ms);
+        }
         switch_decision =
             _agent_panel_model.voice_cleanup_complete();
     }
@@ -2475,8 +2599,38 @@ bool AppCodexStatus::save_agent_registry()
                secure_pairing::StoreResult::Ok;
 }
 
-void AppCodexStatus::sync_task_detail_credential()
+AppCodexStatus::TaskFocusStateSnapshot
+AppCodexStatus::snapshot_task_focus_state()
 {
+    std::lock_guard<std::mutex> task_lock(_task_state_mutex);
+    TaskFocusStateSnapshot snapshot;
+    snapshot.deck = _task_focus_deck;
+    snapshot.mode = _task_focus_mode;
+    snapshot.selected_route = _task_focus_deck.selected_route();
+    if (const CodexTaskAlert* selected = _task_focus_deck.selected()) {
+        snapshot.selected_task = *selected;
+        snapshot.has_selected_task = true;
+        if (const CodexTaskDetail* detail =
+                _task_detail_store.find(selected->route)) {
+            snapshot.detail_text = detail->text;
+            snapshot.has_detail = true;
+        }
+    }
+    return snapshot;
+}
+
+void AppCodexStatus::sync_task_edge_exclusion(CodexTaskFocusMode mode)
+{
+    GetGlobalEdgeControlService().setTouchExclusion(
+        mode == CodexTaskFocusMode::Status
+            ? std::optional<EdgeControlRect>{kTaskDeckTouchExclusion}
+            : std::optional<EdgeControlRect>{kTaskModeTouchExclusion});
+}
+
+bool AppCodexStatus::sync_task_detail_credential()
+{
+    bool content_cleared = false;
+    std::lock_guard<std::mutex> task_lock(_task_state_mutex);
     if (_task_detail_crypto == nullptr) {
         _task_detail_crypto =
             std::make_unique<voice_input::crypto::CcmContext>();
@@ -2486,40 +2640,48 @@ void AppCodexStatus::sync_task_detail_credential()
             _task_detail_store.reset();
             _task_detail_crypto->clear();
             _task_detail_key_epoch = 0;
+            content_cleared = true;
         }
-        return;
+        return content_cleared;
     }
     const uint32_t key_epoch = _agent_registry.key_epoch();
     if (key_epoch == 0 || key_epoch == _task_detail_key_epoch) {
-        return;
+        return false;
     }
     _task_detail_store.reset_for_credential(key_epoch);
+    content_cleared = true;
     if (!_task_detail_crypto->set_key(_agent_registry.master_key())) {
         _task_detail_store.reset();
         _task_detail_key_epoch = 0;
-        return;
+        return content_cleared;
     }
     _task_detail_key_epoch = key_epoch;
+    return content_cleared;
 }
 
 void AppCodexStatus::sync_task_voice_route()
 {
-    if (_voice_input != nullptr) {
-        (void)_voice_input->set_task_route(
-            _task_focus_deck.selected_route());
+    const uint64_t route = snapshot_task_focus_state().selected_route;
+    {
+        std::lock_guard<std::mutex> controller_lock(_task_controller_mutex);
+        if (_voice_input != nullptr) {
+            (void)_voice_input->set_task_route(route);
+        }
     }
     sync_task_voice_readiness();
 }
 
 void AppCodexStatus::sync_task_voice_readiness()
 {
+    const TaskFocusStateSnapshot task = snapshot_task_focus_state();
+    std::lock_guard<std::mutex> controller_lock(_task_controller_mutex);
     if (_voice_input == nullptr) {
         _task_voice_ready_applied = false;
         return;
     }
     const bool usable =
-        _task_focus_mode == CodexTaskFocusMode::TaskDetail &&
-        _task_focus_deck.selected_route() != 0 &&
+        task.mode == CodexTaskFocusMode::TaskDetail &&
+        task.selected_route != 0 &&
         _production_voice_link_usable;
     if (_task_voice_ready_applied &&
         _voice_input->ui_state() == VoiceInputUiState::Active) {
@@ -2534,11 +2696,13 @@ void AppCodexStatus::sync_task_voice_readiness()
 
 VoiceButtonSink* AppCodexStatus::task_focus_voice_sink()
 {
+    const TaskFocusStateSnapshot task = snapshot_task_focus_state();
+    std::lock_guard<std::mutex> controller_lock(_task_controller_mutex);
     return _voice_input != nullptr &&
                _voice_input->ui_state() == VoiceInputUiState::Active
         ? _voice_input.get()
-        : _task_focus_mode == CodexTaskFocusMode::TaskDetail &&
-               _task_focus_deck.selected_route() != 0 &&
+        : task.mode == CodexTaskFocusMode::TaskDetail &&
+               task.selected_route != 0 &&
                _production_voice_link_usable
         ? _voice_input.get()
         : nullptr;
@@ -2549,8 +2713,9 @@ void AppCodexStatus::sync_task_focus_visibility()
     if (_task_focus_view == nullptr) {
         return;
     }
+    const TaskFocusStateSnapshot task = snapshot_task_focus_state();
     const bool visible =
-        _task_focus_mode != CodexTaskFocusMode::Status &&
+        task.mode != CodexTaskFocusMode::Status &&
         _current_page == 0 &&
         !_agent_panel_model.snapshot().visible &&
         !_agent_panel_model.owns_touch();
@@ -2559,15 +2724,16 @@ void AppCodexStatus::sync_task_focus_visibility()
 
 void AppCodexStatus::render_task_focus()
 {
+    const TaskFocusStateSnapshot task = snapshot_task_focus_state();
     if (_task_focus_view == nullptr ||
-        _task_focus_mode == CodexTaskFocusMode::Status) {
+        task.mode == CodexTaskFocusMode::Status) {
         return;
     }
-    if (_task_focus_mode == CodexTaskFocusMode::TaskDetail) {
+    if (task.mode == CodexTaskFocusMode::TaskDetail) {
         render_task_focus_detail();
     } else {
         _task_focus_view->show_deck(
-            _task_focus_deck,
+            task.deck,
             _ble_transport != nullptr && _ble_transport->connected());
         sync_task_focus_visibility();
     }
@@ -2578,17 +2744,19 @@ void AppCodexStatus::render_task_focus_detail()
     if (_task_focus_view == nullptr) {
         return;
     }
-    const CodexTaskAlert* task = _task_focus_deck.selected();
-    if (task == nullptr) {
-        _task_focus_mode = CodexTaskFocusMode::TaskDeck;
+    TaskFocusStateSnapshot task = snapshot_task_focus_state();
+    if (!task.has_selected_task) {
+        {
+            std::lock_guard<std::mutex> task_lock(_task_state_mutex);
+            _task_focus_mode = CodexTaskFocusMode::TaskDeck;
+        }
+        sync_task_edge_exclusion(CodexTaskFocusMode::TaskDeck);
         render_task_focus();
         return;
     }
-    const CodexTaskDetail* detail =
-        _task_detail_store.find(task->route);
     _task_focus_view->show_detail(
-        task,
-        detail == nullptr ? nullptr : detail->text.c_str(),
+        &task.selected_task,
+        task.has_detail ? task.detail_text.c_str() : nullptr,
         _ble_transport != nullptr && _ble_transport->connected());
     sync_task_focus_visibility();
 }
@@ -2601,7 +2769,11 @@ void AppCodexStatus::open_task_deck()
     _page_swipe.cancel();
     _trae_card_tap.cancel();
     _last_page_touch_state = LV_INDEV_STATE_REL;
-    _task_focus_mode = CodexTaskFocusMode::TaskDeck;
+    {
+        std::lock_guard<std::mutex> task_lock(_task_state_mutex);
+        _task_focus_mode = CodexTaskFocusMode::TaskDeck;
+    }
+    sync_task_edge_exclusion(CodexTaskFocusMode::TaskDeck);
     sync_task_voice_readiness();
     render_task_focus();
 }
@@ -2628,6 +2800,8 @@ void AppCodexStatus::update_task_focus_touch(uint32_t now_ms)
         return;
     }
     const lv_indev_state_t state = lv_indev_get_state(indev);
+    const CodexTaskFocusMode task_mode =
+        snapshot_task_focus_state().mode;
     lv_point_t point = {};
     lv_indev_get_point(indev, &point);
     if (state == LV_INDEV_STATE_PR) {
@@ -2648,21 +2822,31 @@ void AppCodexStatus::update_task_focus_touch(uint32_t now_ms)
                     kTaskTapTolerance) {
                 _task_touch_moved = true;
             }
-            if (_task_focus_mode == CodexTaskFocusMode::TaskDetail &&
+            if (task_mode == CodexTaskFocusMode::TaskDetail &&
                 _task_focus_view != nullptr) {
                 _task_focus_view->detail_scroll_by(dy);
             }
         }
     } else if (_last_task_touch_state == LV_INDEV_STATE_PR) {
         const int total_dy = point.y - _task_touch_start_y;
-        if (_task_focus_mode == CodexTaskFocusMode::TaskDeck &&
+        if (task_mode == CodexTaskFocusMode::TaskDeck &&
             std::abs(total_dy) >= kTaskSwipeThreshold) {
             const int direction = total_dy < 0 ? 1 : -1;
-            const CodexTaskFocusEvent event =
-                _task_focus_deck.browse(direction);
+            CodexTaskFocusEvent event = CodexTaskFocusEvent::None;
+            bool at_first = false;
+            {
+                std::lock_guard<std::mutex> task_lock(_task_state_mutex);
+                event = _task_focus_deck.browse(direction);
+                at_first = _task_focus_deck.focused_index() == 0;
+            }
             if (direction < 0 && event == CodexTaskFocusEvent::None &&
-                _task_focus_deck.focused_index() == 0) {
-                _task_focus_mode = CodexTaskFocusMode::Status;
+                at_first) {
+                {
+                    std::lock_guard<std::mutex> task_lock(
+                        _task_state_mutex);
+                    _task_focus_mode = CodexTaskFocusMode::Status;
+                }
+                sync_task_edge_exclusion(CodexTaskFocusMode::Status);
                 if (_task_focus_view != nullptr) {
                     _task_focus_view->set_visible(false);
                 }
@@ -2677,19 +2861,27 @@ void AppCodexStatus::update_task_focus_touch(uint32_t now_ms)
             if (event != CodexTaskFocusEvent::None) {
                 render_task_focus();
             }
-        } else if (_task_focus_mode == CodexTaskFocusMode::TaskDeck &&
+        } else if (task_mode == CodexTaskFocusMode::TaskDeck &&
                    !_task_touch_moved &&
                    _task_focus_view != nullptr &&
                    _task_focus_view->contains_focus_point(point.x, point.y)) {
-            (void)_task_focus_deck.select_focused();
+            {
+                std::lock_guard<std::mutex> task_lock(_task_state_mutex);
+                (void)_task_focus_deck.select_focused();
+                _task_focus_mode = CodexTaskFocusMode::TaskDetail;
+            }
             sync_task_voice_route();
-            _task_focus_mode = CodexTaskFocusMode::TaskDetail;
+            sync_task_edge_exclusion(CodexTaskFocusMode::TaskDetail);
             sync_task_voice_readiness();
             render_task_focus_detail();
-        } else if (_task_focus_mode == CodexTaskFocusMode::TaskDetail &&
+        } else if (task_mode == CodexTaskFocusMode::TaskDetail &&
                    total_dy >= kTaskSwipeThreshold &&
                    _task_detail_started_at_top) {
-            _task_focus_mode = CodexTaskFocusMode::TaskDeck;
+            {
+                std::lock_guard<std::mutex> task_lock(_task_state_mutex);
+                _task_focus_mode = CodexTaskFocusMode::TaskDeck;
+            }
+            sync_task_edge_exclusion(CodexTaskFocusMode::TaskDeck);
             sync_task_voice_readiness();
             render_task_focus();
         }
@@ -2768,7 +2960,7 @@ void AppCodexStatus::set_page(int page, bool animate)
         return;
     }
     page = std::clamp(page, 0, kPageCount - 1);
-    if (_task_focus_mode != CodexTaskFocusMode::Status) {
+    if (snapshot_task_focus_state().mode != CodexTaskFocusMode::Status) {
         return;
     }
     const int target_x = -page * kPageWidth;

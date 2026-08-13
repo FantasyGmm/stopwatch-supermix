@@ -128,6 +128,8 @@ private:
     CodexTaskDetailStore _task_detail_store;
     CodexTaskFocusMode _task_focus_mode = CodexTaskFocusMode::Status;
     uint32_t _task_detail_key_epoch = 0;
+    std::mutex _task_state_mutex;
+    std::mutex _task_controller_mutex;
     TraeStatusSnapshot _trae_snapshot;
     TraeTaskCarousel _trae_carousel;
     StatusPageSwipeLogic _page_swipe;
@@ -165,6 +167,16 @@ private:
     bool _base_status_is_error = false;
     std::atomic<VoiceInputUiState> _voice_status{VoiceInputUiState::Off};
 
+    struct TaskFocusStateSnapshot {
+        CodexTaskFocusDeck deck;
+        CodexTaskFocusMode mode = CodexTaskFocusMode::Status;
+        CodexTaskAlert selected_task;
+        std::string detail_text;
+        uint64_t selected_route = 0;
+        bool has_selected_task = false;
+        bool has_detail = false;
+    };
+
     void create_view();
     void destroy_view();
     void update_battery();
@@ -189,7 +201,9 @@ private:
     void sync_task_focus_visibility();
     void sync_task_voice_route();
     void sync_task_voice_readiness();
-    void sync_task_detail_credential();
+    bool sync_task_detail_credential();
+    void sync_task_edge_exclusion(CodexTaskFocusMode mode);
+    TaskFocusStateSnapshot snapshot_task_focus_state();
     VoiceButtonSink* task_focus_voice_sink();
     void update_agent_panel_touch(uint32_t now_ms);
     void render_agent_panel();

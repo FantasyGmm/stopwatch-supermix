@@ -55,7 +55,7 @@ class CodexTaskFocusFirmwareContractTests(unittest.TestCase):
         running = self.source.split("update_agent_panel_touch(now);", 1)[1]
         self.assertLess(running.index("_agent_panel_model.owns_touch()"),
                         running.index("update_task_focus_touch(now)"))
-        self.assertIn("_task_focus_mode == CodexTaskFocusMode::Status",
+        self.assertIn("task_mode == CodexTaskFocusMode::Status",
                       running)
 
     def test_voice_and_lifecycle_fail_closed(self):
@@ -64,12 +64,52 @@ class CodexTaskFocusFirmwareContractTests(unittest.TestCase):
         sink = sink.split("\n}", 1)[0]
         self.assertIn("CodexTaskFocusMode::TaskDetail", sink)
         self.assertIn("_production_voice_link_usable", sink)
-        self.assertIn("selected_route() != 0", sink)
+        self.assertIn("task.selected_route != 0", sink)
         self.assertIn("_task_detail_store.reset_connection()", self.source)
         self.assertIn("_task_detail_store.reset_for_credential", self.source)
         self.assertIn("_task_detail_store.reset()", self.source)
         self.assertIn("_voice_input->set_task_route(0)", self.source)
         self.assertNotIn("task detail plaintext", self.source.lower())
+
+    def test_task_modes_update_edge_exclusion_and_close_clears_it(self):
+        self.assertIn("sync_task_edge_exclusion", self.header)
+        helper = self.source.split(
+            "void AppCodexStatus::sync_task_edge_exclusion", 1
+        )[1].split("\n}", 1)[0]
+        self.assertIn("kTaskDeckTouchExclusion", helper)
+        self.assertIn("kTaskModeTouchExclusion", helper)
+        self.assertIn("setTouchExclusion", helper)
+        self.assertIn("sync_task_edge_exclusion(CodexTaskFocusMode::TaskDeck)",
+                      self.source)
+        self.assertIn("sync_task_edge_exclusion(CodexTaskFocusMode::TaskDetail)",
+                      self.source)
+        self.assertIn("setTouchExclusion(std::nullopt)", self.source)
+
+    def test_credential_change_clears_detail_ui_and_rearms_voice_ready(self):
+        credential = self.source.split(
+            "bool AppCodexStatus::sync_task_detail_credential", 1
+        )[1].split("\n}\n\nvoid AppCodexStatus::sync_task_voice_route", 1)[0]
+        self.assertIn("_task_detail_store.reset_for_credential", credential)
+        self.assertIn("return content_cleared", credential)
+        self.assertIn("credential_cleared_detail", self.source)
+        self.assertGreaterEqual(
+            self.source.count("_task_voice_ready_applied = false"), 5)
+        self.assertIn("render_task_focus_detail", self.source)
+
+    def test_task_state_is_mutex_protected_without_external_calls_under_lock(self):
+        self.assertIn("std::mutex _task_state_mutex", self.header)
+        self.assertIn("std::mutex _task_controller_mutex", self.header)
+        self.assertIn("TaskFocusStateSnapshot", self.header)
+        self.assertIn("snapshot_task_focus_state", self.header)
+        self.assertIn("std::lock_guard<std::mutex> task_lock(_task_state_mutex)",
+                      self.source)
+        snapshot = self.source.split(
+            "AppCodexStatus::snapshot_task_focus_state()", 1
+        )[1].split("\n}\n\nvoid AppCodexStatus::sync_task_edge_exclusion", 1)[0]
+        self.assertNotIn("_voice_input", snapshot)
+        self.assertNotIn("_ble_transport", snapshot)
+        self.assertNotIn("_task_focus_view", snapshot)
+        self.assertNotIn("GetGlobalEdgeControlService", snapshot)
 
 
 if __name__ == "__main__":
