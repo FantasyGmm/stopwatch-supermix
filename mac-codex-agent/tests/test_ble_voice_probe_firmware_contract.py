@@ -336,7 +336,7 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
             ROOT / "main/apps/app_codex_status/voice_input_protocol.h"
         ).read_text()
 
-        self.assertIn("kProtocolVersion = 4", protocol_header)
+        self.assertIn("kProtocolVersion = 5", protocol_header)
         self.assertIn("uint32_t key_epoch", protocol_header)
         self.assertIn("uint32_t expected_key_epoch", protocol_header)
         self.assertIn("set_voice_credential", transport_header)
@@ -481,16 +481,20 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         self.assertIn("_pinned_microphone_switch", header)
         self.assertIn("kPageCount                 = 3", source)
         self.assertIn("lv_obj_set_size(_page_strip, 1398, 466)", source)
-        self.assertIn("lv_obj_set_pos(_pinned_microphone_page, 466, 0)", source)
+        self.assertIn("lv_obj_set_pos(_pinned_microphone_page, 0, 0)", source)
+        self.assertIn("lv_obj_set_pos(_codex_page, 466, 0)", source)
         self.assertIn("lv_obj_set_pos(_trae_page_root, 932, 0)", source)
         self.assertIn('"固定麦克风"', source)
         self.assertIn('"已关闭"', source)
         self.assertIn('"收音中"', source)
-        self.assertIn('"MAC · CONTINUOUS AUDIO"', source)
+        self.assertIn('"MAC · EXTERNAL MIC"', source)
         self.assertIn("kQuotaMint", source)
         self.assertIn("kBeaconViolet", source)
         self.assertIn("kRunningCyan", source)
         self.assertIn("pinned_microphone_switch_event_cb", source)
+        self.assertIn("PinnedMicTitle24", source)
+        self.assertIn("PinnedMicState22", source)
+        self.assertNotIn("LV_SYMBOL_AUDIO", source)
 
     def test_production_controller_has_bounded_task_and_encrypted_queue(self):
         header = (ROOT / "main/apps/app_codex_status/voice_input_controller.h").read_text()

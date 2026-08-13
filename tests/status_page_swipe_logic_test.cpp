@@ -3,16 +3,7 @@
 #include <cassert>
 
 
-static bool right_to_left_fast_swipe_moves_codex_to_pinned_microphone()
-{
-    StatusPageSwipeLogic swipe;
-    swipe.press(300, 220, 1000);
-    swipe.move(260, 218);
-    return swipe.release(1200, 0) == StatusPageSwipeResult::PinnedMicrophone;
-}
-
-
-static bool right_to_left_fast_swipe_moves_pinned_microphone_to_trae()
+static bool right_to_left_fast_swipe_moves_codex_to_trae()
 {
     StatusPageSwipeLogic swipe;
     swipe.press(300, 220, 1000);
@@ -21,21 +12,30 @@ static bool right_to_left_fast_swipe_moves_pinned_microphone_to_trae()
 }
 
 
-static bool left_to_right_fast_swipe_moves_trae_to_pinned_microphone()
+static bool right_to_left_fast_swipe_moves_pinned_microphone_to_codex()
 {
     StatusPageSwipeLogic swipe;
-    swipe.press(160, 220, 1000);
-    swipe.move(200, 222);
-    return swipe.release(1260, 2) == StatusPageSwipeResult::PinnedMicrophone;
+    swipe.press(300, 220, 1000);
+    swipe.move(260, 218);
+    return swipe.release(1200, 0) == StatusPageSwipeResult::Codex;
 }
 
 
-static bool left_to_right_fast_swipe_moves_pinned_microphone_to_codex()
+static bool left_to_right_fast_swipe_moves_trae_to_codex()
 {
     StatusPageSwipeLogic swipe;
     swipe.press(160, 220, 1000);
     swipe.move(200, 222);
-    return swipe.release(1260, 1) == StatusPageSwipeResult::Codex;
+    return swipe.release(1260, 2) == StatusPageSwipeResult::Codex;
+}
+
+
+static bool left_to_right_fast_swipe_moves_codex_to_pinned_microphone()
+{
+    StatusPageSwipeLogic swipe;
+    swipe.press(160, 220, 1000);
+    swipe.move(200, 222);
+    return swipe.release(1260, 1) == StatusPageSwipeResult::PinnedMicrophone;
 }
 
 
@@ -44,7 +44,7 @@ static bool long_horizontal_drag_moves_page()
     StatusPageSwipeLogic swipe;
     swipe.press(300, 220, 1000);
     swipe.move(199, 240);
-    return swipe.release(1600, 0) == StatusPageSwipeResult::PinnedMicrophone;
+    return swipe.release(1600, 1) == StatusPageSwipeResult::Trae;
 }
 
 
@@ -66,7 +66,7 @@ static bool short_slow_drag_snaps_back()
 }
 
 
-static void assert_codex_page_does_not_wrap_left()
+static void assert_pinned_page_does_not_wrap_right()
 {
     StatusPageSwipeLogic swipe;
     swipe.press(160, 220, 1000);
@@ -96,14 +96,14 @@ static void assert_cancel_clears_active_gesture()
 
 int main()
 {
-    assert(right_to_left_fast_swipe_moves_codex_to_pinned_microphone());
-    assert(right_to_left_fast_swipe_moves_pinned_microphone_to_trae());
-    assert(left_to_right_fast_swipe_moves_trae_to_pinned_microphone());
-    assert(left_to_right_fast_swipe_moves_pinned_microphone_to_codex());
+    assert(right_to_left_fast_swipe_moves_codex_to_trae());
+    assert(right_to_left_fast_swipe_moves_pinned_microphone_to_codex());
+    assert(left_to_right_fast_swipe_moves_trae_to_codex());
+    assert(left_to_right_fast_swipe_moves_codex_to_pinned_microphone());
     assert(long_horizontal_drag_moves_page());
     assert(vertical_drag_does_not_move_page());
     assert(short_slow_drag_snaps_back());
-    assert_codex_page_does_not_wrap_left();
+    assert_pinned_page_does_not_wrap_right();
     assert_trae_page_does_not_wrap_left();
     assert_cancel_clears_active_gesture();
 }

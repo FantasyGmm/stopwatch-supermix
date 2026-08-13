@@ -45,10 +45,13 @@ bool control_values_valid(const VoiceControl& control)
         return false;
     }
     if (control.kind == ControlKind::Ready) {
-        return control.reason == 0 && control.target_bps == kTargetBitrate;
+        return control.reason == 0 && control.target_bps == kTargetBitrate &&
+               control.capabilities != 0 &&
+               (control.capabilities & ~kAllVoiceCapabilities) == 0;
     }
     if (control.kind == ControlKind::Unavailable) {
-        return valid_reason(control.reason) && control.target_bps == 0;
+        return valid_reason(control.reason) && control.capabilities == 0 &&
+               control.target_bps == 0;
     }
     return false;
 }
@@ -160,6 +163,7 @@ size_t encode_control(
     aad[0] = kProtocolVersion;
     aad[1] = static_cast<uint8_t>(control.kind);
     aad[2] = control.reason;
+    aad[3] = control.capabilities;
     write_u32(aad + 4, control.key_epoch);
     std::copy(
         control.exchange_nonce.begin(), control.exchange_nonce.end(), aad + 8);
@@ -192,7 +196,7 @@ bool decode_control(
     VoiceControl& control)
 {
     if (bytes == nullptr || length != kControlSize ||
-        bytes[0] != kProtocolVersion || bytes[3] != 0 ||
+        bytes[0] != kProtocolVersion ||
         expected_key_epoch == 0 || read_u32(bytes + 4) != expected_key_epoch ||
         (bytes[1] != static_cast<uint8_t>(ControlKind::Ready) &&
          bytes[1] != static_cast<uint8_t>(ControlKind::Unavailable))) {
@@ -201,6 +205,7 @@ bool decode_control(
     VoiceControl candidate = {};
     candidate.kind = static_cast<ControlKind>(bytes[1]);
     candidate.reason = bytes[2];
+    candidate.capabilities = bytes[3];
     candidate.key_epoch = read_u32(bytes + 4);
     std::copy_n(
         bytes + 8,
@@ -346,13 +351,17 @@ bool decode_notification(
 size_t encode_begin_body(const BeginBody& body, uint8_t* output, size_t capacity)
 {
     if (output == nullptr || capacity < kBeginBodySize ||
-        body.codec != kImaAdpcmCodec || body.sample_rate != kSampleRate ||
+        body.codec != kImaAdpcmCodec ||
+        (body.mode != BeginBody::Mode::PushToTalk &&
+         body.mode != BeginBody::Mode::ExternalMicrophone) ||
+        body.sample_rate != kSampleRate ||
         body.block_samples != kBlockSamples) {
         return 0;
     }
     output[0] = body.codec;
-    write_u16(output + 1, body.sample_rate);
-    write_u16(output + 3, body.block_samples);
+    output[1] = static_cast<uint8_t>(body.mode);
+    write_u16(output + 2, body.sample_rate);
+    write_u16(output + 4, body.block_samples);
     return kBeginBodySize;
 }
 
@@ -363,9 +372,13 @@ bool decode_begin_body(const uint8_t* bytes, size_t length, BeginBody& body)
     }
     BeginBody candidate = {};
     candidate.codec = bytes[0];
-    candidate.sample_rate = read_u16(bytes + 1);
-    candidate.block_samples = read_u16(bytes + 3);
-    if (candidate.codec != kImaAdpcmCodec || candidate.sample_rate != kSampleRate ||
+    candidate.mode = static_cast<BeginBody::Mode>(bytes[1]);
+    candidate.sample_rate = read_u16(bytes + 2);
+    candidate.block_samples = read_u16(bytes + 4);
+    if (candidate.codec != kImaAdpcmCodec ||
+        (candidate.mode != BeginBody::Mode::PushToTalk &&
+         candidate.mode != BeginBody::Mode::ExternalMicrophone) ||
+        candidate.sample_rate != kSampleRate ||
         candidate.block_samples != kBlockSamples) {
         return false;
     }

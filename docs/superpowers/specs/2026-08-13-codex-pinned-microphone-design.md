@@ -36,7 +36,7 @@ existing Codex palette:
   are aligned on `x=233`;
 - off state uses etched gray, `已关闭`, and a left-positioned switch knob;
 - active state uses a violet/cyan beacon, mint `收音中`,
-  `MAC · CONTINUOUS AUDIO`, and a right-positioned switch knob;
+  `MAC · EXTERNAL MIC`, and a right-positioned switch knob;
 - unavailable/error states keep the same geometry and replace the status copy
   and color rather than rearranging the page.
 

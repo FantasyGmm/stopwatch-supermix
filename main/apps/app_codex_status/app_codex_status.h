@@ -61,7 +61,11 @@ private:
     lv_obj_t* _page_dot_codex    = nullptr;
     lv_obj_t* _page_dot_pinned_microphone = nullptr;
     lv_obj_t* _page_dot_trae     = nullptr;
-    lv_obj_t* _pinned_microphone_icon = nullptr;
+    lv_obj_t* _pinned_microphone_beacon = nullptr;
+    lv_obj_t* _pinned_microphone_capsule = nullptr;
+    lv_obj_t* _pinned_microphone_cup = nullptr;
+    lv_obj_t* _pinned_microphone_stem = nullptr;
+    lv_obj_t* _pinned_microphone_base = nullptr;
     lv_obj_t* _pinned_microphone_state_label = nullptr;
     lv_obj_t* _pinned_microphone_route_label = nullptr;
     lv_obj_t* _pinned_microphone_switch = nullptr;
@@ -127,7 +131,7 @@ private:
     bool _ws_connected           = false;
     bool _screen_off             = false;
     bool _trae_stale             = false;
-    int _current_page            = 0;
+    int _current_page            = 1;
     lv_indev_state_t _last_page_touch_state = LV_INDEV_STATE_REL;
     lv_indev_state_t _last_agent_touch_state = LV_INDEV_STATE_REL;
     int _agent_panel_drag_start_y = 0;
@@ -168,6 +172,7 @@ private:
     std::unique_ptr<InputActionController> _input_action_controller;
     bool _production_voice_ready = false;
     bool _production_voice_link_usable = false;
+    uint8_t _production_voice_capabilities = 0;
     uint16_t _production_voice_mtu = 23;
     uint32_t _production_voice_connection_epoch = 0;
     std::mutex _status_mutex;

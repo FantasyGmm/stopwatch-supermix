@@ -119,11 +119,13 @@ already foreground and Accessibility exposes a recognized, editable, non-empty
 composer with an unambiguous Send, Queue, or Steer control. It does not activate
 Codex, target a background window, or submit from an empty or unknown composer.
 
-One left swipe from the watch Codex status page opens **固定麦克风**. Its switch
+One right swipe from the watch Codex status page opens **固定麦克风**. Its switch
 holds the same authenticated Begin/Audio/End voice session open, so the Mac
-receives continuous watch microphone audio without a held button. It adds no
-GATT service or Mac audio route. Switch-off, Codex Home/close, BLE or Agent
-epoch loss, or voice failure ends it; page navigation and display-off do not.
+receives continuous watch microphone audio without a held button. It feeds the
+BlackHole route as an external microphone and does not start or stop Typeless.
+It adds no GATT service or Mac audio route. Switch-off, Codex Home/close, BLE or
+Agent epoch loss, or voice failure ends it; page navigation and display-off do
+not.
 
 For normal Send, Queue, or Steer, the Agent presses the verified Codex button
 through Accessibility. Only a forced steer from Queue uses Codex's alternate

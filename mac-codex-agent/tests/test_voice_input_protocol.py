@@ -18,6 +18,8 @@ from voice_input_protocol import (  # noqa: E402
     VOICE_ERROR,
     EndSummary,
     IMA_ADPCM,
+    PUSH_TO_TALK,
+    ALL_VOICE_CAPABILITIES,
     PTT_BEGIN,
     decode_control as _decode_control,
     decode_notification as _decode_notification,
@@ -120,7 +122,7 @@ class VoiceInputProtocolTests(unittest.TestCase):
             7,
             0,
             100,
-            BEGIN_BODY.pack(IMA_ADPCM, 16000, 320),
+            BEGIN_BODY.pack(IMA_ADPCM, PUSH_TO_TALK, 16000, 320),
             TEST_NONCE,
             key_epoch=TEST_EPOCH,
         )
@@ -141,13 +143,13 @@ class VoiceInputProtocolTests(unittest.TestCase):
         self.assertEqual(
             encode_ready(TEST_KEY, TEST_NONCE, 8192),
             bytes.fromhex(
-                "04010000070000001011121314151617"
-                "b0f4d7edb499c51c18fee1e9"
+                "05010003070000001011121314151617"
+                "b0f4d7eddf85dd4364154e5b"
             ),
         )
 
     def test_begin_matches_vector_and_decodes_to_immutable_logical_packet(self):
-        begin_body = BEGIN_BODY.pack(IMA_ADPCM, 16000, 320)
+        begin_body = BEGIN_BODY.pack(IMA_ADPCM, PUSH_TO_TALK, 16000, 320)
         raw = pack_notification(
             TEST_KEY, PTT_BEGIN, 7, 0, 100, begin_body, TEST_NONCE
         )
@@ -155,8 +157,8 @@ class VoiceInputProtocolTests(unittest.TestCase):
         self.assertEqual(
             raw,
             bytes.fromhex(
-                "040107000000000064000000070000001500"
-                "1011121314151617db7a3c2d9d0b84d4cee73f0f58"
+                "050107000000000064000000070000001600"
+                "1011121314151617dbfb8253dcc65fb7bc0c1a575694"
             ),
         )
         packet = decode_notification(TEST_KEY, raw)
@@ -183,8 +185,14 @@ class VoiceInputProtocolTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            (ready.kind, ready.reason, ready.exchange_nonce, ready.target_bps),
-            (1, 0, TEST_NONCE, 8192),
+            (
+                ready.kind,
+                ready.reason,
+                ready.capabilities,
+                ready.exchange_nonce,
+                ready.target_bps,
+            ),
+            (1, 0, ALL_VOICE_CAPABILITIES, TEST_NONCE, 8192),
         )
         self.assertEqual(
             (
@@ -227,7 +235,7 @@ class VoiceInputProtocolTests(unittest.TestCase):
             summary.generated_packets = 0
 
     def test_rejects_versions_kinds_lengths_sessions_sequences_and_codec(self):
-        begin_body = BEGIN_BODY.pack(IMA_ADPCM, 16000, 320)
+        begin_body = BEGIN_BODY.pack(IMA_ADPCM, PUSH_TO_TALK, 16000, 320)
         begin = pack_notification(
             TEST_KEY, PTT_BEGIN, 7, 0, 100, begin_body, TEST_NONCE
         )
@@ -275,16 +283,16 @@ class VoiceInputProtocolTests(unittest.TestCase):
         invalid_raw = (
             begin[: HEADER.size - 1],
             begin[:-1],
-            bytes((2,)) + begin[1:],
-            bytes((4, 99)) + begin[2:],
+            bytes((4,)) + begin[1:],
+            bytes((5, 99)) + begin[2:],
             begin[:2] + b"\x00\x00" + begin[4:],
         )
         for raw in invalid_raw:
             with self.subTest(raw=raw), self.assertRaises(ValueError):
                 decode_notification(TEST_KEY, raw)
 
-        invalid_body = BEGIN_BODY.pack(2, 16000, 320)
-        header = HEADER.pack(4, PTT_BEGIN, 7, 0, 100, TEST_EPOCH, 21)
+        invalid_body = BEGIN_BODY.pack(2, PUSH_TO_TALK, 16000, 320)
+        header = HEADER.pack(5, PTT_BEGIN, 7, 0, 100, TEST_EPOCH, 22)
         aad = header + TEST_NONCE
         authenticated_invalid_begin = aad + encrypt(
             TEST_KEY,
@@ -333,7 +341,7 @@ class VoiceInputProtocolTests(unittest.TestCase):
             7,
             0,
             100,
-            BEGIN_BODY.pack(IMA_ADPCM, 16000, 320),
+            BEGIN_BODY.pack(IMA_ADPCM, PUSH_TO_TALK, 16000, 320),
             TEST_NONCE,
         )
         audio = pack_notification(

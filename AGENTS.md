@@ -415,6 +415,16 @@ explicitly changes the decision.
   presence in source: default/off, active, unavailable/error, and navigation
   position. If an automatic framebuffer capture is unavailable, use a named
   physical screenshot packet and user confirmation before accepting fidelity.
+- A watch UI change is only "compiled" until the running device has been
+  compared against the approved artifact region by region and that comparison
+  is recorded. Do not report it as implemented or visually complete before
+  this physical gate.
+- A source-level style assignment is not proof of the rendered state. On the
+  real watch, inspect theme inheritance, part selectors, opacity, shadows, and
+  z-order for every state. The pinned-microphone photo caught an unchecked
+  switch inheriting a blue `LV_PART_INDICATOR`, an opaque beacon disc where the
+  design required a soft glow, and a decorative segment protruding above the
+  microphone even though the object/coordinate contracts all passed.
 - The pinned-microphone miss is the concrete warning: the approved centered
   beacon specified a large Chinese title, readable state, and central microphone
   glyph, while the first firmware reused a 14 px Chinese font and an unverified
@@ -587,6 +597,15 @@ explicitly changes the decision.
 - Contract and real host stages pass.
 - Clean ESP-IDF build and capacity gates pass when firmware is affected.
 - Package/sign/install checks pass when the Agent is affected.
+- Before physical acceptance, compare the installed Agent bundle's protocol,
+  runtime, and transport files with the working tree. A newly flashed watch
+  talking to a stale installed Agent can look like a touch/UI failure while
+  the real failure is an authenticated Ready frame rejected at the protocol
+  boundary.
+- After reinstalling the Agent, restart it through the same normal macOS app
+  launch path the user will use, then confirm a fresh BLE connection and Ready
+  transition. A source test or a manually launched development process does
+  not prove the installed app is current.
 - Real end-to-end device-to-Codex acceptance passes.
 - Documentation and explicit validation counts/lists are updated.
 

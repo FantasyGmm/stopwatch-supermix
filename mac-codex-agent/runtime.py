@@ -58,6 +58,8 @@ from voice_input_protocol import (
     INITIALIZATION_FAILED,
     RESTART_REQUIRED,
     TYPELESS_NOT_RUNNING,
+    EXTERNAL_MICROPHONE_CAPABILITY,
+    PUSH_TO_TALK_CAPABILITY,
     encode_ready,
     encode_unavailable,
 )
@@ -360,10 +362,6 @@ def _create_voice_session(
             return VoiceState.DRIVER_REQUIRED
         if driver_state is DriverState.RESTART_REQUIRED:
             return VoiceState.RESTART_REQUIRED
-        if not _is_accessibility_trusted():
-            return VoiceState.ACCESSIBILITY_REQUIRED
-        if not _is_typeless_running():
-            return VoiceState.TYPELESS_NOT_RUNNING
         return VoiceState.READY
 
     return VoiceSessionService(
@@ -398,6 +396,7 @@ class AgentRuntime:
         input_nonce_factory=None,
         submit_controller_factory=None,
         accessibility_checker=None,
+        typeless_checker=None,
     ):
         self._collector = collector
         self._transport_factory = transport_factory
@@ -418,6 +417,7 @@ class AgentRuntime:
         self._accessibility_checker = (
             accessibility_checker or _is_accessibility_trusted
         )
+        self._typeless_checker = typeless_checker or _is_typeless_running
         self._state_lock = threading.Lock()
         self._snapshot = AgentSnapshot(
             ConnectionState.SCANNING
@@ -979,8 +979,10 @@ class AgentRuntime:
                     VoiceState.DRIVER_REQUIRED,
                     VoiceState.RESTART_REQUIRED,
                 )
-                and self.snapshot().voice_state
-                is not VoiceState.ACCESSIBILITY_REQUIRED
+                and self.snapshot().voice_state not in (
+                    VoiceState.ACCESSIBILITY_REQUIRED,
+                    VoiceState.TYPELESS_NOT_RUNNING,
+                )
             )
         ):
             return
@@ -998,13 +1000,15 @@ class AgentRuntime:
             return
 
         context.accessibility_available = self._accessibility_is_available()
-        if not context.accessibility_available:
-            state = VoiceState.ACCESSIBILITY_REQUIRED
-
-        self._transition_voice(state)
-        if state is not VoiceState.READY:
+        if state in (VoiceState.DRIVER_REQUIRED, VoiceState.RESTART_REQUIRED):
+            public_state = (
+                state
+                if context.accessibility_available
+                else VoiceState.ACCESSIBILITY_REQUIRED
+            )
+            self._transition_voice(public_state)
             reason = _VOICE_UNAVAILABLE_REASONS.get(
-                state, INITIALIZATION_FAILED
+                public_state, INITIALIZATION_FAILED
             )
             payload = self._encode_unavailable_payload(
                 key,
@@ -1013,6 +1017,36 @@ class AgentRuntime:
             )
             await self._disable_voice(transport, payload)
             return
+
+        if state not in (
+            VoiceState.READY,
+            VoiceState.ACCESSIBILITY_REQUIRED,
+            VoiceState.TYPELESS_NOT_RUNNING,
+        ):
+            self._transition_voice(state)
+            payload = self._encode_unavailable_payload(
+                key, INITIALIZATION_FAILED, context.voice_key_epoch
+            )
+            await self._disable_voice(transport, payload)
+            return
+
+        capabilities = EXTERNAL_MICROPHONE_CAPABILITY
+        typeless_available = self._typeless_is_available()
+        if (
+            state is VoiceState.READY
+            and context.accessibility_available
+            and typeless_available
+        ):
+            capabilities |= PUSH_TO_TALK_CAPABILITY
+            public_state = VoiceState.READY
+        elif (
+            state is VoiceState.ACCESSIBILITY_REQUIRED
+            or not context.accessibility_available
+        ):
+            public_state = VoiceState.ACCESSIBILITY_REQUIRED
+        else:
+            public_state = VoiceState.TYPELESS_NOT_RUNNING
+        self._transition_voice(public_state)
 
         async def handle_notification(payload: bytes) -> None:
             try:
@@ -1029,6 +1063,7 @@ class AgentRuntime:
                 self._voice_nonce_factory(),
                 VOICE_TARGET_BPS,
                 key_epoch=context.voice_key_epoch,
+                capabilities=capabilities,
             )
         except Exception as error:
             await self._isolate_voice_failure(context, error)
@@ -1043,6 +1078,13 @@ class AgentRuntime:
             return bool(self._accessibility_checker())
         except Exception:
             LOGGER.exception("Could not inspect Accessibility permission")
+            return False
+
+    def _typeless_is_available(self) -> bool:
+        try:
+            return bool(self._typeless_checker())
+        except Exception:
+            LOGGER.exception("Could not inspect Typeless process")
             return False
 
     def _encode_unavailable_payload(

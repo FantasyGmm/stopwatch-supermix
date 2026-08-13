@@ -477,21 +477,28 @@ void VoiceInputController::clear_credential()
         _crypto->clear();
     }
     _key_epoch = 0;
+    _capabilities = 0;
     _ready = false;
     _ui_state = VoiceInputUiState::Off;
 }
 
-void VoiceInputController::set_ready(bool ready, uint16_t negotiated_mtu)
+void VoiceInputController::set_ready(
+    bool ready,
+    uint16_t negotiated_mtu,
+    uint8_t capabilities)
 {
     const bool usable =
         ready && negotiated_mtu >= kMinimumAudioMtu && _crypto != nullptr &&
-        _crypto->ready() && _key_epoch != 0;
+        _crypto->ready() && _key_epoch != 0 && capabilities != 0 &&
+        (capabilities & ~voice_input::kAllVoiceCapabilities) == 0;
     _negotiated_mtu = negotiated_mtu;
     if (!usable) {
+        _capabilities = 0;
         handle_disconnect();
         return;
     }
     std::lock_guard<std::mutex> lock(_mutex);
+    _capabilities = capabilities;
     _ready = true;
     if (_session.state() == voice_input::VoiceInputState::Unavailable) {
         _session.set_ready(true);
@@ -520,7 +527,12 @@ void VoiceInputController::handle_button(bool pressed, uint32_t now_ms)
     }
     _button_pressed = pressed;
     if (pressed) {
-        (void)start_continuous(now_ms);
+        if (_ready.load() &&
+            (_capabilities.load() & voice_input::kPushToTalkCapability) != 0 &&
+            _negotiated_mtu >= kMinimumAudioMtu && !active()) {
+            (void)start_session(
+                now_ms, voice_input::BeginBody::Mode::PushToTalk);
+        }
         return;
     }
 
@@ -529,10 +541,13 @@ void VoiceInputController::handle_button(bool pressed, uint32_t now_ms)
 
 bool VoiceInputController::start_continuous(uint32_t now_ms)
 {
-    if (!_ready.load() || _negotiated_mtu < kMinimumAudioMtu || active()) {
+    if (!_ready.load() ||
+        (_capabilities.load() & voice_input::kExternalMicrophoneCapability) == 0 ||
+        _negotiated_mtu < kMinimumAudioMtu || active()) {
         return false;
     }
-    return start_session(now_ms);
+    return start_session(
+        now_ms, voice_input::BeginBody::Mode::ExternalMicrophone);
 }
 
 bool VoiceInputController::stop_continuous(uint32_t now_ms)
@@ -605,6 +620,7 @@ void VoiceInputController::cancel_for_home(uint32_t now_ms)
 void VoiceInputController::handle_disconnect()
 {
     _ready = false;
+    _capabilities = 0;
     _button_pressed = false;
     _capture_pipeline->requestStop();
     wake_producer();
@@ -912,7 +928,9 @@ void VoiceInputController::producer_step(uint32_t now_ms)
     wake_transmitter();
 }
 
-bool VoiceInputController::start_session(uint32_t now_ms)
+bool VoiceInputController::start_session(
+    uint32_t now_ms,
+    voice_input::BeginBody::Mode mode)
 {
     if (!initialize() || _producer_worker_failed.load()) {
         std::lock_guard<std::mutex> lock(_mutex);
@@ -962,7 +980,7 @@ bool VoiceInputController::start_session(uint32_t now_ms)
         fail(static_cast<uint16_t>(VoiceFailure::InvalidState), 0, now_ms);
         return false;
     }
-    if (!prepare_begin(now_ms)) {
+    if (!prepare_begin(now_ms, mode)) {
         _capture_pipeline->close();
         fail(static_cast<uint16_t>(VoiceFailure::Crypto), 0, now_ms);
         return false;
@@ -977,7 +995,9 @@ bool VoiceInputController::start_session(uint32_t now_ms)
     return true;
 }
 
-bool VoiceInputController::prepare_begin(uint32_t now_ms)
+bool VoiceInputController::prepare_begin(
+    uint32_t now_ms,
+    voice_input::BeginBody::Mode mode)
 {
     {
         std::lock_guard<std::mutex> lock(_mutex);
@@ -988,8 +1008,10 @@ bool VoiceInputController::prepare_begin(uint32_t now_ms)
         logical.watch_ms = now_ms;
         logical.key_epoch = _key_epoch;
         logical.session_nonce = _session_nonce;
+        voice_input::BeginBody begin = {};
+        begin.mode = mode;
         logical.payload_size = voice_input::encode_begin_body(
-            voice_input::BeginBody{}, logical.payload.data(), logical.payload.size());
+            begin, logical.payload.data(), logical.payload.size());
         voice_input::Notification wire = {};
         if (logical.payload_size == 0 || !enqueue_encoded(logical, wire)) {
             return false;

@@ -44,6 +44,8 @@ from voice_input_protocol import (
     BEGIN_BODY,
     DRIVER_REQUIRED,
     IMA_ADPCM,
+    EXTERNAL_MICROPHONE_CAPABILITY,
+    PUSH_TO_TALK,
     PTT_BEGIN,
     PTT_END,
     READY,
@@ -1297,14 +1299,29 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 self.assertLess(
                     events.index("input.enable"), events.index("voice.prepare")
                 )
-                self.assertIn("voice.disable", events)
+                if unavailable_state is VoiceState.DRIVER_REQUIRED:
+                    self.assertIn("voice.disable", events)
+                else:
+                    self.assertIn("voice.enable", events)
+                    control = decode_control(key, transport.voice_payloads[0][1])
+                    self.assertEqual(
+                        control.capabilities,
+                        EXTERNAL_MICROPHONE_CAPABILITY,
+                    )
                 self.assertEqual(transport.input_disable_count, 0)
                 session.cancel()
                 with self.assertRaises(asyncio.CancelledError):
                     await session
-                self.assertGreater(
-                    events.index("input.disable"), events.index("voice.disable")
-                )
+                if unavailable_state is VoiceState.DRIVER_REQUIRED:
+                    self.assertGreater(
+                        events.index("input.disable"),
+                        events.index("voice.disable"),
+                    )
+                else:
+                    self.assertLess(
+                        events.index("input.disable"),
+                        events.index("voice.disconnect"),
+                    )
                 self.assertEqual(transport.input_disable_count, 1)
                 ready = transport.input_payloads[0][1]
                 self.assertEqual(decode_input_ready(key, ready), nonce)
@@ -1397,6 +1414,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             voice_nonce_factory=lambda: b"voiceax1",
             input_nonce_factory=lambda: b"inputax2",
             accessibility_checker=lambda: permission["available"],
+            typeless_checker=lambda: True,
             status_interval=0.01,
         )
 
@@ -1414,6 +1432,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             self.fail("Accessibility-required state was not published")
 
         permission["available"] = True
+        transport.voice_enable_started.clear()
         runtime.refresh_voice_readiness()
         await asyncio.wait_for(transport.voice_enable_started.wait(), 1)
 
@@ -1654,7 +1673,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("[redacted]", runtime.snapshot().voice_detail)
         self.assertNotIn(key_text, "\n".join(logs.output))
 
-    async def test_non_ready_states_send_exact_authenticated_unavailable(self):
+    async def test_driver_states_are_unavailable_but_desktop_states_keep_external_mic(self):
         cases = (
             (VoiceState.DRIVER_REQUIRED, DRIVER_REQUIRED),
             (VoiceState.RESTART_REQUIRED, RESTART_REQUIRED),
@@ -1690,11 +1709,22 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
                 self.assertEqual(result, "disconnected")
                 controls = factory.instances[0].voice_payloads
-                self.assertEqual(len(controls), 1)
-                self.assertEqual(controls[0][0], "unavailable")
+                self.assertGreaterEqual(len(controls), 1)
                 control = decode_control(key, controls[0][1])
-                self.assertEqual(control.kind, UNAVAILABLE)
-                self.assertEqual(control.reason, reason)
+                if state in (
+                    VoiceState.DRIVER_REQUIRED,
+                    VoiceState.RESTART_REQUIRED,
+                ):
+                    self.assertEqual(controls[0][0], "unavailable")
+                    self.assertEqual(control.kind, UNAVAILABLE)
+                    self.assertEqual(control.reason, reason)
+                else:
+                    self.assertEqual(controls[0][0], "ready")
+                    self.assertEqual(control.kind, READY)
+                    self.assertEqual(
+                        control.capabilities,
+                        EXTERNAL_MICROPHONE_CAPABILITY,
+                    )
                 self.assertEqual(
                     [item[0] for item in factory.instances[0].messages],
                     [EVENT_MESSAGE, STATUS_MESSAGE],
@@ -1792,7 +1822,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             7,
             0,
             100,
-            BEGIN_BODY.pack(IMA_ADPCM, 16000, 320),
+            BEGIN_BODY.pack(IMA_ADPCM, PUSH_TO_TALK, 16000, 320),
             b"12345678",
         )
         factory = FakeTransportFactory(
@@ -1954,7 +1984,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             9,
             0,
             100,
-            BEGIN_BODY.pack(IMA_ADPCM, 16000, 320),
+            BEGIN_BODY.pack(IMA_ADPCM, PUSH_TO_TALK, 16000, 320),
             b"abcdefgh",
         )
 
@@ -2206,7 +2236,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             11,
             0,
             100,
-            BEGIN_BODY.pack(IMA_ADPCM, 16000, 320),
+            BEGIN_BODY.pack(IMA_ADPCM, PUSH_TO_TALK, 16000, 320),
             b"abcdefgh",
         )
         drain_started = asyncio.Event()
@@ -2297,7 +2327,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             13,
             0,
             100,
-            BEGIN_BODY.pack(IMA_ADPCM, 16000, 320),
+            BEGIN_BODY.pack(IMA_ADPCM, PUSH_TO_TALK, 16000, 320),
             b"abcdefgh",
         )
         end = pack_notification(
@@ -3035,7 +3065,7 @@ class AgentControllerTests(unittest.TestCase):
             12,
             0,
             100,
-            BEGIN_BODY.pack(IMA_ADPCM, 16000, 320),
+            BEGIN_BODY.pack(IMA_ADPCM, PUSH_TO_TALK, 16000, 320),
             b"abcdefgh",
         )
         recording_started = threading.Event()

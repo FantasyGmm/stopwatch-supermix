@@ -13,8 +13,9 @@ screen wake, has priority. The authenticated input
 notification is independent of voice readiness, so Typeless, BlackHole, and
 audio availability do not gate click actions.
 
-The **固定麦克风** pinned microphone page is one left swipe from Codex status. Its switch
-keeps the existing encrypted voice session active without a held button; page
+The **固定麦克风** pinned microphone page is one right swipe from Codex status.
+Its switch keeps the existing encrypted voice session active without a held
+button and feeds the Mac BlackHole route without starting Typeless. Page
 navigation and display-off preserve it, while Home/close, disconnect, Agent
 epoch change, or voice failure stop it.
 
@@ -61,7 +62,8 @@ git diff --check
 
 ### Current automated evidence (2026-08-14)
 
-- Full Mac Agent discovery: 902 tests passed.
+- Full Mac Agent discovery: 904 tests passed; one read-only live Accessibility
+  probe was skipped because its foreground-app precondition was not present.
 - Focused input protocol and desktop submission: 37 tests passed; the same live
   probe was the only skip.
 - Offline contract: all 58 stages were present and correctly numbered, with 63

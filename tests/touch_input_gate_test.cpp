@@ -35,7 +35,7 @@ struct RawTouchConsumers {
             page.move(x, y);
         } else if (last_pressed) {
             edge.release(now_ms);
-            page_result = page.release(now_ms, 0);
+            page_result = page.release(now_ms, 1);
         }
         last_pressed = pressed;
     }
@@ -138,6 +138,6 @@ int main()
     consumers.update(gate, gate.filterForLvgl(true), 300, 220, 2200);
     consumers.update(gate, gate.filterForLvgl(true), 250, 220, 2240);
     consumers.update(gate, gate.filterForLvgl(false), 250, 220, 2300);
-    assert(consumers.page_result == StatusPageSwipeResult::PinnedMicrophone);
+    assert(consumers.page_result == StatusPageSwipeResult::Trae);
     return 0;
 }

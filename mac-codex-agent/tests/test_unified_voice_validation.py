@@ -463,7 +463,7 @@ output.chmod(0o700)
         self.assertIn("export IDF_PATH=/path/to/esp-idf", normalized_validation)
         self.assertNotIn("/Users/luke/esp", normalized_validation)
         self.assertIn(
-            "Full Mac Agent discovery: 902 tests passed",
+            "Full Mac Agent discovery: 904 tests passed",
             normalized_validation,
         )
         self.assertIn(

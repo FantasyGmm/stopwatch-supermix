@@ -19,7 +19,7 @@ from voice_input_crypto import (
 )
 
 
-PROTOCOL_VERSION = 4
+PROTOCOL_VERSION = 5
 READY = 1
 UNAVAILABLE = 2
 PTT_BEGIN = 1
@@ -28,6 +28,13 @@ PTT_END = 3
 VOICE_ERROR = 4
 
 IMA_ADPCM = 1
+PUSH_TO_TALK = 1
+EXTERNAL_MICROPHONE = 2
+PUSH_TO_TALK_CAPABILITY = 1 << 0
+EXTERNAL_MICROPHONE_CAPABILITY = 1 << 1
+ALL_VOICE_CAPABILITIES = (
+    PUSH_TO_TALK_CAPABILITY | EXTERNAL_MICROPHONE_CAPABILITY
+)
 SAMPLE_RATE = 16000
 BLOCK_SAMPLES = 320
 AUDIO_BYTES = 164
@@ -50,7 +57,7 @@ UNAVAILABLE_REASONS = frozenset(
 CONTROL_AAD = struct.Struct("<BBBBI8s")
 CONTROL_BODY = struct.Struct("<I")
 HEADER = struct.Struct("<BBHIIIH")
-BEGIN_BODY = struct.Struct("<BHH")
+BEGIN_BODY = struct.Struct("<BBHH")
 END_PAYLOAD = struct.Struct("<IIIIIIH")
 ERROR_PAYLOAD = struct.Struct("<HH")
 
@@ -73,6 +80,7 @@ _PAYLOAD_SIZES = {
 class Control:
     kind: int
     reason: int
+    capabilities: int
     key_epoch: int
     exchange_nonce: bytes
     target_bps: int
@@ -123,11 +131,14 @@ def encode_ready(
     target_bps: int,
     *,
     key_epoch: int,
+    capabilities: int = ALL_VOICE_CAPABILITIES,
 ) -> bytes:
     if target_bps != 8192:
         raise ValueError("READY target bitrate must be 8192")
+    if capabilities == 0 or capabilities & ~ALL_VOICE_CAPABILITIES:
+        raise ValueError("READY capabilities are invalid")
     return _encode_control(
-        key, READY, 0, key_epoch, exchange_nonce, target_bps
+        key, READY, 0, capabilities, key_epoch, exchange_nonce, target_bps
     )
 
 
@@ -141,7 +152,7 @@ def encode_unavailable(
     if reason not in UNAVAILABLE_REASONS:
         raise ValueError("UNAVAILABLE reason is not defined")
     return _encode_control(
-        key, UNAVAILABLE, reason, key_epoch, exchange_nonce, 0
+        key, UNAVAILABLE, reason, 0, key_epoch, exchange_nonce, 0
     )
 
 
@@ -149,6 +160,7 @@ def _encode_control(
     key: bytes,
     kind: int,
     reason: int,
+    capabilities: int,
     key_epoch: int,
     exchange_nonce: bytes,
     target_bps: int,
@@ -157,7 +169,7 @@ def _encode_control(
     domain = _CONTROL_DOMAINS[kind]
     derive_nonce(domain, exchange_nonce, 0)
     aad = CONTROL_AAD.pack(
-        PROTOCOL_VERSION, kind, reason, 0, key_epoch, exchange_nonce
+        PROTOCOL_VERSION, kind, reason, capabilities, key_epoch, exchange_nonce
     )
     body = CONTROL_BODY.pack(target_bps)
     return aad + encrypt(key, domain, exchange_nonce, 0, body, aad)
@@ -177,7 +189,7 @@ def decode_control(
         version,
         kind,
         reason,
-        reserved,
+        capabilities,
         key_epoch,
         exchange_nonce,
     ) = CONTROL_AAD.unpack_from(raw)
@@ -185,8 +197,6 @@ def decode_control(
         raise ValueError("unsupported production protocol version")
     if kind not in _CONTROL_DOMAINS:
         raise ValueError("unknown control kind")
-    if reserved != 0:
-        raise ValueError("control reserved byte must be zero")
     if key_epoch != expected_epoch:
         raise ValueError("voice key epoch does not match")
 
@@ -200,13 +210,22 @@ def decode_control(
         aad,
     )
     target_bps = CONTROL_BODY.unpack(body)[0]
-    if kind == READY and (reason != 0 or target_bps != 8192):
+    if kind == READY and (
+        reason != 0
+        or target_bps != 8192
+        or capabilities == 0
+        or capabilities & ~ALL_VOICE_CAPABILITIES
+    ):
         raise ValueError("invalid READY control")
     if kind == UNAVAILABLE and (
-        reason not in UNAVAILABLE_REASONS or target_bps != 0
+        reason not in UNAVAILABLE_REASONS
+        or capabilities != 0
+        or target_bps != 0
     ):
         raise ValueError("invalid UNAVAILABLE control")
-    return Control(kind, reason, key_epoch, exchange_nonce, target_bps)
+    return Control(
+        kind, reason, capabilities, key_epoch, exchange_nonce, target_bps
+    )
 
 
 def _validate_header_values(session: int, sequence: int, watch_ms: int) -> None:
@@ -223,7 +242,13 @@ def _validate_begin(sequence: int, payload: bytes) -> None:
         raise ValueError("PTT_BEGIN sequence must be zero")
     if len(payload) != BEGIN_BODY.size:
         raise ValueError("invalid PTT_BEGIN body size")
-    if BEGIN_BODY.unpack(payload) != (IMA_ADPCM, SAMPLE_RATE, BLOCK_SAMPLES):
+    codec, mode, sample_rate, block_samples = BEGIN_BODY.unpack(payload)
+    if (
+        codec != IMA_ADPCM
+        or mode not in (PUSH_TO_TALK, EXTERNAL_MICROPHONE)
+        or sample_rate != SAMPLE_RATE
+        or block_samples != BLOCK_SAMPLES
+    ):
         raise ValueError("invalid production codec tuple")
 
 

@@ -16,17 +16,17 @@ constexpr voice_input::crypto::ExchangeNonce kTestNonce = {
 };
 constexpr uint32_t kTestEpoch = 7;
 constexpr std::array<uint8_t, 28> kReadyVector = {
-    0x04, 0x01, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00,
+    0x05, 0x01, 0x00, 0x03, 0x07, 0x00, 0x00, 0x00,
     0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
-    0xb0, 0xf4, 0xd7, 0xed, 0xb4, 0x99, 0xc5, 0x1c,
-    0x18, 0xfe, 0xe1, 0xe9,
+    0xb0, 0xf4, 0xd7, 0xed, 0xdf, 0x85, 0xdd, 0x43,
+    0x64, 0x15, 0x4e, 0x5b,
 };
-constexpr std::array<uint8_t, 39> kBeginVector = {
-    0x04, 0x01, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00,
+constexpr std::array<uint8_t, 40> kBeginVector = {
+    0x05, 0x01, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x64, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00,
-    0x15, 0x00, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15,
-    0x16, 0x17, 0xdb, 0x7a, 0x3c, 0x2d, 0x9d, 0x0b,
-    0x84, 0xd4, 0xce, 0xe7, 0x3f, 0x0f, 0x58,
+    0x16, 0x00, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15,
+    0x16, 0x17, 0xdb, 0xfb, 0x82, 0x53, 0xdc, 0xc6,
+    0x5f, 0xb7, 0xbc, 0x0c, 0x1a, 0x57, 0x56, 0x94,
 };
 
 }  // namespace
@@ -38,6 +38,7 @@ int main()
     crypto::CcmContext context(kTestKey);
     VoiceControl epoch_ready = {};
     epoch_ready.kind = ControlKind::Ready;
+    epoch_ready.capabilities = kAllVoiceCapabilities;
     epoch_ready.key_epoch = kTestEpoch;
     epoch_ready.exchange_nonce = kTestNonce;
     epoch_ready.target_bps = kTargetBitrate;
@@ -55,6 +56,7 @@ int main()
         kTestEpoch,
         decoded_epoch_ready));
     assert(decoded_epoch_ready.key_epoch == kTestEpoch);
+    assert(decoded_epoch_ready.capabilities == kAllVoiceCapabilities);
     assert(!decode_control(
         epoch_ready_bytes.data(),
         epoch_ready_bytes.size(),
@@ -71,6 +73,7 @@ int main()
         ready));
     assert(ready.kind == ControlKind::Ready);
     assert(ready.reason == 0);
+    assert(ready.capabilities == kAllVoiceCapabilities);
     assert(ready.exchange_nonce == kTestNonce);
     assert(ready.target_bps == kTargetBitrate);
 
@@ -131,6 +134,7 @@ int main()
     assert(decode_begin_body(
         decoded_begin.payload.data(), decoded_begin.payload_size, decoded_body));
     assert(decoded_body.codec == kImaAdpcmCodec);
+    assert(decoded_body.mode == BeginBody::Mode::PushToTalk);
     assert(decoded_body.sample_rate == kSampleRate);
     assert(decoded_body.block_samples == kBlockSamples);
 

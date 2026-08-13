@@ -182,7 +182,10 @@ public:
         const voice_input::crypto::Key& key,
         uint32_t key_epoch);
     void clear_credential();
-    void set_ready(bool ready, uint16_t negotiated_mtu);
+    void set_ready(
+        bool ready,
+        uint16_t negotiated_mtu,
+        uint8_t capabilities = voice_input::kAllVoiceCapabilities);
     void handle_connection_epoch(uint32_t connection_epoch);
     bool start_continuous(uint32_t now_ms) override;
     bool stop_continuous(uint32_t now_ms) override;
@@ -215,8 +218,8 @@ private:
     static void transmitter_entry(void* context);
     void transmitter_loop();
     bool transmitter_step(uint32_t now_ms);
-    bool start_session(uint32_t now_ms);
-    bool prepare_begin(uint32_t now_ms);
+    bool start_session(uint32_t now_ms, voice_input::BeginBody::Mode mode);
+    bool prepare_begin(uint32_t now_ms, voice_input::BeginBody::Mode mode);
     bool prepare_audio(
         const std::array<uint8_t, VoiceCapturePipeline::kAdpcmBytesPerBlock>& adpcm,
         uint32_t captured_samples,
@@ -288,6 +291,7 @@ private:
     bool _congestion_active = false;
     bool _has_accepted_timestamp = false;
     std::atomic<bool> _ready{false};
+    std::atomic<uint8_t> _capabilities{0};
     bool _graceful_stop = false;
     bool _terminal_pending = false;
     bool _initialized = false;

@@ -36,13 +36,13 @@ class TraeStatusFirmwareContractTests(unittest.TestCase):
         for token in (
             "lv_obj_set_size(_panel, 466, 466)",
             "lv_obj_set_size(_page_strip, 1398, 466)",
-            "lv_obj_set_pos(_codex_page, 0, 0)",
-            "lv_obj_set_pos(_pinned_microphone_page, 466, 0)",
+            "lv_obj_set_pos(_codex_page, 466, 0)",
+            "lv_obj_set_pos(_pinned_microphone_page, 0, 0)",
             "lv_obj_set_pos(_trae_page_root, 932, 0)",
             "lv_obj_align(_battery_label, LV_ALIGN_TOP_MID, 0, kBatteryY)",
             "lv_obj_set_y(dot, kPageIndicatorY)",
-            "_page_dot_codex = make_page_dot(_panel, 213)",
-            "_page_dot_pinned_microphone = make_page_dot(_panel, 229)",
+            "_page_dot_pinned_microphone = make_page_dot(_panel, 213)",
+            "_page_dot_codex = make_page_dot(_panel, 229)",
             "_page_dot_trae = make_page_dot(_panel, 245)",
             "lv_anim_set_duration(&animation, 140)",
             "lv_anim_set_path_cb(&animation, lv_anim_path_ease_out)",
@@ -51,6 +51,7 @@ class TraeStatusFirmwareContractTests(unittest.TestCase):
 
         self.assertIn("constexpr int kPageIndicatorY = 416;", layout)
         self.assertIn("constexpr int kBatteryY = 432;", layout)
+        self.assertIn("int _current_page            = 1;", header)
 
         battery_create = source.index("_battery_label = lv_label_create(_panel)")
         strip_create = source.index("_page_strip = lv_obj_create(_panel)")
@@ -196,6 +197,40 @@ class TraeStatusFirmwareContractTests(unittest.TestCase):
         self.assertIn("&NotoSansSCBold16Trae", source)
         self.assertNotIn("kSummaryLabelOutlineWidth", layout)
         self.assertNotIn("text_outline_stroke", source)
+
+    def test_pinned_microphone_matches_locked_type_and_icon_geometry(self):
+        header = (self.app_root / "app_codex_status.h").read_text(encoding="utf-8")
+        source = (self.app_root / "app_codex_status.cpp").read_text(encoding="utf-8")
+        cmake = (ROOT / "main/CMakeLists.txt").read_text(encoding="utf-8")
+
+        for name in ("PinnedMicTitle24", "PinnedMicState22"):
+            font_path = ROOT / f"main/assets/fonts/{name}.c"
+            self.assertTrue(font_path.exists())
+            self.assertIn(f"assets/fonts/{name}.c", cmake)
+            self.assertIn(f"LV_FONT_DECLARE({name})", source)
+            self.assertIn(f"&{name}", source)
+
+        for token in (
+            "_pinned_microphone_capsule",
+            "_pinned_microphone_beacon",
+            "_pinned_microphone_cup",
+            "_pinned_microphone_stem",
+            "_pinned_microphone_base",
+            "lv_arc_create(_pinned_microphone_page)",
+            "lv_obj_set_size(_pinned_microphone_capsule, 28, 50)",
+            "lv_obj_set_size(_pinned_microphone_cup, 62, 62)",
+            "lv_obj_set_size(_pinned_microphone_beacon, 112, 112)",
+            "lv_obj_set_pos(_pinned_microphone_beacon, 177, 116)",
+            '"CODEX",\n        37,\n        &lv_font_montserrat_14',
+            '"固定麦克风",\n        69,\n        &PinnedMicTitle24',
+            "lv_obj_set_style_bg_opa(_pinned_microphone_beacon, LV_OPA_TRANSP, 0)",
+            "lv_color_hex(kPanelGraphite),\n        LV_PART_INDICATOR",
+            "_page_dot_pinned_microphone = make_page_dot(_panel, 213)",
+            "_page_dot_codex = make_page_dot(_panel, 229)",
+            "_page_dot_trae = make_page_dot(_panel, 245)",
+        ):
+            self.assertIn(token, header + source)
+        self.assertNotIn("LV_SYMBOL_AUDIO", source)
 
     def test_status_messages_route_to_independent_models_and_freshness(self):
         header = (self.app_root / "app_codex_status.h").read_text(encoding="utf-8")

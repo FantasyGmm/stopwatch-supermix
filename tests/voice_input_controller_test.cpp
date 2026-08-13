@@ -695,6 +695,7 @@ void test_control_authentication_and_replay_guard()
     voice_input::ControlReplayGuard guard;
     voice_input::VoiceControl ready = {};
     ready.kind = voice_input::ControlKind::Ready;
+    ready.capabilities = voice_input::kAllVoiceCapabilities;
     ready.key_epoch = 1;
     ready.exchange_nonce = {1, 2, 3, 4, 5, 6, 7, 8};
     ready.target_bps = voice_input::kTargetBitrate;
@@ -1247,6 +1248,13 @@ void test_continuous_voice_is_idempotent_and_does_not_require_button_hold()
     assert(backend.acquire_calls == 1);
     assert(transport.sent.size() == 2);
     assert(transport.sent[0].kind == voice_input::NotificationKind::PttBegin);
+    const voice_input::VoiceNotification begin =
+        decode(transport.sent[0], crypto, nullptr);
+    voice_input::BeginBody begin_body = {};
+    assert(voice_input::decode_begin_body(
+        begin.payload.data(), begin.payload_size, begin_body));
+    assert(begin_body.mode ==
+           voice_input::BeginBody::Mode::ExternalMicrophone);
     assert(transport.sent[1].kind == voice_input::NotificationKind::Audio);
 
     assert(controller.stop_continuous(62004));
@@ -1257,6 +1265,29 @@ void test_continuous_voice_is_idempotent_and_does_not_require_button_hold()
     assert(!controller.active());
     assert(transport.sent.back().kind == voice_input::NotificationKind::PttEnd);
     assert(backend.release_calls == 1);
+}
+
+void test_voice_capabilities_gate_ptt_and_external_microphone_independently()
+{
+    FakeBackend backend;
+    FakeEntropy entropy;
+    voice_input::crypto::CcmContext crypto(kKey);
+    VoiceInputController controller(backend, crypto, entropy, kKeyEpoch);
+
+    controller.set_ready(
+        true, 256, voice_input::kExternalMicrophoneCapability);
+    controller.handle_button(true, 63000);
+    assert(!controller.active());
+    assert(backend.acquire_calls == 0);
+    controller.handle_button(false, 63001);
+    assert(controller.start_continuous(63002));
+    controller.cancel_continuous(63003);
+
+    controller.set_ready(true, 256, voice_input::kPushToTalkCapability);
+    assert(!controller.start_continuous(63004));
+    controller.handle_button(true, 63005);
+    assert(controller.active());
+    controller.handle_button(false, 63006);
 }
 
 void test_immediate_begin_send_failure_cannot_be_overwritten_by_startup()
@@ -1424,6 +1455,7 @@ int main()
     test_cancel_waits_for_inflight_producer_cleanup();
     test_sixty_seconds_of_voice_does_not_depend_on_ui_polling();
     test_continuous_voice_is_idempotent_and_does_not_require_button_hold();
+    test_voice_capabilities_gate_ptt_and_external_microphone_independently();
     test_immediate_begin_send_failure_cannot_be_overwritten_by_startup();
     test_cancel_waits_for_inflight_transmission();
     test_transient_congestion_retries_same_packet_and_recovers();

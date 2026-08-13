@@ -16,6 +16,8 @@ from voice_input_protocol import (  # noqa: E402
     BEGIN_BODY,
     ERROR_PAYLOAD,
     IMA_ADPCM,
+    EXTERNAL_MICROPHONE,
+    PUSH_TO_TALK,
     PTT_BEGIN,
     PTT_END,
     VOICE_ERROR,
@@ -77,11 +79,11 @@ def encrypted_packet(kind, sequence, payload, session=7, nonce=TEST_NONCE):
     )
 
 
-def begin_packet(session=7, nonce=TEST_NONCE):
+def begin_packet(session=7, nonce=TEST_NONCE, mode=PUSH_TO_TALK):
     return encrypted_packet(
         PTT_BEGIN,
         0,
-        BEGIN_BODY.pack(IMA_ADPCM, 16000, 320),
+        BEGIN_BODY.pack(IMA_ADPCM, mode, 16000, 320),
         session,
         nonce,
     )
@@ -340,6 +342,23 @@ class VoiceSessionServiceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(route.calls, ["start", "write:320", "stop"])
         self.assertEqual(shortcut.calls, ["start", "stop"])
+        self.assertEqual(service.state, VoiceState.READY)
+
+    async def test_external_microphone_never_arms_typeless_shortcut(self):
+        route = FakeRoute()
+        shortcut = FakeShortcut(fail_start=True)
+        service = VoiceSessionService(
+            route, shortcut, TEST_KEY, sleep=no_sleep
+        )
+
+        await service.handle(begin_packet(mode=EXTERNAL_MICROPHONE))
+        await service.handle(audio_packet(1))
+        await service.handle(
+            end_packet(2, EndSummary(1, 1, 0, 0, 320, 20, 256))
+        )
+
+        self.assertEqual(route.calls, ["start", "write:320", "stop"])
+        self.assertEqual(shortcut.calls, [])
         self.assertEqual(service.state, VoiceState.READY)
 
     async def test_invalid_tag_cleans_up_before_audio_decode_or_write(self):

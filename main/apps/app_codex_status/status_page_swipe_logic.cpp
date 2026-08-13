@@ -55,16 +55,16 @@ StatusPageSwipeResult StatusPageSwipeLogic::release(uint32_t now_ms, int current
         return StatusPageSwipeResult::Stay;
     }
     if (dx < 0 && current_page == 0) {
-        return StatusPageSwipeResult::PinnedMicrophone;
+        return StatusPageSwipeResult::Codex;
     }
     if (dx < 0 && current_page == 1) {
         return StatusPageSwipeResult::Trae;
     }
     if (dx > 0 && current_page == 2) {
-        return StatusPageSwipeResult::PinnedMicrophone;
+        return StatusPageSwipeResult::Codex;
     }
     if (dx > 0 && current_page == 1) {
-        return StatusPageSwipeResult::Codex;
+        return StatusPageSwipeResult::PinnedMicrophone;
     }
     return StatusPageSwipeResult::Stay;
 }

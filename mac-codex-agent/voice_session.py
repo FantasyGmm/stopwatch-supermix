@@ -9,9 +9,12 @@ from ima_adpcm import decode_ima_adpcm_block
 from voice_input_protocol import (
     AUDIO,
     BLOCK_SAMPLES,
+    BEGIN_BODY,
+    EXTERNAL_MICROPHONE,
     ERROR_PAYLOAD,
     PTT_BEGIN,
     PTT_END,
+    PUSH_TO_TALK,
     VOICE_ERROR,
     EndSummary,
     decode_notification,
@@ -231,8 +234,14 @@ class VoiceSessionService:
         self._highest_session = packet.session
         self.route.start()
         self._route_armed = True
-        self.shortcut.start()
-        self._shortcut_armed = True
+        _codec, mode, _sample_rate, _block_samples = BEGIN_BODY.unpack(
+            packet.payload
+        )
+        if mode == PUSH_TO_TALK:
+            self.shortcut.start()
+            self._shortcut_armed = True
+        elif mode != EXTERNAL_MICROPHONE:
+            raise ValueError("unsupported voice session mode")
         self._session = packet.session
         self._session_nonce = packet.session_nonce
         self._last_sequence = 0
