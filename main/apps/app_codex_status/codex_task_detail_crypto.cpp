@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cinttypes>
 #include <vector>
 
 namespace {
@@ -110,8 +111,9 @@ std::string canonical_codex_task_detail_aad(const CodexTaskDetailEnvelope& envel
     const int written = std::snprintf(
         suffix,
         sizeof(suffix),
-        "\",\"revision\":%d,\"index\":%u,\"count\":%u,\"epoch\":%u,"
-        "\"nonce\":\"%s\",\"sequence\":%u}",
+        "\",\"revision\":%" PRId32 ",\"index\":%" PRIu32
+        ",\"count\":%" PRIu32 ",\"epoch\":%" PRIu32 ","
+        "\"nonce\":\"%s\",\"sequence\":%" PRIu32 "}",
         envelope.revision,
         envelope.index,
         envelope.count,
