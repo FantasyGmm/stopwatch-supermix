@@ -819,6 +819,134 @@ class CodexStatusAgentTests(unittest.TestCase):
         ]
         self.assertEqual([item["route"] for item in details], ["fedcba9876543210"])
 
+    def test_active_and_completed_collision_stays_excluded_for_agent_lifetime(self):
+        collector = FakeCollector()
+        collector.pending_ids = ()
+        transport = FakeTransport()
+        agent = secure_status_agent(collector, transport)
+        route = "0123456789abcdef"
+        active = {
+            "route": route,
+            "project": "active",
+            "title": "active",
+            "state": "running",
+            "last_reply": "must never be first wins",
+        }
+        completed = {
+            "route": route,
+            "project": "completed",
+            "title": "completed",
+            "state": "completed",
+            "last_reply": "old",
+        }
+
+        asyncio.run(
+            agent.tick(
+                status={
+                    "codex_alert_revision": 1,
+                    "codex_alerts": [active, completed],
+                }
+            )
+        )
+        asyncio.run(
+            agent.tick(
+                status={
+                    "codex_alert_revision": 2,
+                    "codex_alerts": [active],
+                }
+            )
+        )
+
+        compact = [
+            payload
+            for _, payload in transport.messages
+            if payload.get("type") != "task_detail"
+        ]
+        self.assertEqual(
+            [payload.get("codex_alerts") for payload in compact], [[], []]
+        )
+        self.assertFalse(
+            any(
+                payload.get("type") == "task_detail"
+                for _, payload in transport.messages
+            )
+        )
+
+    def test_fresh_agent_can_use_route_after_authoritative_clean_snapshot(self):
+        collector = FakeCollector()
+        collector.pending_ids = ()
+        route = "0123456789abcdef"
+        task = {
+            "route": route,
+            "project": "safe",
+            "title": "safe",
+            "state": "running",
+            "last_reply": "fresh reply",
+        }
+        collided = dict(task, project="peer", title="peer")
+        retired_transport = FakeTransport()
+        retired_agent = secure_status_agent(collector, retired_transport)
+        asyncio.run(
+            retired_agent.tick(
+                status={"codex_alert_revision": 1, "codex_alerts": [task, collided]}
+            )
+        )
+        fresh_transport = FakeTransport()
+
+        asyncio.run(
+            secure_status_agent(collector, fresh_transport).tick(
+                status={"codex_alert_revision": 2, "codex_alerts": [task]}
+            )
+        )
+
+        self.assertEqual(
+            fresh_transport.messages[0][1]["codex_alerts"][0]["route"],
+            route,
+        )
+        detail = next(
+            payload
+            for _, payload in fresh_transport.messages
+            if payload.get("type") == "task_detail"
+        )
+        self.assertEqual(decrypt_task_detail(TEST_DETAIL_KEY, detail), "fresh reply")
+
+    def test_noncolliding_route_can_disappear_and_reappear(self):
+        collector = FakeCollector()
+        collector.pending_ids = ()
+        transport = FakeTransport()
+        agent = secure_status_agent(collector, transport)
+        task = {
+            "route": "0123456789abcdef",
+            "project": "safe",
+            "title": "safe",
+            "state": "running",
+            "last_reply": "reply",
+        }
+
+        asyncio.run(
+            agent.tick(
+                status={"codex_alert_revision": 1, "codex_alerts": [task]}
+            )
+        )
+        asyncio.run(
+            agent.tick(status={"codex_alert_revision": 2, "codex_alerts": []})
+        )
+        asyncio.run(
+            agent.tick(
+                status={"codex_alert_revision": 3, "codex_alerts": [task]}
+            )
+        )
+
+        details = [
+            payload
+            for _, payload in transport.messages
+            if payload.get("type") == "task_detail"
+        ]
+        self.assertEqual(
+            [decrypt_task_detail(TEST_DETAIL_KEY, payload) for payload in details],
+            ["reply", "reply"],
+        )
+
     def test_nested_task_values_require_strict_utf8_strings(self):
         collector = FakeCollector()
         collector.pending_ids = ()

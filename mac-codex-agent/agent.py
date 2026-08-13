@@ -36,6 +36,7 @@ from task_detail_crypto import (
     MAX_TASK_REVISION,
     encrypt_task_detail,
 )
+from task_routes import TaskRouteRegistry
 
 
 DEVICE_NAME = "StopWatch-Codex"
@@ -148,6 +149,9 @@ class CodexStatusAgent:
         self._task_detail_nonce = None
         self._task_detail_nonce_factory = detail_nonce_factory
         self._task_detail_used_nonces = set()
+        # Collision tombstones intentionally live for this connected Agent
+        # instance. A reconnect creates a fresh authoritative registry.
+        self._task_route_registry = TaskRouteRegistry()
         self.update_detail_credential(detail_key, detail_key_epoch)
 
     def update_detail_credential(self, detail_key, detail_key_epoch) -> None:
@@ -180,6 +184,10 @@ class CodexStatusAgent:
                     self._task_detail_nonce = nonce
                     break
 
+    def disable_detail_credential(self) -> None:
+        """Fail closed without affecting compact plaintext status updates."""
+        self.update_detail_credential(None, None)
+
     async def sync_time(self) -> None:
         payload = {
             "type": "time_sync",
@@ -199,7 +207,10 @@ class CodexStatusAgent:
             if isinstance(raw_alert_ids, (list, tuple))
             else ()
         )
-        watch_status = _watch_codex_status(status)
+        active_alerts = _normalized_active_alerts(
+            status, route_registry=self._task_route_registry
+        )
+        watch_status = _watch_codex_status(status, active_alerts=active_alerts)
         await self.transport.send_json(
             json.dumps(
                 watch_status,
@@ -214,7 +225,11 @@ class CodexStatusAgent:
             for item in watch_status.get("codex_alerts", [])
         }
         details = (
-            task_detail_messages(status, retained_routes=retained_routes)
+            task_detail_messages(
+                status,
+                retained_routes=retained_routes,
+                active_alerts=active_alerts,
+            )
             if self._task_detail_key is not None
             else []
         )
@@ -301,7 +316,35 @@ class CodexStatusAgent:
         return self._task_detail_sequence
 
 
-def _watch_codex_status(status: Mapping[str, object]):
+def _normalized_active_alerts(status, route_registry=None):
+    if not isinstance(status, Mapping):
+        return []
+    alerts = status.get("codex_alerts")
+    if not isinstance(alerts, list):
+        return []
+    observed_routes = [
+        item["route"]
+        for item in alerts
+        if isinstance(item, dict)
+        and isinstance(item.get("route"), str)
+        and _TASK_ROUTE_PATTERN.fullmatch(item["route"]) is not None
+    ]
+    registry = route_registry or TaskRouteRegistry()
+    registry.update([], observed_routes=observed_routes)
+    return [
+        item
+        for item in alerts
+        if isinstance(item, dict)
+        and item.get("state") in ("pending", "running")
+        and isinstance(item.get("route"), str)
+        and _TASK_ROUTE_PATTERN.fullmatch(item["route"]) is not None
+        and not registry.is_tombstoned(item["route"])
+    ]
+
+
+def _watch_codex_status(
+    status: Mapping[str, object], active_alerts=None
+):
     result = {}
     if "codex_model" in status:
         result["codex_model"] = _strict_bounded_text(
@@ -328,30 +371,20 @@ def _watch_codex_status(status: Mapping[str, object]):
         )
     alerts = status.get("codex_alerts")
     if isinstance(alerts, list):
-        route_counts = {}
-        route_alerts = []
-        for item in alerts:
-            if (
-                not isinstance(item, dict)
-                or item.get("state") not in ("pending", "running")
-                or not isinstance(item.get("route"), str)
-                or _TASK_ROUTE_PATTERN.fullmatch(item["route"]) is None
-            ):
-                continue
-            route = item["route"]
-            route_counts[route] = route_counts.get(route, 0) + 1
-            route_alerts.append(item)
-        active_alerts = []
-        for item in route_alerts:
-            if route_counts[item["route"]] != 1:
-                continue
+        normalized_alerts = (
+            _normalized_active_alerts(status)
+            if active_alerts is None
+            else active_alerts
+        )
+        display_alerts = []
+        for item in normalized_alerts:
             project = _strict_bounded_text(
                 item.get("project"), MAX_PROJECT_LENGTH
             )
             title = _strict_bounded_text(item.get("title"), MAX_TITLE_LENGTH)
             if project is None or title is None:
                 continue
-            active_alerts.append(
+            display_alerts.append(
                 {
                     "route": item["route"],
                     "project": project,
@@ -359,12 +392,12 @@ def _watch_codex_status(status: Mapping[str, object]):
                     "state": item["state"],
                 }
             )
-        active_alerts.sort(
+        display_alerts.sort(
             key=lambda item: 0 if item.get("state") == "pending" else 1
         )
         result["codex_alerts"] = [
             item
-            for item in active_alerts[:MAX_WATCH_ALERTS]
+            for item in display_alerts[:MAX_WATCH_ALERTS]
         ]
         while result["codex_alerts"] and len(
             _compact_json_bytes(result)
@@ -440,6 +473,7 @@ def task_detail_messages(
     status,
     max_size=MAX_MESSAGE_SIZE,
     retained_routes=None,
+    active_alerts=None,
 ):
     """Return detail payloads with at most 12 KiB of reply plus a marker."""
     if not isinstance(status, Mapping):
@@ -449,19 +483,11 @@ def task_detail_messages(
     if not isinstance(alerts, list):
         return []
     messages = []
-    route_counts = {}
-    active_alerts = []
-    for alert in alerts:
-        if not isinstance(alert, dict) or alert.get("state") not in (
-            "pending",
-            "running",
-        ):
-            continue
-        route = alert.get("route")
-        if not isinstance(route, str) or _TASK_ROUTE_PATTERN.fullmatch(route) is None:
-            continue
-        route_counts[route] = route_counts.get(route, 0) + 1
-        active_alerts.append(alert)
+    normalized_alerts = (
+        _normalized_active_alerts(status)
+        if active_alerts is None
+        else active_alerts
+    )
     if retained_routes is None:
         compact_status = _watch_codex_status(status)
         retained_routes = {
@@ -469,9 +495,9 @@ def task_detail_messages(
             for item in compact_status.get("codex_alerts", [])
         }
     allowed_routes = set(retained_routes)
-    for alert in active_alerts:
+    for alert in normalized_alerts:
         route = alert["route"]
-        if route_counts[route] != 1 or route not in allowed_routes:
+        if route not in allowed_routes:
             continue
         reply = alert.get("last_reply")
         if not isinstance(reply, str):

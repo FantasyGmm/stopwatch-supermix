@@ -113,6 +113,17 @@ class TaskRouteRegistryTests(unittest.TestCase):
 
         self.assertIsNone(registry.resolve(route))
 
+    def test_observed_route_collision_tombstones_completed_peer(self):
+        route = "01e0a1b2900f0425"
+        target = self.target(route=route)
+        registry = TaskRouteRegistry()
+
+        registry.update([target], observed_routes=[route, route])
+        registry.update([target], observed_routes=[route])
+
+        self.assertIsNone(registry.resolve(route))
+        self.assertTrue(registry.is_tombstoned(route))
+
     def test_collision_publication_never_exposes_tombstoned_target(self):
         route = "01e0a1b2900f0425"
         first = self.target(route=route)

@@ -82,7 +82,11 @@ class TaskRouteRegistry:
         self._targets: Dict[str, TaskRouteTarget] = {}
         self._collided_routes: Set[str] = set()
 
-    def update(self, targets: Iterable[TaskRouteTarget]) -> None:
+    def update(
+        self,
+        targets: Iterable[TaskRouteTarget],
+        observed_routes: Optional[Iterable[str]] = None,
+    ) -> None:
         grouped = {}
         for target in targets:
             _validate_target(target, self._route_deriver)
@@ -92,6 +96,14 @@ class TaskRouteRegistry:
             for route, route_targets in grouped.items()
             if len(route_targets) > 1
         }
+        if observed_routes is not None:
+            observed_counts: Dict[str, int] = {}
+            for route in observed_routes:
+                _validate_route(route)
+                observed_counts[route] = observed_counts.get(route, 0) + 1
+            collisions.update(
+                route for route, count in observed_counts.items() if count > 1
+            )
         with self._lock:
             self._collided_routes.update(collisions)
             self._targets = {
@@ -105,6 +117,11 @@ class TaskRouteRegistry:
         _validate_route(route)
         with self._lock:
             return self._targets.get(route)
+
+    def is_tombstoned(self, route: str) -> bool:
+        _validate_route(route)
+        with self._lock:
+            return route in self._collided_routes
 
     def reset(self) -> None:
         with self._lock:

@@ -16,9 +16,19 @@ allowlisted workspace metadata, and newly appended local log events. A
 private-format parse failure degrades the Trae page to `WAIT` and `--` values
 without affecting Codex.
 
-No raw prompt, response, source code, tool argument, tool output, request header,
-or log line is persisted or transmitted. Only bounded normalized fields such as
-project, short task title, state, model, and effort leave the collector.
+Task names and status use the existing status channel. Exact last replies are
+encrypted and authenticated with the paired master key and its key epoch; reply
+plaintext is never sent or logged. Route metadata remains visible and is
+authenticated as part of each encrypted detail envelope. Raw prompts, source
+code, tool arguments, tool output, request headers, and raw log lines are not
+included in watch updates. This is an application-layer protection and does not
+assert that the BLE link itself is encrypted.
+
+If two snapshot records expose the same opaque route, that route is excluded
+from both the compact task list and encrypted details for the rest of the
+connected Agent session, even if one record later disappears. A new BLE session
+starts with a fresh registry and accepts the route only when its authoritative
+snapshot has no collision.
 
 ## Install
 
@@ -192,8 +202,9 @@ over silently missing a task that is waiting for the user. A normal response
 becomes Completed without a chime. A later user message completes older Pending
 records in that conversation without affecting another conversation.
 
-Classification stays entirely local and does not send response text to the
-watch. Each completed alert stores an explainable reason such as
+Classification stays local, while an exact last reply may be sent to the watch
+only in the encrypted and authenticated detail envelope described above. Each
+completed alert stores an explainable reason such as
 `structured_unfinished_plan`, `structured_input_request`, `text_question`, or
 `completion_only`, so incorrect classifications can be diagnosed from the
 ledger and log without exposing prompt or response content.
@@ -208,8 +219,9 @@ Pending chime.
 The project name is derived from the conversation working directory, and the
 conversation title is refreshed through Codex's local app-server so generated
 short titles replace initial prompt text. The watch displays only project,
-short conversation title, and localized state; it does not display prompt or
-response content. Pending records have priority and rotate exclusively. When no
+short conversation title, and localized state in the compact list; selecting a
+task can display its securely delivered exact last reply. Pending records have
+priority and rotate exclusively. When no
 Pending exists, Running records rotate. With neither active state, the latest
 Completed record remains static under a green `COMPLETED` heading.
 

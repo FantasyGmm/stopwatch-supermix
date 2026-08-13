@@ -724,13 +724,14 @@ class AgentRuntime:
                 if failure is not None:
                     await self._isolate_voice_failure(context, failure)
                 sent_generation = self._status_generation
-                await status_agent.tick(status=dict(self._latest_status))
                 detail_credential = (
                     context.voice_key,
                     context.voice_key_epoch,
                 )
-                await self._refresh_secure_credential(context)
-                if detail_credential != (
+                detail_safe = await self._refresh_secure_credential(context)
+                if detail_safe is False:
+                    status_agent.disable_detail_credential()
+                elif detail_credential != (
                     context.voice_key,
                     context.voice_key_epoch,
                 ):
@@ -738,6 +739,7 @@ class AgentRuntime:
                         context.voice_key,
                         context.voice_key_epoch,
                     )
+                await status_agent.tick(status=dict(self._latest_status))
                 failure = await self._wait_for_status_interval(
                     transport,
                     ignore_voice_failure=context.voice_failed,
@@ -754,12 +756,12 @@ class AgentRuntime:
 
     async def _refresh_secure_credential(
         self, context: _BleSessionContext
-    ) -> None:
+    ) -> bool:
         if self._secure_authorizer is None or context.credential is None:
-            return
+            return True
         refresh = getattr(self._secure_authorizer, "refresh_if_needed", None)
         if refresh is None:
-            return
+            return True
         try:
             updated = await refresh(
                 context.transport,
@@ -770,22 +772,22 @@ class AgentRuntime:
             if not context.voice_failed:
                 await self._isolate_voice_failure(context, error)
             LOGGER.exception("Active Agent rekey failed; status remains active")
-            return
+            return False
         except Exception as error:
             LOGGER.warning(
                 "Active Agent epoch check deferred; existing voice remains active: %s",
                 error,
             )
-            return
+            return True
         if updated == context.credential:
-            return
-        await self._replace_voice_credential(context, updated)
+            return True
+        return await self._replace_voice_credential(context, updated)
 
     async def _replace_voice_credential(
         self,
         context: _BleSessionContext,
         credential: WatchCredential,
-    ) -> None:
+    ) -> bool:
         retired_consumer = self._retire_voice_generation(context.transport)
         await self._disable_voice(context.transport, None)
         if context.voice_service is not None:
@@ -800,7 +802,7 @@ class AgentRuntime:
                     VoiceState.ERROR,
                     "Voice session could not restart after rekey",
                 )
-                return
+                return False
             context.voice_service = None
         if retired_consumer is not None:
             await self._bounded_cleanup(
@@ -812,6 +814,7 @@ class AgentRuntime:
         context.voice_key_epoch = credential.key_epoch
         context.voice_failed = False
         await self._prepare_voice(context)
+        return True
 
     async def _prepare_voice(self, context: _BleSessionContext) -> None:
         key = context.voice_key

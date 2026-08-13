@@ -65,8 +65,13 @@ P-256 ECDH and shows the same six-digit verification code on both devices; the
 watch must be approved physically before the Agent is authorized. Up to eight
 Agents can be stored. Pull down on the watch Codex page to choose the active
 Agent, while a new pairing request remains pending without interrupting the
-current connection. The Agent sends only rendered status fields, never OAuth
-credentials, prompts, responses, or source code.
+current connection. Task names and status use the existing status channel.
+Exact last replies are encrypted and authenticated with the paired master key
+and its key epoch; reply plaintext is never sent or logged. Route metadata
+remains visible and is authenticated as part of each encrypted detail envelope.
+OAuth credentials, prompts, source code, tool arguments, and tool output are
+not included in these watch updates. This is an application-layer protection;
+it makes no claim that the BLE link itself is encrypted.
 
 Each Mac keeps its own signing identity in Keychain. The watch keeps one
 random master voice key shared with its authorized Agents and sends the current

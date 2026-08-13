@@ -23,6 +23,7 @@ from pairing_client import (
 from secure_pairing_crypto import public_key_bytes
 from protocol import EVENT_MESSAGE, STATUS_MESSAGE
 from runtime import (
+    ActiveRekeyError,
     VOICE_KEY_EPOCH,
     AgentCommand,
     AgentController,
@@ -368,6 +369,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 context.voice_key = updated.master_key
                 context.voice_key_epoch = updated.key_epoch
                 context.transport._connected = False
+                return True
 
         voice_service = type(
             "VoiceSession",
@@ -391,6 +393,179 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result, "disconnected")
         self.assertEqual(rotations, [(updated.master_key, updated.key_epoch)])
+
+    async def test_secure_credential_refresh_precedes_every_status_tick(self):
+        credential = WatchCredential(
+            bytes(range(16)), b"K" * 16, 9, b"F" * 16, b"\x02" + b"W" * 32
+        )
+        events = []
+
+        class Authorizer:
+            async def authorize(self, transport, publish):
+                return credential
+
+            async def refresh_if_needed(self, transport, current, publish):
+                events.append("refresh")
+                return current
+
+        class StatusAgentSpy:
+            def __init__(self, collector, transport, **kwargs):
+                self.transport = transport
+                self.detail_enabled = True
+
+            async def sync_time(self):
+                pass
+
+            async def tick(self, status=None):
+                events.append("detail" if self.detail_enabled else "compact")
+                self.transport._connected = False
+
+            def update_detail_credential(self, key, epoch):
+                events.append("rotate")
+
+            def disable_detail_credential(self):
+                events.append("disable")
+                self.detail_enabled = False
+
+        voice_service = type(
+            "VoiceSession",
+            (),
+            {
+                "state": VoiceState.ERROR,
+                "prepare": lambda self: asyncio.sleep(0, result=VoiceState.ERROR),
+                "disconnect": lambda self: asyncio.sleep(0),
+            },
+        )()
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            transport_factory=FakeTransportFactory([{}]),
+            secure_authorizer=Authorizer(),
+            voice_session_factory=lambda key, key_epoch: voice_service,
+            status_interval=0,
+        )
+
+        with patch("runtime.CodexStatusAgent", StatusAgentSpy):
+            await runtime._run_session()
+
+        self.assertEqual(events[:2], ["refresh", "detail"])
+
+    async def test_rekey_cleanup_failure_disables_detail_before_next_tick(self):
+        original = WatchCredential(
+            bytes(range(16)), b"K" * 16, 9, b"F" * 16, b"\x02" + b"W" * 32
+        )
+        updated = WatchCredential(
+            original.watch_id,
+            b"N" * 16,
+            10,
+            original.fingerprint,
+            original.watch_identity_public,
+        )
+        events = []
+
+        class Authorizer:
+            async def authorize(self, transport, publish):
+                return original
+
+            async def refresh_if_needed(self, transport, current, publish):
+                return updated
+
+        class StatusAgentSpy:
+            def __init__(self, collector, transport, **kwargs):
+                self.transport = transport
+                self.detail_enabled = True
+
+            async def sync_time(self):
+                pass
+
+            async def tick(self, status=None):
+                events.append("detail" if self.detail_enabled else "compact")
+                self.transport._connected = False
+
+            def update_detail_credential(self, key, epoch):
+                events.append(("rotate", key, epoch))
+
+            def disable_detail_credential(self):
+                events.append("disable")
+                self.detail_enabled = False
+
+        class VoiceService:
+            state = VoiceState.ERROR
+
+            async def prepare(self):
+                return VoiceState.ERROR
+
+            async def disconnect_bounded(self, timeout):
+                return False
+
+            async def disconnect(self):
+                pass
+
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            transport_factory=FakeTransportFactory([{}]),
+            secure_authorizer=Authorizer(),
+            voice_session_factory=lambda key, key_epoch: VoiceService(),
+            status_interval=0,
+        )
+
+        with patch("runtime.CodexStatusAgent", StatusAgentSpy):
+            await runtime._run_session()
+
+        self.assertEqual(events, ["disable", "compact"])
+
+    async def test_active_rekey_failure_disables_detail_before_next_tick(self):
+        credential = WatchCredential(
+            bytes(range(16)), b"K" * 16, 9, b"F" * 16, b"\x02" + b"W" * 32
+        )
+        events = []
+
+        class Authorizer:
+            async def authorize(self, transport, publish):
+                return credential
+
+            async def refresh_if_needed(self, transport, current, publish):
+                raise ActiveRekeyError("retired")
+
+        class StatusAgentSpy:
+            def __init__(self, collector, transport, **kwargs):
+                self.transport = transport
+                self.detail_enabled = True
+
+            async def sync_time(self):
+                pass
+
+            async def tick(self, status=None):
+                events.append("detail" if self.detail_enabled else "compact")
+                self.transport._connected = False
+
+            def update_detail_credential(self, key, epoch):
+                events.append("rotate")
+
+            def disable_detail_credential(self):
+                events.append("disable")
+                self.detail_enabled = False
+
+        voice_service = type(
+            "VoiceSession",
+            (),
+            {
+                "state": VoiceState.ERROR,
+                "prepare": lambda self: asyncio.sleep(0, result=VoiceState.ERROR),
+                "disconnect": lambda self: asyncio.sleep(0),
+            },
+        )()
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            transport_factory=FakeTransportFactory([{}]),
+            secure_authorizer=Authorizer(),
+            voice_session_factory=lambda key, key_epoch: voice_service,
+            status_interval=0,
+        )
+
+        with patch("runtime.CodexStatusAgent", StatusAgentSpy):
+            await runtime._run_session()
+
+        self.assertEqual(events, ["disable", "compact"])
 
     async def test_rollout_change_publishes_before_long_heartbeat(self):
         class ChangeCollector(FakeCollector):
@@ -2233,6 +2408,38 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 await wait_for_state(runtime, expected)
                 runtime.submit(AgentCommand.STOP)
                 await asyncio.wait_for(task, 1)
+
+
+class PrivacyDocumentationContractTests(unittest.TestCase):
+    def test_readmes_document_secure_task_detail_boundary(self):
+        root = pathlib.Path(__file__).resolve().parents[2]
+        for path in (root / "README.md", root / "mac-codex-agent/README.md"):
+            with self.subTest(path=path):
+                normalized = " ".join(
+                    path.read_text(encoding="utf-8").split()
+                ).lower()
+                self.assertIn(
+                    "task names and status use the existing status channel",
+                    normalized,
+                )
+                self.assertIn(
+                    "exact last replies are encrypted and authenticated",
+                    normalized,
+                )
+                self.assertIn(
+                    "paired master key and its key epoch", normalized
+                )
+                self.assertIn(
+                    "reply plaintext is never sent or logged", normalized
+                )
+                self.assertIn("route metadata remains visible", normalized)
+                self.assertNotIn(
+                    "never oauth credentials, prompts, responses, or source code",
+                    normalized,
+                )
+                self.assertNotIn(
+                    "does not send response text to the watch", normalized
+                )
 
 
 class FakeRuntime:
