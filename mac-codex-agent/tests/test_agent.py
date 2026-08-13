@@ -1098,6 +1098,49 @@ class CodexStatusAgentTests(unittest.TestCase):
 
         self.assertEqual(agent._task_detail_nonce, replacement)
 
+    def test_detail_reenable_with_same_credential_uses_fresh_nonce_and_sequence(self):
+        collector = FakeCollector()
+        collector.pending_ids = ()
+        transport = FakeTransport()
+        replacement = bytes.fromhex("2021222324252627")
+        nonces = iter((TEST_DETAIL_NONCE, replacement))
+        agent = CodexStatusAgent(
+            collector=collector,
+            transport=transport,
+            detail_key=TEST_DETAIL_KEY,
+            detail_key_epoch=TEST_DETAIL_EPOCH,
+            detail_nonce_factory=lambda: next(nonces),
+        )
+        status = {
+            "codex_alert_revision": 2,
+            "codex_alerts": [
+                {
+                    "route": "0123456789abcdef",
+                    "project": "p",
+                    "title": "t",
+                    "state": "running",
+                    "last_reply": "exact",
+                }
+            ],
+        }
+
+        asyncio.run(agent.tick(status=status))
+        agent.disable_detail_credential()
+        asyncio.run(agent.tick(status=status))
+        agent.update_detail_credential(TEST_DETAIL_KEY, TEST_DETAIL_EPOCH)
+        asyncio.run(agent.tick(status=status))
+
+        details = [
+            payload
+            for _, payload in transport.messages
+            if payload.get("type") == "task_detail"
+        ]
+        self.assertEqual([item["sequence"] for item in details], [1, 1])
+        self.assertEqual(
+            [bytes.fromhex(item["nonce"]) for item in details],
+            [TEST_DETAIL_NONCE, replacement],
+        )
+
     def test_task_detail_change_resends_and_disappearance_allows_reappearance(self):
         collector = FakeCollector()
         collector.pending_ids = ()

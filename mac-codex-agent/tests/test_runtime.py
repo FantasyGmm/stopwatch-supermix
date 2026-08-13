@@ -28,6 +28,7 @@ from runtime import (
     AgentCommand,
     AgentController,
     AgentRuntime,
+    SecureCredentialRefresh,
     SecureConnectionAuthorizer,
     _create_voice_session,
 )
@@ -567,6 +568,87 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(events, ["disable", "compact"])
 
+    async def test_uncertain_ticks_suppress_details_until_verified_unchanged(self):
+        credential = WatchCredential(
+            bytes(range(16)), b"K" * 16, 9, b"F" * 16, b"\x02" + b"W" * 32
+        )
+        refreshes = iter(
+            (
+                SecureCredentialRefresh(credential, verified=False),
+                RuntimeError("temporary discovery failure"),
+                SecureCredentialRefresh(credential, verified=True),
+            )
+        )
+        events = []
+
+        class Authorizer:
+            async def authorize(self, transport, publish):
+                return credential
+
+            async def refresh_if_needed(self, transport, current, publish):
+                result = next(refreshes)
+                if isinstance(result, Exception):
+                    raise result
+                return result
+
+        class StatusAgentSpy:
+            def __init__(self, collector, transport, **kwargs):
+                self.transport = transport
+                self.detail_enabled = True
+
+            async def sync_time(self):
+                pass
+
+            async def tick(self, status=None):
+                events.append("detail" if self.detail_enabled else "compact")
+                ticks = [
+                    item
+                    for item in events
+                    if item in ("detail", "compact")
+                ]
+                if len(ticks) == 3:
+                    self.transport._connected = False
+
+            def update_detail_credential(self, key, epoch):
+                events.append(("rotate", key, epoch))
+                self.detail_enabled = True
+
+            def disable_detail_credential(self):
+                events.append("disable")
+                self.detail_enabled = False
+
+        voice_service = type(
+            "VoiceSession",
+            (),
+            {
+                "state": VoiceState.ERROR,
+                "prepare": lambda self: asyncio.sleep(0, result=VoiceState.ERROR),
+                "disconnect": lambda self: asyncio.sleep(0),
+            },
+        )()
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            transport_factory=FakeTransportFactory([{}]),
+            secure_authorizer=Authorizer(),
+            voice_session_factory=lambda key, key_epoch: voice_service,
+            status_interval=0,
+        )
+
+        with patch("runtime.CodexStatusAgent", StatusAgentSpy):
+            await runtime._run_session()
+
+        self.assertEqual(
+            events,
+            [
+                "disable",
+                "compact",
+                "disable",
+                "compact",
+                ("rotate", credential.master_key, credential.key_epoch),
+                "detail",
+            ],
+        )
+
     async def test_rollout_change_publishes_before_long_heartbeat(self):
         class ChangeCollector(FakeCollector):
             def __init__(self):
@@ -890,7 +972,8 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             Transport(), old, lambda *state: states.append(state)
         )
 
-        self.assertEqual(result, updated)
+        self.assertEqual(result.credential, updated)
+        self.assertTrue(result.verified)
         self.assertEqual(client.arguments[2], old)
         self.assertEqual(states[0][0], PairingState.REKEYING)
         self.assertEqual(states[-1][0], PairingState.PAIRED)
@@ -918,7 +1001,8 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             Transport(), credential, lambda *state: states.append(state)
         )
 
-        self.assertEqual(result, credential)
+        self.assertEqual(result.credential, credential)
+        self.assertFalse(result.verified)
         self.assertEqual(states, [])
 
     async def test_runtime_does_not_open_production_surface_before_authorization(self):

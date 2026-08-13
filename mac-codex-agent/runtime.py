@@ -87,6 +87,14 @@ class ActiveRekeyError(RuntimeError):
     """The watch confirmed a new epoch but active rekey did not complete."""
 
 
+@dataclasses.dataclass(frozen=True)
+class SecureCredentialRefresh:
+    """Credential retained for voice plus its task-detail epoch confidence."""
+
+    credential: WatchCredential
+    verified: bool
+
+
 @dataclasses.dataclass
 class _BleSessionContext:
     transport: object
@@ -221,13 +229,13 @@ class SecureConnectionAuthorizer:
         transport,
         credential: WatchCredential,
         publish,
-    ) -> WatchCredential:
+    ) -> SecureCredentialRefresh:
         watch_suffix = credential.watch_id.hex()[-4:].upper()
         try:
             discovery = await transport.discover_watch()
         except Exception as error:
             LOGGER.warning("Active watch epoch check failed: %s", error)
-            return credential
+            return SecureCredentialRefresh(credential, verified=False)
         identity = await _run_in_daemon_thread(
             self._identity_store.load_or_create
         )
@@ -245,7 +253,7 @@ class SecureConnectionAuthorizer:
                     "active watch identity does not match Keychain"
                 )
             if discovery.key_epoch == credential.key_epoch:
-                return credential
+                return SecureCredentialRefresh(credential, verified=True)
             if discovery.key_epoch < credential.key_epoch:
                 raise PermissionError("watch credential epoch rolled back")
             publish(
@@ -276,7 +284,7 @@ class SecureConnectionAuthorizer:
                 watch_suffix,
                 identity.display_name,
             )
-            return updated
+            return SecureCredentialRefresh(updated, verified=True)
         except Exception as error:
             publish(
                 PairingState.ERROR,
@@ -716,6 +724,7 @@ class AgentRuntime:
             await self._prepare_voice(context)
             if self._status_ready is not None:
                 await self._status_ready.wait()
+            task_details_enabled = context.voice_key is not None
             while transport.connected:
                 if self._voice_refresh_requested.is_set():
                     self._voice_refresh_requested.clear()
@@ -731,14 +740,17 @@ class AgentRuntime:
                 detail_safe = await self._refresh_secure_credential(context)
                 if detail_safe is False:
                     status_agent.disable_detail_credential()
-                elif detail_credential != (
-                    context.voice_key,
-                    context.voice_key_epoch,
+                    task_details_enabled = False
+                elif (
+                    not task_details_enabled
+                    or detail_credential
+                    != (context.voice_key, context.voice_key_epoch)
                 ):
                     status_agent.update_detail_credential(
                         context.voice_key,
                         context.voice_key_epoch,
                     )
+                    task_details_enabled = context.voice_key is not None
                 await status_agent.tick(status=dict(self._latest_status))
                 failure = await self._wait_for_status_interval(
                     transport,
@@ -763,7 +775,7 @@ class AgentRuntime:
         if refresh is None:
             return True
         try:
-            updated = await refresh(
+            refresh_result = await refresh(
                 context.transport,
                 context.credential,
                 self._transition_pairing,
@@ -775,10 +787,18 @@ class AgentRuntime:
             return False
         except Exception as error:
             LOGGER.warning(
-                "Active Agent epoch check deferred; existing voice remains active: %s",
+                "Active Agent epoch check unverified; task details paused: %s",
                 error,
             )
-            return True
+            return False
+        if isinstance(refresh_result, SecureCredentialRefresh):
+            if not refresh_result.verified:
+                return False
+            updated = refresh_result.credential
+        else:
+            # Compatibility for injected test/development authorizers. The
+            # production authorizer always returns SecureCredentialRefresh.
+            updated = refresh_result
         if updated == context.credential:
             return True
         return await self._replace_voice_credential(context, updated)
