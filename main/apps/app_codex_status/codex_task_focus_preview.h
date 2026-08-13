@@ -25,9 +25,9 @@ struct TaskFocusPreviewData {
     std::array<TaskTrackState, kMaxTrackNodes> states{};
     size_t count = 0;
     size_t focused_index = 0;
-    size_t selected_index = 0;
     bool detail = false;
     bool recording = false;
+    bool connected = true;
 };
 
 
@@ -59,13 +59,11 @@ inline TaskFocusPreviewData task_focus_preview(TaskFocusPreviewScenario scenario
         data.project = "Codex Watch";
         data.title = "Build the authenticated task routing pipeline";
         data.focused_index = 3;
-        data.selected_index = 3;
         break;
     case TaskFocusPreviewScenario::MixedBoundary:
         data.project = "Agent";
         data.title = "整理协议实现并核对正式构建验证结果";
         data.focused_index = 3;
-        data.selected_index = 1;
         break;
     case TaskFocusPreviewScenario::LongCjkDetail:
         data.project = "超长项目名称用于验证圆形屏幕安全区域";
@@ -82,7 +80,6 @@ inline TaskFocusPreviewData task_focus_preview(TaskFocusPreviewScenario scenario
         data.detail = true;
         data.recording = true;
         data.focused_index = 3;
-        data.selected_index = 3;
         break;
     }
     return data;

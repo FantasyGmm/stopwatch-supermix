@@ -1,8 +1,10 @@
 #include "apps/app_codex_status/codex_task_focus_layout.h"
 #include "apps/app_codex_status/codex_task_focus_preview.h"
+#include "apps/app_codex_status/codex_task_focus_text.h"
 
 #include <array>
 #include <cassert>
+#include <cmath>
 
 
 namespace {
@@ -29,6 +31,9 @@ void assert_fixed_original_e_contract()
     static_assert(kTaskTitleY == 154);
     static_assert(kTaskTitleHeight == 104);
     static_assert(kTaskTitleMaxLines == 3);
+    static_assert(kLatinTitleScale == 315);
+    static_assert(kCjkTitleScale == 476);
+    static_assert(kCjkBodyScale == 293);
     static_assert(kStatusCenterY == 305);
     static_assert(kStatusHeight == 30);
     static_assert(kFocusTargetX == 36);
@@ -69,23 +74,25 @@ void assert_track_node_semantics_and_geometry()
         TaskTrackState::Running,
         TaskTrackState::Running,
     };
-    const auto nodes = make_track_nodes(states.data(), states.size(), 3, 1);
+    const auto nodes = make_track_nodes(states.data(), states.size(), 3);
 
     assert(nodes.count == 8);
     int previous_y = -1;
     for (size_t index = 0; index < nodes.count; ++index) {
         const auto& node = nodes.items[index];
         assert(node.center_x <= kTrackSafeMaxX);
-        assert(node.center_x >= kTrackSafeMinX);
+        assert(node.center_x >= kTrackCenterX - kTrackRadius);
         assert(node.center_y >= kTrackTopY);
         assert(node.center_y <= kTrackBottomY);
         assert(node.center_y > previous_y);
         previous_y = node.center_y;
-        assert(node.selected == (index == 1));
+        const int delta_x = node.center_x - kTrackCenterX;
+        const int delta_y = node.center_y - kTrackCenterY;
+        const double radius = std::sqrt(delta_x * delta_x + delta_y * delta_y);
+        assert(std::abs(radius - kTrackRadius) <= kTrackRadiusTolerance);
         if (index == 3) {
             assert(node.shape == TaskTrackShape::FocusedCapsule);
-            assert(node.color == kRunningCyan);
-            assert(node.accent_color == kGraphite);
+            assert(node.color == kBeaconViolet);
             assert(node.width == kFocusedNodeWidth);
             assert(node.height == kFocusedNodeHeight);
         } else if (index < 3) {
@@ -95,8 +102,6 @@ void assert_track_node_semantics_and_geometry()
             assert(node.shape == TaskTrackShape::RunningCircle);
             assert(node.color == kRunningCyan);
         }
-        assert(node.accent_color ==
-               (index == 1 ? kBeaconViolet : kGraphite));
     }
 }
 
@@ -107,14 +112,25 @@ void assert_track_handles_short_and_empty_lists()
         TaskTrackState::Pending,
         TaskTrackState::Running,
     };
-    const auto nodes = make_track_nodes(states.data(), states.size(), 0, 0);
+    const auto nodes = make_track_nodes(states.data(), states.size(), 0);
     assert(nodes.count == 2);
     assert(nodes.items[0].shape == TaskTrackShape::FocusedCapsule);
     assert(nodes.items[0].center_y < nodes.items[1].center_y);
-    assert(nodes.items[0].selected);
 
-    const auto empty = make_track_nodes(nullptr, 0, 0, 0);
+    const auto empty = make_track_nodes(nullptr, 0, 0);
     assert(empty.count == 0);
+}
+
+
+void assert_utf8_elision_is_bounded_and_valid()
+{
+    assert(elide_utf8("short", 5) == "short");
+    assert(elide_utf8("abcdef", 5) == "abcd…");
+    assert(elide_utf8("中文标题安全", 5) == "中文标题…");
+    assert(elide_utf8("😀😀😀😀", 3) == "😀😀…");
+    assert(elide_utf8("anything", 1) == "…");
+    assert(elide_utf8(nullptr, 5).empty());
+    assert(utf8_scalar_count(elide_utf8("中文标题安全", 5)) == 5);
 }
 
 
@@ -155,5 +171,6 @@ int main()
     assert_fixed_original_e_contract();
     assert_track_node_semantics_and_geometry();
     assert_track_handles_short_and_empty_lists();
+    assert_utf8_elision_is_bounded_and_valid();
     assert_deterministic_preview_scenarios();
 }

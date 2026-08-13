@@ -1,12 +1,14 @@
 #pragma once
 
 #include "codex_task_focus_deck.h"
+#include "codex_task_focus_preview.h"
 
 #include <lvgl.h>
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <string>
 
 
 enum class CodexTaskFocusViewMode : uint8_t {
@@ -27,6 +29,9 @@ public:
         bool connected
     );
     void set_recording(bool recording);
+    void show_preview(
+        codex_task_focus_layout::TaskFocusPreviewScenario scenario
+    );
     void set_visible(bool visible);
     bool contains_focus_point(int x, int y) const;
     void detail_scroll_by(int delta_y);
@@ -52,7 +57,6 @@ private:
     lv_obj_t* _track_layer = nullptr;
     lv_obj_t* _track_arc = nullptr;
     std::array<lv_obj_t*, 8> _track_nodes{};
-    std::array<lv_obj_t*, 8> _track_accents{};
     lv_obj_t* _detail_layer = nullptr;
     lv_obj_t* _detail_project = nullptr;
     lv_obj_t* _detail_title = nullptr;
@@ -67,4 +71,6 @@ private:
     bool _visible = true;
     bool _connected = false;
     bool _recording = false;
+    std::string _deck_title_text;
+    std::string _detail_title_text;
 };

@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cmath>
 
 
 namespace codex_task_focus_layout {
@@ -26,6 +27,12 @@ constexpr int kProjectHeight = 24;
 constexpr int kTaskTitleY = 154;
 constexpr int kTaskTitleHeight = 104;
 constexpr int kTaskTitleMaxLines = 3;
+constexpr size_t kDeckTitleCjkMaxScalars = 36;
+constexpr size_t kDeckTitleLatinMaxScalars = 54;
+constexpr size_t kDetailTitleMaxScalars = 30;
+constexpr int kLatinTitleScale = 315;  // 26 px source rendered at 32 px.
+constexpr int kCjkTitleScale = 476;   // 14 px source rendered at 26 px.
+constexpr int kCjkBodyScale = 293;    // 14 px source rendered at 16 px.
 constexpr int kStatusCenterY = 305;
 constexpr int kStatusHeight = 30;
 constexpr int kStatusPendingWidth = 142;
@@ -57,15 +64,19 @@ constexpr int kDetailFooterHeight = 44;
 constexpr int kTrackCenterX = 421;
 constexpr int kTrackCenterY = 234;
 constexpr int kTrackRadius = 132;
-constexpr int kTrackSafeMinX = 378;
 constexpr int kTrackSafeMaxX = 426;
-constexpr int kTrackTopY = 132;
-constexpr int kTrackBottomY = 338;
+// LVGL angles increase clockwise: 90 is bottom, 180 left, 270 top.
+constexpr int kTrackArcStartAngleDegrees = 92;
+constexpr int kTrackArcEndAngleDegrees = 268;
+constexpr int kTrackNodeStartAngleDegrees = 268;
+constexpr int kTrackNodeEndAngleDegrees = 92;
+constexpr int kTrackTopY = 102;
+constexpr int kTrackBottomY = 366;
+constexpr int kTrackRadiusTolerance = 2;
 constexpr size_t kMaxTrackNodes = 8;
 constexpr int kInactiveNodeSize = 8;
 constexpr int kFocusedNodeWidth = 10;
 constexpr int kFocusedNodeHeight = 24;
-constexpr int kSelectedAccentWidth = 2;
 
 constexpr bool kUsesCards = false;
 constexpr bool kUsesGradients = false;
@@ -92,8 +103,6 @@ struct TaskTrackNode {
     int height = 0;
     TaskTrackShape shape = TaskTrackShape::RunningCircle;
     uint32_t color = kGraphite;
-    uint32_t accent_color = kGraphite;
-    bool selected = false;
 };
 
 
@@ -106,8 +115,7 @@ struct TaskTrackNodes {
 inline TaskTrackNodes make_track_nodes(
     const TaskTrackState* states,
     size_t count,
-    size_t focused_index,
-    size_t selected_index
+    size_t focused_index
 )
 {
     TaskTrackNodes result;
@@ -116,27 +124,26 @@ inline TaskTrackNodes make_track_nodes(
     }
     result.count = count < kMaxTrackNodes ? count : kMaxTrackNodes;
 
-    constexpr std::array<int, kMaxTrackNodes> kArcX = {
-        386, 399, 409, 416, 416, 409, 399, 386,
-    };
-    constexpr std::array<int, kMaxTrackNodes> kArcY = {
-        134, 163, 192, 221, 250, 279, 308, 337,
-    };
-
     for (size_t index = 0; index < result.count; ++index) {
-        const size_t slot = result.count == 1
-            ? 3
-            : index * (kMaxTrackNodes - 1) / (result.count - 1);
+        const double angle_degrees = result.count == 1
+            ? 180.0
+            : kTrackNodeStartAngleDegrees +
+                static_cast<double>(index) *
+                    (kTrackNodeEndAngleDegrees -
+                     kTrackNodeStartAngleDegrees) /
+                    static_cast<double>(result.count - 1);
+        const double angle = angle_degrees * 3.14159265358979323846 / 180.0;
         TaskTrackNode& node = result.items[index];
-        node.center_x = kArcX[slot];
-        node.center_y = kArcY[slot];
-        node.selected = index == selected_index;
+        node.center_x = static_cast<int>(std::lround(
+            kTrackCenterX + kTrackRadius * std::cos(angle)));
+        node.center_y = static_cast<int>(std::lround(
+            kTrackCenterY + kTrackRadius * std::sin(angle)));
         node.color = states[index] == TaskTrackState::Pending
             ? kPendingVermilion
             : kRunningCyan;
-        node.accent_color = node.selected ? kBeaconViolet : kGraphite;
         if (index == focused_index) {
             node.shape = TaskTrackShape::FocusedCapsule;
+            node.color = kBeaconViolet;
             node.width = kFocusedNodeWidth;
             node.height = kFocusedNodeHeight;
         } else {

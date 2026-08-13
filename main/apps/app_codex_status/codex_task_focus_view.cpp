@@ -1,6 +1,7 @@
 #include "codex_task_focus_view.h"
 
 #include "codex_task_focus_layout.h"
+#include "codex_task_focus_text.h"
 
 #include <assets/assets.h>
 
@@ -109,6 +110,15 @@ const lv_font_t* title_font(const char* text)
 }
 
 
+void set_text_scale(lv_obj_t* label, int scale)
+{
+    lv_obj_set_style_transform_scale_x(label, scale, 0);
+    lv_obj_set_style_transform_scale_y(label, scale, 0);
+    lv_obj_set_style_transform_pivot_x(label, 0, 0);
+    lv_obj_set_style_transform_pivot_y(label, 0, 0);
+}
+
+
 const char* status_text(CodexTaskState state)
 {
     return state == CodexTaskState::Pending ? "等待你的指令" : "正在执行";
@@ -173,8 +183,10 @@ void CodexTaskFocusView::init(lv_obj_t* parent)
     lv_obj_set_pos(
         _track_arc, kTrackCenterX - kTrackRadius,
         kTrackCenterY - kTrackRadius);
-    lv_arc_set_bg_angles(_track_arc, 126, 234);
-    lv_arc_set_angles(_track_arc, 126, 126);
+    lv_arc_set_bg_angles(
+        _track_arc, kTrackArcStartAngleDegrees, kTrackArcEndAngleDegrees);
+    lv_arc_set_angles(
+        _track_arc, kTrackArcStartAngleDegrees, kTrackArcStartAngleDegrees);
     lv_obj_set_style_arc_width(_track_arc, 2, LV_PART_MAIN);
     lv_obj_set_style_arc_color(
         _track_arc, lv_color_hex(kGraphite), LV_PART_MAIN);
@@ -189,12 +201,6 @@ void CodexTaskFocusView::init(lv_obj_t* parent)
         lv_obj_set_style_bg_opa(_track_nodes[index], LV_OPA_COVER, 0);
         lv_obj_clear_flag(_track_nodes[index], LV_OBJ_FLAG_CLICKABLE);
         lv_obj_clear_flag(_track_nodes[index], LV_OBJ_FLAG_SCROLLABLE);
-        _track_accents[index] = lv_obj_create(_track_layer);
-        lv_obj_set_style_pad_all(_track_accents[index], 0, 0);
-        lv_obj_set_style_border_width(_track_accents[index], 0, 0);
-        lv_obj_set_style_bg_opa(_track_accents[index], LV_OPA_COVER, 0);
-        lv_obj_clear_flag(_track_accents[index], LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_clear_flag(_track_accents[index], LV_OBJ_FLAG_SCROLLABLE);
     }
 
     _detail_layer = make_layer(_root);
@@ -205,7 +211,7 @@ void CodexTaskFocusView::init(lv_obj_t* parent)
     _detail_title = make_label(
         _detail_layer, "", kContentX, kDetailTitleY, kContentWidth,
         kDetailTitleHeight, &MontserratSemiBold26, kSignalWhite,
-        LV_TEXT_ALIGN_CENTER, LV_LABEL_LONG_MODE_CLIP);
+        LV_TEXT_ALIGN_CENTER, LV_LABEL_LONG_MODE_DOTS);
     lv_obj_set_style_text_line_space(_detail_title, 2, 0);
     _detail_status = make_label(
         _detail_layer, "", kContentX, kDetailStatusY, kContentWidth,
@@ -229,6 +235,10 @@ void CodexTaskFocusView::init(lv_obj_t* parent)
         _detail_body, "暂无完整回复", 0, 0, kDetailBodyWidth - 12,
         LV_SIZE_CONTENT, &font_puhui_14_1, kSignalWhite,
         LV_TEXT_ALIGN_LEFT, LV_LABEL_LONG_MODE_WRAP);
+    set_text_scale(_detail_reply, kCjkBodyScale);
+    lv_obj_set_width(
+        _detail_reply,
+        (kDetailBodyWidth - 12) * 256 / kCjkBodyScale);
     lv_obj_set_style_text_line_space(_detail_reply, 7, 0);
 
     _detail_footer = make_label(
@@ -249,7 +259,6 @@ void CodexTaskFocusView::init(lv_obj_t* parent)
     set_hidden(_detail_recording_dot, true);
     for (size_t index = 0; index < _track_nodes.size(); ++index) {
         set_hidden(_track_nodes[index], true);
-        set_hidden(_track_accents[index], true);
     }
     _mode = CodexTaskFocusViewMode::Hidden;
     set_visible(false);
@@ -271,7 +280,6 @@ void CodexTaskFocusView::shutdown()
     _track_layer = nullptr;
     _track_arc = nullptr;
     _track_nodes = {};
-    _track_accents = {};
     _detail_layer = nullptr;
     _detail_project = nullptr;
     _detail_title = nullptr;
@@ -286,6 +294,8 @@ void CodexTaskFocusView::shutdown()
     _visible = false;
     _connected = false;
     _recording = false;
+    _deck_title_text.clear();
+    _detail_title_text.clear();
 }
 
 
@@ -312,9 +322,27 @@ void CodexTaskFocusView::show_deck(
         lv_label_set_text(_deck_project, task->project.c_str());
         lv_obj_set_style_text_font(
             _deck_project, project_font(task->project.c_str()), 0);
-        lv_label_set_text(_deck_title, task->title.c_str());
+        const int project_scale = has_non_ascii(task->project.c_str())
+            ? kCjkBodyScale
+            : 256;
+        set_text_scale(_deck_project, project_scale);
+        lv_obj_set_size(
+            _deck_project, kContentWidth * 256 / project_scale,
+            kProjectHeight * 256 / project_scale);
+        const bool cjk_title = has_non_ascii(task->title.c_str());
+        _deck_title_text = elide_utf8(
+            task->title.c_str(),
+            cjk_title ? kDeckTitleCjkMaxScalars
+                      : kDeckTitleLatinMaxScalars);
+        lv_label_set_text(_deck_title, _deck_title_text.c_str());
         lv_obj_set_style_text_font(
             _deck_title, title_font(task->title.c_str()), 0);
+        const int title_scale = cjk_title ? kCjkTitleScale : kLatinTitleScale;
+        set_text_scale(_deck_title, title_scale);
+        lv_obj_set_style_text_line_space(_deck_title, cjk_title ? 4 : 2, 0);
+        lv_obj_set_size(
+            _deck_title, kContentWidth * 256 / title_scale,
+            kTaskTitleHeight * 256 / title_scale);
         render_status(task, true);
     }
     render_track(deck);
@@ -339,9 +367,25 @@ void CodexTaskFocusView::show_detail(
     lv_label_set_text(_detail_project, task->project.c_str());
     lv_obj_set_style_text_font(
         _detail_project, project_font(task->project.c_str()), 0);
-    lv_label_set_text(_detail_title, task->title.c_str());
+    const int project_scale = has_non_ascii(task->project.c_str())
+        ? kCjkBodyScale
+        : 256;
+    set_text_scale(_detail_project, project_scale);
+    lv_obj_set_size(
+        _detail_project, kContentWidth * 256 / project_scale,
+        kDetailProjectHeight * 256 / project_scale);
+    _detail_title_text = elide_utf8(
+        task->title.c_str(), kDetailTitleMaxScalars);
+    lv_label_set_text(_detail_title, _detail_title_text.c_str());
     lv_obj_set_style_text_font(
         _detail_title, title_font(task->title.c_str()), 0);
+    const int detail_title_scale = has_non_ascii(task->title.c_str())
+        ? kCjkBodyScale
+        : 256;
+    set_text_scale(_detail_title, detail_title_scale);
+    lv_obj_set_size(
+        _detail_title, kContentWidth * 256 / detail_title_scale,
+        kDetailTitleHeight * 256 / detail_title_scale);
     render_status(task, false);
     if (reply == nullptr || reply[0] == '\0') {
         lv_label_set_text(_detail_reply, "暂无完整回复");
@@ -360,6 +404,42 @@ void CodexTaskFocusView::set_recording(bool recording)
     _recording = recording && _connected &&
         _mode == CodexTaskFocusViewMode::Detail;
     render_footer();
+}
+
+
+void CodexTaskFocusView::show_preview(TaskFocusPreviewScenario scenario)
+{
+    const TaskFocusPreviewData data = task_focus_preview(scenario);
+    CodexStatusSnapshot snapshot;
+    snapshot.alerts_valid = true;
+    for (size_t index = 0; index < data.count; ++index) {
+        CodexTaskAlert task;
+        task.route = index + 1;
+        task.project = data.project;
+        task.title = data.title;
+        task.state = data.states[index] == TaskTrackState::Pending
+            ? CodexTaskState::Pending
+            : CodexTaskState::Running;
+        snapshot.alerts.push_back(task);
+    }
+    CodexTaskFocusDeck deck;
+    deck.apply(snapshot);
+    for (size_t index = 0; index < data.focused_index; ++index) {
+        deck.browse(1);
+    }
+    show_deck(deck, data.connected);
+    set_visible(true);
+    if (data.detail) {
+        CodexTaskAlert task;
+        task.route = 1;
+        task.project = data.project;
+        task.title = data.title;
+        task.state = data.states[data.focused_index] == TaskTrackState::Pending
+            ? CodexTaskState::Pending
+            : CodexTaskState::Running;
+        show_detail(&task, data.reply, data.connected);
+        set_recording(data.recording);
+    }
 }
 
 
@@ -466,22 +546,17 @@ void CodexTaskFocusView::render_footer()
 void CodexTaskFocusView::render_track(const CodexTaskFocusDeck& deck)
 {
     std::array<TaskTrackState, kMaxTrackNodes> states{};
-    size_t selected_index = kMaxTrackNodes;
     for (size_t index = 0; index < deck.count(); ++index) {
         states[index] = deck.tasks()[index].state == CodexTaskState::Pending
             ? TaskTrackState::Pending
             : TaskTrackState::Running;
-        if (deck.tasks()[index].route == deck.selected_route()) {
-            selected_index = index;
-        }
     }
     const TaskTrackNodes geometry = make_track_nodes(
-        states.data(), deck.count(), deck.focused_index(), selected_index);
+        states.data(), deck.count(), deck.focused_index());
     _rendered_track_count = geometry.count;
     for (size_t index = 0; index < _track_nodes.size(); ++index) {
         const bool hidden = index >= geometry.count;
         set_hidden(_track_nodes[index], hidden);
-        set_hidden(_track_accents[index], hidden || !geometry.items[index].selected);
         if (hidden) {
             continue;
         }
@@ -491,7 +566,12 @@ void CodexTaskFocusView::render_track(const CodexTaskFocusDeck& deck)
             _track_nodes[index], node.center_x - node.width / 2,
             node.center_y - node.height / 2);
         lv_obj_set_style_bg_color(
-            _track_nodes[index], lv_color_hex(node.color), 0);
+            _track_nodes[index],
+            lv_color_hex(
+                node.shape == TaskTrackShape::FocusedCapsule
+                    ? kBeaconViolet
+                    : node.color),
+            0);
         lv_obj_set_style_radius(
             _track_nodes[index],
             node.shape == TaskTrackShape::RunningCircle ||
@@ -503,19 +583,6 @@ void CodexTaskFocusView::render_track(const CodexTaskFocusDeck& deck)
             _track_nodes[index],
             node.shape == TaskTrackShape::PendingDiamond ? 450 : 0,
             0);
-
-        lv_obj_set_size(
-            _track_accents[index], kSelectedAccentWidth,
-            node.shape == TaskTrackShape::FocusedCapsule ? node.height : 14);
-        lv_obj_set_pos(
-            _track_accents[index], node.center_x - node.width / 2 - 5,
-            node.center_y -
-                (node.shape == TaskTrackShape::FocusedCapsule
-                    ? node.height
-                    : 14) / 2);
-        lv_obj_set_style_radius(_track_accents[index], 1, 0);
-        lv_obj_set_style_bg_color(
-            _track_accents[index], lv_color_hex(node.accent_color), 0);
     }
 }
 
