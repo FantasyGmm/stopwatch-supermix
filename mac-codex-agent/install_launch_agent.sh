@@ -247,6 +247,7 @@ import completion_classifier
 import ima_adpcm
 import menu_app
 import protocol
+import rollout_change_watcher
 import runtime
 import pairing_client
 import secure_pairing_crypto
@@ -300,6 +301,7 @@ validate_app_contents() {
         "$resources/app/task_voice_submitter.py" \
         "$resources/app/task_routes.py" \
         "$resources/app/task_detail_crypto.py" \
+        "$resources/app/rollout_change_watcher.py" \
         "$resources/app/ima_adpcm.py" \
         "$resources/app/agent_identity.py" \
         "$resources/app/watch_credentials.py" \
@@ -585,6 +587,7 @@ build_staged_app() {
         task_voice_submitter.py \
         task_routes.py \
         task_detail_crypto.py \
+        rollout_change_watcher.py \
         watch_credentials.py \
         ima_adpcm.py; do
         cp "$ROOT_DIR/$module" "$STAGING_CODE/$module"

@@ -115,6 +115,7 @@ class InstallScriptTests(unittest.TestCase):
             "task_voice_submitter.py",
             "task_routes.py",
             "task_detail_crypto.py",
+            "rollout_change_watcher.py",
             "ima_adpcm.py",
         ):
             self.assertIn(module, script)
