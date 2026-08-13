@@ -73,7 +73,7 @@ reinstall_candidate_on_failure() {
         echo "Recovery exercise failed after restoring the backup; attempting to reinstall the unified candidate" >&2
         wait_for_port || true
         "$ROOT/scripts/flash_unified_candidate.sh" \
-            --port "$PORT" --backup "$BACKUP" --build-dir "$BUILD_DIR" || true
+            --port "$PORT" --build-dir "$BUILD_DIR" || true
     fi
     exit "$exit_code"
 }
@@ -87,7 +87,7 @@ if (( DRY_RUN )); then
         "$OUTPUT_DIR/restored-boot.json" "$OUTPUT_DIR/restored-boot.log"
     echo "RECOVERY STEP flash-unified-candidate"
     "$ROOT/scripts/flash_unified_candidate.sh" \
-        --dry-run --port "$PORT" --backup "$BACKUP" --build-dir "$BUILD_DIR"
+        --dry-run --port "$PORT" --build-dir "$BUILD_DIR"
     echo "RECOVERY STEP validate-unified-boot"
     printf 'DRY RUN: %q --port %q --summary %q --log %q\n' \
         "$ROOT/scripts/validate_watch_boot.py" "$PORT" \
@@ -111,7 +111,7 @@ echo "RECOVERY STEP validate-restored-boot"
 
 echo "RECOVERY STEP flash-unified-candidate"
 "$ROOT/scripts/flash_unified_candidate.sh" \
-    --port "$PORT" --backup "$BACKUP" --build-dir "$BUILD_DIR"
+    --port "$PORT" --build-dir "$BUILD_DIR"
 wait_for_port
 
 echo "RECOVERY STEP validate-unified-boot"

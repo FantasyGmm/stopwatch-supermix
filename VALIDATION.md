@@ -72,6 +72,10 @@ git diff --check
   `13488fc847f6538d7992408418032f3ccbca9ae58361439915136c184c299914`.
 - `git diff --check`: passed.
 
+Normal project flashing does not create or require a firmware backup. The
+candidate flasher still requires the exact bootloader, partition table,
+application, and assets artifacts and enforces partition and capacity limits.
+
 No physical button and no live Accessibility action was invoked by automated
 validation. The manual hardware cases below remain required.
 

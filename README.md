@@ -201,7 +201,7 @@ The launcher and apps use the shared key manager. Long-pressing both side button
 ├── patches/                          # Dependency/runtime patches
 ├── scripts/
 │   ├── build_unified_candidate.sh    # Isolated unified build and size gates
-│   ├── flash_unified_candidate.sh    # Backup-gated full candidate write
+│   ├── flash_unified_candidate.sh    # Capacity-gated full candidate write
 │   ├── run_unified_offline_validation.sh
 │   └── run_unified_hardware_validation.sh
 ├── partitions.csv                    # Default unified 16 MB layout
@@ -278,28 +278,22 @@ preserving at least 1.5 MiB inside the App partition.
 
 ## Flash
 
-Before the first unified write, create and retain a complete 16 MiB backup:
+Project policy does not require or create firmware backups during normal
+flashing. Build and capacity verification remain mandatory before writing.
 
-```bash
-./scripts/backup_watch_flash.sh \
-  --port /dev/cu.usbmodem1101 \
-  --output backups/watch-full-flash.bin
-```
-
-Flash the application, partition table, bootloader, and assets together. The script rejects a missing, short, or checksum-mismatched backup before writing:
+Flash the application, partition table, bootloader, and assets together:
 
 ```bash
 ./scripts/flash_unified_candidate.sh \
-  --port /dev/cu.usbmodem1101 \
-  --backup backups/watch-full-flash.bin
+  --port /dev/cu.usbmodem1101
 ```
 
-Run the complete hardware release gate (10 mixed lifecycles, all-app smoke, 50 mixed lifecycles, full-Flash restore exercise, and final smoke):
+Run the hardware release gate (10 mixed lifecycles, all-app smoke, 50 mixed
+lifecycles, and final smoke):
 
 ```bash
 ./scripts/run_unified_hardware_validation.sh \
-  --port /dev/cu.usbmodem1101 \
-  --backup backups/watch-full-flash.bin
+  --port /dev/cu.usbmodem1101
 ```
 
 ## BLE And Wi-Fi Setup

@@ -102,6 +102,40 @@ class UnifiedFlashToolsTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertNotIn("write_flash", result.stdout)
 
+    def test_candidate_flash_policy_never_requires_a_firmware_backup(self):
+        result = run_script(
+            "flash_unified_candidate.sh",
+            "--dry-run",
+            "--port",
+            "/dev/test",
+            "--build-dir",
+            self.build,
+        )
+        source = (SCRIPTS / "flash_unified_candidate.sh").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("write_flash", result.stdout)
+        self.assertNotIn("--backup", source)
+        self.assertNotIn("verify_backup", source)
+
+    def test_hardware_campaign_does_not_schedule_backup_recovery(self):
+        result = run_script(
+            "run_unified_hardware_validation.sh",
+            "--dry-run",
+            "--port",
+            "/dev/test",
+            "--build-dir",
+            self.build,
+            "--output-dir",
+            self.root / "hardware evidence",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("--backup", result.stdout)
+        self.assertNotIn("full-flash-recovery", result.stdout)
+
     def test_backup_dry_run_reads_the_complete_flash_without_erasing(self):
         output = self.root / "new backup with spaces.bin"
         result = run_script(
@@ -151,8 +185,6 @@ class UnifiedFlashToolsTest(unittest.TestCase):
             "--dry-run",
             "--port",
             "/dev/test",
-            "--backup",
-            self.backup,
             "--build-dir",
             self.build,
         )
@@ -183,8 +215,6 @@ class UnifiedFlashToolsTest(unittest.TestCase):
             "--dry-run",
             "--port",
             "/dev/test",
-            "--backup",
-            self.backup,
             "--build-dir",
             self.build,
         )
@@ -252,8 +282,6 @@ class UnifiedFlashToolsTest(unittest.TestCase):
                 str(SCRIPTS / "flash_unified_candidate.sh"),
                 "--port",
                 "/dev/test",
-                "--backup",
-                str(self.backup),
                 "--build-dir",
                 str(self.build),
             ],
@@ -298,8 +326,6 @@ class UnifiedFlashToolsTest(unittest.TestCase):
             "--dry-run",
             "--port",
             "/dev/test",
-            "--backup",
-            self.backup,
             "--build-dir",
             self.build,
             "--output-dir",
@@ -313,7 +339,6 @@ class UnifiedFlashToolsTest(unittest.TestCase):
             "mixed-10-cycles",
             "product-smoke",
             "mixed-50-cycles",
-            "full-flash-recovery",
             "final-product-smoke",
             "secure-multi-agent-acceptance",
         ):
@@ -371,8 +396,6 @@ class UnifiedFlashToolsTest(unittest.TestCase):
                 "--dry-run",
                 "--port",
                 "/dev/test",
-                "--backup",
-                str(self.backup),
                 "--build-dir",
                 str(self.build),
                 "--output-dir",
@@ -387,7 +410,7 @@ class UnifiedFlashToolsTest(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         write_lines = [line for line in result.stdout.splitlines() if "write_flash" in line]
-        self.assertEqual(len(write_lines), 3, result.stdout)
+        self.assertEqual(len(write_lines), 1, result.stdout)
         self.assertTrue(
             all(str(fake_python).replace(" ", "\\ ") in line for line in write_lines),
             result.stdout,
@@ -427,61 +450,6 @@ class UnifiedFlashToolsTest(unittest.TestCase):
         self.assert_rejected_before_write(result)
         self.assertIn("Backup checksum mismatch", result.stderr)
 
-    def test_candidate_requires_verified_complete_backup_even_in_dry_run(self):
-        pathlib.Path(f"{self.backup}.sha256").unlink()
-
-        result = run_script(
-            "flash_unified_candidate.sh",
-            "--dry-run",
-            "--port",
-            "/dev/test",
-            "--backup",
-            self.backup,
-            "--build-dir",
-            self.build,
-        )
-
-        self.assert_rejected_before_write(result)
-        self.assertIn("checksum sidecar is missing", result.stderr)
-
-    def test_candidate_rejects_short_backup_even_in_dry_run(self):
-        with self.backup.open("r+b") as backup_file:
-            backup_file.truncate(0x1000000 - 1)
-
-        result = run_script(
-            "flash_unified_candidate.sh",
-            "--dry-run",
-            "--port",
-            "/dev/test",
-            "--backup",
-            self.backup,
-            "--build-dir",
-            self.build,
-        )
-
-        self.assert_rejected_before_write(result)
-        self.assertIn("Backup size is invalid", result.stderr)
-
-    def test_candidate_rejects_mismatched_backup_hash_even_in_dry_run(self):
-        pathlib.Path(f"{self.backup}.sha256").write_text(
-            f"{'f' * 64}  {self.backup}\n",
-            encoding="utf-8",
-        )
-
-        result = run_script(
-            "flash_unified_candidate.sh",
-            "--dry-run",
-            "--port",
-            "/dev/test",
-            "--backup",
-            self.backup,
-            "--build-dir",
-            self.build,
-        )
-
-        self.assert_rejected_before_write(result)
-        self.assertIn("Backup checksum mismatch", result.stderr)
-
     def test_candidate_rejects_app_over_capacity_before_printing_write(self):
         with (self.build / "StopWatch-UserDemo.bin").open("wb") as app_file:
             app_file.truncate(0x660000 + 1)
@@ -491,8 +459,6 @@ class UnifiedFlashToolsTest(unittest.TestCase):
             "--dry-run",
             "--port",
             "/dev/test",
-            "--backup",
-            self.backup,
             "--build-dir",
             self.build,
         )
@@ -509,8 +475,6 @@ class UnifiedFlashToolsTest(unittest.TestCase):
             "--dry-run",
             "--port",
             "/dev/test",
-            "--backup",
-            self.backup,
             "--build-dir",
             self.build,
         )
@@ -556,8 +520,6 @@ class UnifiedFlashToolsTest(unittest.TestCase):
             "--dry-run",
             "--port",
             "/dev/test",
-            "--backup",
-            self.backup,
             "--build-dir",
             self.build,
         )
@@ -581,8 +543,6 @@ class UnifiedFlashToolsTest(unittest.TestCase):
                     "--dry-run",
                     "--port",
                     "/dev/test",
-                    "--backup",
-                    self.backup,
                     "--build-dir",
                     self.build,
                 )

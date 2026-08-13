@@ -4,7 +4,6 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT/scripts/resolve_esptool_python.sh"
 PORT=""
-BACKUP=""
 BUILD_DIR="$ROOT/build-unified"
 OUTPUT_DIR="$ROOT/build-unified/hardware-validation"
 DRY_RUN=0
@@ -25,7 +24,7 @@ SECURE_ACCEPTANCE_CHECKS=(
 )
 
 usage() {
-    echo "Usage: $0 --port PORT --backup FILE [--build-dir DIR] [--output-dir DIR] [--dry-run]" >&2
+    echo "Usage: $0 --port PORT [--build-dir DIR] [--output-dir DIR] [--dry-run]" >&2
 }
 
 while (( $# > 0 )); do
@@ -33,11 +32,6 @@ while (( $# > 0 )); do
         --port)
             [[ $# -ge 2 ]] || { usage; exit 2; }
             PORT="$2"
-            shift 2
-            ;;
-        --backup)
-            [[ $# -ge 2 ]] || { usage; exit 2; }
-            BACKUP="$2"
             shift 2
             ;;
         --build-dir)
@@ -68,8 +62,8 @@ done
 
 SECURE_ACCEPTANCE_FILE="$OUTPUT_DIR/secure-pairing-acceptance.md"
 
-if [[ -z "$PORT" || -z "$BACKUP" ]]; then
-    echo "Both --port and --backup are required" >&2
+if [[ -z "$PORT" ]]; then
+    echo "Missing required --port" >&2
     usage
     exit 2
 fi
@@ -127,7 +121,7 @@ write_secure_acceptance_checklist() {
 if (( DRY_RUN )); then
     echo "HARDWARE STEP flash-candidate"
     "$ROOT/scripts/flash_unified_candidate.sh" \
-        --dry-run --port "$PORT" --backup "$BACKUP" --build-dir "$BUILD_DIR"
+        --dry-run --port "$PORT" --build-dir "$BUILD_DIR"
     echo "HARDWARE STEP validate-candidate-boot"
     print_python_step validate_watch_boot.py --port "$PORT" \
         --summary "$OUTPUT_DIR/candidate-boot.json" --log "$OUTPUT_DIR/candidate-boot.log"
@@ -142,10 +136,6 @@ if (( DRY_RUN )); then
     print_python_step validate_assistant_graceful_close.py --port "$PORT" \
         --cycles 50 --profiles mixed --summary "$OUTPUT_DIR/assistant-50.json" \
         --log "$OUTPUT_DIR/assistant-50.log"
-    echo "HARDWARE STEP full-flash-recovery"
-    "$ROOT/scripts/exercise_full_flash_recovery.sh" --dry-run --port "$PORT" \
-        --backup "$BACKUP" --build-dir "$BUILD_DIR" \
-        --output-dir "$OUTPUT_DIR/recovery"
     echo "HARDWARE STEP final-product-smoke"
     print_python_step validate_product_smoke.py --port "$PORT" \
         --summary "$OUTPUT_DIR/final-product-smoke.json" \
@@ -158,7 +148,7 @@ mkdir -p "$OUTPUT_DIR"
 
 echo "HARDWARE STEP flash-candidate"
 "$ROOT/scripts/flash_unified_candidate.sh" \
-    --port "$PORT" --backup "$BACKUP" --build-dir "$BUILD_DIR"
+    --port "$PORT" --build-dir "$BUILD_DIR"
 wait_for_port
 
 echo "HARDWARE STEP validate-candidate-boot"
@@ -178,11 +168,6 @@ echo "HARDWARE STEP mixed-50-cycles"
 "$ROOT/scripts/validate_assistant_graceful_close.py" --port "$PORT" \
     --cycles 50 --profiles mixed --summary "$OUTPUT_DIR/assistant-50.json" \
     --log "$OUTPUT_DIR/assistant-50.log"
-
-echo "HARDWARE STEP full-flash-recovery"
-"$ROOT/scripts/exercise_full_flash_recovery.sh" --port "$PORT" \
-    --backup "$BACKUP" --build-dir "$BUILD_DIR" \
-    --output-dir "$OUTPUT_DIR/recovery"
 
 echo "HARDWARE STEP final-product-smoke"
 "$ROOT/scripts/validate_product_smoke.py" --port "$PORT" \
