@@ -415,6 +415,7 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
             ROOT / "main/apps/app_codex_status/voice_input_controller.h"
         ).read_text()
         self.assertIn("kChordGuardMs = 90", controller_header)
+        self.assertIn("kVoiceHoldMs = 500", controller_header)
         self.assertIn("CancelVoice", controller_header)
         opened = source.split("void AppCodexStatus::onOpen()", 1)[1].split(
             "void AppCodexStatus::onRunning()", 1

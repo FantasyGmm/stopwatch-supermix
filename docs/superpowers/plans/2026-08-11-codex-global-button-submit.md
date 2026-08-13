@@ -310,7 +310,7 @@ Expected: FAIL for missing input-action controller and GATT characteristics.
 
 - [ ] **Step 3: Expose short clicks from the existing edge gate**
 
-Add `ShortClick` to `VoiceButtonAction`. In `VoiceButtonEdgeGate::State::Pending`, return it when the right button releases before `kChordGuardMs`. Extend `VoiceButtonDispatcher` with a `CodexButtonGesture` member and a `CodexButtonActionSink*` parameter. Feed each short click, current right-button state, `Press` as `hold_started`, and wake/Home suppression into the classifier. Dispatch only final `Submit` or `ForceSteer` to the action sink.
+Add `ShortClick` to `VoiceButtonAction`. In `VoiceButtonEdgeGate::State::Pending`, return it when the right button releases before `kVoiceHoldMs`; keep `kChordGuardMs` independent for A+B Home arbitration. Extend `VoiceButtonDispatcher` with a `CodexButtonGesture` member and a `CodexButtonActionSink*` parameter. Feed each short click, current right-button state, `Press` as `hold_started`, and wake/Home suppression into the classifier. Dispatch only final `Submit` or `ForceSteer` to the action sink.
 
 Keep `VoiceInputController` as the voice sink; do not add desktop-action logic to it.
 

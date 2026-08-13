@@ -15,8 +15,9 @@ other watch application.
 
 ## Confirmed Interaction
 
-- Hold the upper-right button beyond the existing 90 ms chord guard to start
-  push-to-talk. Releasing it stops push-to-talk as it does today.
+- Hold the upper-right button for 500 ms to start push-to-talk. The separate
+  90 ms chord guard remains reserved for A+B Home arbitration. Releasing the
+  right button stops push-to-talk as it does today.
 - Complete one short click and wait 300 ms without a second click to request a
   normal submit.
 - Complete a second short click within the 300 ms window to request a forced
@@ -123,11 +124,12 @@ readiness only gate push-to-talk; they do not gate button submission.
 
 - A single click emits one `Submit` only after 300 ms.
 - A double click emits one `ForceSteer` and no preceding `Submit`.
-- A second press that becomes a hold cancels the pending click and starts
-  push-to-talk at the existing threshold.
+- A second press that reaches 500 ms cancels the pending click and starts
+  push-to-talk.
 - Wake, A+B Home, app close, disconnect, suppression, and 32-bit timer wrap do
   not leave a pending action.
-- Existing long-press voice latency and cancellation behavior remain intact.
+- The 500 ms long-press voice threshold and cancellation behavior remain
+  intact.
 
 ### Protocol and Agent
 

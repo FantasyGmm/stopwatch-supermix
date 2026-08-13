@@ -167,7 +167,7 @@ VoiceButtonAction VoiceButtonEdgeGate::update(
             _state = State::Idle;
             return VoiceButtonAction::ShortClick;
         }
-        if (now_ms - _pending_since_ms < kChordGuardMs) {
+        if (now_ms - _pending_since_ms < kVoiceHoldMs) {
             return VoiceButtonAction::None;
         }
         _state = State::Active;

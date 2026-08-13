@@ -399,6 +399,7 @@ output.chmod(0o700)
             "Voice Input: Error",
             "Set Up Watch Voice Input...",
             "90 ms",
+            "500 ms",
             "A+B",
             "wake press",
             "six-digit",
@@ -429,7 +430,7 @@ output.chmod(0o700)
         button_contract = (
             "Inside the watch Codex app, an upper-right single click submits after "
             "the 300 ms double-click window. A fast double click steers the running "
-            "turn, or sends once when idle. Holding beyond 90 ms still controls "
+            "turn, or sends once when idle. Holding for 500 ms still controls "
             "Typeless."
         )
         for document in (

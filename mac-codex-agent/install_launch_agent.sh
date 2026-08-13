@@ -559,6 +559,8 @@ build_staged_app() {
         agent.py \
         agent_identity.py \
         codex_adapter.py \
+        codex_submit.py \
+        input_action_protocol.py \
         combined_collector.py \
         completion_classifier.py \
         codex_turn_evidence.py \

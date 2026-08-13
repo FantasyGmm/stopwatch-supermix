@@ -91,8 +91,10 @@ public:
 
 class VoiceButtonEdgeGate {
 public:
-    // Keeps PTT start latency below 100 ms while reserving A+B for GoHome.
+    // Reserves an initial window for A+B GoHome arbitration.
     static constexpr uint32_t kChordGuardMs = 90;
+    // Keeps deliberate clicks distinct from push-to-talk holds.
+    static constexpr uint32_t kVoiceHoldMs = 500;
 
     void reset(bool right_pressed);
     VoiceButtonAction update(

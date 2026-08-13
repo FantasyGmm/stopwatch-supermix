@@ -66,6 +66,8 @@ class InstallScriptTests(unittest.TestCase):
             "agent.py",
             "agent_identity.py",
             "codex_adapter.py",
+            "codex_submit.py",
+            "input_action_protocol.py",
             "trae_tasks.py",
             "trae_adapter.py",
             "combined_collector.py",

@@ -756,30 +756,48 @@ void test_short_b_tap_does_not_start_voice()
            VoiceButtonAction::ShortClick);
 }
 
-void test_b_hold_starts_once_at_guard_boundary()
+void test_deliberate_226_ms_b_click_does_not_start_voice()
 {
-    static_assert(VoiceButtonEdgeGate::kChordGuardMs <= 100);
-    constexpr uint32_t guard = VoiceButtonEdgeGate::kChordGuardMs;
+    VoiceButtonEdgeGate gate;
+    gate.reset(false);
+    assert(gate.update(false, true, false, false, 0) ==
+           VoiceButtonAction::None);
+    assert(gate.update(false, true, false, false, 100) ==
+           VoiceButtonAction::None);
+    assert(gate.update(false, false, false, false, 226) ==
+           VoiceButtonAction::ShortClick);
+}
+
+void test_b_click_and_hold_boundary_is_500_ms()
+{
+    static_assert(VoiceButtonEdgeGate::kChordGuardMs == 90);
+    static_assert(VoiceButtonEdgeGate::kVoiceHoldMs == 500);
+    constexpr uint32_t hold = VoiceButtonEdgeGate::kVoiceHoldMs;
     VoiceButtonEdgeGate gate;
     gate.reset(false);
     assert(gate.update(false, true, false, false, 200) == VoiceButtonAction::None);
-    assert(gate.update(false, true, false, false, 200 + guard - 1) ==
+    assert(gate.update(false, false, false, false, 200 + hold - 1) ==
+           VoiceButtonAction::ShortClick);
+
+    gate.reset(false);
+    assert(gate.update(false, true, false, false, 800) == VoiceButtonAction::None);
+    assert(gate.update(false, true, false, false, 800 + hold - 1) ==
            VoiceButtonAction::None);
-    assert(gate.update(false, true, false, false, 200 + guard) ==
+    assert(gate.update(false, true, false, false, 800 + hold) ==
            VoiceButtonAction::Press);
-    assert(gate.update(false, true, false, false, 201 + guard) ==
+    assert(gate.update(false, true, false, false, 801 + hold) ==
            VoiceButtonAction::None);
 }
 
 void test_b_release_is_only_sent_after_press()
 {
-    constexpr uint32_t guard = VoiceButtonEdgeGate::kChordGuardMs;
+    constexpr uint32_t hold = VoiceButtonEdgeGate::kVoiceHoldMs;
     VoiceButtonEdgeGate gate;
     gate.reset(false);
     assert(gate.update(false, true, false, false, 200) == VoiceButtonAction::None);
-    assert(gate.update(false, true, false, false, 200 + guard) ==
+    assert(gate.update(false, true, false, false, 200 + hold) ==
            VoiceButtonAction::Press);
-    assert(gate.update(false, false, false, false, 202 + guard) ==
+    assert(gate.update(false, false, false, false, 202 + hold) ==
            VoiceButtonAction::Release);
 
     gate.reset(false);
@@ -789,17 +807,17 @@ void test_b_release_is_only_sent_after_press()
 
 void test_late_a_cancels_active_voice_before_home()
 {
-    constexpr uint32_t guard = VoiceButtonEdgeGate::kChordGuardMs;
+    constexpr uint32_t hold = VoiceButtonEdgeGate::kVoiceHoldMs;
     VoiceButtonEdgeGate gate;
     gate.reset(false);
     assert(gate.update(false, true, false, false, 400) == VoiceButtonAction::None);
-    assert(gate.update(false, true, false, false, 400 + guard) ==
+    assert(gate.update(false, true, false, false, 400 + hold) ==
            VoiceButtonAction::Press);
-    assert(gate.update(true, true, false, false, 401 + guard) ==
+    assert(gate.update(true, true, false, false, 401 + hold) ==
            VoiceButtonAction::CancelVoice);
-    assert(gate.update(true, true, false, true, 402 + guard) ==
+    assert(gate.update(true, true, false, true, 402 + hold) ==
            VoiceButtonAction::CancelHome);
-    assert(gate.update(false, false, false, false, 403 + guard) ==
+    assert(gate.update(false, false, false, false, 403 + hold) ==
            VoiceButtonAction::None);
 }
 
@@ -817,15 +835,15 @@ void test_wake_consumed_b_is_suppressed_through_release()
 
 void test_b_held_on_entry_requires_release_and_new_press()
 {
-    constexpr uint32_t guard = VoiceButtonEdgeGate::kChordGuardMs;
+    constexpr uint32_t hold = VoiceButtonEdgeGate::kVoiceHoldMs;
     VoiceButtonEdgeGate gate;
     gate.reset(true);
-    assert(gate.update(false, true, false, false, 600 + guard) ==
+    assert(gate.update(false, true, false, false, 600 + hold) ==
            VoiceButtonAction::None);
-    assert(gate.update(false, false, false, false, 601 + guard) ==
+    assert(gate.update(false, false, false, false, 601 + hold) ==
            VoiceButtonAction::None);
     assert(gate.update(false, true, false, false, 700) == VoiceButtonAction::None);
-    assert(gate.update(false, true, false, false, 700 + guard) ==
+    assert(gate.update(false, true, false, false, 700 + hold) ==
            VoiceButtonAction::Press);
 }
 
@@ -869,15 +887,15 @@ void test_dispatcher_normal_hold_presses_and_releases_once()
     FakeVoiceButtonSink sink;
     VoiceButtonDispatcher dispatcher;
     dispatcher.reset(false);
-    constexpr uint32_t guard = VoiceButtonEdgeGate::kChordGuardMs;
+    constexpr uint32_t hold = VoiceButtonEdgeGate::kVoiceHoldMs;
 
     assert(dispatch(dispatcher, sink, false, true, false, false, 100) ==
            VoiceButtonDispatchDecision::Continue);
-    assert(dispatch(dispatcher, sink, false, true, false, false, 100 + guard) ==
+    assert(dispatch(dispatcher, sink, false, true, false, false, 100 + hold) ==
            VoiceButtonDispatchDecision::Continue);
-    assert(dispatch(dispatcher, sink, false, true, false, false, 101 + guard) ==
+    assert(dispatch(dispatcher, sink, false, true, false, false, 101 + hold) ==
            VoiceButtonDispatchDecision::Continue);
-    assert(dispatch(dispatcher, sink, false, false, false, false, 102 + guard) ==
+    assert(dispatch(dispatcher, sink, false, false, false, false, 102 + hold) ==
            VoiceButtonDispatchDecision::Continue);
     assert(sink.events.size() == 2);
     assert(std::string(sink.events[0]) == "press");
@@ -889,13 +907,13 @@ void test_dispatcher_late_a_cancels_before_close()
     FakeVoiceButtonSink sink;
     VoiceButtonDispatcher dispatcher;
     dispatcher.reset(false);
-    constexpr uint32_t guard = VoiceButtonEdgeGate::kChordGuardMs;
+    constexpr uint32_t hold = VoiceButtonEdgeGate::kVoiceHoldMs;
 
     dispatch(dispatcher, sink, false, true, false, false, 200);
-    dispatch(dispatcher, sink, false, true, false, false, 200 + guard);
-    assert(dispatch(dispatcher, sink, true, true, false, false, 201 + guard) ==
+    dispatch(dispatcher, sink, false, true, false, false, 200 + hold);
+    assert(dispatch(dispatcher, sink, true, true, false, false, 201 + hold) ==
            VoiceButtonDispatchDecision::Continue);
-    assert(dispatch(dispatcher, sink, true, true, false, true, 202 + guard) ==
+    assert(dispatch(dispatcher, sink, true, true, false, true, 202 + hold) ==
            VoiceButtonDispatchDecision::Close);
     assert(sink.events.size() == 3);
     assert(std::string(sink.events[0]) == "press");
@@ -907,12 +925,12 @@ void test_dispatcher_entry_held_and_short_tap_do_not_start()
 {
     FakeVoiceButtonSink sink;
     VoiceButtonDispatcher dispatcher;
-    constexpr uint32_t guard = VoiceButtonEdgeGate::kChordGuardMs;
+    constexpr uint32_t hold = VoiceButtonEdgeGate::kVoiceHoldMs;
     dispatcher.reset(true);
-    dispatch(dispatcher, sink, false, true, false, false, 300 + guard);
-    dispatch(dispatcher, sink, false, false, false, false, 301 + guard);
+    dispatch(dispatcher, sink, false, true, false, false, 300 + hold);
+    dispatch(dispatcher, sink, false, false, false, false, 301 + hold);
     dispatch(dispatcher, sink, false, true, false, false, 400);
-    dispatch(dispatcher, sink, false, false, false, false, 400 + guard - 1);
+    dispatch(dispatcher, sink, false, false, false, false, 400 + hold - 1);
     assert(sink.events.empty());
 }
 
@@ -959,17 +977,17 @@ void test_dispatcher_second_click_hold_cancels_pending_submit_and_starts_voice()
     FakeVoiceButtonSink voice_sink;
     FakeCodexButtonActionSink action_sink;
     VoiceButtonDispatcher dispatcher;
-    constexpr uint32_t guard = VoiceButtonEdgeGate::kChordGuardMs;
+    constexpr uint32_t hold = VoiceButtonEdgeGate::kVoiceHoldMs;
     dispatcher.reset(false);
 
     dispatcher.dispatch(false, true, false, false, 1000, &voice_sink, &action_sink);
     dispatcher.dispatch(false, false, false, false, 1020, &voice_sink, &action_sink);
     dispatcher.dispatch(false, true, false, false, 1100, &voice_sink, &action_sink);
     dispatcher.dispatch(
-        false, true, false, false, 1100 + guard, &voice_sink, &action_sink);
+        false, true, false, false, 1100 + hold, &voice_sink, &action_sink);
     dispatcher.dispatch(
-        false, false, false, false, 1101 + guard, &voice_sink, &action_sink);
-    dispatcher.dispatch(false, false, false, false, 1400, &voice_sink, &action_sink);
+        false, false, false, false, 1101 + hold, &voice_sink, &action_sink);
+    dispatcher.dispatch(false, false, false, false, 1700, &voice_sink, &action_sink);
 
     assert(action_sink.actions.empty());
     assert(voice_sink.events.size() == 2);
@@ -1090,24 +1108,24 @@ void test_dispatcher_global_input_suppression_cancels_active_voice_once()
     FakeVoiceButtonSink voice_sink;
     FakeCodexButtonActionSink action_sink;
     VoiceButtonDispatcher dispatcher;
-    constexpr uint32_t guard = VoiceButtonEdgeGate::kChordGuardMs;
+    constexpr uint32_t hold = VoiceButtonEdgeGate::kVoiceHoldMs;
     dispatcher.reset(false);
 
     dispatcher.dispatch(false, true, false, false, 0, &voice_sink, &action_sink);
     dispatcher.dispatch(
-        false, true, false, false, guard, &voice_sink, &action_sink);
+        false, true, false, false, hold, &voice_sink, &action_sink);
     assert(voice_sink.events.size() == 1);
     assert(std::string(voice_sink.events[0]) == "press");
 
     assert(dispatcher.dispatch(
-               false, false, false, false, 100, &voice_sink, &action_sink, true) ==
+               false, false, false, false, 600, &voice_sink, &action_sink, true) ==
            VoiceButtonDispatchDecision::Continue);
     dispatcher.dispatch(
-        false, false, false, false, 120, &voice_sink, &action_sink, false);
+        false, false, false, false, 620, &voice_sink, &action_sink, false);
 
     assert(voice_sink.events.size() == 2);
     assert(std::string(voice_sink.events[1]) == "cancel");
-    assert(voice_sink.times[1] == 100);
+    assert(voice_sink.times[1] == 600);
     assert(action_sink.actions.empty());
 }
 
@@ -1116,15 +1134,15 @@ void test_dispatcher_guard_handles_uint32_wraparound()
     FakeVoiceButtonSink sink;
     VoiceButtonDispatcher dispatcher;
     dispatcher.reset(false);
-    constexpr uint32_t start = UINT32_MAX - 44;
+    constexpr uint32_t start = UINT32_MAX - 244;
 
     dispatch(dispatcher, sink, false, true, false, false, start);
-    dispatch(dispatcher, sink, false, true, false, false, 44);
+    dispatch(dispatcher, sink, false, true, false, false, 254);
     assert(sink.events.empty());
-    dispatch(dispatcher, sink, false, true, false, false, 45);
+    dispatch(dispatcher, sink, false, true, false, false, 255);
     assert(sink.events.size() == 1);
     assert(std::string(sink.events[0]) == "press");
-    assert(sink.times[0] == 45);
+    assert(sink.times[0] == 255);
 }
 
 void test_cancel_waits_for_inflight_producer_cleanup()
@@ -1350,7 +1368,8 @@ int main()
     test_b_then_a_inside_guard_is_reserved_for_home();
     test_a_then_b_is_reserved_for_home();
     test_short_b_tap_does_not_start_voice();
-    test_b_hold_starts_once_at_guard_boundary();
+    test_deliberate_226_ms_b_click_does_not_start_voice();
+    test_b_click_and_hold_boundary_is_500_ms();
     test_b_release_is_only_sent_after_press();
     test_late_a_cancels_active_voice_before_home();
     test_wake_consumed_b_is_suppressed_through_release();
