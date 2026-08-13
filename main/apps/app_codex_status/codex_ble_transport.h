@@ -3,6 +3,7 @@
 #include "codex_ble_framing.h"
 #include "ble_voice_probe_protocol.h"
 #include "agent_connection_router.h"
+#include "input_action_controller.h"
 #include "voice_input_controller.h"
 
 #include <array>
@@ -29,6 +30,10 @@ struct CodexPairingFrame {
     std::array<uint8_t, 256> data = {};
 };
 
+struct CodexInputActionControl {
+    input_action::ReadyControl control = {};
+};
+
 enum class CodexBleNotifyResult { Accepted, NotReady, Congested, InvalidSize };
 
 
@@ -43,12 +48,17 @@ public:
     bool take_voice_control(CodexBleVoiceControl& control);
     bool take_production_voice_control(CodexProductionVoiceControl& control);
     bool take_pairing_frame(CodexPairingFrame& frame);
+    bool take_input_action_control(CodexInputActionControl& control);
     bool voice_subscribed() const;
+    bool input_action_subscribed() const;
     uint16_t negotiated_mtu() const;
     size_t voice_notification_limit() const;
     CodexBleNotifyResult notify_voice(const uint8_t* data, size_t length);
     VoiceNotificationSendResult send_voice_notification(
         const voice_input::Notification& notification) override;
+    CodexBleNotifyResult notify_input_action(
+        const uint8_t* data,
+        size_t length);
     CodexBleNotifyResult notify_pairing(
         uint16_t connection_handle,
         const uint8_t* data,
@@ -57,6 +67,7 @@ public:
         const voice_input::crypto::Key& key,
         uint32_t key_epoch);
     void clear_voice_credential();
+    voice_input::crypto::CcmContext& input_action_crypto();
 
     bool authorize_gatt(
         uint16_t connection_handle,
@@ -93,6 +104,14 @@ public:
         uint16_t connection_handle,
         uint16_t attr_handle,
         bool enabled);
+    bool enqueue_input_control_from_ble(
+        uint16_t connection_handle,
+        const uint8_t* data,
+        size_t length);
+    void handle_input_subscription(
+        uint16_t connection_handle,
+        uint16_t attr_handle,
+        bool enabled);
     void handle_mtu_update(uint16_t connection_handle, uint16_t mtu);
     bool stopping() const;
 
@@ -106,7 +125,9 @@ private:
     void* _voice_control_queue = nullptr;
     void* _production_voice_control_queue = nullptr;
     void* _pairing_frame_queue = nullptr;
+    void* _input_control_queue = nullptr;
     voice_input::ControlReplayGuard _production_control_guard;
+    InputActionReadyReplayGuard _input_control_guard;
     voice_input::crypto::CcmContext _production_voice_crypto;
     std::atomic<uint32_t> _production_voice_key_epoch{0};
     std::atomic<uint64_t> _active_disconnect_token{0};
@@ -119,5 +140,7 @@ private:
     CodexBleReassembler _reassembler;
     std::deque<CodexBleMessage> _messages;
     std::atomic<bool> _stopping{false};
+    std::atomic<bool> _input_action_subscribed{false};
     bool _initialized = false;
+    std::atomic<uint16_t> _input_tx_value_handle{0};
 };

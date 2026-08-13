@@ -42,6 +42,8 @@ VOICE_TX_UUID = "7a230004-5474-4f50-5741-544348434f44"
 PAIRING_SERVICE_UUID = "7a230006-5474-4f50-5741-544348434f44"
 PAIRING_CONTROL_UUID = "7a230007-5474-4f50-5741-544348434f44"
 PAIRING_TX_UUID = "7a230008-5474-4f50-5741-544348434f44"
+INPUT_CONTROL_UUID = "7a230009-5474-4f50-5741-544348434f44"
+INPUT_TX_UUID = "7a23000a-5474-4f50-5741-544348434f44"
 STATUS_INTERVAL_SECONDS = 2.0
 SAFE_WRITE_SIZE = 20
 MAX_STATUS_WRITE_SIZE = 256
@@ -75,6 +77,7 @@ VOICE_NOTIFICATION_QUEUE_SIZE = (
 GATT_OPERATION_TIMEOUT_SECONDS = 5.0
 PAIRING_CONFIRM_TIMEOUT_SECONDS = 65.0
 PAIRING_RESPONSE_QUEUE_SIZE = 8
+INPUT_NOTIFICATION_QUEUE_SIZE = 8
 
 
 @dataclasses.dataclass(frozen=True)
@@ -98,6 +101,29 @@ class _VoiceGeneration:
     failure: asyncio.Future
     consumer: asyncio.Task
     ingress: _VoiceIngressGate
+
+
+@dataclasses.dataclass
+class _InputIngressGate:
+    lock: threading.Lock = dataclasses.field(default_factory=threading.Lock)
+    pending: int = 0
+    enabled: bool = True
+
+
+@dataclasses.dataclass(frozen=True)
+class _InputGeneration:
+    queue: asyncio.Queue
+    consumer: asyncio.Task
+    ingress: _InputIngressGate
+
+
+async def _await_cancelled_task(task: asyncio.Task) -> None:
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    except Exception:
+        pass
 
 
 def _unix_time_ms() -> int:
@@ -365,6 +391,8 @@ class BleStatusTransport:
         self._pairing_responses = None
         self._pairing_notify_started = False
         self._pairing_transaction = 1
+        self._input_generation = None
+        self._input_notify_started = False
 
     @property
     def connected(self) -> bool:
@@ -392,6 +420,24 @@ class BleStatusTransport:
     @property
     def _voice_ingress_pending(self):
         generation = self._voice_generation
+        if generation is None:
+            return 0
+        with generation.ingress.lock:
+            return generation.ingress.pending
+
+    @property
+    def _input_queue(self):
+        generation = self._input_generation
+        return generation.queue if generation is not None else None
+
+    @property
+    def _input_consumer(self):
+        generation = self._input_generation
+        return generation.consumer if generation is not None else None
+
+    @property
+    def _input_ingress_pending(self):
+        generation = self._input_generation
         if generation is None:
             return 0
         with generation.ingress.lock:
@@ -767,6 +813,138 @@ class BleStatusTransport:
         error = task.exception()
         if error is not None and not generation.failure.done():
             generation.failure.set_result(error)
+
+    async def enable_input_actions(self, ready_payload: bytes, handler) -> None:
+        if not self.connected:
+            raise ConnectionError("StopWatch BLE connection is not active")
+        if self._input_generation is not None:
+            raise RuntimeError("input action generation is already active")
+        if self._input_notify_started:
+            raise RuntimeError("input action notification cleanup is incomplete")
+
+        loop = asyncio.get_running_loop()
+        queue = asyncio.Queue(maxsize=INPUT_NOTIFICATION_QUEUE_SIZE)
+        generation = _InputGeneration(
+            queue,
+            asyncio.create_task(self._consume_input(queue, handler)),
+            _InputIngressGate(),
+        )
+        self._input_generation = generation
+
+        def on_notification(_sender, data) -> None:
+            payload = bytes(data)
+            with generation.ingress.lock:
+                if (
+                    not generation.ingress.enabled
+                    or generation.ingress.pending
+                    >= INPUT_NOTIFICATION_QUEUE_SIZE
+                ):
+                    return
+                generation.ingress.pending += 1
+            try:
+                loop.call_soon_threadsafe(
+                    self._deliver_input_payload, generation, payload
+                )
+            except RuntimeError:
+                self._release_input_ingress(generation)
+
+        # Own notification cleanup before entering the cancellable GATT call.
+        self._input_notify_started = True
+        try:
+            await asyncio.wait_for(
+                self._client.start_notify(INPUT_TX_UUID, on_notification),
+                timeout=GATT_OPERATION_TIMEOUT_SECONDS,
+            )
+            await asyncio.wait_for(
+                self._client.write_gatt_char(
+                    INPUT_CONTROL_UUID, ready_payload, response=True
+                ),
+                timeout=GATT_OPERATION_TIMEOUT_SECONDS,
+            )
+        except BaseException:
+            consumer = self._retire_input_generation(generation)
+            try:
+                if self.connected and self._input_notify_started:
+                    try:
+                        await asyncio.wait_for(
+                            self._client.stop_notify(INPUT_TX_UUID),
+                            timeout=GATT_OPERATION_TIMEOUT_SECONDS,
+                        )
+                    except Exception:
+                        pass
+                    else:
+                        self._input_notify_started = False
+            finally:
+                if consumer is not None:
+                    await _await_cancelled_task(consumer)
+            raise
+
+    async def disable_input_actions(self) -> None:
+        consumer = self._retire_input_generation()
+        failure = None
+        try:
+            if self.connected and self._input_notify_started:
+                try:
+                    await asyncio.wait_for(
+                        self._client.stop_notify(INPUT_TX_UUID),
+                        timeout=GATT_OPERATION_TIMEOUT_SECONDS,
+                    )
+                except Exception as error:
+                    failure = error
+                else:
+                    self._input_notify_started = False
+        finally:
+            if consumer is not None:
+                await _await_cancelled_task(consumer)
+        if failure is not None:
+            raise failure
+
+    def _retire_input_generation(self, expected=None):
+        generation = self._input_generation
+        if generation is None or (
+            expected is not None and generation is not expected
+        ):
+            return None
+        with generation.ingress.lock:
+            generation.ingress.enabled = False
+        if self._input_generation is generation:
+            self._input_generation = None
+        if not generation.consumer.done():
+            generation.consumer.cancel()
+        return generation.consumer
+
+    def _deliver_input_payload(
+        self, generation: _InputGeneration, payload: bytes
+    ) -> None:
+        with generation.ingress.lock:
+            enabled = generation.ingress.enabled
+        if not enabled or self._input_generation is not generation:
+            self._release_input_ingress(generation)
+            return
+        try:
+            generation.queue.put_nowait(payload)
+        except asyncio.QueueFull:
+            self._release_input_ingress(generation)
+
+    @staticmethod
+    def _release_input_ingress(generation: _InputGeneration) -> None:
+        with generation.ingress.lock:
+            if generation.ingress.pending:
+                generation.ingress.pending -= 1
+
+    async def _consume_input(self, queue: asyncio.Queue, handler) -> None:
+        generation = self._input_generation
+        while True:
+            payload = await queue.get()
+            try:
+                await handler(payload)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                LOGGER.exception("Input action handler failed")
+            finally:
+                if generation is not None:
+                    self._release_input_ingress(generation)
 
     async def disconnect(self) -> None:
         client = self._client

@@ -13,6 +13,9 @@ from agent import (
     PAIRING_CONTROL_UUID,
     PAIRING_TX_UUID,
     STATUS_RX_UUID,
+    INPUT_CONTROL_UUID,
+    INPUT_NOTIFICATION_QUEUE_SIZE,
+    INPUT_TX_UUID,
     VOICE_NOTIFICATION_QUEUE_SIZE,
     VOICE_CONTROL_UUID,
     VOICE_TX_UUID,
@@ -1331,6 +1334,177 @@ class BleStatusTransportVoiceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(client.stop_calls, 1)
         self.assertIsNone(transport._voice_consumer)
+
+
+class BleStatusTransportInputActionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_input_ready_failure_is_clean_before_direct_retry(self):
+        class Client:
+            is_connected = True
+
+            def __init__(self):
+                self.callbacks = []
+                self.stop_calls = 0
+
+            async def start_notify(self, _uuid, callback):
+                self.callbacks.append(callback)
+
+            async def write_gatt_char(self, _uuid, payload, response):
+                self.response = response
+                if payload == b"ready-1":
+                    raise RuntimeError("input READY failed")
+
+            async def stop_notify(self, _uuid):
+                self.stop_calls += 1
+
+        client = Client()
+        transport = BleStatusTransport()
+        transport._client = client
+
+        with self.assertRaisesRegex(RuntimeError, "input READY failed"):
+            await transport.enable_input_actions(
+                b"ready-1", lambda _payload: asyncio.sleep(0)
+            )
+        old_callback = client.callbacks[0]
+        handled = []
+        await transport.enable_input_actions(
+            b"ready-2", lambda payload: _append_async(handled, payload)
+        )
+        old_callback(None, b"stale")
+        client.callbacks[-1](None, b"current")
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        await transport.disable_input_actions()
+
+        self.assertEqual(handled, [b"current"])
+        self.assertEqual(client.stop_calls, 2)
+
+    async def test_input_subscription_is_independent_and_announces_ready_after_subscribe(self):
+        class Client:
+            is_connected = True
+
+            def __init__(self):
+                self.calls = []
+
+            async def start_notify(self, uuid, callback):
+                self.calls.append(("start_notify", uuid, callback))
+
+            async def write_gatt_char(self, uuid, payload, response):
+                self.calls.append(("write", uuid, payload, response))
+
+            async def stop_notify(self, uuid):
+                self.calls.append(("stop_notify", uuid))
+
+        client = Client()
+        transport = BleStatusTransport()
+        transport._client = client
+
+        await transport.enable_input_actions(
+            b"authenticated-input-ready", lambda _payload: asyncio.sleep(0)
+        )
+        await transport.disable_voice(None)
+        await transport.disable_input_actions()
+        await transport.disable_input_actions()
+
+        self.assertEqual(
+            [(call[0], call[1]) for call in client.calls],
+            [
+                ("start_notify", INPUT_TX_UUID),
+                ("write", INPUT_CONTROL_UUID),
+                ("stop_notify", INPUT_TX_UUID),
+            ],
+        )
+        self.assertEqual(
+            client.calls[1][2:], (b"authenticated-input-ready", True)
+        )
+
+    async def test_input_queue_drops_newest_at_eight_and_isolates_handler_errors(self):
+        class Client:
+            is_connected = True
+
+            async def start_notify(self, _uuid, callback):
+                self.callback = callback
+
+            async def write_gatt_char(self, _uuid, _payload, response):
+                self.response = response
+
+            async def stop_notify(self, _uuid):
+                pass
+
+        client = Client()
+        transport = BleStatusTransport()
+        transport._client = client
+        release = asyncio.Event()
+        first_started = asyncio.Event()
+        handled = []
+
+        async def handle(payload):
+            handled.append(payload)
+            if payload == b"0":
+                first_started.set()
+                await release.wait()
+                raise RuntimeError("desktop dispatch failed")
+
+        await transport.enable_input_actions(b"ready", handle)
+        client.callback(None, bytearray(b"0"))
+        await asyncio.wait_for(first_started.wait(), 1)
+        for index in range(1, INPUT_NOTIFICATION_QUEUE_SIZE + 2):
+            client.callback(None, str(index).encode("ascii"))
+        await asyncio.sleep(0)
+
+        self.assertEqual(transport._input_ingress_pending, 8)
+        release.set()
+        for _ in range(100):
+            if transport._input_ingress_pending == 0:
+                break
+            await asyncio.sleep(0.01)
+        else:
+            self.fail("input queue did not drain")
+
+        self.assertEqual(
+            handled,
+            [str(index).encode("ascii") for index in range(8)],
+        )
+        self.assertFalse(transport._input_consumer.done())
+        await transport.disable_input_actions()
+
+    async def test_disable_retires_callback_and_can_retry_timed_out_stop(self):
+        class Client:
+            is_connected = True
+
+            def __init__(self):
+                self.callbacks = []
+                self.stop_calls = 0
+
+            async def start_notify(self, _uuid, callback):
+                self.callbacks.append(callback)
+
+            async def write_gatt_char(self, _uuid, _payload, response):
+                self.response = response
+
+            async def stop_notify(self, _uuid):
+                self.stop_calls += 1
+                if self.stop_calls == 1:
+                    await asyncio.Event().wait()
+
+        client = Client()
+        transport = BleStatusTransport()
+        transport._client = client
+        handled = []
+        await transport.enable_input_actions(
+            b"ready", lambda payload: _append_async(handled, payload)
+        )
+        old_callback = client.callbacks[0]
+
+        with patch("agent.GATT_OPERATION_TIMEOUT_SECONDS", 0.01):
+            with self.assertRaises(asyncio.TimeoutError):
+                await transport.disable_input_actions()
+        old_callback(None, b"stale")
+        await asyncio.sleep(0)
+        await transport.disable_input_actions()
+
+        self.assertEqual(handled, [])
+        self.assertEqual(client.stop_calls, 2)
+        self.assertIsNone(transport._input_consumer)
 
 
 if __name__ == "__main__":

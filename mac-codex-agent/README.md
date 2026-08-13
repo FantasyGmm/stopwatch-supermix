@@ -100,12 +100,29 @@ then use its **Voice Input** row:
 - `Voice Input: Error`: release the right button, inspect **Open Log**, and use
   **Reconnect Now** after correcting the reported cause.
 
-The right-button behavior is push-to-talk. A 90 ms chord guard reserves the
-button for A+B Home handling: hold the right button beyond that guard to start
-Typeless and recording, keep holding while speaking, and release it to stop.
-A short tap is ignored. A+B is always reserved for Home, and a wake press is
-consumed until the button is fully released, so waking the screen cannot start
-dictation.
+Inside the watch Codex app, an upper-right single click submits after the
+300 ms double-click window. A fast double click steers the running turn, or
+sends once when idle. Holding beyond 90 ms still controls Typeless.
+
+The click meanings are global across every page and conversation state inside
+the watch Codex app. They are not armed by a voice session and do not apply in
+Launcher or any other watch app. A+B Home always takes priority, and a wake
+press is consumed until both buttons are released. A second short press that
+becomes a hold cancels the pending click and starts push-to-talk without first
+submitting.
+
+The authenticated BLE input path is independent of voice readiness. Single and
+double clicks therefore remain available when Typeless, BlackHole, or the audio
+route is unavailable. The Agent handles them only when `com.openai.codex` is
+already foreground and Accessibility exposes a recognized, editable, non-empty
+composer with an unambiguous Send, Queue, or Steer control. It does not activate
+Codex, target a background window, or submit from an empty or unknown composer.
+
+For normal Send, Queue, or Steer, the Agent presses the verified Codex button
+through Accessibility. Only a forced steer from Queue uses Codex's alternate
+Command+Shift+Return behavior, posted to the already verified Codex process.
+Actions are authenticated and replay-checked per BLE connection and are never
+retried after an ambiguous desktop outcome.
 
 The Agent restores the previous default input on button release, BLE
 disconnect, Home, Agent quit, and all failure paths. Voice setup or transport
@@ -179,6 +196,20 @@ The standalone version-1 BLE probe is diagnostic-only, uses a different
 session contract, and must run only after fully quitting the Agent. See the
 [BLE voice diagnostic guide](../docs/ble-voice-link-probe.md). Offline tests and
 a clean firmware build do not replace BLE and physical acceptance on the watch.
+
+## Codex Button Acceptance
+
+Before relying on the physical controls, verify the following with the watch
+Codex app open:
+
+1. With Codex idle and non-empty text, a single click submits exactly once.
+2. During a running turn in Queue mode, a single click queues and a fast double
+   click steers exactly once.
+3. During a running turn in Steer mode, a double click steers exactly once.
+4. With Codex in the background, or its composer empty, clicks are ignored.
+5. With Typeless unavailable, clicks still work while a hold reports voice as
+   unavailable.
+6. Screen wake, A+B Home, and a second press becoming a hold never submit.
 
 ## Task Alerts
 

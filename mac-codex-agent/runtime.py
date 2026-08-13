@@ -32,6 +32,12 @@ from app_state import (
 from codex_adapter import CodexStateCollector
 from combined_collector import CompositeStateCollector
 from pairing_client import PairingClient, WatchCredential
+from codex_submit import CodexSubmitController, MacOSCodexAccessibility
+from input_action_protocol import (
+    ActionReplayGuard,
+    decode_action,
+    encode_ready as encode_input_ready,
+)
 from task_alerts import TaskAlertTracker
 from trae_adapter import TraeStateCollector
 from watch_credentials import WatchCredentialStore
@@ -103,6 +109,11 @@ class _BleSessionContext:
     voice_key_epoch: int = VOICE_KEY_EPOCH
     voice_service: Optional[object] = None
     voice_failed: bool = False
+    input_nonce: Optional[bytes] = None
+    input_replay_guard: Optional[ActionReplayGuard] = None
+    input_submit_controller: Optional[object] = None
+    input_active: bool = False
+    accessibility_available: bool = True
     shutdown_task: Optional[asyncio.Task] = None
 
 
@@ -310,6 +321,10 @@ def _new_voice_nonce() -> bytes:
     return nonce
 
 
+def _create_submit_controller() -> CodexSubmitController:
+    return CodexSubmitController(MacOSCodexAccessibility())
+
+
 def _blackhole_receipt_present() -> bool:
     try:
         result = subprocess.run(
@@ -380,6 +395,9 @@ class AgentRuntime:
         voice_session_factory=None,
         voice_nonce_factory=None,
         secure_authorizer=None,
+        input_nonce_factory=None,
+        submit_controller_factory=None,
+        accessibility_checker=None,
     ):
         self._collector = collector
         self._transport_factory = transport_factory
@@ -393,6 +411,13 @@ class AgentRuntime:
         self._voice_session_factory = voice_session_factory or _create_voice_session
         self._voice_nonce_factory = voice_nonce_factory or _new_voice_nonce
         self._secure_authorizer = secure_authorizer
+        self._input_nonce_factory = input_nonce_factory or _new_voice_nonce
+        self._submit_controller_factory = (
+            submit_controller_factory or _create_submit_controller
+        )
+        self._accessibility_checker = (
+            accessibility_checker or _is_accessibility_trusted
+        )
         self._state_lock = threading.Lock()
         self._snapshot = AgentSnapshot(
             ConnectionState.SCANNING
@@ -794,6 +819,14 @@ class AgentRuntime:
         context: _BleSessionContext,
         credential: WatchCredential,
     ) -> None:
+        context.input_active = False
+        await self._bounded_cleanup(
+            context.transport.disable_input_actions(),
+            "Input action rekey cleanup",
+        )
+        context.input_nonce = None
+        context.input_replay_guard = None
+        context.input_submit_controller = None
         retired_consumer = self._retire_voice_generation(context.transport)
         await self._disable_voice(context.transport, None)
         if context.voice_service is not None:
@@ -837,6 +870,10 @@ class AgentRuntime:
                 return
             context.voice_key = key
 
+        context.accessibility_available = self._accessibility_is_available()
+
+        await self._prepare_input_actions(context)
+
         try:
             if self._secure_authorizer is None:
                 service = self._voice_session_factory(key)
@@ -851,6 +888,81 @@ class AgentRuntime:
 
         await self._publish_voice_readiness(context)
 
+    async def _prepare_input_actions(
+        self, context: _BleSessionContext
+    ) -> None:
+        key = context.voice_key
+        if key is None:
+            return
+        try:
+            nonce = self._input_nonce_factory()
+            ready_payload = encode_input_ready(key, nonce)
+            replay_guard = ActionReplayGuard()
+            replay_guard.set_active_nonce(nonce)
+            controller = self._submit_controller_factory()
+        except Exception:
+            LOGGER.exception("Could not prepare authenticated input actions")
+            return
+
+        context.input_nonce = nonce
+        context.input_replay_guard = replay_guard
+        context.input_submit_controller = controller
+        context.input_active = True
+
+        async def handle_notification(payload: bytes) -> None:
+            if not context.input_active:
+                return
+            try:
+                packet = decode_action(key, payload, nonce)
+            except Exception as error:
+                LOGGER.warning("Ignoring invalid input action: %s", error)
+                return
+            try:
+                accepted_sequence = replay_guard.accept(
+                    nonce, packet.sequence
+                )
+            except Exception as error:
+                LOGGER.warning("Ignoring invalid input sequence: %s", error)
+                return
+            if not accepted_sequence or not context.input_active:
+                LOGGER.info(
+                    "Ignoring replayed or stale input action sequence %d",
+                    packet.sequence,
+                )
+                return
+            context.accessibility_available = (
+                self._accessibility_is_available()
+            )
+            if not context.accessibility_available:
+                self._transition_voice(VoiceState.ACCESSIBILITY_REQUIRED)
+                LOGGER.info(
+                    "Ignoring input action: Accessibility permission is required"
+                )
+                return
+            try:
+                accepted = await asyncio.to_thread(
+                    controller.handle, packet.action
+                )
+            except Exception:
+                LOGGER.exception("Codex input action dispatch failed")
+                return
+            LOGGER.info(
+                "Codex input action %s: %s",
+                packet.action.name.lower(),
+                "accepted" if accepted else "ignored",
+            )
+
+        try:
+            await context.transport.enable_input_actions(
+                ready_payload, handle_notification
+            )
+        except Exception:
+            context.input_active = False
+            context.input_nonce = None
+            context.input_replay_guard = None
+            context.input_submit_controller = None
+            LOGGER.exception("Could not enable authenticated input actions")
+
     async def _refresh_voice_readiness(self, context: _BleSessionContext) -> None:
         service_state = getattr(
             context.voice_service,
@@ -861,8 +973,15 @@ class AgentRuntime:
             context.voice_failed
             or context.voice_key is None
             or context.voice_service is None
-            or service_state
-            not in (VoiceState.DRIVER_REQUIRED, VoiceState.RESTART_REQUIRED)
+            or (
+                service_state
+                not in (
+                    VoiceState.DRIVER_REQUIRED,
+                    VoiceState.RESTART_REQUIRED,
+                )
+                and self.snapshot().voice_state
+                is not VoiceState.ACCESSIBILITY_REQUIRED
+            )
         ):
             return
         await self._publish_voice_readiness(context)
@@ -877,6 +996,10 @@ class AgentRuntime:
         except Exception as error:
             await self._isolate_voice_failure(context, error)
             return
+
+        context.accessibility_available = self._accessibility_is_available()
+        if not context.accessibility_available:
+            state = VoiceState.ACCESSIBILITY_REQUIRED
 
         self._transition_voice(state)
         if state is not VoiceState.READY:
@@ -914,6 +1037,13 @@ class AgentRuntime:
             await transport.enable_voice(ready_payload, handle_notification)
         except Exception as error:
             await self._isolate_voice_failure(context, error)
+
+    def _accessibility_is_available(self) -> bool:
+        try:
+            return bool(self._accessibility_checker())
+        except Exception:
+            LOGGER.exception("Could not inspect Accessibility permission")
+            return False
 
     def _encode_unavailable_payload(
         self,
@@ -1060,6 +1190,7 @@ class AgentRuntime:
         self, context: _BleSessionContext, voice_was_recording: bool
     ) -> None:
         deadline = asyncio.get_running_loop().time() + self._disconnect_timeout
+        context.input_active = False
         unavailable_payload = None
         if context.voice_key is not None:
             unavailable_payload = self._encode_unavailable_payload(
@@ -1071,8 +1202,17 @@ class AgentRuntime:
         retired_consumer = self._retire_voice_generation(context.transport)
         has_service = context.voice_service is not None
         future_steps = (
-            int(has_service) + int(retired_consumer is not None) + 1
+            int(has_service) + int(retired_consumer is not None) + 2
         )
+        await self._cleanup_before_deadline(
+            context.transport.disable_input_actions,
+            "Input action notification cleanup",
+            deadline,
+            future_steps + 1,
+        )
+        context.input_nonce = None
+        context.input_replay_guard = None
+        context.input_submit_controller = None
         voice_cleaned = await self._cleanup_before_deadline(
             lambda: context.transport.disable_voice(unavailable_payload),
             "Voice notification cleanup",

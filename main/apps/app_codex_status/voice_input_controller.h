@@ -1,5 +1,6 @@
 #pragma once
 
+#include "codex_button_gesture.h"
 #include "voice_capture_pipeline.h"
 #include "voice_input_protocol.h"
 #include "voice_input_session.h"
@@ -59,6 +60,7 @@ enum class VoiceInputUiState : uint8_t {
 
 enum class VoiceButtonAction : uint8_t {
     None,
+    ShortClick,
     Press,
     Release,
     CancelVoice,
@@ -99,6 +101,8 @@ public:
         bool woke_screen,
         bool go_home,
         uint32_t now_ms);
+    bool is_active() const;
+    bool is_suppressed() const;
 
 private:
     enum class State : uint8_t {
@@ -120,6 +124,12 @@ public:
     virtual void cancel_for_home(uint32_t now_ms) = 0;
 };
 
+class CodexButtonActionSink {
+public:
+    virtual ~CodexButtonActionSink() = default;
+    virtual void handle_action(CodexButtonAction action, uint32_t now_ms) = 0;
+};
+
 enum class VoiceButtonDispatchDecision : uint8_t {
     Continue,
     Close,
@@ -134,10 +144,13 @@ public:
         bool woke_screen,
         bool go_home,
         uint32_t now_ms,
-        VoiceButtonSink* sink);
+        VoiceButtonSink* sink,
+        CodexButtonActionSink* action_sink = nullptr,
+        bool input_suppressed = false);
 
 private:
     VoiceButtonEdgeGate _gate;
+    CodexButtonGesture _gesture;
 };
 
 class VoiceInputController : public VoiceButtonSink {

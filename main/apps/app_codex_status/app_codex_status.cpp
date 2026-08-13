@@ -292,6 +292,15 @@ AppCodexStatus::AppCodexStatus()
 
 AppCodexStatus::~AppCodexStatus() = default;
 
+void AppCodexStatus::handle_action(
+    CodexButtonAction action,
+    uint32_t now_ms)
+{
+    if (_input_action_controller) {
+        (void)_input_action_controller->enqueue(action, now_ms);
+    }
+}
+
 void AppCodexStatus::onCreate()
 {
     mclog::tagInfo(getAppInfo().name, "on create");
@@ -314,6 +323,9 @@ void AppCodexStatus::onOpen()
     _trae_stale = false;
     _suppress_task_navigation = false;
     GetHAL().updateButtonStates();
+    if (_input_action_controller) {
+        _input_action_controller->disconnect();
+    }
     _voice_button_dispatcher.reset(GetHAL().btnB.isPressed());
     _production_voice_ready = false;
     _production_voice_link_usable = false;
@@ -388,6 +400,9 @@ void AppCodexStatus::onOpen()
     if (_transport_mode != "wifi") {
         _ble_transport = std::make_unique<CodexBleTransport>();
         if (_ble_transport->start(_ble_name)) {
+            _input_action_controller =
+                std::make_unique<InputActionController>(
+                    _ble_transport->input_action_crypto());
             _voice_probe = std::make_unique<BleVoiceProbeController>();
             if (!_voice_probe->initialize()) {
                 _voice_probe.reset();
@@ -438,9 +453,15 @@ void AppCodexStatus::onRunning()
     if (_key_manager) {
         key_event = _key_manager->update(false);
     }
+    if (key_event == input::KeyEvent::GoNext) {
+        key_event = input::KeyEvent::None;
+    }
 
     if (woke_screen) {
         _suppress_task_navigation = true;
+        if (_input_action_controller) {
+            _input_action_controller->clear_pending();
+        }
     }
     if (_suppress_task_navigation) {
         key_event = input::KeyEvent::None;
@@ -454,8 +475,14 @@ void AppCodexStatus::onRunning()
         woke_screen,
         key_event == input::KeyEvent::GoHome,
         now,
-        _voice_input.get());
+        _voice_input.get(),
+        this,
+        GetHAL().buttonInputSuppressed());
     if (voice_decision == VoiceButtonDispatchDecision::Close) {
+        if (_input_action_controller) {
+            _input_action_controller->disconnect();
+        }
+        _voice_button_dispatcher.reset(right_pressed);
         close();
         return;
     }
@@ -479,8 +506,6 @@ void AppCodexStatus::onRunning()
         bool alert_changed = false;
         if (_current_page == 0 && key_event == input::KeyEvent::GoPrevious) {
             alert_changed = _alert_carousel.step(-1, now);
-        } else if (_current_page == 0 && key_event == input::KeyEvent::GoNext) {
-            alert_changed = _alert_carousel.step(1, now);
         } else {
             alert_changed = _alert_carousel.update(now);
         }
@@ -508,18 +533,41 @@ void AppCodexStatus::onRunning()
         process_secure_pairing(now);
         _ble_transport->poll(now);
         ble_connected = _ble_transport && _ble_transport->connected();
-        if (_voice_input) {
-            const uint32_t connection_epoch =
-                _ble_transport->connection_epoch();
-            if (connection_epoch != _production_voice_connection_epoch) {
-                _production_voice_connection_epoch = connection_epoch;
-                _production_voice_ready = false;
-                _production_voice_link_usable = false;
-                _production_voice_mtu = 23;
+        const uint32_t connection_epoch =
+            _ble_transport->connection_epoch();
+        if (connection_epoch != _production_voice_connection_epoch) {
+            _production_voice_connection_epoch = connection_epoch;
+            _production_voice_ready = false;
+            _production_voice_link_usable = false;
+            _production_voice_mtu = 23;
+            if (_input_action_controller) {
+                _input_action_controller->disconnect();
+            }
+            _voice_button_dispatcher.reset(right_pressed);
+            if (_voice_input) {
                 _voice_input->handle_connection_epoch(connection_epoch);
                 sync_agent_panel_registry();
                 _agent_panel_dirty = true;
             }
+        }
+
+        CodexInputActionControl input_control = {};
+        while (_ble_transport->take_input_action_control(input_control)) {
+            if (_input_action_controller) {
+                _input_action_controller->set_ready(input_control.control);
+            }
+        }
+        input_action::WireAction input_action = {};
+        while (_input_action_controller &&
+               _input_action_controller->take(input_action)) {
+            const CodexBleNotifyResult result =
+                _ble_transport->notify_input_action(
+                    input_action.bytes.data(), input_action.bytes.size());
+            _input_action_controller->record_result(
+                result == CodexBleNotifyResult::Accepted);
+        }
+
+        if (_voice_input) {
             CodexProductionVoiceControl production_control;
             while (_ble_transport->take_production_voice_control(production_control)) {
                 _production_voice_ready =
@@ -577,6 +625,10 @@ void AppCodexStatus::onRunning()
             render_trae_status();
         } else if (!ble_connected && _ble_was_connected) {
             _production_voice_ready = false;
+            if (_input_action_controller) {
+                _input_action_controller->disconnect();
+            }
+            _voice_button_dispatcher.reset(right_pressed);
             if (_voice_input) {
                 _voice_input->handle_disconnect();
             }
@@ -629,6 +681,10 @@ void AppCodexStatus::onClose()
     mclog::tagInfo(getAppInfo().name, "on close");
 
     _key_manager.reset();
+    _voice_button_dispatcher.reset(false);
+    if (_input_action_controller) {
+        _input_action_controller->disconnect();
+    }
     stop_network_fallback();
     if (_voice_input) {
         _voice_status.store(VoiceInputUiState::Off);
@@ -643,6 +699,7 @@ void AppCodexStatus::onClose()
         _ble_transport->stop();
         _ble_transport.reset();
     }
+    _input_action_controller.reset();
     _agent_registry_store.reset();
     _agent_registry_backend.reset();
     _agent_registry_ready = false;

@@ -75,6 +75,23 @@ key and increments its epoch; an authorized Agent that was offline receives
 the new epoch on its next signed connection. Agent names are editable from the
 menu bar app and are signed before the watch stores or displays them.
 
+### Codex Hardware Button
+
+Inside the watch Codex app, an upper-right single click submits after the
+300 ms double-click window. A fast double click steers the running turn, or
+sends once when idle. Holding beyond 90 ms still controls Typeless.
+
+These meanings are global across pages and conversation states inside the
+watch Codex app, but do not apply in Launcher or another watch app. A+B Home
+and a screen-wake press take priority and never submit. The authenticated BLE
+input path is independent of voice readiness, so click submission remains
+available when Typeless or the audio route is unavailable.
+
+The Mac Agent acts only when `com.openai.codex` is already foreground with a
+recognized, editable, non-empty Codex composer. It does not activate Codex,
+send to a background window, or guess when Accessibility state or button
+semantics are unknown.
+
 After every successful BLE connection, the Mac agent first sends the current
 Unix time and effective UTC offset. The watch applies them to its global system
 clock, persists the fixed-offset timezone, and writes the RX8130 RTC, so the

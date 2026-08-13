@@ -13,7 +13,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from app_state import ConnectionState, MemoryPreferences, PairingState
-from agent import BleStatusTransport, WatchDiscovery
+from agent import VOICE_CONTROL_UUID, BleStatusTransport, WatchDiscovery
 from combined_collector import CompositeStateCollector
 from pairing_client import (
     AuthenticationResult,
@@ -22,6 +22,11 @@ from pairing_client import (
     WatchCredential,
 )
 from secure_pairing_crypto import public_key_bytes
+from input_action_protocol import (
+    InputAction,
+    decode_ready as decode_input_ready,
+    encode_action,
+)
 from protocol import EVENT_MESSAGE, STATUS_MESSAGE
 from runtime import (
     VOICE_KEY_EPOCH,
@@ -119,6 +124,9 @@ class FakeTransport:
         block_voice_disable=False,
         block_voice_enable=False,
         voice_notification=None,
+        input_enable_error=None,
+        input_notifications=None,
+        block_input_disable=False,
     ):
         self.connect_result = connect_result
         self.connect_error = connect_error
@@ -133,11 +141,16 @@ class FakeTransport:
         self.block_voice_disable = block_voice_disable
         self.block_voice_enable = block_voice_enable
         self.voice_notification = voice_notification
+        self.input_enable_error = input_enable_error
+        self.input_notifications = list(input_notifications or [])
+        self.block_input_disable = block_input_disable
         self.connect_started = asyncio.Event()
         self.connected_event = asyncio.Event()
         self.disconnected_event = asyncio.Event()
         self.voice_enable_started = asyncio.Event()
         self.voice_notification_handled = asyncio.Event()
+        self.input_enable_started = asyncio.Event()
+        self.input_notifications_handled = asyncio.Event()
         self._connect_release = asyncio.Event()
         self._connected = False
         self.disconnect_count = 0
@@ -145,6 +158,10 @@ class FakeTransport:
         self.voice_failure = None
         self.voice_payloads = []
         self._voice_disabled = False
+        self.input_payloads = []
+        self.input_disable_count = 0
+        self._input_disabled = True
+        self.input_handler = None
 
     @property
     def connected(self):
@@ -213,6 +230,32 @@ class FakeTransport:
             await asyncio.Event().wait()
         if self.disconnect_after_voice:
             self._connected = False
+
+    async def enable_input_actions(self, ready_payload, handler):
+        self.input_enable_started.set()
+        self._input_disabled = False
+        self.input_handler = handler
+        self.input_payloads.append(("ready", ready_payload, handler))
+        if self.events is not None:
+            self.events.append("input.enable")
+        if self.input_enable_error is not None:
+            raise self.input_enable_error
+        for payload in self.input_notifications:
+            await handler(payload)
+        if self.input_notifications:
+            self.input_notifications_handled.set()
+
+    async def disable_input_actions(self):
+        if self._input_disabled:
+            return
+        self._input_disabled = True
+        self.input_handler = None
+        self.input_disable_count += 1
+        self.input_payloads.append(("disabled",))
+        if self.events is not None:
+            self.events.append("input.disable")
+        if self.block_input_disable:
+            await asyncio.Event().wait()
 
 
 class FakeTransportFactory:
@@ -1147,6 +1190,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             events[-3:],
             ["voice.disable", "voice.disconnect", "ble.disconnect"],
         )
+        self.assertEqual(factory.instances[0].input_disable_count, 1)
         ready = decode_control(key, factory.instances[0].voice_payloads[0][1])
         self.assertEqual(ready.kind, READY)
         self.assertEqual(ready.target_bps, 8192)
@@ -1183,6 +1227,410 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             runtime.snapshot().voice_detail,
             "voice key stored in Keychain is malformed",
         )
+        self.assertEqual(factory.instances[0].input_payloads, [])
+        self.assertFalse(
+            any(
+                payload[0] == "ready"
+                for payload in factory.instances[0].voice_payloads
+            )
+        )
+
+    async def test_input_actions_start_before_voice_and_survive_unavailable_voice(self):
+        key = bytes(range(16))
+        nonce = b"input001"
+        action = encode_action(key, InputAction.SUBMIT, 1, 123, nonce)
+        for unavailable_state in (
+            VoiceState.TYPELESS_NOT_RUNNING,
+            VoiceState.DRIVER_REQUIRED,
+        ):
+            with self.subTest(unavailable_state=unavailable_state):
+                events = []
+                factory = FakeTransportFactory([{"events": events}])
+
+                class VoiceSession:
+                    state = unavailable_state
+
+                    async def prepare(self):
+                        events.append("voice.prepare")
+                        return self.state
+
+                    async def disconnect(self):
+                        events.append("voice.disconnect")
+
+                class SubmitController:
+                    def __init__(self):
+                        self.actions = []
+
+                    def handle(self, submitted_action):
+                        self.actions.append(submitted_action)
+                        return True
+
+                controller = SubmitController()
+                runtime = AgentRuntime(
+                    collector=FakeCollector(),
+                    transport_factory=factory,
+                    voice_key_loader=lambda: key,
+                    voice_session_factory=lambda _key: VoiceSession(),
+                    voice_nonce_factory=lambda: b"voice001",
+                    input_nonce_factory=lambda: nonce,
+                    submit_controller_factory=lambda: controller,
+                    status_interval=30,
+                )
+
+                session = asyncio.create_task(runtime._run_session())
+                await factory.wait_for_instances(1)
+                transport = factory.instances[0]
+                await asyncio.wait_for(transport.input_enable_started.wait(), 1)
+                for _ in range(100):
+                    if runtime.snapshot().voice_state is unavailable_state:
+                        break
+                    await asyncio.sleep(0.01)
+                else:
+                    self.fail("voice unavailable state was not published")
+
+                self.assertIsNotNone(transport.input_handler)
+                self.assertEqual(transport.input_disable_count, 0)
+                await transport.input_handler(action)
+                await asyncio.sleep(0)
+
+                self.assertEqual(controller.actions, [InputAction.SUBMIT])
+                self.assertLess(
+                    events.index("input.enable"), events.index("voice.prepare")
+                )
+                self.assertIn("voice.disable", events)
+                self.assertEqual(transport.input_disable_count, 0)
+                session.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await session
+                self.assertGreater(
+                    events.index("input.disable"), events.index("voice.disable")
+                )
+                self.assertEqual(transport.input_disable_count, 1)
+                ready = transport.input_payloads[0][1]
+                self.assertEqual(decode_input_ready(key, ready), nonce)
+
+    async def test_missing_accessibility_overrides_driver_and_blocks_input_dispatch(
+        self,
+    ):
+        key = bytes(range(16))
+        nonce = b"inputax1"
+        action = encode_action(key, InputAction.SUBMIT, 1, 124, nonce)
+        factory = FakeTransportFactory([{}])
+
+        class VoiceSession:
+            state = VoiceState.DRIVER_REQUIRED
+
+            async def prepare(self):
+                return self.state
+
+            async def disconnect(self):
+                pass
+
+        class SubmitController:
+            def __init__(self):
+                self.actions = []
+
+            def handle(self, submitted_action):
+                self.actions.append(submitted_action)
+                return True
+
+        controller = SubmitController()
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            transport_factory=factory,
+            voice_key_loader=lambda: key,
+            voice_session_factory=lambda _key: VoiceSession(),
+            input_nonce_factory=lambda: nonce,
+            submit_controller_factory=lambda: controller,
+            accessibility_checker=lambda: False,
+            status_interval=30,
+        )
+
+        session = asyncio.create_task(runtime._run_session())
+        await factory.wait_for_instances(1)
+        transport = factory.instances[0]
+        await asyncio.wait_for(transport.input_enable_started.wait(), 1)
+        for _ in range(100):
+            if (
+                runtime.snapshot().voice_state
+                is VoiceState.ACCESSIBILITY_REQUIRED
+            ):
+                break
+            await asyncio.sleep(0.01)
+        else:
+            self.fail("Accessibility-required state was not published")
+
+        self.assertEqual(transport.input_disable_count, 0)
+        self.assertIsNotNone(transport.input_handler)
+        await transport.input_handler(action)
+        self.assertEqual(controller.actions, [])
+        control = decode_control(key, transport.voice_payloads[0][1])
+        self.assertEqual(control.kind, UNAVAILABLE)
+        self.assertEqual(control.reason, ACCESSIBILITY_REQUIRED)
+
+        session.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await session
+
+    async def test_accessibility_recovery_refresh_restores_ready_voice(self):
+        key = bytes(range(16))
+        permission = {"available": False}
+        factory = FakeTransportFactory([{}])
+
+        class VoiceSession:
+            state = VoiceState.READY
+
+            async def prepare(self):
+                return self.state
+
+            async def disconnect(self):
+                pass
+
+            async def handle(self, _payload):
+                pass
+
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            transport_factory=factory,
+            voice_key_loader=lambda: key,
+            voice_session_factory=lambda _key: VoiceSession(),
+            voice_nonce_factory=lambda: b"voiceax1",
+            input_nonce_factory=lambda: b"inputax2",
+            accessibility_checker=lambda: permission["available"],
+            status_interval=0.01,
+        )
+
+        session = asyncio.create_task(runtime._run_session())
+        await factory.wait_for_instances(1)
+        transport = factory.instances[0]
+        for _ in range(100):
+            if (
+                runtime.snapshot().voice_state
+                is VoiceState.ACCESSIBILITY_REQUIRED
+            ):
+                break
+            await asyncio.sleep(0.01)
+        else:
+            self.fail("Accessibility-required state was not published")
+
+        permission["available"] = True
+        runtime.refresh_voice_readiness()
+        await asyncio.wait_for(transport.voice_enable_started.wait(), 1)
+
+        self.assertIs(runtime.snapshot().voice_state, VoiceState.READY)
+        self.assertTrue(
+            any(item[0] == "ready" for item in transport.voice_payloads)
+        )
+        session.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await session
+
+    async def test_input_decoder_rejects_duplicate_out_of_order_old_nonce_and_malformed(self):
+        key = bytes(range(16))
+        nonce = b"input002"
+        old_nonce = b"oldnonce"
+        valid = encode_action(key, InputAction.FORCE_STEER, 2, 200, nonce)
+        duplicate = valid
+        out_of_order = encode_action(key, InputAction.SUBMIT, 1, 201, nonce)
+        stale = encode_action(key, InputAction.SUBMIT, 3, 202, old_nonce)
+        factory = FakeTransportFactory(
+            [
+                {
+                    "input_notifications": [
+                        valid,
+                        duplicate,
+                        out_of_order,
+                        stale,
+                        b"malformed",
+                    ],
+                    "disconnect_after_messages": 2,
+                }
+            ]
+        )
+
+        class VoiceSession:
+            state = VoiceState.TYPELESS_NOT_RUNNING
+
+            async def prepare(self):
+                return self.state
+
+            async def disconnect(self):
+                pass
+
+        class SubmitController:
+            def __init__(self):
+                self.actions = []
+
+            def handle(self, action):
+                self.actions.append(action)
+                return False
+
+        controller = SubmitController()
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            transport_factory=factory,
+            voice_key_loader=lambda: key,
+            voice_session_factory=lambda _key: VoiceSession(),
+            input_nonce_factory=lambda: nonce,
+            submit_controller_factory=lambda: controller,
+            status_interval=0.01,
+        )
+
+        result = await runtime._run_session()
+
+        self.assertEqual(result, "disconnected")
+        self.assertEqual(controller.actions, [InputAction.FORCE_STEER])
+        self.assertEqual(
+            [item[0] for item in factory.instances[0].messages],
+            [EVENT_MESSAGE, STATUS_MESSAGE],
+        )
+
+    async def test_reconnect_uses_fresh_input_nonce_and_rejects_old_connection_packet(self):
+        key = bytes(range(16))
+        first_nonce = b"input003"
+        second_nonce = b"input004"
+        stale = encode_action(key, InputAction.SUBMIT, 1, 300, first_nonce)
+        factory = FakeTransportFactory(
+            [
+                {"disconnect_after_messages": 2},
+                {
+                    "input_notifications": [stale],
+                    "disconnect_after_messages": 2,
+                },
+            ]
+        )
+        nonces = iter((first_nonce, second_nonce))
+
+        class VoiceSession:
+            state = VoiceState.TYPELESS_NOT_RUNNING
+
+            async def prepare(self):
+                return self.state
+
+            async def disconnect(self):
+                pass
+
+        class SubmitController:
+            def __init__(self):
+                self.actions = []
+
+            def handle(self, action):
+                self.actions.append(action)
+                return True
+
+        controllers = []
+
+        def make_controller():
+            controller = SubmitController()
+            controllers.append(controller)
+            return controller
+
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            transport_factory=factory,
+            voice_key_loader=lambda: key,
+            voice_session_factory=lambda _key: VoiceSession(),
+            input_nonce_factory=lambda: next(nonces),
+            submit_controller_factory=make_controller,
+            status_interval=0.01,
+        )
+
+        self.assertEqual(await runtime._run_session(), "disconnected")
+        self.assertEqual(await runtime._run_session(), "disconnected")
+
+        ready_nonces = [
+            decode_input_ready(key, transport.input_payloads[0][1])
+            for transport in factory.instances
+        ]
+        self.assertEqual(ready_nonces, [first_nonce, second_nonce])
+        self.assertEqual([controller.actions for controller in controllers], [[], []])
+
+    async def test_submit_handler_exception_isolated_and_action_is_not_retried(self):
+        key = bytes(range(16))
+        nonce = b"input005"
+        action = encode_action(key, InputAction.SUBMIT, 1, 400, nonce)
+        factory = FakeTransportFactory(
+            [
+                {
+                    "input_notifications": [action],
+                    "disconnect_after_messages": 2,
+                }
+            ]
+        )
+
+        class VoiceSession:
+            state = VoiceState.TYPELESS_NOT_RUNNING
+
+            async def prepare(self):
+                return self.state
+
+            async def disconnect(self):
+                pass
+
+        class SubmitController:
+            def __init__(self):
+                self.calls = 0
+
+            def handle(self, _action):
+                self.calls += 1
+                raise RuntimeError("AX unavailable")
+
+        controller = SubmitController()
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            transport_factory=factory,
+            voice_key_loader=lambda: key,
+            voice_session_factory=lambda _key: VoiceSession(),
+            input_nonce_factory=lambda: nonce,
+            submit_controller_factory=lambda: controller,
+            status_interval=0.01,
+        )
+
+        with self.assertLogs("runtime", level="WARNING"):
+            result = await runtime._run_session()
+
+        self.assertEqual(result, "disconnected")
+        self.assertEqual(controller.calls, 1)
+        self.assertEqual(len(factory.instances[0].messages), 2)
+
+    async def test_input_enable_failure_does_not_prevent_voice_readiness(self):
+        factory = FakeTransportFactory(
+            [
+                {
+                    "input_enable_error": ConnectionError(
+                        "input READY write failed"
+                    ),
+                    "disconnect_after_voice": True,
+                }
+            ]
+        )
+
+        class VoiceSession:
+            state = VoiceState.READY
+
+            async def prepare(self):
+                return self.state
+
+            async def disconnect(self):
+                pass
+
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            transport_factory=factory,
+            voice_key_loader=lambda: bytes(range(16)),
+            voice_session_factory=lambda _key: VoiceSession(),
+            voice_nonce_factory=lambda: b"voice007",
+            input_nonce_factory=lambda: b"input007",
+        )
+
+        with self.assertLogs("runtime", level="ERROR"):
+            result = await runtime._run_session()
+
+        self.assertEqual(result, "disconnected")
+        self.assertTrue(
+            any(item[0] == "ready" for item in factory.instances[0].voice_payloads)
+        )
+        self.assertIs(runtime.snapshot().voice_state, VoiceState.READY)
 
     async def test_voice_key_material_is_redacted_from_snapshot_and_logs(self):
         key_text = bytes(range(16)).hex()
@@ -1234,6 +1682,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
                     voice_key_loader=lambda: key,
                     voice_session_factory=lambda _key: VoiceSession(),
                     voice_nonce_factory=lambda: b"12345678",
+                    accessibility_checker=lambda: True,
                     status_interval=0.01,
                 )
 
@@ -1276,8 +1725,13 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         await runtime._run_session()
 
         self.assertEqual(
-            events[-3:],
-            ["voice.disable", "voice.disconnect", "ble.disconnect"],
+            events[-4:],
+            [
+                "voice.disable",
+                "voice.disconnect",
+                "input.disable",
+                "ble.disconnect",
+            ],
         )
         self.assertIs(runtime.snapshot().voice_state, VoiceState.ERROR)
         self.assertEqual(runtime.snapshot().voice_detail, "readiness failed")
@@ -1321,8 +1775,13 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(runtime.snapshot().voice_state, VoiceState.ERROR)
         self.assertEqual(runtime.snapshot().voice_detail, "READY write failed")
         self.assertEqual(
-            events[-3:],
-            ["voice.disable", "voice.disconnect", "ble.disconnect"],
+            events[-4:],
+            [
+                "voice.disable",
+                "voice.disconnect",
+                "input.disable",
+                "ble.disconnect",
+            ],
         )
 
     async def test_cancellation_while_ready_write_is_blocked_stops_active_recording(self):
@@ -1581,8 +2040,13 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             "voice notification queue overflow",
         )
         self.assertEqual(
-            events[-3:],
-            ["voice.disable", "voice.disconnect", "ble.disconnect"],
+            events[-4:],
+            [
+                "voice.disable",
+                "voice.disconnect",
+                "input.disable",
+                "ble.disconnect",
+            ],
         )
 
     async def test_voice_cleanup_timeouts_still_reach_ble_disconnect(self):
@@ -1620,6 +2084,44 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result, "disconnected")
         self.assertEqual(events[-1], "ble.disconnect")
+        self.assertEqual(events.count("voice.disable"), 1)
+        self.assertEqual(events.count("voice.disconnect"), 1)
+        self.assertEqual(events.count("ble.disconnect"), 1)
+
+    async def test_input_cleanup_timeout_still_reaches_voice_and_ble_cleanup(self):
+        events = []
+        factory = FakeTransportFactory(
+            [
+                {
+                    "events": events,
+                    "disconnect_after_voice": True,
+                    "block_input_disable": True,
+                }
+            ]
+        )
+
+        class VoiceSession:
+            state = VoiceState.READY
+
+            async def prepare(self):
+                return self.state
+
+            async def disconnect(self):
+                events.append("voice.disconnect")
+
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            transport_factory=factory,
+            voice_key_loader=lambda: bytes(range(16)),
+            voice_session_factory=lambda _key: VoiceSession(),
+            input_nonce_factory=lambda: b"input006",
+            disconnect_timeout=0.03,
+        )
+
+        result = await asyncio.wait_for(runtime._run_session(), 1)
+
+        self.assertEqual(result, "disconnected")
+        self.assertEqual(events.count("input.disable"), 1)
         self.assertEqual(events.count("voice.disable"), 1)
         self.assertEqual(events.count("voice.disconnect"), 1)
         self.assertEqual(events.count("ble.disconnect"), 1)
@@ -1829,9 +2331,13 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             async def start_notify(self, _uuid, callback):
                 self.callback = callback
 
-            async def write_gatt_char(self, _uuid, _payload, response):
+            async def write_gatt_char(self, uuid, _payload, response):
                 self.response = response
-                if self.callback is not None and not self.sent_notifications:
+                if (
+                    uuid == VOICE_CONTROL_UUID
+                    and self.callback is not None
+                    and not self.sent_notifications
+                ):
                     self.sent_notifications = True
                     self.callback(None, begin)
                     self.callback(None, end)

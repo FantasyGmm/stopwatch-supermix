@@ -165,7 +165,7 @@ VoiceButtonAction VoiceButtonEdgeGate::update(
         }
         if (!right_pressed) {
             _state = State::Idle;
-            return VoiceButtonAction::None;
+            return VoiceButtonAction::ShortClick;
         }
         if (now_ms - _pending_since_ms < kChordGuardMs) {
             return VoiceButtonAction::None;
@@ -200,9 +200,21 @@ VoiceButtonAction VoiceButtonEdgeGate::update(
     return VoiceButtonAction::None;
 }
 
+bool VoiceButtonEdgeGate::is_suppressed() const
+{
+    return _state == State::SuppressedUntilRightRelease ||
+           _state == State::SuppressedUntilBothRelease;
+}
+
+bool VoiceButtonEdgeGate::is_active() const
+{
+    return _state == State::Active;
+}
+
 void VoiceButtonDispatcher::reset(bool right_pressed)
 {
     _gate.reset(right_pressed);
+    _gesture.reset();
 }
 
 VoiceButtonDispatchDecision VoiceButtonDispatcher::dispatch(
@@ -211,11 +223,31 @@ VoiceButtonDispatchDecision VoiceButtonDispatcher::dispatch(
     bool woke_screen,
     bool go_home,
     uint32_t now_ms,
-    VoiceButtonSink* sink)
+    VoiceButtonSink* sink,
+    CodexButtonActionSink* action_sink,
+    bool input_suppressed)
 {
-    const VoiceButtonAction action = _gate.update(
+    const bool cancel_active_voice = input_suppressed && _gate.is_active();
+    if (input_suppressed) {
+        _gate.reset(right_pressed);
+    }
+    VoiceButtonAction action = _gate.update(
         left_pressed, right_pressed, woke_screen, go_home, now_ms);
+    if (cancel_active_voice && action == VoiceButtonAction::None) {
+        action = VoiceButtonAction::CancelVoice;
+    }
+    const CodexButtonAction codex_action = _gesture.update(
+        action == VoiceButtonAction::ShortClick,
+        right_pressed,
+        action == VoiceButtonAction::Press,
+        now_ms,
+        input_suppressed || _gate.is_suppressed() || woke_screen || go_home);
+    if (action_sink != nullptr && codex_action != CodexButtonAction::None) {
+        action_sink->handle_action(codex_action, now_ms);
+    }
     switch (action) {
+    case VoiceButtonAction::ShortClick:
+        break;
     case VoiceButtonAction::Press:
         if (sink) {
             sink->handle_button(true, now_ms);

@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CXX="${CXX:-c++}"
 PYTHON="${PYTHON:-$ROOT/mac-codex-agent/.venv/bin/python}"
-TOTAL_STAGES=54
+TOTAL_STAGES=57
 STAGE_INDEX=0
 CONTRACT_ONLY=0
 HOST_TESTS_ONLY=0
@@ -269,6 +269,12 @@ run_host_test codex_status_model_test \
     main/apps/app_codex_status/codex_status_model.cpp \
     "$TRAE_CJSON_OBJECT"
 
+stage "Codex button gesture host test"
+run_host_test codex_button_gesture_test \
+    -std=c++17 -Wall -Wextra -Werror -DSTOPWATCH_HOST_TEST -I. \
+    tests/codex_button_gesture_test.cpp \
+    main/apps/app_codex_status/codex_button_gesture.cpp
+
 stage "Status page swipe and Trae card tap host tests"
 run_host_test status_page_swipe_logic_test \
     -std=c++17 -Wall -Wextra -Werror -Imain \
@@ -449,6 +455,25 @@ run_host_test voice_input_protocol_test \
     main/apps/app_codex_status/voice_input_crypto.cpp \
     "$MBEDTLS_BUILD/library/libmbedcrypto.a"
 
+stage "Input action protocol host test"
+run_host_test input_action_protocol_test \
+    -std=c++17 -Wall -Wextra -Werror -pthread -DSTOPWATCH_HOST_TEST -I. \
+    -I"$MBEDTLS_SOURCE/include" \
+    tests/input_action_protocol_test.cpp \
+    main/apps/app_codex_status/input_action_protocol.cpp \
+    main/apps/app_codex_status/voice_input_crypto.cpp \
+    "$MBEDTLS_BUILD/library/libmbedcrypto.a"
+
+stage "Input action controller host test"
+run_host_test input_action_controller_test \
+    -std=c++17 -Wall -Wextra -Werror -pthread -DSTOPWATCH_HOST_TEST -I. \
+    -I"$MBEDTLS_SOURCE/include" \
+    tests/input_action_controller_test.cpp \
+    main/apps/app_codex_status/input_action_controller.cpp \
+    main/apps/app_codex_status/input_action_protocol.cpp \
+    main/apps/app_codex_status/voice_input_crypto.cpp \
+    "$MBEDTLS_BUILD/library/libmbedcrypto.a"
+
 stage "Production voice session host test"
 run_host_test voice_input_session_test \
     -std=c++17 -Wall -Wextra -Werror -DSTOPWATCH_HOST_TEST -I. \
@@ -467,6 +492,7 @@ run_host_test voice_input_controller_test \
     -I"$MBEDTLS_SOURCE/include" \
     tests/voice_input_controller_test.cpp \
     main/apps/app_codex_status/voice_input_controller.cpp \
+    main/apps/app_codex_status/codex_button_gesture.cpp \
     main/apps/app_codex_status/voice_capture_pipeline.cpp \
     main/apps/app_codex_status/voice_input_session.cpp \
     main/apps/app_codex_status/voice_input_protocol.cpp \

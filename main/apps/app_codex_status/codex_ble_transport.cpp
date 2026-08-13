@@ -31,6 +31,7 @@ constexpr size_t kFrameQueueDepth = 32;
 constexpr size_t kVoiceControlQueueDepth = 8;
 constexpr size_t kProductionVoiceControlQueueDepth = 8;
 constexpr size_t kPairingFrameQueueDepth = 8;
+constexpr size_t kInputControlQueueDepth = 8;
 constexpr size_t kMaxNotificationSize = 256;
 constexpr uint32_t kPendingAuthenticationIdleTimeoutMs = 60000;
 constexpr uint32_t kPendingAuthenticationMaxLifetimeMs = 120000;
@@ -79,6 +80,10 @@ struct QueuedPairingFrame {
     uint8_t data[kMaxFrameSize] = {};
 };
 
+struct QueuedInputControl {
+    input_action::ReadyControl control = {};
+};
+
 CodexBleTransport* g_transport = nullptr;
 uint8_t g_own_address_type = 0;
 std::string g_device_name;
@@ -117,6 +122,15 @@ const ble_uuid128_t kPairingTxUuid = BLE_UUID128_INIT(
 );
 uint16_t g_voice_tx_value_handle = 0;
 uint16_t g_pairing_tx_value_handle = 0;
+const ble_uuid128_t kInputControlUuid = BLE_UUID128_INIT(
+    0x44, 0x4f, 0x43, 0x48, 0x43, 0x54, 0x41, 0x57,
+    0x50, 0x4f, 0x74, 0x54, 0x09, 0x00, 0x23, 0x7a
+);
+const ble_uuid128_t kInputTxUuid = BLE_UUID128_INIT(
+    0x44, 0x4f, 0x43, 0x48, 0x43, 0x54, 0x41, 0x57,
+    0x50, 0x4f, 0x74, 0x54, 0x0a, 0x00, 0x23, 0x7a
+);
+uint16_t g_input_tx_value_handle = 0;
 
 bool configure_identity_address()
 {
@@ -275,6 +289,53 @@ int pairing_tx_access(
     return BLE_ATT_ERR_REQ_NOT_SUPPORTED;
 }
 
+int input_control_access(
+    uint16_t connection_handle,
+    uint16_t,
+    ble_gatt_access_ctxt* context,
+    void*)
+{
+    if (g_transport == nullptr || context == nullptr ||
+        context->op != BLE_GATT_ACCESS_OP_WRITE_CHR) {
+        return BLE_ATT_ERR_UNLIKELY;
+    }
+    if (!g_transport->authorize_gatt(
+            connection_handle,
+            secure_pairing::AgentGattSurface::Production)) {
+        return BLE_ATT_ERR_INSUFFICIENT_AUTHOR;
+    }
+    const uint16_t length = OS_MBUF_PKTLEN(context->om);
+    if (length != input_action::kReadyControlSize) {
+        return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+    }
+    std::array<uint8_t, input_action::kReadyControlSize> bytes = {};
+    uint16_t copied = 0;
+    if (ble_hs_mbuf_to_flat(
+            context->om, bytes.data(), bytes.size(), &copied) != 0 ||
+        copied != length) {
+        return BLE_ATT_ERR_UNLIKELY;
+    }
+    return g_transport->enqueue_input_control_from_ble(
+               connection_handle, bytes.data(), copied)
+               ? 0
+               : BLE_ATT_ERR_INSUFFICIENT_RES;
+}
+
+int input_tx_access(
+    uint16_t connection_handle,
+    uint16_t,
+    ble_gatt_access_ctxt*,
+    void*)
+{
+    if (g_transport == nullptr ||
+        !g_transport->authorize_gatt(
+            connection_handle,
+            secure_pairing::AgentGattSurface::Production)) {
+        return BLE_ATT_ERR_INSUFFICIENT_AUTHOR;
+    }
+    return BLE_ATT_ERR_REQ_NOT_SUPPORTED;
+}
+
 const ble_gatt_chr_def kStatusCharacteristics[] = {
     {
         &kStatusRxUuid.u,
@@ -308,6 +369,26 @@ const ble_gatt_chr_def kVoiceCharacteristics[] = {
         BLE_GATT_CHR_F_NOTIFY,
         0,
         &g_voice_tx_value_handle,
+        nullptr,
+    },
+    {
+        &kInputControlUuid.u,
+        input_control_access,
+        nullptr,
+        nullptr,
+        BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP,
+        0,
+        nullptr,
+        nullptr,
+    },
+    {
+        &kInputTxUuid.u,
+        input_tx_access,
+        nullptr,
+        nullptr,
+        BLE_GATT_CHR_F_NOTIFY,
+        0,
+        &g_input_tx_value_handle,
         nullptr,
     },
     {},
@@ -394,6 +475,10 @@ int gap_event(ble_gap_event* event, void*)
             return 0;
         case BLE_GAP_EVENT_SUBSCRIBE:
             g_transport->handle_subscription(
+                event->subscribe.conn_handle,
+                event->subscribe.attr_handle,
+                event->subscribe.cur_notify != 0);
+            g_transport->handle_input_subscription(
                 event->subscribe.conn_handle,
                 event->subscribe.attr_handle,
                 event->subscribe.cur_notify != 0);
@@ -530,10 +615,21 @@ bool CodexBleTransport::start(const std::string& device_name)
         _frame_queue = nullptr;
         vQueueDelete(static_cast<QueueHandle_t>(_voice_control_queue));
         _voice_control_queue = nullptr;
-        vQueueDelete(
-            static_cast<QueueHandle_t>(
-                _production_voice_control_queue));
+        vQueueDelete(static_cast<QueueHandle_t>(_production_voice_control_queue));
         _production_voice_control_queue = nullptr;
+        return false;
+    }
+    _input_control_queue = xQueueCreate(
+        kInputControlQueueDepth, sizeof(QueuedInputControl));
+    if (_input_control_queue == nullptr) {
+        vQueueDelete(static_cast<QueueHandle_t>(_frame_queue));
+        _frame_queue = nullptr;
+        vQueueDelete(static_cast<QueueHandle_t>(_voice_control_queue));
+        _voice_control_queue = nullptr;
+        vQueueDelete(static_cast<QueueHandle_t>(_production_voice_control_queue));
+        _production_voice_control_queue = nullptr;
+        vQueueDelete(static_cast<QueueHandle_t>(_pairing_frame_queue));
+        _pairing_frame_queue = nullptr;
         return false;
     }
 
@@ -548,9 +644,13 @@ bool CodexBleTransport::start(const std::string& device_name)
         _rejected_disconnect_handle =
             secure_pairing::kNoAgentConnection;
     }
+    _input_action_subscribed = false;
+    _input_tx_value_handle = 0;
     _production_control_guard.reset();
+    _input_control_guard.reset();
     g_voice_tx_value_handle = 0;
     g_pairing_tx_value_handle = 0;
+    g_input_tx_value_handle = 0;
 
     const esp_err_t init_result = nimble_port_init();
     if (init_result != ESP_OK) {
@@ -563,6 +663,8 @@ bool CodexBleTransport::start(const std::string& device_name)
         _production_voice_control_queue = nullptr;
         vQueueDelete(static_cast<QueueHandle_t>(_pairing_frame_queue));
         _pairing_frame_queue = nullptr;
+        vQueueDelete(static_cast<QueueHandle_t>(_input_control_queue));
+        _input_control_queue = nullptr;
         g_transport = nullptr;
         return false;
     }
@@ -581,6 +683,7 @@ bool CodexBleTransport::start(const std::string& device_name)
     ble_svc_gatt_init();
     g_voice_tx_value_handle = 0;
     g_pairing_tx_value_handle = 0;
+    g_input_tx_value_handle = 0;
     int result = ble_gatts_count_cfg(kServices);
     if (result == 0) {
         result = ble_gatts_add_svcs(kServices);
@@ -599,14 +702,18 @@ bool CodexBleTransport::start(const std::string& device_name)
         _production_voice_control_queue = nullptr;
         vQueueDelete(static_cast<QueueHandle_t>(_pairing_frame_queue));
         _pairing_frame_queue = nullptr;
+        vQueueDelete(static_cast<QueueHandle_t>(_input_control_queue));
+        _input_control_queue = nullptr;
         g_voice_tx_value_handle = 0;
         g_pairing_tx_value_handle = 0;
+        g_input_tx_value_handle = 0;
         g_transport = nullptr;
         return false;
     }
 
     ble_store_config_init();
     nimble_port_freertos_init(host_task);
+    _input_tx_value_handle = g_input_tx_value_handle;
     _initialized = true;
     return true;
 }
@@ -681,9 +788,19 @@ void CodexBleTransport::stop()
         _rejected_disconnect_handle =
             secure_pairing::kNoAgentConnection;
     }
+    if (_input_control_queue != nullptr) {
+        vQueueDelete(static_cast<QueueHandle_t>(_input_control_queue));
+        _input_control_queue = nullptr;
+    }
+    _messages.clear();
+    _reassembler.reset();
+    _input_action_subscribed = false;
+    _input_tx_value_handle = 0;
     _production_control_guard.reset();
+    _input_control_guard.reset();
     g_voice_tx_value_handle = 0;
     g_pairing_tx_value_handle = 0;
+    g_input_tx_value_handle = 0;
     _initialized = false;
 }
 
@@ -840,9 +957,33 @@ bool CodexBleTransport::take_pairing_frame(CodexPairingFrame& frame)
 }
 
 
+bool CodexBleTransport::take_input_action_control(
+    CodexInputActionControl& control)
+{
+    if (_input_control_queue == nullptr) {
+        return false;
+    }
+    QueuedInputControl queued = {};
+    if (xQueueReceive(
+            static_cast<QueueHandle_t>(_input_control_queue),
+            &queued,
+            0) != pdTRUE) {
+        return false;
+    }
+    control.control = queued.control;
+    return true;
+}
+
+
 bool CodexBleTransport::voice_subscribed() const
 {
     return _connection_router.active_voice_subscribed();
+}
+
+
+bool CodexBleTransport::input_action_subscribed() const
+{
+    return _input_action_subscribed.load();
 }
 
 
@@ -979,6 +1120,43 @@ CodexBleNotifyResult CodexBleTransport::notify_pairing(
     return CodexBleNotifyResult::NotReady;
 }
 
+CodexBleNotifyResult CodexBleTransport::notify_input_action(
+    const uint8_t* data,
+    size_t length)
+{
+    if (data == nullptr || length != input_action::kWireActionSize ||
+        length > voice_notification_limit()) {
+        return CodexBleNotifyResult::InvalidSize;
+    }
+    std::lock_guard<std::mutex> voice_link_lock(_voice_link_mutex);
+    const secure_pairing::AgentVoiceLink link =
+        _connection_router.active_voice_link();
+    const uint16_t value_handle = _input_tx_value_handle.load();
+    if (!link.authorized || !_input_action_subscribed.load() ||
+        link.handle == secure_pairing::kNoAgentConnection ||
+        value_handle == 0) {
+        return CodexBleNotifyResult::NotReady;
+    }
+
+    os_mbuf* mbuf = os_msys_get_pkthdr(static_cast<uint16_t>(length), 0);
+    if (mbuf == nullptr) {
+        return CodexBleNotifyResult::Congested;
+    }
+    if (os_mbuf_append(mbuf, data, static_cast<uint16_t>(length)) != 0) {
+        os_mbuf_free_chain(mbuf);
+        return CodexBleNotifyResult::Congested;
+    }
+    const int result = ble_gatts_notify_custom(
+        link.handle, value_handle, mbuf);
+    if (result == 0) {
+        return CodexBleNotifyResult::Accepted;
+    }
+    if (result == BLE_HS_ENOMEM || result == BLE_HS_EBUSY) {
+        return CodexBleNotifyResult::Congested;
+    }
+    return CodexBleNotifyResult::NotReady;
+}
+
 bool CodexBleTransport::set_voice_credential(
     const voice_input::crypto::Key& key,
     uint32_t key_epoch)
@@ -988,6 +1166,7 @@ bool CodexBleTransport::set_voice_credential(
     }
     _production_voice_key_epoch = key_epoch;
     _production_control_guard.reset();
+    _input_control_guard.reset();
     return true;
 }
 
@@ -996,6 +1175,12 @@ void CodexBleTransport::clear_voice_credential()
     _production_voice_key_epoch = 0;
     _production_voice_crypto.clear();
     _production_control_guard.reset();
+    _input_control_guard.reset();
+}
+
+voice_input::crypto::CcmContext& CodexBleTransport::input_action_crypto()
+{
+    return _production_voice_crypto;
 }
 
 
@@ -1038,6 +1223,12 @@ bool CodexBleTransport::promote_pending(uint16_t connection_handle)
         return false;
     }
     _production_control_guard.reset();
+    _input_control_guard.reset();
+    _input_action_subscribed = false;
+    _input_tx_value_handle = g_input_tx_value_handle;
+    if (_input_control_queue != nullptr) {
+        xQueueReset(static_cast<QueueHandle_t>(_input_control_queue));
+    }
     if (_voice_control_queue != nullptr) {
         xQueueReset(static_cast<QueueHandle_t>(_voice_control_queue));
     }
@@ -1208,6 +1399,32 @@ bool CodexBleTransport::enqueue_pairing_frame_from_ble(
                0) == pdTRUE;
 }
 
+bool CodexBleTransport::enqueue_input_control_from_ble(
+    uint16_t connection_handle,
+    const uint8_t* data,
+    size_t length)
+{
+    if (!authorize_gatt(
+            connection_handle,
+            secure_pairing::AgentGattSurface::Production) ||
+        _input_control_queue == nullptr || data == nullptr ||
+        length != input_action::kReadyControlSize) {
+        return false;
+    }
+    QueuedInputControl queued = {};
+    if (!_input_control_guard.decode_once(
+            data,
+            length,
+            _production_voice_crypto,
+            queued.control)) {
+        return false;
+    }
+    return xQueueSend(
+               static_cast<QueueHandle_t>(_input_control_queue),
+               &queued,
+               0) == pdTRUE;
+}
+
 bool CodexBleTransport::handle_gap_connected(uint16_t connection_handle)
 {
     const uint32_t now_ms = static_cast<uint32_t>(
@@ -1223,6 +1440,7 @@ bool CodexBleTransport::handle_gap_connected(uint16_t connection_handle)
         _rejected_disconnect_handle = connection_handle;
         return false;
     }
+    _input_control_guard.reset();
     return true;
 }
 
@@ -1273,6 +1491,12 @@ void CodexBleTransport::handle_gap_disconnected(
                 static_cast<QueueHandle_t>(
                     _production_voice_control_queue));
         }
+        if (_input_control_queue != nullptr) {
+            xQueueReset(static_cast<QueueHandle_t>(_input_control_queue));
+        }
+        _input_action_subscribed = false;
+        _input_tx_value_handle = 0;
+        _input_control_guard.reset();
     } else if ((
                    previous == secure_pairing::AgentConnectionRole::Pending ||
                    previous ==
@@ -1295,6 +1519,21 @@ void CodexBleTransport::handle_subscription(
     } else if (attr_handle == g_pairing_tx_value_handle) {
         (void)_connection_router.update_pairing_subscription(
             connection_handle, enabled);
+    }
+}
+
+
+void CodexBleTransport::handle_input_subscription(
+    uint16_t connection_handle,
+    uint16_t attr_handle,
+    bool enabled)
+{
+    if (attr_handle == g_input_tx_value_handle &&
+        authorize_gatt(
+            connection_handle,
+            secure_pairing::AgentGattSurface::Production)) {
+        _input_action_subscribed = enabled;
+        _input_tx_value_handle = g_input_tx_value_handle;
     }
 }
 

@@ -357,6 +357,52 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         self.assertNotIn("device_context", production)
         self.assertNotIn("generated::kDeviceKey", production)
 
+    def test_input_actions_have_independent_authenticated_gatt_path(self):
+        header = (ROOT / "main/apps/app_codex_status/codex_ble_transport.h").read_text()
+        source = (ROOT / "main/apps/app_codex_status/codex_ble_transport.cpp").read_text()
+        controller = (
+            ROOT / "main/apps/app_codex_status/input_action_controller.cpp"
+        ).read_text()
+        app_header = (ROOT / "main/apps/app_codex_status/app_codex_status.h").read_text()
+        app = (ROOT / "main/apps/app_codex_status/app_codex_status.cpp").read_text()
+
+        self.assertIn("kInputControlUuid", source)
+        self.assertIn("kInputTxUuid", source)
+        self.assertIn("0x09, 0x00, 0x23, 0x7a", source)
+        self.assertIn("0x0a, 0x00, 0x23, 0x7a", source)
+        self.assertIn("take_input_action_control", header)
+        self.assertIn("input_action_subscribed", header)
+        self.assertIn("notify_input_action", header)
+        self.assertIn("_input_control_queue", header)
+        self.assertIn("_input_action_subscribed", header)
+        self.assertIn("_input_tx_value_handle", header)
+        self.assertIn("decode_ready", controller)
+        self.assertIn("_input_control_guard", header)
+
+        disconnect = source.split(
+            "void CodexBleTransport::handle_gap_disconnected", 1
+        )[1]
+        self.assertIn("_input_control_guard.reset()", disconnect)
+        self.assertIn("_input_action_subscribed = false", disconnect)
+        self.assertIn("_input_tx_value_handle = 0", disconnect)
+
+        self.assertIn("public CodexButtonActionSink", app_header)
+        self.assertIn("InputActionController", app_header)
+        running = app.split("void AppCodexStatus::onRunning()", 1)[1].split(
+            "void AppCodexStatus::onClose()", 1
+        )[0]
+        self.assertIn("take_input_action_control", running)
+        self.assertIn("notify_input_action", running)
+        self.assertLess(
+            running.index("take_input_action_control"),
+            running.index("notify_input_action"),
+        )
+        epoch_reset = running.split(
+            "connection_epoch != _production_voice_connection_epoch", 1
+        )[1].split("CodexInputActionControl", 1)[0]
+        self.assertIn("_input_action_controller->disconnect()", epoch_reset)
+        self.assertIn("_voice_button_dispatcher.reset(right_pressed)", epoch_reset)
+
     def test_app_routes_button_edges_after_wake_and_cancels_before_home(self):
         header = (ROOT / "main/apps/app_codex_status/app_codex_status.h").read_text()
         source = (ROOT / "main/apps/app_codex_status/app_codex_status.cpp").read_text()
@@ -403,6 +449,7 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         )
         self.assertEqual(running.count("updateButtonStates"), 1)
         self.assertEqual(running.count("_voice_button_dispatcher.dispatch"), 1)
+        self.assertIn("GetHAL().buttonInputSuppressed()", running)
         self.assertNotIn("VoiceButtonAction::", running)
         self.assertNotIn("->handle_button", running)
         self.assertNotIn("->cancel_for_home", running)

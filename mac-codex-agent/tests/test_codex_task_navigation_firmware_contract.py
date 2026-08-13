@@ -18,18 +18,33 @@ class CodexTaskNavigationFirmwareContractTests(unittest.TestCase):
         self.assertIn("bool CodexAlertCarousel::step(int direction, uint32_t now_ms)", source)
         self.assertIn("_last_rotation_ms = now_ms;", source)
 
-    def test_codex_page_maps_top_buttons_to_previous_and_next_tasks(self):
+    def test_codex_page_reserves_right_click_and_keeps_left_task_navigation(self):
         app = (
             ROOT / "main/apps/app_codex_status/app_codex_status.cpp"
         ).read_text()
 
+        key_update = app.index("_key_manager->update(false)")
+        self.assertIn(
+            "if (key_event == input::KeyEvent::GoNext)", app[key_update:]
+        )
+        consume_next = app.index(
+            "if (key_event == input::KeyEvent::GoNext)", key_update
+        )
+        clear_next = app.index("key_event = input::KeyEvent::None", consume_next)
+        dispatch = app.index("_voice_button_dispatcher.dispatch", clear_next)
         previous = app.index("key_event == input::KeyEvent::GoPrevious")
         previous_step = app.index("_alert_carousel.step(-1, now)", previous)
-        next_event = app.index("key_event == input::KeyEvent::GoNext", previous_step)
-        next_step = app.index("_alert_carousel.step(1, now)", next_event)
+        running = app.split("void AppCodexStatus::onRunning()", 1)[1].split(
+            "void AppCodexStatus::onClose()", 1
+        )[0]
+
+        self.assertLess(key_update, consume_next)
+        self.assertLess(consume_next, clear_next)
+        self.assertLess(clear_next, dispatch)
         self.assertLess(previous, previous_step)
-        self.assertLess(previous_step, next_event)
-        self.assertLess(next_event, next_step)
+        self.assertEqual(running.count("key_event == input::KeyEvent::GoNext"), 1)
+        self.assertNotIn("_alert_carousel.step(1, now)", running)
+        self.assertIn("key_event == input::KeyEvent::GoHome", running)
 
     def test_manual_screen_off_release_is_suppressed_before_task_navigation(self):
         header = (

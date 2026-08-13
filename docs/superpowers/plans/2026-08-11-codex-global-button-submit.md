@@ -24,7 +24,8 @@
 - `mac-codex-agent/runtime.py`: keep the action path alive even when Typeless or audio setup is unavailable.
 - `tests/*` and `mac-codex-agent/tests/*`: host, protocol, transport, runtime, and Accessibility-policy coverage.
 - `scripts/run_unified_offline_validation.sh`: register the new focused C++ host tests.
-- `mac-codex-agent/README.md`: document the Codex-app-global right-button behavior.
+- `README.md`, `mac-codex-agent/README.md`, and `VALIDATION.md`: document the
+  Codex-app-global right-button behavior, safety boundary, and verification.
 
 ### Task 1: Classify Clicks on the Watch
 
@@ -425,7 +426,7 @@ Require all three safety predicates before dispatch: Codex foreground, editable 
 
 - [ ] **Step 4: Implement the production Accessibility adapter**
 
-Use `NSWorkspace.sharedWorkspace().frontmostApplication()` and require bundle ID `com.openai.codex`. Starting from the focused AX element, verify an editable text role/value and inspect nearby submit control `AXTitle`, `AXDescription`, and `AXHelp`. Normalize the current English and Simplified Chinese labels:
+Use `NSWorkspace.sharedWorkspace().frontmostApplication()` and require bundle ID `com.openai.codex`. Starting from the focused AX element, verify an editable text role/value and inspect nearby submit control `AXTitle`, `AXDescription`, and `AXHelp`. The implemented adapter also requires the real `ProseMirror`, `ChromeAXNodeId`, `_RichTextInput_`, and `_ComposerLayoutBody_` anchors and a description from the 16 current composer resource IDs. Normalize the current English and Simplified Chinese labels:
 
 ```python
 SEND_LABELS = frozenset(("send", "发送"))
@@ -433,7 +434,14 @@ QUEUE_LABELS = frozenset(("queue", "加入队列"))
 STEER_LABELS = frozenset(("steer", "调整方向"))
 ```
 
-The normal submit emits Return. The alternate submit emits Command+Shift+Return. Both use complete down/up Quartz events and are callable only after a safe snapshot. AX traversal is bounded by a fixed node/depth limit so a malformed tree cannot stall the Agent.
+Normal Send, Queue, and Steer invoke `AXPress` on the uniquely verified button.
+Only Queue-to-forced-Steer emits Command+Shift+Return, with a complete down/up
+pair through `CGEventPostToPid` for the revalidated Codex PID. AX traversal is
+bounded by a fixed node/depth limit so a malformed tree cannot stall the Agent.
+The foreground PID, composer and button tokens, text, and semantic state are
+revalidated immediately before dispatch. A same-process focus change after
+revalidation remains a non-atomic macOS race, so ambiguous results are never
+retried.
 
 - [ ] **Step 5: Run focused tests**
 
@@ -544,7 +552,9 @@ git commit -m "Keep Codex button actions independent of voice"
 ### Task 6: Document and Verify the Complete Feature
 
 **Files:**
+- Modify: `README.md`
 - Modify: `mac-codex-agent/README.md`
+- Create: `VALIDATION.md`
 - Modify: `mac-codex-agent/tests/test_unified_voice_validation.py`
 
 - [ ] **Step 1: Add a failing documentation contract**
