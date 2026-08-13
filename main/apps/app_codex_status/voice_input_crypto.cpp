@@ -17,6 +17,7 @@ bool valid_domain(Domain domain)
         case Domain::Audio:
         case Domain::PttEnd:
         case Domain::VoiceError:
+        case Domain::TaskDetail:
             return true;
     }
     return false;

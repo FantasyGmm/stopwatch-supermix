@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CXX="${CXX:-c++}"
 PYTHON="${PYTHON:-$ROOT/mac-codex-agent/.venv/bin/python}"
-TOTAL_STAGES=54
+TOTAL_STAGES=56
 STAGE_INDEX=0
 CONTRACT_ONLY=0
 HOST_TESTS_ONLY=0
@@ -269,6 +269,12 @@ run_host_test codex_status_model_test \
     main/apps/app_codex_status/codex_status_model.cpp \
     "$TRAE_CJSON_OBJECT"
 
+stage "Codex task detail replay and reassembly host test"
+run_host_test codex_task_detail_store_test \
+    -std=c++17 -Wall -Wextra -Werror -I. \
+    tests/codex_task_detail_store_test.cpp \
+    main/apps/app_codex_status/codex_task_detail_store.cpp
+
 stage "Status page swipe and Trae card tap host tests"
 run_host_test status_page_swipe_logic_test \
     -std=c++17 -Wall -Wextra -Werror -Imain \
@@ -437,6 +443,15 @@ run_host_test voice_input_crypto_test \
     -std=c++17 -Wall -Wextra -Werror -pthread -DSTOPWATCH_HOST_TEST -I. \
     -I"$MBEDTLS_SOURCE/include" \
     tests/voice_input_crypto_test.cpp \
+    main/apps/app_codex_status/voice_input_crypto.cpp \
+    "$MBEDTLS_BUILD/library/libmbedcrypto.a"
+
+stage "Codex task detail crypto host test"
+run_host_test codex_task_detail_crypto_test \
+    -std=c++17 -Wall -Wextra -Werror -pthread -DSTOPWATCH_HOST_TEST -I. \
+    -I"$MBEDTLS_SOURCE/include" \
+    tests/codex_task_detail_crypto_test.cpp \
+    main/apps/app_codex_status/codex_task_detail_crypto.cpp \
     main/apps/app_codex_status/voice_input_crypto.cpp \
     "$MBEDTLS_BUILD/library/libmbedcrypto.a"
 
