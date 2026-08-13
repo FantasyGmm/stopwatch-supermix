@@ -72,18 +72,39 @@ int main()
     assert(store.accept(chunk(kRoute, 7, 0, 1, 9, UINT32_MAX, "last sequence")));
     assert(!store.accept(chunk(kRoute, 8, 0, 1, 9, UINT32_MAX, "exhausted")));
     assert(!store.accept(chunk(kRoute, 7, 0, 1, 8, 10, "replayed nonce")));
-    for (uint8_t nonce = 10; nonce < 18; ++nonce) {
+    for (uint8_t nonce = 10; nonce < 20; ++nonce) {
         assert(store.accept(chunk(kRoute, 6 + nonce, 0, 1, nonce, 1, "rotate")));
     }
+    assert(!store.accept(chunk(kRoute, 31, 0, 1, 8, 11, "evicted replay")));
     assert(!store.accept(chunk(kRoute, 30, 0, 1, 9, 2, "recent replay")));
 
     store.reset_connection();
     assert(store.accept(chunk(kRoute, 40, 0, 1, 42, 1, "connected")));
     assert(!store.accept(chunk(kRoute, 41, 0, 1, 17, 2, "retired")));
+    store.reset_connection();
+    assert(!store.accept(chunk(kRoute, 41, 0, 1, 42, 2, "reconnect replay")));
+
+    store.reset_for_credential(7);
+    assert(!store.accept(chunk(kRoute, 1, 0, 1, 42, 1, "same epoch replay")));
 
     store.reset_for_credential(8);
     assert(store.find(kRoute) == nullptr);
     assert(store.accept(chunk(kRoute, 1, 0, 1, 8, 1, "epoch reset")));
+
+    CodexTaskDetailStore nonce_capacity;
+    nonce_capacity.reset_for_credential(1);
+    for (uint8_t nonce = 1; nonce <= 64; ++nonce) {
+        assert(nonce_capacity.accept(chunk(
+            kRoute, nonce, 0, 1, nonce, 1, "bounded nonce history")));
+    }
+    assert(!nonce_capacity.accept(chunk(kRoute, 65, 0, 1, 65, 1, "capacity exhausted")));
+    assert(!nonce_capacity.accept(chunk(kRoute, 65, 0, 1, 1, 2, "old nonce")));
+    nonce_capacity.reset_connection();
+    assert(!nonce_capacity.accept(chunk(kRoute, 65, 0, 1, 65, 1, "still exhausted")));
+    nonce_capacity.reset_for_credential(1);
+    assert(!nonce_capacity.accept(chunk(kRoute, 1, 0, 1, 1, 1, "same epoch retained")));
+    nonce_capacity.reset_for_credential(2);
+    assert(nonce_capacity.accept(chunk(kRoute, 1, 0, 1, 1, 1, "new epoch reset")));
 
     // UTF-8 and assembly bounds fail closed.
     std::string invalid_utf8(1, static_cast<char>(0xff));

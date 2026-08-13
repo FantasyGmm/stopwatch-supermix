@@ -4,7 +4,6 @@
 
 #include <array>
 #include <cstdint>
-#include <deque>
 #include <map>
 #include <string>
 #include <vector>
@@ -34,13 +33,14 @@ private:
     bool accept_sequence(
         const voice_input::crypto::ExchangeNonce& nonce,
         uint32_t sequence);
-    void retire_active_nonce();
+    void clear_content();
 
     uint32_t _key_epoch = 0;
     bool _has_active_nonce = false;
     voice_input::crypto::ExchangeNonce _active_nonce = {};
     uint32_t _highest_sequence = 0;
-    std::deque<voice_input::crypto::ExchangeNonce> _recent_nonces;
+    std::array<voice_input::crypto::ExchangeNonce, 64> _seen_nonces = {};
+    size_t _seen_nonce_count = 0;
     std::map<uint64_t, Pending> _pending;
     std::map<uint64_t, CodexTaskDetail> _published;
 };

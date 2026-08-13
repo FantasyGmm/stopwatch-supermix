@@ -11,6 +11,7 @@ from voice_input_crypto import TASK_DETAIL_DOMAIN, decrypt, encrypt
 TASK_DETAIL_TYPE = "task_detail"
 TASK_DETAIL_VERSION = 1
 MAX_TASK_REVISION = 0x7FFFFFFF
+MAX_TASK_DETAIL_CHUNKS = 16
 MAX_UINT32 = 0xFFFFFFFF
 _ROUTE_PATTERN = re.compile(r"^[0-9a-f]{16}$")
 _NONCE_PATTERN = re.compile(r"^[0-9a-f]{16}$")
@@ -42,9 +43,11 @@ def _validate_metadata(
         or not any(exchange_nonce)
     ):
         raise ValueError("exchange nonce must be 8 nonzero bytes")
-    _validate_uint32(sequence, "sequence")
+    _validate_uint32(sequence, "sequence", allow_zero=False)
     if not isinstance(route, str) or _ROUTE_PATTERN.fullmatch(route) is None:
         raise ValueError("route must be 16 lowercase hex characters")
+    if route == "0000000000000000":
+        raise ValueError("route must be nonzero")
     if (
         isinstance(revision, bool)
         or not isinstance(revision, int)
@@ -52,6 +55,8 @@ def _validate_metadata(
     ):
         raise ValueError("revision must be 0..2147483647")
     _validate_uint32(count, "count", allow_zero=False)
+    if count > MAX_TASK_DETAIL_CHUNKS:
+        raise ValueError("count must be 1..16")
     _validate_uint32(index, "index")
     if index >= count:
         raise ValueError("index must be less than count")

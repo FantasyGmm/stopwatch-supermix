@@ -8,7 +8,7 @@ constexpr size_t kMaxRoutes = 8;
 constexpr size_t kMaxChunks = 16;
 constexpr size_t kMaxChunkBytes = 1300;
 constexpr size_t kMaxReplyBytes = 12 * 1024;
-constexpr size_t kRecentNonceCount = 8;
+constexpr size_t kMaxSeenNonces = 64;
 const std::string kTruncationMarker = "\n\n[内容过长，手表仅显示前 12 KiB]";
 
 bool nonzero(const voice_input::crypto::ExchangeNonce& nonce)
@@ -99,29 +99,32 @@ bool CodexTaskDetailStore::accept_sequence(
         _highest_sequence = sequence;
         return true;
     }
-    if (std::find(_recent_nonces.begin(), _recent_nonces.end(), nonce) !=
-        _recent_nonces.end()) {
+    if (std::find(_seen_nonces.begin(), _seen_nonces.begin() + _seen_nonce_count, nonce) !=
+        _seen_nonces.begin() + _seen_nonce_count) {
         return false;
     }
-    retire_active_nonce();
+    if (_seen_nonce_count >= kMaxSeenNonces) {
+        return false;
+    }
+    _seen_nonces[_seen_nonce_count++] = nonce;
     _active_nonce = nonce;
     _has_active_nonce = true;
     _highest_sequence = sequence;
     return true;
 }
 
-void CodexTaskDetailStore::retire_active_nonce()
+void CodexTaskDetailStore::clear_content()
 {
-    if (!_has_active_nonce) {
-        return;
+    for (auto& item : _pending) {
+        for (std::string& part : item.second.chunks) {
+            clear_string(part);
+        }
     }
-    _recent_nonces.push_back(_active_nonce);
-    while (_recent_nonces.size() > kRecentNonceCount) {
-        _recent_nonces.pop_front();
+    for (auto& item : _published) {
+        clear_string(item.second.text);
     }
-    _active_nonce = {};
-    _highest_sequence = 0;
-    _has_active_nonce = false;
+    _pending.clear();
+    _published.clear();
 }
 
 bool CodexTaskDetailStore::accept(const CodexTaskDetailChunk& chunk)
@@ -227,31 +230,41 @@ void CodexTaskDetailStore::retain_routes(const std::vector<uint64_t>& routes)
 
 void CodexTaskDetailStore::reset_for_credential(uint32_t key_epoch)
 {
+    if (key_epoch == 0) {
+        reset();
+        return;
+    }
+    if (_key_epoch != 0 && key_epoch == _key_epoch) {
+        clear_content();
+        _has_active_nonce = false;
+        _active_nonce = {};
+        _highest_sequence = 0;
+        return;
+    }
     reset();
     _key_epoch = key_epoch;
 }
 
 void CodexTaskDetailStore::reset_connection()
 {
-    retire_active_nonce();
-    _pending.clear();
-}
-
-void CodexTaskDetailStore::reset()
-{
     for (auto& item : _pending) {
         for (std::string& part : item.second.chunks) {
             clear_string(part);
         }
     }
-    for (auto& item : _published) {
-        clear_string(item.second.text);
-    }
     _pending.clear();
-    _published.clear();
+    _has_active_nonce = false;
+    _active_nonce = {};
+    _highest_sequence = 0;
+}
+
+void CodexTaskDetailStore::reset()
+{
+    clear_content();
     _key_epoch = 0;
     _has_active_nonce = false;
     _active_nonce = {};
     _highest_sequence = 0;
-    _recent_nonces.clear();
+    _seen_nonces = {};
+    _seen_nonce_count = 0;
 }

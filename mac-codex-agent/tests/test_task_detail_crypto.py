@@ -150,10 +150,13 @@ class TaskDetailCryptoTests(unittest.TestCase):
             {"key_epoch": 0},
             {"exchange_nonce": bytes(8)},
             {"sequence": 0x100000000},
+            {"sequence": 0},
+            {"route": "0000000000000000"},
             {"route": "INVALID"},
             {"revision": -1},
             {"revision": 0x80000000},
             {"index": 1, "count": 1},
+            {"count": 17},
             {"text": "bad\ud800"},
         )
         defaults = {

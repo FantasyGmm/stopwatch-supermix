@@ -43,6 +43,17 @@ bool object_has_exact_fields(cJSON* object, const char* const* fields, size_t fi
     return true;
 }
 
+bool only_json_whitespace(const char* begin, const char* end)
+{
+    while (begin < end) {
+        if (*begin != ' ' && *begin != '\t' && *begin != '\r' && *begin != '\n') {
+            return false;
+        }
+        ++begin;
+    }
+    return true;
+}
+
 bool parse_hex64(const char* text, uint64_t& value, std::array<uint8_t, 8>* bytes = nullptr)
 {
     if (text == nullptr || std::strlen(text) != 16) {
@@ -299,8 +310,11 @@ CodexMessageKind parse_codex_message(const char* data, size_t length, CodexStatu
         return CodexMessageKind::Invalid;
     }
 
-    cJSON* root = cJSON_ParseWithLength(data, length);
-    if (root == nullptr || !cJSON_IsObject(root)) {
+    const char* parse_end = nullptr;
+    cJSON* root = cJSON_ParseWithLengthOpts(data, length, &parse_end, 0);
+    if (root == nullptr || !cJSON_IsObject(root) || parse_end == nullptr ||
+        parse_end < data || parse_end > data + length ||
+        !only_json_whitespace(parse_end, data + length)) {
         cJSON_Delete(root);
         return CodexMessageKind::Invalid;
     }

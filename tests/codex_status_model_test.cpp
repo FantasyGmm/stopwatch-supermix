@@ -28,6 +28,12 @@ static std::string repeated(const char* text, size_t count)
 int main()
 {
     CodexStatusSnapshot snapshot;
+    std::string trailing_whitespace = R"({"codex_model":"whitespace"})";
+    trailing_whitespace += " \t\r\n";
+    assert(parse_codex_message(
+        trailing_whitespace.data(), trailing_whitespace.size(), snapshot
+    ) == CodexMessageKind::Status);
+    assert(snapshot.model == "whitespace");
     assert(parse(
         R"({"type":"time_sync","unix_ms":1783872000123,"utc_offset_minutes":480})",
         snapshot
@@ -143,6 +149,16 @@ int main()
     }
 
     snapshot = valid_snapshot;
+    const std::string invalid_trailing_status[] = {
+        R"({"codex_model":"bad"}x)",
+        R"({"codex_model":"bad"}{"codex_model":"second"})",
+        std::string(R"({"codex_model":"bad"})") + '\0' + "garbage",
+    };
+    for (const std::string& invalid : invalid_trailing_status) {
+        assert(parse_codex_message(invalid.data(), invalid.size(), snapshot) == CodexMessageKind::Invalid);
+        assert(snapshot.model == valid_snapshot.model);
+        assert(snapshot.alert_revision == valid_snapshot.alert_revision);
+    }
     const char* invalid_alerts[] = {
         R"({"codex_alerts":[{"route":"0000000000000000","project":"p","title":"t","state":"pending"}]})",
         R"({"codex_alerts":[{"route":"0123456789abcde","project":"p","title":"t","state":"pending"}]})",
@@ -185,6 +201,22 @@ int main()
     assert(snapshot.task_detail.ciphertext.size() == 20);
 
     const CodexStatusSnapshot valid_detail = snapshot;
+    std::string detail_whitespace = detail;
+    detail_whitespace += " \n\t";
+    assert(parse_codex_message(
+        detail_whitespace.data(), detail_whitespace.size(), snapshot
+    ) == CodexMessageKind::TaskDetail);
+    const std::string invalid_trailing_detail[] = {
+        std::string(detail) + "garbage",
+        std::string(detail) + detail,
+        std::string(detail) + '\0' + "garbage",
+    };
+    for (const std::string& invalid : invalid_trailing_detail) {
+        assert(parse_codex_message(invalid.data(), invalid.size(), snapshot) == CodexMessageKind::Invalid);
+        assert(snapshot.task_detail.route == valid_detail.task_detail.route);
+        assert(snapshot.task_detail.ciphertext == valid_detail.task_detail.ciphertext);
+    }
+    snapshot = valid_detail;
     const char* invalid_details[] = {
         R"({"type":"task_detail","route":"0123456789abcdef","revision":12,"index":1,"count":3,"epoch":7,"nonce":"1011121314151617","sequence":16909060,"ciphertext":"0MswuvXkAPavyTTH3//AiAsfo1Y=","text":"plaintext"})",
         R"({"type":"task_detail","version":1,"route":"0123456789abcdef","revision":12,"index":1,"count":3,"epoch":7,"nonce":"1011121314151617","sequence":16909060,"ciphertext":"0MswuvXkAPavyTTH3//AiAsfo1Y="})",
