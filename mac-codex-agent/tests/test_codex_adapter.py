@@ -497,6 +497,7 @@ class CodexStateCollectorTests(unittest.TestCase):
             [
                 {
                     "route": route_id_for_thread("thread-a"),
+                    "thread_id": "thread-a",
                     "project": "StopWatch",
                     "title": "Codex status monitor",
                     "time": "08:15",
@@ -507,6 +508,7 @@ class CodexStateCollectorTests(unittest.TestCase):
                 },
                 {
                     "route": route_id_for_thread("thread-b"),
+                    "thread_id": "thread-b",
                     "project": "docs",
                     "title": "Update guide",
                     "time": "08:12",
@@ -517,6 +519,7 @@ class CodexStateCollectorTests(unittest.TestCase):
                 },
                 {
                     "route": route_id_for_thread("thread-c"),
+                    "thread_id": "thread-c",
                     "project": "webshot",
                     "title": "UI review",
                     "time": "08:08",

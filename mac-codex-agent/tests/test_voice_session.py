@@ -170,6 +170,32 @@ class FakeShortcut:
             raise RuntimeError("shortcut stop failed")
 
 
+class FakeTranscriptSource:
+    def __init__(self, events, text="转写结果"):
+        self.events = events
+        self.text = text
+
+    def mark(self):
+        self.events.append("mark")
+        return "cursor"
+
+    async def wait_after(self, cursor, timeout):
+        self.events.append(("wait", cursor, timeout))
+        return self.text
+
+
+class FakeTaskSubmitter:
+    def __init__(self, events):
+        self.events = events
+
+    def snapshot(self, route):
+        self.events.append(("snapshot", route))
+        return "target"
+
+    async def submit(self, target, text):
+        self.events.append(("submit", target, text))
+
+
 async def no_sleep(_seconds):
     return None
 
@@ -182,6 +208,87 @@ class VoiceSessionServiceTests(unittest.IsolatedAsyncioTestCase):
             route, shortcut, TEST_KEY, sleep=no_sleep
         )
         return service, route, shortcut
+
+    async def test_valid_end_marks_before_shortcut_and_submits_after_stops(self):
+        events = []
+
+        class OrderedRoute(FakeRoute):
+            def start(self):
+                events.append("route.start")
+                super().start()
+
+            def stop(self):
+                events.append("route.stop")
+                super().stop()
+
+        class OrderedShortcut(FakeShortcut):
+            def start(self):
+                events.append("shortcut.start")
+                super().start()
+
+            def stop(self):
+                events.append("shortcut.stop")
+                super().stop()
+
+        service = VoiceSessionService(
+            OrderedRoute(),
+            OrderedShortcut(),
+            TEST_KEY,
+            sleep=no_sleep,
+            transcript_source=FakeTranscriptSource(events),
+            task_submitter=FakeTaskSubmitter(events),
+            transcript_timeout=3,
+        )
+
+        await service.handle(begin_packet())
+        await service.handle(
+            end_packet(1, EndSummary(0, 0, 0, 0, 0, 10, 256))
+        )
+
+        self.assertLess(events.index("mark"), events.index("shortcut.start"))
+        self.assertLess(events.index("shortcut.stop"), events.index(("wait", "cursor", 3)))
+        self.assertLess(events.index("route.stop"), events.index(("wait", "cursor", 3)))
+        self.assertEqual(events[-1], ("submit", "target", "转写结果"))
+        self.assertIs(service.state, VoiceState.READY)
+
+    async def test_disconnect_never_polls_or_submits_captured_voice(self):
+        events = []
+        service = VoiceSessionService(
+            FakeRoute(),
+            FakeShortcut(),
+            TEST_KEY,
+            sleep=no_sleep,
+            transcript_source=FakeTranscriptSource(events),
+            task_submitter=FakeTaskSubmitter(events),
+        )
+        await service.handle(begin_packet())
+        await service.disconnect()
+
+        self.assertFalse(any(isinstance(item, tuple) and item[0] in ("wait", "submit") for item in events))
+
+    async def test_submit_failure_sets_error_without_exposing_transcript(self):
+        secret = "do not expose transcript"
+        events = []
+
+        class FailingSubmitter(FakeTaskSubmitter):
+            async def submit(self, target, text):
+                raise RuntimeError(secret)
+
+        service = VoiceSessionService(
+            FakeRoute(),
+            FakeShortcut(),
+            TEST_KEY,
+            sleep=no_sleep,
+            transcript_source=FakeTranscriptSource(events, secret),
+            task_submitter=FailingSubmitter(events),
+        )
+        await service.handle(begin_packet())
+        with self.assertRaises(RuntimeError) as raised:
+            await service.handle(
+                end_packet(1, EndSummary(0, 0, 0, 0, 0, 10, 256))
+            )
+        self.assertNotIn(secret, str(raised.exception))
+        self.assertIs(service.state, VoiceState.ERROR)
 
     async def test_prepare_uses_injected_readiness_without_starting_resources(self):
         states = (

@@ -405,6 +405,7 @@ class CodexStateCollector:
             "codex_alerts": [
                 {
                     "route": route_id_for_thread(alert.thread_id),
+                    "thread_id": alert.thread_id,
                     "project": alert.project,
                     "title": alert.title,
                     "time": _format_alert_time(

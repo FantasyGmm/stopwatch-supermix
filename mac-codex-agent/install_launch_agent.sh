@@ -294,6 +294,10 @@ validate_app_contents() {
         "$resources/app/voice_input_crypto.py" \
         "$resources/app/voice_input_protocol.py" \
         "$resources/app/voice_session.py" \
+        "$resources/app/typeless_transcripts.py" \
+        "$resources/app/codex_app_server.py" \
+        "$resources/app/task_voice_submitter.py" \
+        "$resources/app/task_routes.py" \
         "$resources/app/ima_adpcm.py" \
         "$resources/app/agent_identity.py" \
         "$resources/app/watch_credentials.py" \
@@ -574,6 +578,10 @@ build_staged_app() {
         voice_input_crypto.py \
         voice_input_protocol.py \
         voice_session.py \
+        typeless_transcripts.py \
+        codex_app_server.py \
+        task_voice_submitter.py \
+        task_routes.py \
         watch_credentials.py \
         ima_adpcm.py; do
         cp "$ROOT_DIR/$module" "$STAGING_CODE/$module"

@@ -110,6 +110,10 @@ class InstallScriptTests(unittest.TestCase):
             "voice_input_crypto.py",
             "voice_input_protocol.py",
             "voice_session.py",
+            "typeless_transcripts.py",
+            "codex_app_server.py",
+            "task_voice_submitter.py",
+            "task_routes.py",
             "ima_adpcm.py",
         ):
             self.assertIn(module, script)

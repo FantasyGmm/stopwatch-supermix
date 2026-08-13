@@ -30,10 +30,14 @@ from app_state import (
     UserDefaultsPreferences,
 )
 from codex_adapter import CodexStateCollector
+from codex_app_server import CodexAppServerClient
 from combined_collector import CompositeStateCollector
 from pairing_client import PairingClient, WatchCredential
 from task_alerts import TaskAlertTracker
+from task_routes import TaskRouteRegistry, TaskRouteTarget, route_id_for_thread
+from task_voice_submitter import TaskVoiceSubmitter
 from trae_adapter import TraeStateCollector
+from typeless_transcripts import TypelessTranscriptSource
 from watch_credentials import WatchCredentialStore
 from voice_audio import (
     VoiceAudioBridge,
@@ -327,6 +331,9 @@ def _blackhole_receipt_present() -> bool:
 def _create_voice_session(
     key: bytes,
     key_epoch: int = VOICE_KEY_EPOCH,
+    *,
+    transcript_source=None,
+    task_submitter=None,
 ) -> VoiceSessionService:
     bridge = VoiceAudioBridge()
     route = VoiceAudioRoute(bridge)
@@ -357,6 +364,8 @@ def _create_voice_session(
         key,
         key_epoch=key_epoch,
         readiness_checker=readiness,
+        transcript_source=transcript_source,
+        task_submitter=task_submitter,
     )
 
 
@@ -380,6 +389,10 @@ class AgentRuntime:
         voice_session_factory=None,
         voice_nonce_factory=None,
         secure_authorizer=None,
+        task_route_registry=None,
+        app_server_client=None,
+        transcript_source=None,
+        task_submitter=None,
     ):
         self._collector = collector
         self._transport_factory = transport_factory
@@ -393,6 +406,12 @@ class AgentRuntime:
         self._voice_session_factory = voice_session_factory or _create_voice_session
         self._voice_nonce_factory = voice_nonce_factory or _new_voice_nonce
         self._secure_authorizer = secure_authorizer
+        self._task_route_registry = task_route_registry or TaskRouteRegistry()
+        self._app_server_client = app_server_client or CodexAppServerClient()
+        self._transcript_source = transcript_source or TypelessTranscriptSource()
+        self._task_submitter = task_submitter or TaskVoiceSubmitter(
+            self._task_route_registry, self._app_server_client
+        )
         self._state_lock = threading.Lock()
         self._snapshot = AgentSnapshot(
             ConnectionState.SCANNING
@@ -651,6 +670,7 @@ class AgentRuntime:
             with self._command_lock:
                 self._loop = None
                 self._commands = None
+            await self._app_server_client.close()
 
     async def _collect_status(self) -> None:
         while True:
@@ -676,6 +696,7 @@ class AgentRuntime:
                         changed_at=time.time(),
                     )
                 self._latest_status = status
+                self._update_task_routes(status)
                 self._status_generation += 1
                 if self._status_changed is not None:
                     self._status_changed.set()
@@ -695,6 +716,47 @@ class AgentRuntime:
                     wait_for_change,
                     self._status_interval,
                 )
+
+    def _update_task_routes(self, status) -> None:
+        alerts = status.get("codex_alerts")
+        revision = status.get("codex_alert_revision", 0)
+        if isinstance(revision, bool) or not isinstance(revision, int) or revision < 0:
+            revision = 0
+        targets = []
+        observed_routes = []
+        if isinstance(alerts, list):
+            for alert in alerts:
+                if not isinstance(alert, dict):
+                    continue
+                route = alert.get("route")
+                thread_id = alert.get("thread_id")
+                state = alert.get("state")
+                if isinstance(route, str):
+                    observed_routes.append(route)
+                if (
+                    not isinstance(thread_id, str)
+                    or not thread_id
+                    or state not in ("pending", "running")
+                ):
+                    continue
+                derived_route = route_id_for_thread(thread_id)
+                if route != derived_route:
+                    continue
+                targets.append(
+                    TaskRouteTarget(
+                        route=derived_route,
+                        thread_id=thread_id,
+                        state=state,
+                        expected_turn_id=alert.get("turn_id"),
+                        revision=revision,
+                    )
+                )
+        try:
+            self._task_route_registry.update(
+                targets, observed_routes=observed_routes
+            )
+        except ValueError:
+            self._task_route_registry.update(())
 
     async def _run_session(self) -> str:
         context = _BleSessionContext(self._transport_factory())
@@ -854,11 +916,26 @@ class AgentRuntime:
 
         try:
             if self._secure_authorizer is None:
-                service = self._voice_session_factory(key)
+                try:
+                    service = self._voice_session_factory(
+                        key,
+                        transcript_source=self._transcript_source,
+                        task_submitter=self._task_submitter,
+                    )
+                except TypeError:
+                    service = self._voice_session_factory(key)
             else:
-                service = self._voice_session_factory(
-                    key, key_epoch=context.voice_key_epoch
-                )
+                try:
+                    service = self._voice_session_factory(
+                        key,
+                        key_epoch=context.voice_key_epoch,
+                        transcript_source=self._transcript_source,
+                        task_submitter=self._task_submitter,
+                    )
+                except TypeError:
+                    service = self._voice_session_factory(
+                        key, key_epoch=context.voice_key_epoch
+                    )
         except Exception as error:
             await self._isolate_voice_failure(context, error)
             return

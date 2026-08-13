@@ -32,6 +32,7 @@ from runtime import (
     SecureConnectionAuthorizer,
     _create_voice_session,
 )
+from task_routes import route_id_for_thread
 from voice_audio import VoiceAudioDeviceNotFound, VoiceAudioError
 from voice_driver import DriverState
 from voice_input_crypto import VoiceKeyError
@@ -281,6 +282,38 @@ async def wait_for_messages(transport, count):
 
 
 class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_latest_internal_alerts_refresh_shared_voice_routes(self):
+        class Client:
+            async def close(self):
+                pass
+
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            app_server_client=Client(),
+            transcript_source=object(),
+        )
+        thread_id = "thread-selected"
+        runtime._update_task_routes(
+            {
+                "codex_alert_revision": 8,
+                "codex_alerts": [
+                    {
+                        "route": route_id_for_thread(thread_id),
+                        "thread_id": thread_id,
+                        "state": "running",
+                        "turn_id": "turn-active",
+                    }
+                ],
+            }
+        )
+
+        target = runtime._task_submitter.snapshot(
+            int(route_id_for_thread(thread_id), 16)
+        )
+        self.assertEqual(target.thread_id, thread_id)
+        self.assertEqual(target.expected_turn_id, "turn-active")
+        self.assertEqual(target.revision, 8)
+
     async def test_authenticated_credential_is_injected_into_status_agent(self):
         credential = WatchCredential(
             bytes(range(16)),
