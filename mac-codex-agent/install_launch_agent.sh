@@ -254,6 +254,7 @@ import secure_pairing_protocol
 import secure_pairing_wire
 import sitecustomize
 import task_alerts
+import task_detail_crypto
 import trae_adapter
 import trae_tasks
 import voice_audio
@@ -298,6 +299,7 @@ validate_app_contents() {
         "$resources/app/codex_app_server.py" \
         "$resources/app/task_voice_submitter.py" \
         "$resources/app/task_routes.py" \
+        "$resources/app/task_detail_crypto.py" \
         "$resources/app/ima_adpcm.py" \
         "$resources/app/agent_identity.py" \
         "$resources/app/watch_credentials.py" \
@@ -582,6 +584,7 @@ build_staged_app() {
         codex_app_server.py \
         task_voice_submitter.py \
         task_routes.py \
+        task_detail_crypto.py \
         watch_credentials.py \
         ima_adpcm.py; do
         cp "$ROOT_DIR/$module" "$STAGING_CODE/$module"

@@ -114,6 +114,7 @@ class InstallScriptTests(unittest.TestCase):
             "codex_app_server.py",
             "task_voice_submitter.py",
             "task_routes.py",
+            "task_detail_crypto.py",
             "ima_adpcm.py",
         ):
             self.assertIn(module, script)
