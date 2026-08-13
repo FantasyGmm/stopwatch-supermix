@@ -72,6 +72,7 @@ EXPECTED_HOST_TESTS = (
     "input_action_controller_test",
     "voice_input_session_test",
     "voice_capture_pipeline_test",
+    "pinned_microphone_controller_test",
     "voice_input_controller_test",
     "codex_status_priority_test",
     "ble_voice_probe_failure_transition_test",
@@ -210,7 +211,7 @@ output.chmod(0o700)
         declared_total = re.search(r"^TOTAL_STAGES=(\d+)$", runner, re.MULTILINE)
         self.assertIsNotNone(declared_total)
         self.assertEqual(total, int(declared_total.group(1)))
-        self.assertEqual(total, 57)
+        self.assertEqual(total, 58)
         self.assertEqual(len(stages), total)
         self.assertEqual([stage[0] for stage in stages], list(range(1, total + 1)))
         self.assertEqual({stage[1] for stage in stages}, {total})
@@ -306,6 +307,10 @@ output.chmod(0o700)
             "voice_capture_pipeline_test": {
                 "tests/voice_capture_pipeline_test.cpp",
                 "main/apps/app_codex_status/voice_capture_pipeline.cpp",
+            },
+            "pinned_microphone_controller_test": {
+                "tests/pinned_microphone_controller_test.cpp",
+                "main/apps/app_codex_status/pinned_microphone_controller.cpp",
             },
             "voice_input_controller_test": {
                 "tests/voice_input_controller_test.cpp",
@@ -443,6 +448,8 @@ output.chmod(0o700)
             self.assertIn("A+B Home", document)
             self.assertIn("does not activate Codex", document)
             self.assertIn("independent of voice readiness", document)
+            self.assertIn("固定麦克风", document)
+            self.assertIn("display-off", document)
 
         for safety_fact in (
             "AXPress",
@@ -456,7 +463,7 @@ output.chmod(0o700)
         self.assertIn("export IDF_PATH=/path/to/esp-idf", normalized_validation)
         self.assertNotIn("/Users/luke/esp", normalized_validation)
         self.assertIn(
-            "Full Mac Agent discovery: 897 tests passed",
+            "Full Mac Agent discovery: 902 tests passed",
             normalized_validation,
         )
         self.assertIn(

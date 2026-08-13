@@ -520,13 +520,23 @@ void VoiceInputController::handle_button(bool pressed, uint32_t now_ms)
     }
     _button_pressed = pressed;
     if (pressed) {
-        if (!_ready.load() || _negotiated_mtu < kMinimumAudioMtu) {
-            return;
-        }
-        start_session(now_ms);
+        (void)start_continuous(now_ms);
         return;
     }
 
+    (void)stop_continuous(now_ms);
+}
+
+bool VoiceInputController::start_continuous(uint32_t now_ms)
+{
+    if (!_ready.load() || _negotiated_mtu < kMinimumAudioMtu || active()) {
+        return false;
+    }
+    return start_session(now_ms);
+}
+
+bool VoiceInputController::stop_continuous(uint32_t now_ms)
+{
     bool should_stop = false;
     {
         std::lock_guard<std::mutex> lock(_mutex);
@@ -535,6 +545,12 @@ void VoiceInputController::handle_button(bool pressed, uint32_t now_ms)
              _session.state() == voice_input::VoiceInputState::Unavailable)) {
             _ui_state = _ready.load() ? VoiceInputUiState::Ready
                                       : VoiceInputUiState::Off;
+        }
+        const voice_input::VoiceInputState state = _session.state();
+        if (state != voice_input::VoiceInputState::Starting &&
+            state != voice_input::VoiceInputState::Streaming &&
+            state != voice_input::VoiceInputState::Stopping) {
+            return false;
         }
         should_stop = _session.release(now_ms);
         if (should_stop) {
@@ -546,6 +562,21 @@ void VoiceInputController::handle_button(bool pressed, uint32_t now_ms)
         wake_producer();
         wake_transmitter();
     }
+    return should_stop;
+}
+
+bool VoiceInputController::active() const
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    const voice_input::VoiceInputState state = _session.state();
+    return state == voice_input::VoiceInputState::Starting ||
+           state == voice_input::VoiceInputState::Streaming ||
+           state == voice_input::VoiceInputState::Stopping;
+}
+
+void VoiceInputController::cancel_continuous(uint32_t now_ms)
+{
+    cancel_for_home(now_ms);
 }
 
 void VoiceInputController::cancel_for_home(uint32_t now_ms)

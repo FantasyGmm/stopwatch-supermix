@@ -1227,6 +1227,38 @@ void test_sixty_seconds_of_voice_does_not_depend_on_ui_polling()
     assert(controller.queued_audio_ms_for_test() == 0);
 }
 
+void test_continuous_voice_is_idempotent_and_does_not_require_button_hold()
+{
+    FakeBackend backend;
+    FakeEntropy entropy;
+    FakeNotificationTransport transport;
+    voice_input::crypto::CcmContext crypto(kKey);
+    VoiceInputController controller(backend, crypto, entropy);
+    controller.set_notification_transport(&transport);
+    controller.set_ready(true, 256);
+
+    assert(controller.start_continuous(62000));
+    assert(controller.active());
+    assert(!controller.start_continuous(62001));
+    controller.run_transmit_worker_until_idle_for_test(62002);
+    controller.run_capture_worker_once_for_test(62003);
+    controller.run_transmit_worker_until_idle_for_test(62003);
+
+    assert(backend.acquire_calls == 1);
+    assert(transport.sent.size() == 2);
+    assert(transport.sent[0].kind == voice_input::NotificationKind::PttBegin);
+    assert(transport.sent[1].kind == voice_input::NotificationKind::Audio);
+
+    assert(controller.stop_continuous(62004));
+    assert(!controller.stop_continuous(62005));
+    controller.run_capture_worker_once_for_test(62006);
+    controller.run_transmit_worker_until_idle_for_test(62006);
+
+    assert(!controller.active());
+    assert(transport.sent.back().kind == voice_input::NotificationKind::PttEnd);
+    assert(backend.release_calls == 1);
+}
+
 void test_immediate_begin_send_failure_cannot_be_overwritten_by_startup()
 {
     FakeBackend backend;
@@ -1391,6 +1423,7 @@ int main()
     test_dispatcher_guard_handles_uint32_wraparound();
     test_cancel_waits_for_inflight_producer_cleanup();
     test_sixty_seconds_of_voice_does_not_depend_on_ui_polling();
+    test_continuous_voice_is_idempotent_and_does_not_require_button_hold();
     test_immediate_begin_send_failure_cannot_be_overwritten_by_startup();
     test_cancel_waits_for_inflight_transmission();
     test_transient_congestion_retries_same_packet_and_recovers();

@@ -174,6 +174,20 @@ explicitly changes the decision.
   suppression, active-voice cancellation, cross-release, disconnect, and timer
   wrap.
 
+### Pinned microphone mode
+
+- The page order is Codex status → pinned microphone → TRAE. One left swipe
+  from the Codex status page reaches the microphone switch directly.
+- Pinned mode reuses the existing authenticated encrypted Begin/Audio/End
+  voice session. Do not create a second GATT audio protocol or Mac route.
+- Once enabled, capture continues without holding the upper-right button and
+  survives page navigation and display-off.
+- The latch is session-only. Home/app close, BLE disconnect, Agent/credential
+  epoch change, unusable voice link, controller error, or reboot clears it and
+  stops/cancels capture exactly once.
+- While pinned, single/double right clicks still submit/steer, but a right hold
+  must not create a second voice session.
+
 ## 6. BLE Services, Protocol, and Security
 
 - Preserve the UUID allocation:

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "codex_button_gesture.h"
+#include "pinned_microphone_controller.h"
 #include "voice_capture_pipeline.h"
 #include "voice_input_protocol.h"
 #include "voice_input_session.h"
@@ -155,7 +156,8 @@ private:
     CodexButtonGesture _gesture;
 };
 
-class VoiceInputController : public VoiceButtonSink {
+class VoiceInputController : public VoiceButtonSink,
+                             public PinnedMicrophoneVoice {
 public:
 #ifndef STOPWATCH_HOST_TEST
     VoiceInputController();
@@ -182,6 +184,10 @@ public:
     void clear_credential();
     void set_ready(bool ready, uint16_t negotiated_mtu);
     void handle_connection_epoch(uint32_t connection_epoch);
+    bool start_continuous(uint32_t now_ms) override;
+    bool stop_continuous(uint32_t now_ms) override;
+    void cancel_continuous(uint32_t now_ms) override;
+    bool active() const override;
     void handle_button(bool pressed, uint32_t now_ms) override;
     void cancel_for_home(uint32_t now_ms) override;
     void handle_disconnect();

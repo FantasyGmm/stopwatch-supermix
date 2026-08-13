@@ -74,7 +74,7 @@ Pinned capture stops and the latch clears on:
 - leaving the Codex app or pressing Home;
 - BLE disconnect, connection epoch change, credential change, or voice link
   becoming unusable;
-- global input suppression or controller error;
+- controller error;
 - app shutdown.
 
 Swiping among the three Codex pages does not stop pinned capture. Turning the

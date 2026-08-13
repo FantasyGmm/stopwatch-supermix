@@ -88,6 +88,13 @@ never submit. The authenticated BLE
 input path is independent of voice readiness, so click submission remains
 available when Typeless or the audio route is unavailable.
 
+Swipe left once from the Codex status page to open **固定麦克风**. Turning its
+switch on keeps the existing encrypted watch-to-Mac voice session active
+without holding the upper-right button. Page navigation and display-off keep
+the session running. Switch-off, Codex Home/close, BLE or Agent epoch loss, or
+a voice error stops it; the latch is not restored after close, disconnect, or
+reboot.
+
 The Mac Agent acts only when `com.openai.codex` is already foreground with a
 recognized, editable, non-empty Codex composer. It does not activate Codex,
 send to a background window, or guess when Accessibility state or button

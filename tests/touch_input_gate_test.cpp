@@ -138,6 +138,6 @@ int main()
     consumers.update(gate, gate.filterForLvgl(true), 300, 220, 2200);
     consumers.update(gate, gate.filterForLvgl(true), 250, 220, 2240);
     consumers.update(gate, gate.filterForLvgl(false), 250, 220, 2300);
-    assert(consumers.page_result == StatusPageSwipeResult::Trae);
+    assert(consumers.page_result == StatusPageSwipeResult::PinnedMicrophone);
     return 0;
 }

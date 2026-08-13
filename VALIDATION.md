@@ -13,6 +13,11 @@ screen wake, has priority. The authenticated input
 notification is independent of voice readiness, so Typeless, BlackHole, and
 audio availability do not gate click actions.
 
+The **固定麦克风** pinned microphone page is one left swipe from Codex status. Its switch
+keeps the existing encrypted voice session active without a held button; page
+navigation and display-off preserve it, while Home/close, disconnect, Agent
+epoch change, or voice failure stop it.
+
 ## Desktop safety contract
 
 - The Agent requires the existing foreground bundle to be
@@ -54,23 +59,22 @@ IDF_PATH="$IDF_PATH" ./scripts/run_unified_offline_validation.sh \
 git diff --check
 ```
 
-### Current automated evidence (2026-08-13)
+### Current automated evidence (2026-08-14)
 
-- Full Mac Agent discovery: 897 tests passed; one read-only live Accessibility
-  probe skipped because Codex was not foreground.
+- Full Mac Agent discovery: 902 tests passed.
 - Focused input protocol and desktop submission: 37 tests passed; the same live
   probe was the only skip.
-- Offline contract: all 57 stages were present and correctly numbered, with 62
+- Offline contract: all 58 stages were present and correctly numbered, with 63
   exact host compile/run pairs.
-- Real host execution: all 57 stages passed with `IDF_PATH` pointing at a local
+- Real host execution: all 58 stages passed with `IDF_PATH` pointing at a local
   ESP-IDF 5.5.4 checkout.
 - Firmware clean build: a fresh tracked checkout bootstrapped its locked
   dependencies and produced the ESP32-S3 application and assets successfully.
   `CODEC_UAC_SUPPORT` is now defined by tracked project Kconfig with `default n`,
   so the unused optional `espressif/usb_host_uac` dependency remains disabled.
-  The application used 6,287,200 bytes and retained 56.39% partition headroom;
-  the clean-checkout artifact SHA256 was
-  `13488fc847f6538d7992408418032f3ccbca9ae58361439915136c184c299914`.
+  The application used 6,361,264 bytes and retained 55.88% partition headroom;
+  the flashed artifact SHA256 was
+  `4001f5fba27eb73c5166a945bcf8c104c198379f46bc0efa898084c23d233a1e`.
 - `git diff --check`: passed.
 
 Normal project flashing does not create or require a firmware backup. The

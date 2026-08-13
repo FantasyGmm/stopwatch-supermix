@@ -56,7 +56,7 @@
 
 ### Task 5: Runtime lifecycle integration
 
-- [ ] Add host/contract cases proving page changes preserve capture while Home/app close, global suppression, BLE disconnect, connection epoch change, unusable voice link, credential change, and controller error clear the latch and stop/cancel once.
+- [ ] Add host/contract cases proving page changes and screen-off input gating preserve capture while Home/app close, BLE disconnect, connection epoch change, unusable voice link, credential change, and controller error clear the latch and stop/cancel once.
 - [ ] Verify at least one new lifecycle assertion fails before integration.
 - [ ] Wire the pinned controller before normal UI rendering and after voice readiness polling so UI state follows the actual voice controller.
 - [ ] Prevent right-button hold from starting another voice session while pinned while preserving single/double click actions.

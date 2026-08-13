@@ -6,6 +6,7 @@
 enum class StatusPageSwipeResult {
     Stay,
     Codex,
+    PinnedMicrophone,
     Trae,
 };
 

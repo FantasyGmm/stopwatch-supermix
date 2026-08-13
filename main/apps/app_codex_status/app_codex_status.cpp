@@ -52,7 +52,7 @@ constexpr uint32_t kStatusStaleMs        = 10000;
 constexpr uint32_t kTraeStatusStaleMs    = 15000;
 constexpr uint32_t kScreenOffHoldMs      = 2000;
 constexpr int kPageWidth                 = 466;
-constexpr int kPageCount                 = 2;
+constexpr int kPageCount                 = 3;
 constexpr int kAgentPanelHiddenY         = -430;
 constexpr int kAgentPanelVisibleY        = 0;
 
@@ -469,16 +469,22 @@ void AppCodexStatus::onRunning()
             _suppress_task_navigation = false;
         }
     }
+    const bool pinned_blocks_button_voice =
+        _pinned_microphone_controller.blocks_button_voice();
+    const bool global_input_suppressed = GetHAL().buttonInputSuppressed();
     const VoiceButtonDispatchDecision voice_decision = _voice_button_dispatcher.dispatch(
         left_pressed,
         right_pressed,
         woke_screen,
         key_event == input::KeyEvent::GoHome,
         now,
-        _voice_input.get(),
+        pinned_blocks_button_voice ? nullptr : _voice_input.get(),
         this,
-        GetHAL().buttonInputSuppressed());
+        global_input_suppressed);
     if (voice_decision == VoiceButtonDispatchDecision::Close) {
+        if (_voice_input) {
+            _pinned_microphone_controller.stop_for_safety(*_voice_input, now);
+        }
         if (_input_action_controller) {
             _input_action_controller->disconnect();
         }
@@ -545,6 +551,7 @@ void AppCodexStatus::onRunning()
             }
             _voice_button_dispatcher.reset(right_pressed);
             if (_voice_input) {
+                _pinned_microphone_controller.stop_for_safety(*_voice_input, now);
                 _voice_input->handle_connection_epoch(connection_epoch);
                 sync_agent_panel_registry();
                 _agent_panel_dirty = true;
@@ -581,6 +588,10 @@ void AppCodexStatus::onRunning()
                     voice_input::kAudioCharacteristicValueSize;
             if (production_link_usable != _production_voice_link_usable ||
                 voice_mtu != _production_voice_mtu) {
+                if (!production_link_usable && _voice_input) {
+                    _pinned_microphone_controller.stop_for_safety(
+                        *_voice_input, now);
+                }
                 _production_voice_link_usable = production_link_usable;
                 _production_voice_mtu = voice_mtu;
                 _voice_input->set_ready(production_link_usable, voice_mtu);
@@ -630,6 +641,7 @@ void AppCodexStatus::onRunning()
             }
             _voice_button_dispatcher.reset(right_pressed);
             if (_voice_input) {
+                _pinned_microphone_controller.stop_for_safety(*_voice_input, now);
                 _voice_input->handle_disconnect();
             }
             if (_voice_probe) {
@@ -673,6 +685,16 @@ void AppCodexStatus::onRunning()
 
     _voice_status.store(
         _voice_input ? _voice_input->ui_state() : VoiceInputUiState::Off);
+    if (_voice_input) {
+        _pinned_microphone_controller.sync(
+            _production_voice_link_usable,
+            _voice_input->ui_state() == VoiceInputUiState::Error,
+            *_voice_input);
+    }
+    {
+        LvglLockGuard lock;
+        render_pinned_microphone();
+    }
     render_status();
 }
 
@@ -682,6 +704,10 @@ void AppCodexStatus::onClose()
 
     _key_manager.reset();
     _voice_button_dispatcher.reset(false);
+    if (_voice_input) {
+        _pinned_microphone_controller.stop_for_safety(
+            *_voice_input, GetHAL().millis());
+    }
     if (_input_action_controller) {
         _input_action_controller->disconnect();
     }
@@ -728,7 +754,7 @@ void AppCodexStatus::create_view()
     lv_obj_remove_flag(_panel, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
 
     _page_strip = lv_obj_create(_panel);
-    lv_obj_set_size(_page_strip, 932, 466);
+    lv_obj_set_size(_page_strip, 1398, 466);
     lv_obj_set_pos(_page_strip, 0, 0);
     lv_obj_remove_flag(_page_strip, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_radius(_page_strip, 0, 0);
@@ -745,9 +771,19 @@ void AppCodexStatus::create_view()
     lv_obj_set_style_pad_all(_codex_page, 0, 0);
     lv_obj_set_style_bg_color(_codex_page, lv_color_hex(kInstrumentBlack), 0);
 
+    _pinned_microphone_page = lv_obj_create(_page_strip);
+    lv_obj_set_size(_pinned_microphone_page, 466, 466);
+    lv_obj_set_pos(_pinned_microphone_page, 466, 0);
+    lv_obj_remove_flag(_pinned_microphone_page, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_radius(_pinned_microphone_page, 0, 0);
+    lv_obj_set_style_border_width(_pinned_microphone_page, 0, 0);
+    lv_obj_set_style_pad_all(_pinned_microphone_page, 0, 0);
+    lv_obj_set_style_bg_color(
+        _pinned_microphone_page, lv_color_hex(kInstrumentBlack), 0);
+
     _trae_page_root = lv_obj_create(_page_strip);
     lv_obj_set_size(_trae_page_root, 466, 466);
-    lv_obj_set_pos(_trae_page_root, 466, 0);
+    lv_obj_set_pos(_trae_page_root, 932, 0);
     lv_obj_remove_flag(_trae_page_root, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_radius(_trae_page_root, 0, 0);
     lv_obj_set_style_border_width(_trae_page_root, 0, 0);
@@ -921,11 +957,69 @@ void AppCodexStatus::create_view()
     _trae_status_page->init(_trae_page_root);
     render_trae_status();
     if (_trae_status_page != nullptr) {
-        _trae_status_page->set_active(_current_page == 1 && !_screen_off);
+        _trae_status_page->set_active(_current_page == 2 && !_screen_off);
     }
 
-    _page_dot_codex = make_page_dot(_panel, 223);
-    _page_dot_trae = make_page_dot(_panel, 237);
+    make_center_label(
+        _pinned_microphone_page,
+        "CODEX",
+        38,
+        &MontserratBold16,
+        kEtchedGray);
+    make_center_label(
+        _pinned_microphone_page,
+        "固定麦克风",
+        72,
+        &font_puhui_14_1,
+        kSignalWhite);
+    make_frame_segment(
+        _pinned_microphone_page,
+        232,
+        108,
+        2,
+        30,
+        kBeaconViolet);
+    _pinned_microphone_icon = make_center_label(
+        _pinned_microphone_page,
+        LV_SYMBOL_AUDIO,
+        139,
+        &lv_font_montserrat_22,
+        kEtchedGray);
+    _pinned_microphone_state_label = make_center_label(
+        _pinned_microphone_page,
+        "已关闭",
+        244,
+        &font_puhui_14_1,
+        kSignalWhite);
+    _pinned_microphone_route_label = make_center_label(
+        _pinned_microphone_page,
+        "不会向 MAC 发送音频",
+        286,
+        &font_puhui_14_1,
+        kEtchedGray);
+    make_line(_pinned_microphone_page, 113, 320, 240);
+    _pinned_microphone_switch = lv_switch_create(_pinned_microphone_page);
+    lv_obj_set_size(_pinned_microphone_switch, 110, 54);
+    lv_obj_align(_pinned_microphone_switch, LV_ALIGN_TOP_MID, 0, 344);
+    lv_obj_set_style_bg_color(
+        _pinned_microphone_switch, lv_color_hex(kPanelGraphite), LV_PART_MAIN);
+    lv_obj_set_style_bg_color(
+        _pinned_microphone_switch,
+        lv_color_hex(kQuotaMint),
+        static_cast<lv_style_selector_t>(LV_PART_INDICATOR) |
+            static_cast<lv_style_selector_t>(LV_STATE_CHECKED));
+    lv_obj_set_style_bg_color(
+        _pinned_microphone_switch, lv_color_hex(kSignalWhite), LV_PART_KNOB);
+    lv_obj_add_event_cb(
+        _pinned_microphone_switch,
+        AppCodexStatus::pinned_microphone_switch_event_cb,
+        LV_EVENT_VALUE_CHANGED,
+        this);
+    render_pinned_microphone();
+
+    _page_dot_codex = make_page_dot(_panel, 213);
+    _page_dot_pinned_microphone = make_page_dot(_panel, 229);
+    _page_dot_trae = make_page_dot(_panel, 245);
     update_page_indicator();
 
     _battery_label = lv_label_create(_panel);
@@ -986,9 +1080,15 @@ void AppCodexStatus::destroy_view()
     _model_value    = nullptr;
     _page_strip     = nullptr;
     _codex_page     = nullptr;
+    _pinned_microphone_page = nullptr;
     _trae_page_root = nullptr;
     _page_dot_codex = nullptr;
+    _page_dot_pinned_microphone = nullptr;
     _page_dot_trae  = nullptr;
+    _pinned_microphone_icon = nullptr;
+    _pinned_microphone_state_label = nullptr;
+    _pinned_microphone_route_label = nullptr;
+    _pinned_microphone_switch = nullptr;
     _effort_value   = nullptr;
     _week_pct       = nullptr;
     _week_bar       = nullptr;
@@ -1035,6 +1135,67 @@ void AppCodexStatus::destroy_view()
     _agent_pairing_expired = false;
     _agent_panel_notice = {};
     _pet_frame      = 0;
+}
+
+void AppCodexStatus::render_pinned_microphone()
+{
+    if (_pinned_microphone_state_label == nullptr ||
+        _pinned_microphone_route_label == nullptr ||
+        _pinned_microphone_switch == nullptr) {
+        return;
+    }
+
+    const PinnedMicrophoneState state = _pinned_microphone_controller.state();
+    const bool active = state == PinnedMicrophoneState::Active;
+    const char* status = "已关闭";
+    const char* route = "不会向 MAC 发送音频";
+    uint32_t status_color = kSignalWhite;
+    uint32_t icon_color = kEtchedGray;
+    if (active) {
+        status = "收音中";
+        route = "MAC · CONTINUOUS AUDIO";
+        status_color = kQuotaMint;
+        icon_color = kRunningCyan;
+    } else if (state == PinnedMicrophoneState::Unavailable) {
+        status = "不可用";
+        route = "等待 MAC 语音连接";
+        status_color = kEtchedGray;
+    } else if (state == PinnedMicrophoneState::Error) {
+        status = "语音错误";
+        route = "关闭后重试";
+        status_color = kAlertVermilion;
+    }
+    lv_label_set_text(_pinned_microphone_state_label, status);
+    lv_label_set_text(_pinned_microphone_route_label, route);
+    lv_obj_set_style_text_color(
+        _pinned_microphone_state_label, lv_color_hex(status_color), 0);
+    lv_obj_set_style_text_color(
+        _pinned_microphone_icon, lv_color_hex(icon_color), 0);
+    _rendering_pinned_microphone = true;
+    if (active) {
+        lv_obj_add_state(_pinned_microphone_switch, LV_STATE_CHECKED);
+    } else {
+        lv_obj_remove_state(_pinned_microphone_switch, LV_STATE_CHECKED);
+    }
+    _rendering_pinned_microphone = false;
+}
+
+void AppCodexStatus::pinned_microphone_switch_event_cb(lv_event_t* event)
+{
+    auto* self = static_cast<AppCodexStatus*>(lv_event_get_user_data(event));
+    if (self == nullptr || self->_voice_input == nullptr ||
+        self->_pinned_microphone_switch == nullptr ||
+        self->_rendering_pinned_microphone) {
+        return;
+    }
+    const bool enabled = lv_obj_has_state(
+        self->_pinned_microphone_switch, LV_STATE_CHECKED);
+    (void)self->_pinned_microphone_controller.set_enabled(
+        enabled,
+        self->_production_voice_link_usable,
+        *self->_voice_input,
+        GetHAL().millis());
+    self->render_pinned_microphone();
 }
 
 void AppCodexStatus::update_battery()
@@ -3127,7 +3288,7 @@ void AppCodexStatus::update_page_swipe(uint32_t now_ms)
         if (_last_page_touch_state == LV_INDEV_STATE_REL) {
             _page_swipe.press(point.x, point.y, now_ms);
             const bool task_candidate =
-                _current_page == 1 &&
+                _current_page == 2 &&
                 _trae_status_page != nullptr &&
                 _trae_status_page->contains_task_point(point.x, point.y);
             _trae_card_tap.press(
@@ -3145,8 +3306,10 @@ void AppCodexStatus::update_page_swipe(uint32_t now_ms)
             _page_swipe.release(now_ms, _current_page);
         if (result == StatusPageSwipeResult::Codex) {
             set_page(0, true);
-        } else if (result == StatusPageSwipeResult::Trae) {
+        } else if (result == StatusPageSwipeResult::PinnedMicrophone) {
             set_page(1, true);
+        } else if (result == StatusPageSwipeResult::Trae) {
+            set_page(2, true);
         } else if (_trae_card_tap.release(now_ms) &&
                    _trae_carousel.manual_next(now_ms)) {
             render_trae_status();
@@ -3167,9 +3330,10 @@ void AppCodexStatus::set_page(int page, bool animate)
     _trae_card_tap.cancel();
     _last_page_touch_state = LV_INDEV_STATE_REL;
     _current_page = page;
+    _pinned_microphone_controller.page_changed(page);
     update_page_indicator();
     if (_trae_status_page != nullptr) {
-        _trae_status_page->set_active(_current_page == 1 && !_screen_off);
+        _trae_status_page->set_active(_current_page == 2 && !_screen_off);
     }
 
     lv_anim_delete(this, page_animation_cb);
@@ -3190,18 +3354,27 @@ void AppCodexStatus::set_page(int page, bool animate)
 
 void AppCodexStatus::update_page_indicator()
 {
-    if (_page_dot_codex == nullptr || _page_dot_trae == nullptr) {
+    if (_page_dot_codex == nullptr ||
+        _page_dot_pinned_microphone == nullptr ||
+        _page_dot_trae == nullptr) {
         return;
     }
     const bool codex_active = _current_page == 0;
+    const bool pinned_active = _current_page == 1;
+    const bool trae_active = _current_page == 2;
     lv_obj_set_style_bg_opa(
         _page_dot_codex,
         codex_active ? LV_OPA_COVER : LV_OPA_TRANSP,
         0
     );
     lv_obj_set_style_bg_opa(
+        _page_dot_pinned_microphone,
+        pinned_active ? LV_OPA_COVER : LV_OPA_TRANSP,
+        0
+    );
+    lv_obj_set_style_bg_opa(
         _page_dot_trae,
-        codex_active ? LV_OPA_TRANSP : LV_OPA_COVER,
+        trae_active ? LV_OPA_COVER : LV_OPA_TRANSP,
         0
     );
 }
@@ -3246,7 +3419,7 @@ void AppCodexStatus::sync_display_protection_presentation()
     _last_page_touch_state = LV_INDEV_STATE_REL;
     sync_pending_glow();
     if (_trae_status_page != nullptr) {
-        _trae_status_page->set_active(_current_page == 1 && !_screen_off);
+        _trae_status_page->set_active(_current_page == 2 && !_screen_off);
     }
 }
 

@@ -28,6 +28,7 @@
 #include "trae_task_carousel.h"
 #include "trae_status_page.h"
 #include "input_action_controller.h"
+#include "pinned_microphone_controller.h"
 #include "voice_input_controller.h"
 #include "runtime/services/shared_wifi_service.h"
 
@@ -55,9 +56,16 @@ private:
     lv_obj_t* _panel             = nullptr;
     lv_obj_t* _page_strip        = nullptr;
     lv_obj_t* _codex_page        = nullptr;
+    lv_obj_t* _pinned_microphone_page = nullptr;
     lv_obj_t* _trae_page_root    = nullptr;
     lv_obj_t* _page_dot_codex    = nullptr;
+    lv_obj_t* _page_dot_pinned_microphone = nullptr;
     lv_obj_t* _page_dot_trae     = nullptr;
+    lv_obj_t* _pinned_microphone_icon = nullptr;
+    lv_obj_t* _pinned_microphone_state_label = nullptr;
+    lv_obj_t* _pinned_microphone_route_label = nullptr;
+    lv_obj_t* _pinned_microphone_switch = nullptr;
+    bool _rendering_pinned_microphone = false;
     lv_obj_t* _model_value       = nullptr;
     lv_obj_t* _effort_value      = nullptr;
     lv_obj_t* _week_pct          = nullptr;
@@ -134,6 +142,7 @@ private:
     StatusPageSwipeLogic _page_swipe;
     TraeCardTapLogic _trae_card_tap;
     VoiceButtonDispatcher _voice_button_dispatcher;
+    PinnedMicrophoneController _pinned_microphone_controller;
     AgentPanelModel _agent_panel_model;
     secure_pairing::AgentRegistry _agent_registry;
     secure_pairing::SecurePairingSession _secure_pairing_session;
@@ -181,6 +190,7 @@ private:
     void set_percent(lv_obj_t* label, lv_obj_t* bar, int value);
     void render_alert();
     void render_trae_status();
+    void render_pinned_microphone();
     void sync_pending_glow();
     void update_page_swipe(uint32_t now_ms);
     void update_agent_panel_touch(uint32_t now_ms);
@@ -217,6 +227,7 @@ private:
     static void agent_panel_row_gesture_cb(lv_event_t* event);
     static void agent_reset_hold_event_cb(lv_event_t* event);
     static void agent_panel_animation_cb(void* target, int32_t y);
+    static void pinned_microphone_switch_event_cb(lv_event_t* event);
     void set_page(int page, bool animate);
     void update_page_indicator();
     void sync_display_protection_presentation();

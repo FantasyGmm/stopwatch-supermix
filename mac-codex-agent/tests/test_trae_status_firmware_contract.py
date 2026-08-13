@@ -11,7 +11,7 @@ class TraeStatusFirmwareContractTests(unittest.TestCase):
     def setUp(self):
         self.app_root = ROOT / "main" / "apps" / "app_codex_status"
 
-    def test_watch_uses_a_clipped_two_page_strip_with_shared_footer(self):
+    def test_watch_uses_a_clipped_three_page_strip_with_shared_footer(self):
         header = (self.app_root / "app_codex_status.h").read_text(encoding="utf-8")
         source = (self.app_root / "app_codex_status.cpp").read_text(
             encoding="utf-8"
@@ -23,8 +23,10 @@ class TraeStatusFirmwareContractTests(unittest.TestCase):
         for token in (
             "lv_obj_t* _page_strip",
             "lv_obj_t* _codex_page",
+            "lv_obj_t* _pinned_microphone_page",
             "lv_obj_t* _trae_page_root",
             "lv_obj_t* _page_dot_codex",
+            "lv_obj_t* _page_dot_pinned_microphone",
             "lv_obj_t* _page_dot_trae",
             "std::unique_ptr<TraeStatusPage> _trae_status_page",
             "StatusPageSwipeLogic _page_swipe",
@@ -33,13 +35,15 @@ class TraeStatusFirmwareContractTests(unittest.TestCase):
 
         for token in (
             "lv_obj_set_size(_panel, 466, 466)",
-            "lv_obj_set_size(_page_strip, 932, 466)",
+            "lv_obj_set_size(_page_strip, 1398, 466)",
             "lv_obj_set_pos(_codex_page, 0, 0)",
-            "lv_obj_set_pos(_trae_page_root, 466, 0)",
+            "lv_obj_set_pos(_pinned_microphone_page, 466, 0)",
+            "lv_obj_set_pos(_trae_page_root, 932, 0)",
             "lv_obj_align(_battery_label, LV_ALIGN_TOP_MID, 0, kBatteryY)",
             "lv_obj_set_y(dot, kPageIndicatorY)",
-            "_page_dot_codex = make_page_dot(_panel, 223)",
-            "_page_dot_trae = make_page_dot(_panel, 237)",
+            "_page_dot_codex = make_page_dot(_panel, 213)",
+            "_page_dot_pinned_microphone = make_page_dot(_panel, 229)",
+            "_page_dot_trae = make_page_dot(_panel, 245)",
             "lv_anim_set_duration(&animation, 140)",
             "lv_anim_set_path_cb(&animation, lv_anim_path_ease_out)",
         ):
@@ -63,7 +67,7 @@ class TraeStatusFirmwareContractTests(unittest.TestCase):
             "_trae_carousel.manual_next(now_ms)",
             "_trae_status_page->contains_task_point",
             "_trae_carousel.next()",
-            "_trae_status_page->set_active(_current_page == 1 && !_screen_off)",
+            "_trae_status_page->set_active(_current_page == 2 && !_screen_off)",
             "_ble_transport && _ble_transport->connected()",
         ):
             self.assertIn(token, header + source)

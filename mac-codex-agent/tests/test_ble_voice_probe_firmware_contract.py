@@ -471,6 +471,27 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         for label in ("VOICE", "VOICE OFF", "VOICE ERR"):
             self.assertIn(f'"{label}"', priority)
 
+    def test_pinned_microphone_page_uses_approved_three_page_layout(self):
+        header = (ROOT / "main/apps/app_codex_status/app_codex_status.h").read_text()
+        source = (ROOT / "main/apps/app_codex_status/app_codex_status.cpp").read_text()
+
+        self.assertIn("PinnedMicrophoneController", header)
+        self.assertIn("_pinned_microphone_page", header)
+        self.assertIn("_page_dot_pinned_microphone", header)
+        self.assertIn("_pinned_microphone_switch", header)
+        self.assertIn("kPageCount                 = 3", source)
+        self.assertIn("lv_obj_set_size(_page_strip, 1398, 466)", source)
+        self.assertIn("lv_obj_set_pos(_pinned_microphone_page, 466, 0)", source)
+        self.assertIn("lv_obj_set_pos(_trae_page_root, 932, 0)", source)
+        self.assertIn('"固定麦克风"', source)
+        self.assertIn('"已关闭"', source)
+        self.assertIn('"收音中"', source)
+        self.assertIn('"MAC · CONTINUOUS AUDIO"', source)
+        self.assertIn("kQuotaMint", source)
+        self.assertIn("kBeaconViolet", source)
+        self.assertIn("kRunningCyan", source)
+        self.assertIn("pinned_microphone_switch_event_cb", source)
+
     def test_production_controller_has_bounded_task_and_encrypted_queue(self):
         header = (ROOT / "main/apps/app_codex_status/voice_input_controller.h").read_text()
         source = (ROOT / "main/apps/app_codex_status/voice_input_controller.cpp").read_text()

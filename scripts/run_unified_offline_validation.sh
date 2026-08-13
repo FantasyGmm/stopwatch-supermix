@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CXX="${CXX:-c++}"
 PYTHON="${PYTHON:-$ROOT/mac-codex-agent/.venv/bin/python}"
-TOTAL_STAGES=57
+TOTAL_STAGES=58
 STAGE_INDEX=0
 CONTRACT_ONLY=0
 HOST_TESTS_ONLY=0
@@ -485,6 +485,12 @@ run_host_test voice_capture_pipeline_test \
     -std=c++17 -Wall -Wextra -Werror -pthread -DSTOPWATCH_HOST_TEST -I. \
     tests/voice_capture_pipeline_test.cpp \
     main/apps/app_codex_status/voice_capture_pipeline.cpp
+
+stage "Pinned microphone controller host test"
+run_host_test pinned_microphone_controller_test \
+    -std=c++17 -Wall -Wextra -Werror -I. \
+    tests/pinned_microphone_controller_test.cpp \
+    main/apps/app_codex_status/pinned_microphone_controller.cpp
 
 stage "Production voice input controller host test"
 run_host_test voice_input_controller_test \
