@@ -9,6 +9,22 @@ static CodexMessageKind parse(const char* json, CodexStatusSnapshot& snapshot)
     return parse_codex_message(json, std::strlen(json), snapshot);
 }
 
+static std::string alert_status(const std::string& project, const std::string& title)
+{
+    return std::string(
+        R"({"codex_model":"bounded","codex_alert_revision":99,"codex_alerts":[{"route":"0123456789abcdef","project":")") +
+        project + R"(","title":")" + title + R"(","state":"pending"}]})";
+}
+
+static std::string repeated(const char* text, size_t count)
+{
+    std::string result;
+    for (size_t index = 0; index < count; ++index) {
+        result += text;
+    }
+    return result;
+}
+
 int main()
 {
     CodexStatusSnapshot snapshot;
@@ -92,6 +108,41 @@ int main()
     assert(snapshot.completed_count == 7);
 
     const CodexStatusSnapshot valid_snapshot = snapshot;
+
+    const std::string ascii_boundary = alert_status(std::string(32, 'p'), std::string(48, 't'));
+    assert(parse(ascii_boundary.c_str(), snapshot) == CodexMessageKind::Status);
+    assert(snapshot.alerts[0].project.size() == 32);
+    assert(snapshot.alerts[0].title.size() == 48);
+
+    const std::string multibyte_boundary = alert_status(
+        repeated("项", 32),
+        repeated("🚀", 48));
+    assert(parse(multibyte_boundary.c_str(), snapshot) == CodexMessageKind::Status);
+    assert(snapshot.alerts[0].project == repeated("项", 32));
+    assert(snapshot.alerts[0].title == repeated("🚀", 48));
+
+    const CodexStatusSnapshot bounded_snapshot = snapshot;
+    std::string invalid_project_utf8(1, static_cast<char>(0xff));
+    const std::string invalid_label_messages[] = {
+        alert_status(std::string(33, 'p'), "title"),
+        alert_status("project", std::string(49, 't')),
+        alert_status(repeated("项", 33), "title"),
+        alert_status("project", repeated("🚀", 49)),
+        alert_status(invalid_project_utf8, "title"),
+        alert_status("project", std::string("bad") + static_cast<char>(0xc0) + static_cast<char>(0x80)),
+        alert_status(std::string("bad") + static_cast<char>(0xed) + static_cast<char>(0xa0) + static_cast<char>(0x80), "title"),
+        alert_status("project", std::string("bad") + static_cast<char>(0xf4) + static_cast<char>(0x90) + static_cast<char>(0x80) + static_cast<char>(0x80)),
+    };
+    for (const std::string& invalid : invalid_label_messages) {
+        assert(parse_codex_message(invalid.data(), invalid.size(), snapshot) == CodexMessageKind::Invalid);
+        assert(snapshot.model == bounded_snapshot.model);
+        assert(snapshot.alert_revision == bounded_snapshot.alert_revision);
+        assert(snapshot.alerts.size() == bounded_snapshot.alerts.size());
+        assert(snapshot.alerts[0].project == bounded_snapshot.alerts[0].project);
+        assert(snapshot.alerts[0].title == bounded_snapshot.alerts[0].title);
+    }
+
+    snapshot = valid_snapshot;
     const char* invalid_alerts[] = {
         R"({"codex_alerts":[{"route":"0000000000000000","project":"p","title":"t","state":"pending"}]})",
         R"({"codex_alerts":[{"route":"0123456789abcde","project":"p","title":"t","state":"pending"}]})",

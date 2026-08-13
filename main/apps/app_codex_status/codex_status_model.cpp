@@ -11,6 +11,8 @@ constexpr size_t kMaxAlerts = 8;
 constexpr size_t kMaxStatusJsonBytes = 2048;
 constexpr uint32_t kMaxDetailChunks = 16;
 constexpr size_t kMaxDetailCiphertextBytes = 1300 + 8;
+constexpr size_t kMaxProjectCodepoints = 32;
+constexpr size_t kMaxTitleCodepoints = 48;
 constexpr double kMaximumExactJsonInteger = 9007199254740991.0;
 constexpr int64_t kMinimumUnixMs = 1577836800000LL;
 constexpr int64_t kMaximumUnixMs = 4102444800000LL;
@@ -65,6 +67,60 @@ bool parse_hex64(const char* text, uint64_t& value, std::array<uint8_t, 8>* byte
     value = parsed;
     if (bytes != nullptr) {
         *bytes = parsed_bytes;
+    }
+    return true;
+}
+
+bool valid_utf8_within(const char* text, size_t maximum_codepoints)
+{
+    if (text == nullptr) {
+        return false;
+    }
+    const auto* bytes = reinterpret_cast<const uint8_t*>(text);
+    const size_t size = std::strlen(text);
+    size_t offset = 0;
+    size_t codepoints = 0;
+    while (offset < size) {
+        if (++codepoints > maximum_codepoints) {
+            return false;
+        }
+        const uint8_t first = bytes[offset];
+        if (first < 0x80U) {
+            ++offset;
+            continue;
+        }
+        size_t continuation = 0;
+        uint32_t codepoint = 0;
+        if ((first & 0xe0U) == 0xc0U) {
+            continuation = 1;
+            codepoint = first & 0x1fU;
+        } else if ((first & 0xf0U) == 0xe0U) {
+            continuation = 2;
+            codepoint = first & 0x0fU;
+        } else if ((first & 0xf8U) == 0xf0U) {
+            continuation = 3;
+            codepoint = first & 0x07U;
+        } else {
+            return false;
+        }
+        if (offset + continuation >= size) {
+            return false;
+        }
+        for (size_t index = 1; index <= continuation; ++index) {
+            const uint8_t next = bytes[offset + index];
+            if ((next & 0xc0U) != 0x80U) {
+                return false;
+            }
+            codepoint = (codepoint << 6U) | (next & 0x3fU);
+        }
+        if ((continuation == 1 && codepoint < 0x80U) ||
+            (continuation == 2 && codepoint < 0x800U) ||
+            (continuation == 3 && codepoint < 0x10000U) ||
+            codepoint > 0x10ffffU ||
+            (codepoint >= 0xd800U && codepoint <= 0xdfffU)) {
+            return false;
+        }
+        offset += continuation + 1;
     }
     return true;
 }
@@ -161,7 +217,9 @@ bool parse_alerts(cJSON* root, std::vector<CodexTaskAlert>& alerts)
         if (!cJSON_IsString(route) || !cJSON_IsString(project) || !cJSON_IsString(title) ||
             !cJSON_IsString(state) || route->valuestring == nullptr ||
             project->valuestring == nullptr || title->valuestring == nullptr ||
-            state->valuestring == nullptr) {
+            state->valuestring == nullptr ||
+            !valid_utf8_within(project->valuestring, kMaxProjectCodepoints) ||
+            !valid_utf8_within(title->valuestring, kMaxTitleCodepoints)) {
             return false;
         }
 
