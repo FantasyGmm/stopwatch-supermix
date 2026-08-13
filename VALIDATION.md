@@ -28,7 +28,7 @@ audio availability do not gate click actions.
 - Before dispatch, the Agent rechecks foreground PID, composer and button
   tokens, text, and semantic state. Normal Send, Queue, and Steer use verified
   button `AXPress`.
-- Only Queue to forced Steer uses a complete Command+Shift+Return key-down and
+- Only Queue to forced Steer uses a complete Command+Return key-down and
   key-up pair through `CGEventPostToPid`, scoped to the revalidated Codex PID.
 - macOS cannot make Accessibility revalidation and event delivery atomic. A
   same-process foreground race remains possible if focus changes inside Codex

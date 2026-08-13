@@ -77,7 +77,7 @@ Send, Queue, or Steer button must be present inside the bounded local subtree.
 Immediately before dispatch, the adapter revalidates the foreground PID,
 composer and button tokens, text, and semantics. Normal Send, Queue, and Steer
 invoke `AXPress` on that verified button. Only Queue-to-forced-Steer emits a
-complete Command+Shift+Return down/up pair through `CGEventPostToPid` for the
+complete Command+Return down/up pair through `CGEventPostToPid` for the
 verified Codex PID. It never sends an unqualified Return key to an unknown focus
 target and never activates Codex.
 

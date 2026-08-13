@@ -8,7 +8,6 @@ AGENT_ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(AGENT_ROOT))
 
 from codex_submit import (  # noqa: E402
-    ALTERNATE_MODIFIER_FLAGS,
     AX_CHROME_NODE_ID_ATTRIBUTE,
     CODEX_BUNDLE_IDENTIFIER,
     COMPOSER_DESCRIPTIONS,
@@ -773,7 +772,7 @@ class PreparedCodexSubmissionTests(unittest.TestCase):
         )
         self.assertEqual(
             [value for _, value in flags],
-            [ALTERNATE_MODIFIER_FLAGS, ALTERNATE_MODIFIER_FLAGS],
+            [1 << 20, 1 << 20],
         )
         self.assertEqual(
             posted,

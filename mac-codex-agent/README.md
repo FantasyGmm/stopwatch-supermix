@@ -121,7 +121,8 @@ Codex, target a background window, or submit from an empty or unknown composer.
 
 For normal Send, Queue, or Steer, the Agent presses the verified Codex button
 through Accessibility. Only a forced steer from Queue uses Codex's alternate
-Command+Shift+Return behavior, posted to the already verified Codex process.
+Command+Return behavior for the default Return-to-send composer mode, posted
+to the already verified Codex process.
 Actions are authenticated and replay-checked per BLE connection and are never
 retried after an ambiguous desktop outcome.
 

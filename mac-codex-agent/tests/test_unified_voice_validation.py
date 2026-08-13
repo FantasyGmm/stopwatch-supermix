@@ -446,7 +446,7 @@ output.chmod(0o700)
 
         for safety_fact in (
             "AXPress",
-            "Command+Shift+Return",
+            "Command+Return",
             "CGEventPostToPid",
             "English and Simplified Chinese descriptions from 16 composer "
             "resource IDs",

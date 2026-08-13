@@ -435,7 +435,7 @@ STEER_LABELS = frozenset(("steer", "调整方向"))
 ```
 
 Normal Send, Queue, and Steer invoke `AXPress` on the uniquely verified button.
-Only Queue-to-forced-Steer emits Command+Shift+Return, with a complete down/up
+Only Queue-to-forced-Steer emits Command+Return, with a complete down/up
 pair through `CGEventPostToPid` for the revalidated Codex PID. AX traversal is
 bounded by a fixed node/depth limit so a malformed tree cannot stall the Agent.
 The foreground PID, composer and button tokens, text, and semantic state are

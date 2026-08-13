@@ -17,9 +17,9 @@ from input_action_protocol import InputAction
 
 CODEX_BUNDLE_IDENTIFIER = "com.openai.codex"
 RETURN_KEY_CODE = 0x24
-ALTERNATE_MODIFIER_FLAGS = (
-    Quartz.kCGEventFlagMaskCommand | Quartz.kCGEventFlagMaskShift
-)
+# Codex's default composer mode sends with Return. While a turn is running,
+# Command+Return performs the opposite follow-up action (Queue -> Steer).
+ALTERNATE_MODIFIER_FLAGS = Quartz.kCGEventFlagMaskCommand
 
 SEND_LABELS = frozenset(("send", "发送"))
 QUEUE_LABELS = frozenset(("queue", "加入队列"))
