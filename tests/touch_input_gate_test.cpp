@@ -135,9 +135,17 @@ int main()
 
     assert(consumers.edge_ever_activated);
 
-    consumers.update(gate, gate.filterForLvgl(true), 300, 220, 2200);
-    consumers.update(gate, gate.filterForLvgl(true), 250, 220, 2240);
-    consumers.update(gate, gate.filterForLvgl(false), 250, 220, 2300);
+    // A vertical gesture from the global left-edge region is not claimed by
+    // page/deck gesture logic. Edge control remains its only possible owner.
+    consumers.page_result = StatusPageSwipeResult::OpenTaskDeck;
+    consumers.update(gate, gate.filterForLvgl(true), 10, 440, 2120);
+    consumers.update(gate, gate.filterForLvgl(true), 10, 380, 2160);
+    consumers.update(gate, gate.filterForLvgl(false), 10, 380, 2200);
+    assert(consumers.page_result == StatusPageSwipeResult::Stay);
+
+    consumers.update(gate, gate.filterForLvgl(true), 300, 220, 2300);
+    consumers.update(gate, gate.filterForLvgl(true), 250, 220, 2340);
+    consumers.update(gate, gate.filterForLvgl(false), 250, 220, 2400);
     assert(consumers.page_result == StatusPageSwipeResult::Trae);
     return 0;
 }

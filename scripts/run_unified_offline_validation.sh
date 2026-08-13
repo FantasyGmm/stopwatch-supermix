@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CXX="${CXX:-c++}"
 PYTHON="${PYTHON:-$ROOT/mac-codex-agent/.venv/bin/python}"
-TOTAL_STAGES=56
+TOTAL_STAGES=57
 STAGE_INDEX=0
 CONTRACT_ONLY=0
 HOST_TESTS_ONLY=0
@@ -274,6 +274,12 @@ run_host_test codex_task_detail_store_test \
     -std=c++17 -Wall -Wextra -Werror -I. \
     tests/codex_task_detail_store_test.cpp \
     main/apps/app_codex_status/codex_task_detail_store.cpp
+
+stage "Codex task focus deck host test"
+run_host_test codex_task_focus_deck_test \
+    -std=c++17 -Wall -Wextra -Werror -Imain \
+    tests/codex_task_focus_deck_test.cpp \
+    main/apps/app_codex_status/codex_task_focus_deck.cpp
 
 stage "Status page swipe and Trae card tap host tests"
 run_host_test status_page_swipe_logic_test \
