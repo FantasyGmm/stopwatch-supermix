@@ -166,6 +166,7 @@ public:
         uint32_t key_epoch);
     void clear_credential();
     void set_ready(bool ready, uint16_t negotiated_mtu);
+    bool set_task_route(uint64_t route);
     void handle_connection_epoch(uint32_t connection_epoch);
     void handle_button(bool pressed, uint32_t now_ms) override;
     void cancel_for_home(uint32_t now_ms) override;
@@ -259,6 +260,8 @@ private:
     uint32_t _last_accepted_sequence = 0;
     uint32_t _congestion_started_ms = 0;
     uint32_t _last_accepted_ms = 0;
+    uint64_t _selected_task_route = 0;
+    uint64_t _session_task_route = 0;
     VoiceTransportDiagnostics _transport_diagnostics = {};
     size_t _queued_audio_packets = 0;
     bool _button_pressed = false;

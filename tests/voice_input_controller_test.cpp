@@ -18,6 +18,8 @@ constexpr voice_input::crypto::Key kKey = {
     0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
 };
 constexpr uint32_t kKeyEpoch = 7;
+constexpr uint64_t kFirstTaskRoute = UINT64_C(0x0123456789abcdef);
+constexpr uint64_t kSecondTaskRoute = UINT64_C(0xfedcba9876543210);
 
 class FakeBackend final : public VoiceCaptureBackend {
 public:
@@ -228,12 +230,91 @@ voice_input::VoiceNotification decode(
     return decoded;
 }
 
+uint64_t decode_begin_route(
+    const voice_input::Notification& wire,
+    voice_input::crypto::CcmContext& crypto)
+{
+    const auto notification = decode(wire, crypto, nullptr);
+    voice_input::BeginBody body = {};
+    assert(voice_input::decode_begin_body(
+        notification.payload.data(), notification.payload_size, body));
+    return body.route;
+}
+
+void test_task_route_is_required_and_zero_clears_selection()
+{
+    FakeBackend backend;
+    FakeEntropy entropy;
+    voice_input::crypto::CcmContext crypto(kKey);
+    VoiceInputController controller(backend, crypto, entropy);
+    controller.set_ready(true, 256);
+
+    controller.handle_button(true, 1);
+    assert(backend.acquire_calls == 0);
+    assert(controller.ui_state() == VoiceInputUiState::Error);
+    controller.handle_button(false, 2);
+
+    assert(controller.set_task_route(kFirstTaskRoute));
+    controller.handle_button(true, 3);
+    assert(backend.acquire_calls == 1);
+    controller.cancel_for_home(4);
+    controller.handle_button(false, 5);
+
+    assert(!controller.set_task_route(0));
+    controller.handle_button(true, 6);
+    assert(backend.acquire_calls == 1);
+    assert(controller.ui_state() == VoiceInputUiState::Error);
+}
+
+void test_begin_snapshots_route_and_selection_survives_reconnect()
+{
+    FakeBackend backend;
+    FakeEntropy entropy;
+    voice_input::crypto::CcmContext crypto(kKey);
+    VoiceInputController controller(backend, crypto, entropy);
+    controller.set_task_route(kFirstTaskRoute);
+    controller.handle_connection_epoch(41);
+    controller.set_ready(true, 256);
+    controller.handle_button(true, 10);
+
+    voice_input::Notification first_begin = {};
+    assert(controller.take_notification(first_begin));
+    controller.set_task_route(kSecondTaskRoute);
+    assert(decode_begin_route(first_begin, crypto) == kFirstTaskRoute);
+
+    controller.cancel_for_home(11);
+    controller.handle_button(false, 12);
+    controller.handle_connection_epoch(42);
+    controller.set_ready(true, 256);
+    controller.handle_button(true, 13);
+
+    voice_input::Notification second_begin = {};
+    assert(controller.take_notification(second_begin));
+    assert(decode_begin_route(second_begin, crypto) == kSecondTaskRoute);
+}
+
+void test_shutdown_clears_task_route()
+{
+    FakeBackend backend;
+    FakeEntropy entropy;
+    voice_input::crypto::CcmContext crypto(kKey);
+    VoiceInputController controller(backend, crypto, entropy);
+    controller.set_task_route(kFirstTaskRoute);
+    assert(controller.initialize());
+    controller.shutdown();
+    controller.set_ready(true, 256);
+    controller.handle_button(true, 20);
+    assert(backend.acquire_calls == 0);
+    assert(controller.ui_state() == VoiceInputUiState::Error);
+}
+
 void test_runtime_credential_gates_readiness_and_clears_active_key()
 {
     FakeBackend backend;
     FakeEntropy entropy;
     voice_input::crypto::CcmContext crypto;
     VoiceInputController controller(backend, crypto, entropy, 0);
+    controller.set_task_route(kFirstTaskRoute);
     assert(controller.initialize());
 
     controller.set_ready(true, 256);
@@ -253,6 +334,7 @@ void test_requires_ready_subscription_and_audio_mtu()
     FakeEntropy entropy;
     voice_input::crypto::CcmContext crypto(kKey);
     VoiceInputController controller(backend, crypto, entropy);
+    controller.set_task_route(kFirstTaskRoute);
 
     controller.handle_button(true, 10);
     assert(backend.acquire_calls == 0);
@@ -276,6 +358,7 @@ void test_begin_audio_end_order_and_counters()
     FakeEntropy entropy;
     voice_input::crypto::CcmContext crypto(kKey);
     VoiceInputController controller(backend, crypto, entropy);
+    controller.set_task_route(kFirstTaskRoute);
     controller.set_ready(true, 256);
     controller.handle_button(true, 100);
 
@@ -325,6 +408,7 @@ void test_release_during_read_keeps_final_complete_block()
     FakeEntropy entropy;
     voice_input::crypto::CcmContext crypto(kKey);
     VoiceInputController controller(backend, crypto, entropy);
+    controller.set_task_route(kFirstTaskRoute);
     controller.set_ready(true, 256);
     controller.handle_button(true, 200);
 
@@ -357,6 +441,7 @@ void test_duplicate_edges_disconnect_home_and_capture_failure_are_bounded()
     FakeEntropy entropy;
     voice_input::crypto::CcmContext crypto(kKey);
     VoiceInputController controller(backend, crypto, entropy);
+    controller.set_task_route(kFirstTaskRoute);
     controller.set_ready(true, 256);
     controller.handle_button(true, 300);
     controller.handle_button(true, 301);
@@ -377,6 +462,7 @@ void test_duplicate_edges_disconnect_home_and_capture_failure_are_bounded()
     failed_backend.acquire_ok = false;
     FakeEntropy failed_entropy;
     VoiceInputController failed(failed_backend, crypto, failed_entropy);
+    failed.set_task_route(kFirstTaskRoute);
     failed.set_ready(true, 256);
     failed.handle_button(true, 400);
     assert(failed.ui_state() == VoiceInputUiState::Error);
@@ -389,6 +475,7 @@ void test_queue_overflow_emits_error_and_cleans_capture()
     FakeEntropy entropy;
     voice_input::crypto::CcmContext crypto(kKey);
     VoiceInputController controller(backend, crypto, entropy);
+    controller.set_task_route(kFirstTaskRoute);
     controller.set_ready(true, 256);
     controller.handle_button(true, 500);
     for (int index = 0; index < 60; ++index) {
@@ -421,6 +508,7 @@ void test_transient_main_loop_stall_is_buffered()
     FakeEntropy entropy;
     voice_input::crypto::CcmContext crypto(kKey);
     VoiceInputController controller(backend, crypto, entropy);
+    controller.set_task_route(kFirstTaskRoute);
     controller.set_ready(true, 256);
     controller.handle_button(true, 550);
 
@@ -458,6 +546,7 @@ void test_consecutive_sessions_do_not_reuse_identity()
     };
     voice_input::crypto::CcmContext crypto(kKey);
     VoiceInputController controller(backend, crypto, entropy);
+    controller.set_task_route(kFirstTaskRoute);
     controller.set_ready(true, 256);
 
     controller.handle_button(true, 600);
@@ -494,6 +583,7 @@ void test_session_exhaustion_requires_new_connection_epoch()
     FakeEntropy entropy;
     voice_input::crypto::CcmContext crypto(kKey);
     VoiceInputController controller(backend, crypto, entropy);
+    controller.set_task_route(kFirstTaskRoute);
     controller.set_ready(true, 256);
     controller.set_next_connection_session_for_test(UINT16_MAX);
 
@@ -528,6 +618,7 @@ void test_notification_failure_stops_capture_before_error()
     FakeEntropy entropy;
     voice_input::crypto::CcmContext crypto(kKey);
     VoiceInputController controller(backend, crypto, entropy);
+    controller.set_task_route(kFirstTaskRoute);
     controller.set_ready(true, 256);
     controller.handle_button(true, 700);
 
@@ -560,6 +651,7 @@ void test_rejected_begin_does_not_emit_undecodable_error()
     FakeEntropy entropy;
     voice_input::crypto::CcmContext crypto(kKey);
     VoiceInputController controller(backend, crypto, entropy);
+    controller.set_task_route(kFirstTaskRoute);
     controller.set_ready(true, 256);
     controller.handle_button(true, 800);
 
@@ -579,6 +671,7 @@ void test_congestion_retries_identical_notification_until_accepted()
     FakeEntropy entropy;
     voice_input::crypto::CcmContext crypto(kKey);
     VoiceInputController controller(backend, crypto, entropy);
+    controller.set_task_route(kFirstTaskRoute);
     controller.set_ready(true, 256);
     controller.handle_button(true, 820);
 
@@ -607,6 +700,7 @@ void test_repeated_congestion_replaces_unsent_audio_with_contiguous_error()
     FakeEntropy entropy;
     voice_input::crypto::CcmContext crypto(kKey);
     VoiceInputController controller(backend, crypto, entropy);
+    controller.set_task_route(kFirstTaskRoute);
     controller.set_ready(true, 256);
     controller.handle_button(true, 824);
 
@@ -645,6 +739,7 @@ void test_release_after_failed_attempt_clears_error_state()
     FakeEntropy entropy;
     voice_input::crypto::CcmContext crypto(kKey);
     VoiceInputController controller(backend, crypto, entropy);
+    controller.set_task_route(kFirstTaskRoute);
     controller.set_ready(true, 256);
     controller.handle_button(true, 830);
     assert(controller.ui_state() == VoiceInputUiState::Error);
@@ -663,6 +758,7 @@ void test_production_and_probe_pipeline_exclude_each_other()
     FakeEntropy entropy;
     voice_input::crypto::CcmContext crypto(kKey);
     VoiceInputController production(backend, crypto, entropy);
+    production.set_task_route(kFirstTaskRoute);
     VoiceCapturePipeline diagnostic(backend);
     VoiceCaptureError error = VoiceCaptureError::None;
 
@@ -926,6 +1022,7 @@ void test_cancel_waits_for_inflight_producer_cleanup()
     FakeEntropy entropy;
     voice_input::crypto::CcmContext crypto(kKey);
     VoiceInputController controller(backend, crypto, entropy);
+    controller.set_task_route(kFirstTaskRoute);
     controller.set_ready(true, 256);
     controller.handle_button(true, 950);
 
@@ -970,6 +1067,7 @@ void test_sixty_seconds_of_voice_does_not_depend_on_ui_polling()
     FakeNotificationTransport transport;
     voice_input::crypto::CcmContext crypto(kKey);
     VoiceInputController controller(backend, crypto, entropy);
+    controller.set_task_route(kFirstTaskRoute);
     controller.set_notification_transport(&transport);
     controller.handle_connection_epoch(41);
     controller.set_ready(true, 256);
@@ -1010,6 +1108,7 @@ void test_immediate_begin_send_failure_cannot_be_overwritten_by_startup()
     transport.results = {VoiceNotificationSendResult::PermanentFailure};
     voice_input::crypto::CcmContext crypto(kKey);
     VoiceInputController controller(backend, crypto, entropy);
+    controller.set_task_route(kFirstTaskRoute);
     controller.set_notification_transport(&transport);
     controller.set_ready(true, 256);
     controller.set_transmitter_wake_hook_for_test([&]() {
@@ -1033,6 +1132,7 @@ void test_cancel_waits_for_inflight_transmission()
     BlockingNotificationTransport transport;
     voice_input::crypto::CcmContext crypto(kKey);
     VoiceInputController controller(backend, crypto, entropy);
+    controller.set_task_route(kFirstTaskRoute);
     controller.set_notification_transport(&transport);
     controller.set_ready(true, 256);
     controller.handle_button(true, 1500);
@@ -1077,6 +1177,7 @@ void test_transient_congestion_retries_same_packet_and_recovers()
         VoiceNotificationSendResult::Accepted};
     voice_input::crypto::CcmContext crypto(kKey);
     VoiceInputController controller(backend, crypto, entropy);
+    controller.set_task_route(kFirstTaskRoute);
     controller.set_notification_transport(&transport);
     controller.set_ready(true, 256);
     controller.handle_button(true, 2000);
@@ -1103,6 +1204,7 @@ void test_sustained_congestion_fails_after_elapsed_deadline()
     transport.results.assign(256, VoiceNotificationSendResult::Congested);
     voice_input::crypto::CcmContext crypto(kKey);
     VoiceInputController controller(backend, crypto, entropy);
+    controller.set_task_route(kFirstTaskRoute);
     controller.set_notification_transport(&transport);
     controller.set_ready(true, 256);
     controller.handle_button(true, 3000);
@@ -1123,6 +1225,9 @@ void test_sustained_congestion_fails_after_elapsed_deadline()
 
 int main()
 {
+    test_task_route_is_required_and_zero_clears_selection();
+    test_begin_snapshots_route_and_selection_survives_reconnect();
+    test_shutdown_clears_task_route();
     test_runtime_credential_gates_readiness_and_clears_active_key();
     test_requires_ready_subscription_and_audio_mtu();
     test_begin_audio_end_order_and_counters();

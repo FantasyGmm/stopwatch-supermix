@@ -53,6 +53,9 @@ from voice_input_protocol import (
 from voice_session import VoiceSessionService as _VoiceSessionService, VoiceState
 
 
+TEST_TASK_ROUTE = 0x0123456789ABCDEF
+
+
 def decode_control(key, raw, *, expected_epoch=VOICE_KEY_EPOCH):
     return _decode_control(key, raw, expected_epoch=expected_epoch)
 
@@ -1538,7 +1541,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             7,
             0,
             100,
-            BEGIN_BODY.pack(IMA_ADPCM, 16000, 320),
+            BEGIN_BODY.pack(IMA_ADPCM, 16000, 320, TEST_TASK_ROUTE),
             b"12345678",
         )
         factory = FakeTransportFactory(
@@ -1694,7 +1697,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             9,
             0,
             100,
-            BEGIN_BODY.pack(IMA_ADPCM, 16000, 320),
+            BEGIN_BODY.pack(IMA_ADPCM, 16000, 320, TEST_TASK_ROUTE),
             b"abcdefgh",
         )
 
@@ -1897,7 +1900,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             11,
             0,
             100,
-            BEGIN_BODY.pack(IMA_ADPCM, 16000, 320),
+            BEGIN_BODY.pack(IMA_ADPCM, 16000, 320, TEST_TASK_ROUTE),
             b"abcdefgh",
         )
         drain_started = asyncio.Event()
@@ -1982,7 +1985,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             13,
             0,
             100,
-            BEGIN_BODY.pack(IMA_ADPCM, 16000, 320),
+            BEGIN_BODY.pack(IMA_ADPCM, 16000, 320, TEST_TASK_ROUTE),
             b"abcdefgh",
         )
         end = pack_notification(
@@ -2712,7 +2715,7 @@ class AgentControllerTests(unittest.TestCase):
             12,
             0,
             100,
-            BEGIN_BODY.pack(IMA_ADPCM, 16000, 320),
+            BEGIN_BODY.pack(IMA_ADPCM, 16000, 320, TEST_TASK_ROUTE),
             b"abcdefgh",
         )
         recording_started = threading.Event()

@@ -156,7 +156,9 @@ firmware because older firmware cannot perform secure runtime enrollment.
 If every Agent credential is lost, use **Reset All Agents** on the watch and
 enroll each Mac again physically; a former credential is not a recovery bypass.
 
-The production boundary is application-layer AES-128-CCM protocol version 3.
+The production boundary is application-layer AES-128-CCM protocol version 5.
+Version 5 deliberately rejects older peers and binds each authenticated PTT
+begin frame to one nonzero 64-bit Codex task route.
 The clear packet header is authenticated, audio is encrypted with an 8-byte
 tag, and authentication failure is fail-closed before decoding. Production
 version 2 is rejected to prevent an unencrypted downgrade. This protects BLE

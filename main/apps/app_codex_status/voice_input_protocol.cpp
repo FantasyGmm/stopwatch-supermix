@@ -19,6 +19,15 @@ uint32_t read_u32(const uint8_t* bytes)
            (static_cast<uint32_t>(bytes[3]) << 24U);
 }
 
+uint64_t read_u64(const uint8_t* bytes)
+{
+    uint64_t value = 0;
+    for (size_t index = 0; index < sizeof(value); ++index) {
+        value |= static_cast<uint64_t>(bytes[index]) << (index * 8U);
+    }
+    return value;
+}
+
 void write_u16(uint8_t* bytes, uint16_t value)
 {
     bytes[0] = static_cast<uint8_t>(value & 0xffU);
@@ -31,6 +40,13 @@ void write_u32(uint8_t* bytes, uint32_t value)
     bytes[1] = static_cast<uint8_t>((value >> 8U) & 0xffU);
     bytes[2] = static_cast<uint8_t>((value >> 16U) & 0xffU);
     bytes[3] = static_cast<uint8_t>((value >> 24U) & 0xffU);
+}
+
+void write_u64(uint8_t* bytes, uint64_t value)
+{
+    for (size_t index = 0; index < sizeof(value); ++index) {
+        bytes[index] = static_cast<uint8_t>((value >> (index * 8U)) & 0xffU);
+    }
 }
 
 bool valid_reason(uint8_t reason)
@@ -347,12 +363,13 @@ size_t encode_begin_body(const BeginBody& body, uint8_t* output, size_t capacity
 {
     if (output == nullptr || capacity < kBeginBodySize ||
         body.codec != kImaAdpcmCodec || body.sample_rate != kSampleRate ||
-        body.block_samples != kBlockSamples) {
+        body.block_samples != kBlockSamples || body.route == 0) {
         return 0;
     }
     output[0] = body.codec;
     write_u16(output + 1, body.sample_rate);
     write_u16(output + 3, body.block_samples);
+    write_u64(output + 5, body.route);
     return kBeginBodySize;
 }
 
@@ -365,8 +382,9 @@ bool decode_begin_body(const uint8_t* bytes, size_t length, BeginBody& body)
     candidate.codec = bytes[0];
     candidate.sample_rate = read_u16(bytes + 1);
     candidate.block_samples = read_u16(bytes + 3);
+    candidate.route = read_u64(bytes + 5);
     if (candidate.codec != kImaAdpcmCodec || candidate.sample_rate != kSampleRate ||
-        candidate.block_samples != kBlockSamples) {
+        candidate.block_samples != kBlockSamples || candidate.route == 0) {
         return false;
     }
     body = candidate;

@@ -31,6 +31,7 @@ from voice_session import (  # noqa: E402
 TEST_KEY = bytes.fromhex("000102030405060708090a0b0c0d0e0f")
 TEST_NONCE = bytes.fromhex("1011121314151617")
 TEST_EPOCH = 7
+TEST_ROUTE = 0x0123456789ABCDEF
 
 
 def pack_notification(
@@ -81,7 +82,7 @@ def begin_packet(session=7, nonce=TEST_NONCE):
     return encrypted_packet(
         PTT_BEGIN,
         0,
-        BEGIN_BODY.pack(IMA_ADPCM, 16000, 320),
+        BEGIN_BODY.pack(IMA_ADPCM, 16000, 320, TEST_ROUTE),
         session,
         nonce,
     )

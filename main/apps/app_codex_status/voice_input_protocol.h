@@ -8,7 +8,7 @@
 
 namespace voice_input {
 
-constexpr uint8_t kProtocolVersion = 4;
+constexpr uint8_t kProtocolVersion = 5;
 constexpr uint32_t kTargetBitrate = 8192;
 constexpr uint8_t kImaAdpcmCodec = 1;
 constexpr uint16_t kSampleRate = 16000;
@@ -17,7 +17,7 @@ constexpr size_t kControlAadSize = 16;
 constexpr size_t kControlBodySize = 4;
 constexpr size_t kControlSize = kControlAadSize + kControlBodySize + crypto::kTagSize;
 constexpr size_t kNotificationHeaderSize = 18;
-constexpr size_t kBeginBodySize = 5;
+constexpr size_t kBeginBodySize = 13;
 constexpr size_t kAudioPlaintextSize = 164;
 constexpr size_t kEndBodySize = 26;
 constexpr size_t kErrorBodySize = 4;
@@ -52,6 +52,7 @@ struct BeginBody {
     uint8_t codec = kImaAdpcmCodec;
     uint16_t sample_rate = kSampleRate;
     uint16_t block_samples = kBlockSamples;
+    uint64_t route = 0;
 };
 
 struct EndSummary {

@@ -336,7 +336,7 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
             ROOT / "main/apps/app_codex_status/voice_input_protocol.h"
         ).read_text()
 
-        self.assertIn("kProtocolVersion = 4", protocol_header)
+        self.assertIn("kProtocolVersion = 5", protocol_header)
         self.assertIn("uint32_t key_epoch", protocol_header)
         self.assertIn("uint32_t expected_key_epoch", protocol_header)
         self.assertIn("set_voice_credential", transport_header)
