@@ -371,6 +371,11 @@ explicitly changes the decision.
 
 ### Round-screen UI and gesture ownership
 
+- For every UI design task, default to creating browser-based visual mockups;
+  do not ask whether the user wants a visual companion first.
+- Present multiple meaningfully different UI directions for the user to choose
+  from before converging. Avoid cosmetic variants that preserve the same
+  hierarchy and interaction model.
 - Design for the circular safe area, not the nominal rectangular framebuffer.
   Long labels, bottom buttons, slider endpoints, and touch targets that fit in
   a desktop preview may still clip or become unreachable on the watch.
