@@ -14,8 +14,8 @@ watch-to-Mac microphone session without holding the upper-right button.
 The Codex app page order is:
 
 1. Codex status;
-2. TRAE status;
-3. Pinned microphone.
+2. Pinned microphone;
+3. TRAE status.
 
 A left swipe moves forward and a right swipe moves backward. Navigation does
 not wrap. The existing fast-swipe and long-drag thresholds remain unchanged.
