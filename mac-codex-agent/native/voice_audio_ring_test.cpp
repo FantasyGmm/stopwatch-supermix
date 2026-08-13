@@ -1,4 +1,5 @@
 #include "voice_audio_bridge.h"
+#include "voice_audio_queue_lifecycle.h"
 #include "voice_audio_ring.h"
 
 #include <algorithm>
@@ -27,6 +28,13 @@ static_assert(std::is_same_v<decltype(&swva_close), void (*)(void)>);
 
 int main()
 {
+    VoiceAudioQueueLifecycle lifecycle;
+    assert(lifecycle.needsBufferScheduling());
+    lifecycle.markBuffersScheduled();
+    assert(!lifecycle.needsBufferScheduling());
+    lifecycle.markStopped();
+    assert(lifecycle.needsBufferScheduling());
+
     VoiceAudioRing<24> ring;
     const int16_t mono[] = {100, -200};
     assert(ring.writeMono16kAsStereo48k(mono, 2) == 6);

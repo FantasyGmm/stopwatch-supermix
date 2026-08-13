@@ -1,5 +1,6 @@
 #include "voice_audio_bridge.h"
 
+#include "voice_audio_queue_lifecycle.h"
 #include "voice_audio_ring.h"
 
 #include <AudioToolbox/AudioToolbox.h>
@@ -23,6 +24,7 @@ constexpr size_t kBufferCount = 3;
 constexpr size_t kBytesPerFrame = sizeof(int16_t) * 2;
 
 VoiceAudioRing<48000> audio_ring;
+VoiceAudioQueueLifecycle queue_lifecycle;
 AudioQueueRef audio_queue = nullptr;
 std::array<AudioQueueBufferRef, kBufferCount> audio_buffers{};
 
@@ -157,7 +159,27 @@ void disposeAudioQueue()
         audio_queue = nullptr;
     }
     audio_buffers.fill(nullptr);
+    queue_lifecycle.markStopped();
     audio_ring.clear();
+}
+
+OSStatus scheduleAudioBuffers()
+{
+    audio_ring.clear();
+    for (const AudioQueueBufferRef buffer : audio_buffers) {
+        if (buffer == nullptr) {
+            return kInvalidState;
+        }
+        std::memset(buffer->mAudioData, 0, buffer->mAudioDataBytesCapacity);
+        buffer->mAudioDataByteSize = buffer->mAudioDataBytesCapacity;
+        const OSStatus status =
+            AudioQueueEnqueueBuffer(audio_queue, buffer, 0, nullptr);
+        if (status != noErr) {
+            return status;
+        }
+    }
+    queue_lifecycle.markBuffersScheduled();
+    return noErr;
 }
 
 }  // namespace
@@ -329,7 +351,6 @@ int swva_open(const char* output_device_uid)
         return static_cast<int>(status);
     }
 
-    audio_ring.clear();
     for (AudioQueueBufferRef& buffer : audio_buffers) {
         status = AudioQueueAllocateBuffer(
             audio_queue,
@@ -339,13 +360,11 @@ int swva_open(const char* output_device_uid)
             disposeAudioQueue();
             return static_cast<int>(status);
         }
-        std::memset(buffer->mAudioData, 0, buffer->mAudioDataBytesCapacity);
-        buffer->mAudioDataByteSize = buffer->mAudioDataBytesCapacity;
-        status = AudioQueueEnqueueBuffer(audio_queue, buffer, 0, nullptr);
-        if (status != noErr) {
-            disposeAudioQueue();
-            return static_cast<int>(status);
-        }
+    }
+    status = scheduleAudioBuffers();
+    if (status != noErr) {
+        disposeAudioQueue();
+        return static_cast<int>(status);
     }
 
     return 0;
@@ -355,6 +374,13 @@ int swva_start(void)
 {
     if (audio_queue == nullptr) {
         return kInvalidState;
+    }
+    if (queue_lifecycle.needsBufferScheduling()) {
+        const OSStatus schedule_status = scheduleAudioBuffers();
+        if (schedule_status != noErr) {
+            disposeAudioQueue();
+            return static_cast<int>(schedule_status);
+        }
     }
     return static_cast<int>(AudioQueueStart(audio_queue, nullptr));
 }
@@ -373,6 +399,7 @@ void swva_stop(void)
 {
     if (audio_queue != nullptr) {
         AudioQueueStop(audio_queue, true);
+        queue_lifecycle.markStopped();
     }
     audio_ring.clear();
 }
