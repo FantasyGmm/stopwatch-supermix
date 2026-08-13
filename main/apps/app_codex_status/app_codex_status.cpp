@@ -37,6 +37,8 @@ LV_FONT_DECLARE(font_puhui_14_1)
 
 namespace {
 
+constexpr EdgeControlRect kTaskDeckTouchExclusion = {183, 423, 283, 465};
+
 using namespace codex_status_ui;
 
 constexpr uint32_t kCodexBlue = kBeaconViolet;
@@ -301,6 +303,7 @@ void AppCodexStatus::onCreate()
 void AppCodexStatus::onOpen()
 {
     mclog::tagInfo(getAppInfo().name, "on open");
+    GetGlobalEdgeControlService().setTouchExclusion(kTaskDeckTouchExclusion);
 
     const uint32_t now = GetHAL().millis();
     _key_manager     = std::make_unique<input::KeyManager>();
@@ -621,6 +624,7 @@ void AppCodexStatus::onRunning()
 void AppCodexStatus::onClose()
 {
     mclog::tagInfo(getAppInfo().name, "on close");
+    GetGlobalEdgeControlService().setTouchExclusion(std::nullopt);
 
     _key_manager.reset();
     stop_network_fallback();
@@ -893,6 +897,7 @@ void AppCodexStatus::create_view()
 
 void AppCodexStatus::destroy_view()
 {
+    GetGlobalEdgeControlService().setTouchExclusion(std::nullopt);
     lv_anim_delete(this, page_animation_cb);
     lv_anim_delete(this, agent_panel_animation_cb);
     _page_swipe.cancel();

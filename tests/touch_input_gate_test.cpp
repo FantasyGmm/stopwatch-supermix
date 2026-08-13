@@ -11,8 +11,10 @@ namespace {
 struct RawTouchConsumers {
     EdgeControlLogic edge;
     StatusPageSwipeLogic page;
+    const EdgeControlRect* edge_exclusion = nullptr;
     bool last_pressed = false;
     bool edge_ever_activated = false;
+    bool edge_owns_touch = false;
     StatusPageSwipeResult page_result = StatusPageSwipeResult::Stay;
 
     void update(const TouchInputGate& gate, bool pressed, int x, int y,
@@ -27,15 +29,23 @@ struct RawTouchConsumers {
 
         if (pressed) {
             if (!last_pressed) {
-                edge.press(x, y, 50, 60, now_ms);
+                edge.press(x, y, 50, 60, now_ms, edge_exclusion);
                 page.press(x, y, now_ms);
             }
             const auto edge_update = edge.move(x, y, now_ms);
             edge_ever_activated = edge_ever_activated || edge_update.activated;
-            page.move(x, y);
+            if (edge_update.activated) {
+                edge_owns_touch = true;
+                page.cancel();
+            } else if (!edge_owns_touch) {
+                page.move(x, y);
+            }
         } else if (last_pressed) {
-            edge.release(now_ms);
-            page_result = page.release(now_ms, 0);
+            const EdgeControlUpdate edge_release = edge.release(now_ms);
+            page_result = edge_owns_touch || edge_release.consumed
+                ? StatusPageSwipeResult::Stay
+                : page.release(now_ms, 0);
+            edge_owns_touch = false;
         }
         last_pressed = pressed;
     }
@@ -134,6 +144,34 @@ int main()
     consumers.update(gate, gate.filterForLvgl(false), 80, 220, 2100);
 
     assert(consumers.edge_ever_activated);
+
+    // Production order is global edge first, then page. Codex reserves only
+    // its bottom-center deck-entry rectangle, so the page sees the full swipe.
+    const EdgeControlRect deck_exclusion = {183, 423, 283, 465};
+    RawTouchConsumers codex_consumers;
+    codex_consumers.edge_exclusion = &deck_exclusion;
+    codex_consumers.update(gate, gate.filterForLvgl(true), 183, 465, 3000);
+    codex_consumers.update(gate, gate.filterForLvgl(true), 183, 365, 3060);
+    codex_consumers.update(gate, gate.filterForLvgl(false), 183, 365, 3100);
+    assert(!codex_consumers.edge_ever_activated);
+    assert(!codex_consumers.edge.active());
+    assert(codex_consumers.page_result == StatusPageSwipeResult::OpenTaskDeck);
+
+    // The adjacent point remains a normal global brightness gesture.
+    RawTouchConsumers outside_consumers;
+    outside_consumers.edge_exclusion = &deck_exclusion;
+    outside_consumers.update(gate, gate.filterForLvgl(true), 182, 440, 3200);
+    outside_consumers.update(gate, gate.filterForLvgl(true), 182, 390, 3240);
+    outside_consumers.update(gate, gate.filterForLvgl(false), 182, 390, 3300);
+    assert(outside_consumers.edge_ever_activated);
+
+    // Once Codex clears the exclusion, the center gesture is globally owned.
+    RawTouchConsumers other_app_consumers;
+    other_app_consumers.update(gate, gate.filterForLvgl(true), 233, 440, 3400);
+    other_app_consumers.update(gate, gate.filterForLvgl(true), 233, 390, 3440);
+    other_app_consumers.update(gate, gate.filterForLvgl(false), 233, 390, 3500);
+    assert(other_app_consumers.edge_ever_activated);
+    assert(other_app_consumers.page_result == StatusPageSwipeResult::Stay);
 
     // A vertical gesture from the global left-edge region is not claimed by
     // page/deck gesture logic. Edge control remains its only possible owner.
