@@ -12,6 +12,7 @@
 #include "voice_input_controller.h"
 #include "codex_status_ui_layout.h"
 #include "codex_status_model.h"
+#include "codex_task_detail_crypto.h"
 #include "status_message_router.h"
 #include "trae_status_model.h"
 #include <apps/common/edge_control/global_edge_control_service.h>
@@ -58,6 +59,8 @@ constexpr int kPageCount                 = 2;
 constexpr int kAgentPanelHiddenY         = -430;
 constexpr int kAgentPanelVisibleY        = 0;
 constexpr int kAgentPanelRowHeight       = 40;
+constexpr int kTaskSwipeThreshold        = 36;
+constexpr int kTaskTapTolerance          = 12;
 
 bool fill_agent_entropy(void*, uint8_t* output, size_t size)
 {
@@ -317,6 +320,12 @@ void AppCodexStatus::onOpen()
         DisplayProtectionState::ScreenOff;
     _trae_stale = false;
     _suppress_task_navigation = false;
+    _task_focus_mode = CodexTaskFocusMode::Status;
+    _task_focus_deck.reset();
+    _task_detail_store.reset();
+    _task_detail_crypto = std::make_unique<voice_input::crypto::CcmContext>();
+    _task_detail_key_epoch = 0;
+    _task_voice_ready_applied = false;
     GetHAL().updateButtonStates();
     _voice_button_dispatcher.reset(GetHAL().btnB.isPressed());
     _production_voice_ready = false;
@@ -346,6 +355,7 @@ void AppCodexStatus::onOpen()
     _current_page = 0;
     _last_page_touch_state = LV_INDEV_STATE_REL;
     _last_agent_touch_state = LV_INDEV_STATE_REL;
+    _last_task_touch_state = LV_INDEV_STATE_REL;
     _server_host     = Settings("codex_status").GetString("host", kDefaultServerHost);
     _transport_mode  = Settings("codex_status").GetString("transport", "auto");
     _ble_name        = Settings("codex_status").GetString("ble_name", kDefaultBleName);
@@ -377,6 +387,7 @@ void AppCodexStatus::onOpen()
         }
     }
     sync_agent_panel_registry();
+    sync_task_detail_credential();
 
     {
         LvglLockGuard lock;
@@ -405,6 +416,7 @@ void AppCodexStatus::onOpen()
                         _agent_registry.key_epoch());
                 }
             }
+            sync_task_voice_route();
             set_status("BLE PAIR", kTextDim);
             set_host_text(_ble_name.c_str());
         } else {
@@ -452,7 +464,7 @@ void AppCodexStatus::onRunning()
         woke_screen,
         key_event == input::KeyEvent::GoHome,
         now,
-        _voice_input.get());
+        task_focus_voice_sink());
     if (voice_decision == VoiceButtonDispatchDecision::Close) {
         close();
         return;
@@ -467,11 +479,29 @@ void AppCodexStatus::onRunning()
         }
         update_agent_panel_touch(now);
         if (_agent_panel_model.owns_touch()) {
+            cancel_task_focus_touch();
             _page_swipe.cancel();
             _trae_card_tap.cancel();
             _last_page_touch_state = LV_INDEV_STATE_REL;
         } else {
-            update_page_swipe(now);
+            if (_task_focus_mode != CodexTaskFocusMode::Status &&
+                _agent_panel_model.snapshot().visible) {
+                cancel_task_focus_touch();
+                _page_swipe.cancel();
+                _trae_card_tap.cancel();
+                _last_page_touch_state = LV_INDEV_STATE_REL;
+                sync_task_focus_visibility();
+            } else {
+                sync_task_focus_visibility();
+                if (_task_focus_mode == CodexTaskFocusMode::Status) {
+                    update_page_swipe(now);
+                } else {
+                    _page_swipe.cancel();
+                    _trae_card_tap.cancel();
+                    _last_page_touch_state = LV_INDEV_STATE_REL;
+                    update_task_focus_touch(now);
+                }
+            }
         }
         bool alert_changed = false;
         if (_current_page == 0 && key_event == input::KeyEvent::GoPrevious) {
@@ -505,18 +535,22 @@ void AppCodexStatus::onRunning()
         process_secure_pairing(now);
         _ble_transport->poll(now);
         ble_connected = _ble_transport && _ble_transport->connected();
-        if (_voice_input) {
-            const uint32_t connection_epoch =
-                _ble_transport->connection_epoch();
-            if (connection_epoch != _production_voice_connection_epoch) {
-                _production_voice_connection_epoch = connection_epoch;
-                _production_voice_ready = false;
-                _production_voice_link_usable = false;
-                _production_voice_mtu = 23;
+        const uint32_t connection_epoch =
+            _ble_transport->connection_epoch();
+        if (connection_epoch != _production_voice_connection_epoch) {
+            _production_voice_connection_epoch = connection_epoch;
+            _production_voice_ready = false;
+            _production_voice_link_usable = false;
+            _production_voice_mtu = 23;
+            _task_detail_store.reset_connection();
+            _task_voice_ready_applied = false;
+            if (_voice_input) {
                 _voice_input->handle_connection_epoch(connection_epoch);
-                sync_agent_panel_registry();
-                _agent_panel_dirty = true;
             }
+            sync_agent_panel_registry();
+            _agent_panel_dirty = true;
+        }
+        if (_voice_input) {
             CodexProductionVoiceControl production_control;
             while (_ble_transport->take_production_voice_control(production_control)) {
                 _production_voice_ready =
@@ -532,7 +566,7 @@ void AppCodexStatus::onRunning()
                 voice_mtu != _production_voice_mtu) {
                 _production_voice_link_usable = production_link_usable;
                 _production_voice_mtu = voice_mtu;
-                _voice_input->set_ready(production_link_usable, voice_mtu);
+                sync_task_voice_readiness();
             }
         }
         if (_voice_probe) {
@@ -577,6 +611,8 @@ void AppCodexStatus::onRunning()
             if (_voice_input) {
                 _voice_input->handle_disconnect();
             }
+            _task_detail_store.reset_connection();
+            _task_voice_ready_applied = false;
             if (_voice_probe) {
                 _voice_probe->handle_disconnect();
             }
@@ -618,6 +654,15 @@ void AppCodexStatus::onRunning()
 
     _voice_status.store(
         _voice_input ? _voice_input->ui_state() : VoiceInputUiState::Off);
+    {
+        LvglLockGuard lock;
+        if (_task_focus_view != nullptr) {
+            _task_focus_view->set_recording(
+                _task_focus_mode == CodexTaskFocusMode::TaskDetail &&
+                _voice_status.load() == VoiceInputUiState::Active);
+        }
+    }
+    sync_task_voice_readiness();
     render_status();
 }
 
@@ -627,6 +672,9 @@ void AppCodexStatus::onClose()
     GetGlobalEdgeControlService().setTouchExclusion(std::nullopt);
 
     _key_manager.reset();
+    if (_voice_input) {
+        (void)_voice_input->set_task_route(0);
+    }
     stop_network_fallback();
     if (_voice_input) {
         _voice_status.store(VoiceInputUiState::Off);
@@ -647,6 +695,15 @@ void AppCodexStatus::onClose()
     _agent_switch_pending = false;
     _agent_switch_target = {};
     clear_pairing_runtime();
+    _task_focus_mode = CodexTaskFocusMode::Status;
+    _task_focus_deck.reset();
+    _task_detail_store.reset();
+    if (_task_detail_crypto) {
+        _task_detail_crypto->clear();
+        _task_detail_crypto.reset();
+    }
+    _task_detail_key_epoch = 0;
+    _task_voice_ready_applied = false;
 
     LvglLockGuard lock;
     GetGlobalEdgeControlService().setEnabled(true);
@@ -876,6 +933,10 @@ void AppCodexStatus::create_view()
     lv_obj_align(_battery_label, LV_ALIGN_TOP_MID, 0, kBatteryY);
     update_battery();
 
+    _task_focus_view = std::make_unique<CodexTaskFocusView>();
+    _task_focus_view->init(_panel);
+    _task_focus_view->set_visible(false);
+
     _agent_panel_root = lv_obj_create(_panel);
     lv_obj_set_size(_agent_panel_root, 466, 466);
     lv_obj_set_pos(
@@ -902,6 +963,7 @@ void AppCodexStatus::destroy_view()
     lv_anim_delete(this, agent_panel_animation_cb);
     _page_swipe.cancel();
     _trae_card_tap.cancel();
+    cancel_task_focus_touch();
     _last_page_touch_state = LV_INDEV_STATE_REL;
 
     if (_pending_glow) {
@@ -911,6 +973,10 @@ void AppCodexStatus::destroy_view()
     if (_trae_status_page) {
         _trae_status_page->shutdown();
         _trae_status_page.reset();
+    }
+    if (_task_focus_view) {
+        _task_focus_view->shutdown();
+        _task_focus_view.reset();
     }
 
     if (_pet_timer != nullptr) {
@@ -1177,6 +1243,30 @@ bool AppCodexStatus::handle_status_json(const char* data, int length, const char
         }
         return applied;
     }
+    if (kind == CodexMessageKind::TaskDetail) {
+        sync_task_detail_credential();
+        if (!_agent_registry_ready || _task_detail_crypto == nullptr ||
+            !_task_detail_crypto->ready()) {
+            return false;
+        }
+        CodexTaskDetailChunk chunk;
+        if (!decrypt_codex_task_detail(
+                snapshot.task_detail,
+                _task_detail_key_epoch,
+                *_task_detail_crypto,
+                chunk) ||
+            !_task_detail_store.accept(chunk)) {
+            mclog::tagWarn(getAppInfo().name, "task detail rejected");
+            return false;
+        }
+        if (_task_focus_mode == CodexTaskFocusMode::TaskDetail &&
+            chunk.route == _task_focus_deck.selected_route() &&
+            _task_detail_store.find(chunk.route) != nullptr) {
+            LvglLockGuard lock;
+            render_task_focus_detail();
+        }
+        return true;
+    }
 
     char model[18];
     char effort[12];
@@ -1195,6 +1285,23 @@ bool AppCodexStatus::handle_status_json(const char* data, int length, const char
 
         if (_alert_carousel.apply(snapshot, GetHAL().millis())) {
             render_alert();
+        }
+        const uint64_t previous_selected_route =
+            _task_focus_deck.selected_route();
+        if (_task_focus_deck.apply(snapshot)) {
+            std::vector<uint64_t> routes;
+            routes.reserve(_task_focus_deck.count());
+            for (const CodexTaskAlert& task : _task_focus_deck.tasks()) {
+                routes.push_back(task.route);
+            }
+            _task_detail_store.retain_routes(routes);
+            if (_task_focus_mode == CodexTaskFocusMode::TaskDetail &&
+                previous_selected_route != 0 &&
+                previous_selected_route != _task_focus_deck.selected_route()) {
+                _task_focus_mode = CodexTaskFocusMode::TaskDeck;
+            }
+            sync_task_voice_route();
+            render_task_focus();
         }
     }
     _last_status_payload_ms = GetHAL().millis();
@@ -1738,6 +1845,8 @@ void AppCodexStatus::dispatch_agent_panel_decision(
                     _agent_registry.master_key(),
                     _agent_registry.key_epoch());
             }
+            sync_task_detail_credential();
+            sync_task_voice_route();
         } else {
             (void)secure_pairing::AgentRegistry::restore(
                 before, _agent_registry);
@@ -1778,6 +1887,8 @@ void AppCodexStatus::dispatch_agent_panel_decision(
                 }
             }
             clear_pairing_runtime();
+            sync_task_detail_credential();
+            sync_task_voice_route();
         } else {
             if (had_registry) {
                 (void)secure_pairing::AgentRegistry::restore(
@@ -2364,6 +2475,230 @@ bool AppCodexStatus::save_agent_registry()
                secure_pairing::StoreResult::Ok;
 }
 
+void AppCodexStatus::sync_task_detail_credential()
+{
+    if (_task_detail_crypto == nullptr) {
+        _task_detail_crypto =
+            std::make_unique<voice_input::crypto::CcmContext>();
+    }
+    if (!_agent_registry_ready || !_agent_registry.initialized()) {
+        if (_task_detail_key_epoch != 0) {
+            _task_detail_store.reset();
+            _task_detail_crypto->clear();
+            _task_detail_key_epoch = 0;
+        }
+        return;
+    }
+    const uint32_t key_epoch = _agent_registry.key_epoch();
+    if (key_epoch == 0 || key_epoch == _task_detail_key_epoch) {
+        return;
+    }
+    _task_detail_store.reset_for_credential(key_epoch);
+    if (!_task_detail_crypto->set_key(_agent_registry.master_key())) {
+        _task_detail_store.reset();
+        _task_detail_key_epoch = 0;
+        return;
+    }
+    _task_detail_key_epoch = key_epoch;
+}
+
+void AppCodexStatus::sync_task_voice_route()
+{
+    if (_voice_input != nullptr) {
+        (void)_voice_input->set_task_route(
+            _task_focus_deck.selected_route());
+    }
+    sync_task_voice_readiness();
+}
+
+void AppCodexStatus::sync_task_voice_readiness()
+{
+    if (_voice_input == nullptr) {
+        _task_voice_ready_applied = false;
+        return;
+    }
+    const bool usable =
+        _task_focus_mode == CodexTaskFocusMode::TaskDetail &&
+        _task_focus_deck.selected_route() != 0 &&
+        _production_voice_link_usable;
+    if (_task_voice_ready_applied &&
+        _voice_input->ui_state() == VoiceInputUiState::Active) {
+        return;
+    }
+    if (usable == _task_voice_ready_applied) {
+        return;
+    }
+    _voice_input->set_ready(usable, _production_voice_mtu);
+    _task_voice_ready_applied = usable;
+}
+
+VoiceButtonSink* AppCodexStatus::task_focus_voice_sink()
+{
+    return _voice_input != nullptr &&
+               _voice_input->ui_state() == VoiceInputUiState::Active
+        ? _voice_input.get()
+        : _task_focus_mode == CodexTaskFocusMode::TaskDetail &&
+               _task_focus_deck.selected_route() != 0 &&
+               _production_voice_link_usable
+        ? _voice_input.get()
+        : nullptr;
+}
+
+void AppCodexStatus::sync_task_focus_visibility()
+{
+    if (_task_focus_view == nullptr) {
+        return;
+    }
+    const bool visible =
+        _task_focus_mode != CodexTaskFocusMode::Status &&
+        _current_page == 0 &&
+        !_agent_panel_model.snapshot().visible &&
+        !_agent_panel_model.owns_touch();
+    _task_focus_view->set_visible(visible);
+}
+
+void AppCodexStatus::render_task_focus()
+{
+    if (_task_focus_view == nullptr ||
+        _task_focus_mode == CodexTaskFocusMode::Status) {
+        return;
+    }
+    if (_task_focus_mode == CodexTaskFocusMode::TaskDetail) {
+        render_task_focus_detail();
+    } else {
+        _task_focus_view->show_deck(
+            _task_focus_deck,
+            _ble_transport != nullptr && _ble_transport->connected());
+        sync_task_focus_visibility();
+    }
+}
+
+void AppCodexStatus::render_task_focus_detail()
+{
+    if (_task_focus_view == nullptr) {
+        return;
+    }
+    const CodexTaskAlert* task = _task_focus_deck.selected();
+    if (task == nullptr) {
+        _task_focus_mode = CodexTaskFocusMode::TaskDeck;
+        render_task_focus();
+        return;
+    }
+    const CodexTaskDetail* detail =
+        _task_detail_store.find(task->route);
+    _task_focus_view->show_detail(
+        task,
+        detail == nullptr ? nullptr : detail->text.c_str(),
+        _ble_transport != nullptr && _ble_transport->connected());
+    sync_task_focus_visibility();
+}
+
+void AppCodexStatus::open_task_deck()
+{
+    if (_current_page != 0) {
+        return;
+    }
+    _page_swipe.cancel();
+    _trae_card_tap.cancel();
+    _last_page_touch_state = LV_INDEV_STATE_REL;
+    _task_focus_mode = CodexTaskFocusMode::TaskDeck;
+    sync_task_voice_readiness();
+    render_task_focus();
+}
+
+void AppCodexStatus::cancel_task_focus_touch()
+{
+    _last_task_touch_state = LV_INDEV_STATE_REL;
+    _task_touch_start_x = 0;
+    _task_touch_start_y = 0;
+    _task_touch_last_y = 0;
+    _task_touch_moved = false;
+    _task_detail_started_at_top = false;
+}
+
+void AppCodexStatus::update_task_focus_touch(uint32_t now_ms)
+{
+    (void)now_ms;
+    lv_indev_t* indev = GetHAL().lvTouchpad;
+    auto& controls = GetGlobalEdgeControlService();
+    if (indev == nullptr || _screen_off || controls.ownsTouch() ||
+        controls.lastReleaseConsumed() ||
+        GetGlobalDisplayProtectionService().touchInputSuppressed()) {
+        cancel_task_focus_touch();
+        return;
+    }
+    const lv_indev_state_t state = lv_indev_get_state(indev);
+    lv_point_t point = {};
+    lv_indev_get_point(indev, &point);
+    if (state == LV_INDEV_STATE_PR) {
+        if (_last_task_touch_state == LV_INDEV_STATE_REL) {
+            _task_touch_start_x = point.x;
+            _task_touch_start_y = point.y;
+            _task_touch_last_y = point.y;
+            _task_touch_moved = false;
+            _task_detail_started_at_top =
+                _task_focus_view != nullptr &&
+                _task_focus_view->detail_at_top();
+        } else {
+            const int dy = point.y - _task_touch_last_y;
+            _task_touch_last_y = point.y;
+            if (std::abs(point.y - _task_touch_start_y) >=
+                    kTaskTapTolerance ||
+                std::abs(point.x - _task_touch_start_x) >=
+                    kTaskTapTolerance) {
+                _task_touch_moved = true;
+            }
+            if (_task_focus_mode == CodexTaskFocusMode::TaskDetail &&
+                _task_focus_view != nullptr) {
+                _task_focus_view->detail_scroll_by(dy);
+            }
+        }
+    } else if (_last_task_touch_state == LV_INDEV_STATE_PR) {
+        const int total_dy = point.y - _task_touch_start_y;
+        if (_task_focus_mode == CodexTaskFocusMode::TaskDeck &&
+            std::abs(total_dy) >= kTaskSwipeThreshold) {
+            const int direction = total_dy < 0 ? 1 : -1;
+            const CodexTaskFocusEvent event =
+                _task_focus_deck.browse(direction);
+            if (direction < 0 && event == CodexTaskFocusEvent::None &&
+                _task_focus_deck.focused_index() == 0) {
+                _task_focus_mode = CodexTaskFocusMode::Status;
+                if (_task_focus_view != nullptr) {
+                    _task_focus_view->set_visible(false);
+                }
+                sync_task_voice_readiness();
+                cancel_task_focus_touch();
+                return;
+            }
+            if (event == CodexTaskFocusEvent::StateBoundaryCrossed &&
+                GetHAL().getButtonConfig().vibrateEnabled) {
+                GetHAL().vibrate(20, 60);
+            }
+            if (event != CodexTaskFocusEvent::None) {
+                render_task_focus();
+            }
+        } else if (_task_focus_mode == CodexTaskFocusMode::TaskDeck &&
+                   !_task_touch_moved &&
+                   _task_focus_view != nullptr &&
+                   _task_focus_view->contains_focus_point(point.x, point.y)) {
+            (void)_task_focus_deck.select_focused();
+            sync_task_voice_route();
+            _task_focus_mode = CodexTaskFocusMode::TaskDetail;
+            sync_task_voice_readiness();
+            render_task_focus_detail();
+        } else if (_task_focus_mode == CodexTaskFocusMode::TaskDetail &&
+                   total_dy >= kTaskSwipeThreshold &&
+                   _task_detail_started_at_top) {
+            _task_focus_mode = CodexTaskFocusMode::TaskDeck;
+            sync_task_voice_readiness();
+            render_task_focus();
+        }
+        cancel_task_focus_touch();
+        return;
+    }
+    _last_task_touch_state = state;
+}
+
 void AppCodexStatus::update_page_swipe(uint32_t now_ms)
 {
     lv_indev_t* indev = GetHAL().lvTouchpad;
@@ -2417,6 +2752,8 @@ void AppCodexStatus::update_page_swipe(uint32_t now_ms)
             set_page(0, true);
         } else if (result == StatusPageSwipeResult::Trae) {
             set_page(1, true);
+        } else if (result == StatusPageSwipeResult::OpenTaskDeck) {
+            open_task_deck();
         } else if (_trae_card_tap.release(now_ms) &&
                    _trae_carousel.manual_next(now_ms)) {
             render_trae_status();
@@ -2431,10 +2768,14 @@ void AppCodexStatus::set_page(int page, bool animate)
         return;
     }
     page = std::clamp(page, 0, kPageCount - 1);
+    if (_task_focus_mode != CodexTaskFocusMode::Status) {
+        return;
+    }
     const int target_x = -page * kPageWidth;
     const int current_x = lv_obj_get_x(_page_strip);
     _page_swipe.cancel();
     _trae_card_tap.cancel();
+    cancel_task_focus_touch();
     _last_page_touch_state = LV_INDEV_STATE_REL;
     _current_page = page;
     update_page_indicator();
@@ -2513,6 +2854,7 @@ void AppCodexStatus::sync_display_protection_presentation()
     }
     _page_swipe.cancel();
     _trae_card_tap.cancel();
+    cancel_task_focus_touch();
     _last_page_touch_state = LV_INDEV_STATE_REL;
     sync_pending_glow();
     if (_trae_status_page != nullptr) {

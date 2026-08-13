@@ -16,6 +16,9 @@
 #include <esp_event_base.h>
 #include "codex_alert_carousel.h"
 #include "codex_pending_soft_glow.h"
+#include "codex_task_detail_store.h"
+#include "codex_task_focus_deck.h"
+#include "codex_task_focus_view.h"
 #include "agent_panel_model.h"
 #include "agent_registry_store.h"
 #include "secure_pairing_session.h"
@@ -34,6 +37,12 @@ class BleVoiceProbeController;
 struct esp_websocket_event_data;
 typedef struct esp_websocket_client* esp_websocket_client_handle_t;
 
+enum class CodexTaskFocusMode : uint8_t {
+    Status,
+    TaskDeck,
+    TaskDetail,
+};
+
 class AppCodexStatus : public mooncake::AppAbility {
 public:
     AppCodexStatus();
@@ -48,6 +57,8 @@ private:
     std::unique_ptr<input::KeyManager> _key_manager;
     std::unique_ptr<CodexPendingSoftGlow> _pending_glow;
     std::unique_ptr<TraeStatusPage> _trae_status_page;
+    std::unique_ptr<CodexTaskFocusView> _task_focus_view;
+    std::unique_ptr<voice_input::crypto::CcmContext> _task_detail_crypto;
 
     lv_obj_t* _panel             = nullptr;
     lv_obj_t* _page_strip        = nullptr;
@@ -104,9 +115,19 @@ private:
     int _current_page            = 0;
     lv_indev_state_t _last_page_touch_state = LV_INDEV_STATE_REL;
     lv_indev_state_t _last_agent_touch_state = LV_INDEV_STATE_REL;
+    lv_indev_state_t _last_task_touch_state = LV_INDEV_STATE_REL;
     int _agent_panel_drag_start_y = 0;
+    int _task_touch_start_x = 0;
+    int _task_touch_start_y = 0;
+    int _task_touch_last_y = 0;
+    bool _task_touch_moved = false;
+    bool _task_detail_started_at_top = false;
     bool _suppress_task_navigation = false;
     CodexAlertCarousel _alert_carousel;
+    CodexTaskFocusDeck _task_focus_deck;
+    CodexTaskDetailStore _task_detail_store;
+    CodexTaskFocusMode _task_focus_mode = CodexTaskFocusMode::Status;
+    uint32_t _task_detail_key_epoch = 0;
     TraeStatusSnapshot _trae_snapshot;
     TraeTaskCarousel _trae_carousel;
     StatusPageSwipeLogic _page_swipe;
@@ -135,6 +156,7 @@ private:
     AgentPanelDecision _pending_agent_decision = {};
     bool _production_voice_ready = false;
     bool _production_voice_link_usable = false;
+    bool _task_voice_ready_applied = false;
     uint16_t _production_voice_mtu = 23;
     uint32_t _production_voice_connection_epoch = 0;
     std::mutex _status_mutex;
@@ -159,6 +181,16 @@ private:
     void render_trae_status();
     void sync_pending_glow();
     void update_page_swipe(uint32_t now_ms);
+    void update_task_focus_touch(uint32_t now_ms);
+    void cancel_task_focus_touch();
+    void open_task_deck();
+    void render_task_focus();
+    void render_task_focus_detail();
+    void sync_task_focus_visibility();
+    void sync_task_voice_route();
+    void sync_task_voice_readiness();
+    void sync_task_detail_credential();
+    VoiceButtonSink* task_focus_voice_sink();
     void update_agent_panel_touch(uint32_t now_ms);
     void render_agent_panel();
     void settle_agent_panel(bool animate);
