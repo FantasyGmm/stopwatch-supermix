@@ -55,7 +55,7 @@ git diff --check
 
 ### Current automated evidence (2026-08-13)
 
-- Full Mac Agent discovery: 896 tests passed; one read-only live Accessibility
+- Full Mac Agent discovery: 897 tests passed; one read-only live Accessibility
   probe skipped because Codex was not foreground.
 - Focused input protocol and desktop submission: 37 tests passed; the same live
   probe was the only skip.
@@ -63,11 +63,13 @@ git diff --check
   exact host compile/run pairs.
 - Real host execution: all 57 stages passed with `IDF_PATH` pointing at a local
   ESP-IDF 5.5.4 checkout.
-- Firmware clean build: configuration stopped before application-source
-  compilation because the local dependency set does not provide the required
-  `CODEC_UAC_SUPPORT` option introduced by `espressif/usb_host_uac`. This is an
-  existing build-environment/dependency blocker, not a successful firmware
-  build.
+- Firmware clean build: a fresh tracked checkout bootstrapped its locked
+  dependencies and produced the ESP32-S3 application and assets successfully.
+  `CODEC_UAC_SUPPORT` is now defined by tracked project Kconfig with `default n`,
+  so the unused optional `espressif/usb_host_uac` dependency remains disabled.
+  The application used 6,287,200 bytes and retained 56.39% partition headroom;
+  the clean-checkout artifact SHA256 was
+  `13488fc847f6538d7992408418032f3ccbca9ae58361439915136c184c299914`.
 - `git diff --check`: passed.
 
 No physical button and no live Accessibility action was invoked by automated
