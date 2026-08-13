@@ -5,7 +5,7 @@ Codex app and the Mac Agent.
 
 Inside the watch Codex app, an upper-right single click submits after the
 300 ms double-click window. A fast double click steers the running turn, or
-sends once when idle. Holding for 500 ms still controls Typeless.
+sends once when idle. Holding for 300 ms still controls Typeless.
 
 The meaning applies on every page and in every conversation state in the watch
 Codex app. A+B Home retains its 90 ms arbitration guard and, together with
@@ -95,7 +95,7 @@ behavior, the literal `ChromeAXNodeId`, and bridged NSArray traversal.
 4. Codex background, missing composer, empty composer, or unknown control:
    both click gestures are ignored.
 5. Typeless unavailable: click actions remain usable, while holding for
-   500 ms reports voice unavailable.
+   300 ms reports voice unavailable.
 6. A second press that becomes a hold starts push-to-talk and cancels the
    pending click.
 7. Screen wake and A+B Home never submit; Launcher and all non-Codex watch apps

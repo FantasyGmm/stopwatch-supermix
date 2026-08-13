@@ -143,7 +143,7 @@ explicitly changes the decision.
 - Current gesture contract:
   - one short click: submit after the 300 ms double-click window;
   - two short clicks within the window: emit exactly one forced-steer action;
-  - hold for 500 ms: start push-to-talk voice;
+  - hold for 300 ms: start push-to-talk voice;
   - A+B Home uses its separate 90 ms chord arbitration guard.
 - The old 90 ms voice threshold was wrong: an ordinary deliberate click can
   last about 226 ms and was misclassified as voice. Keep chord arbitration and
@@ -169,7 +169,7 @@ explicitly changes the decision.
   click does not both navigate the carousel and submit. Do not change the
   shared KeyManager behavior for other apps.
 - Use wrap-safe unsigned elapsed-time arithmetic in gesture timing tests.
-- Host tests should cover ordinary 226 ms clicks, the 499/500 ms boundary,
+- Host tests should cover ordinary 226 ms clicks, the 299/300 ms boundary,
   single/double click, second-click-to-hold, A+B, independent A, wake, HAL
   suppression, active-voice cancellation, cross-release, disconnect, and timer
   wrap.

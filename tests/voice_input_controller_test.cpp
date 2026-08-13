@@ -756,7 +756,7 @@ void test_short_b_tap_does_not_start_voice()
            VoiceButtonAction::ShortClick);
 }
 
-void test_deliberate_226_ms_b_click_does_not_start_voice()
+void test_deliberate_299_ms_b_click_does_not_start_voice()
 {
     VoiceButtonEdgeGate gate;
     gate.reset(false);
@@ -764,14 +764,14 @@ void test_deliberate_226_ms_b_click_does_not_start_voice()
            VoiceButtonAction::None);
     assert(gate.update(false, true, false, false, 100) ==
            VoiceButtonAction::None);
-    assert(gate.update(false, false, false, false, 226) ==
+    assert(gate.update(false, false, false, false, 299) ==
            VoiceButtonAction::ShortClick);
 }
 
-void test_b_click_and_hold_boundary_is_500_ms()
+void test_b_click_and_hold_boundary_is_300_ms()
 {
     static_assert(VoiceButtonEdgeGate::kChordGuardMs == 90);
-    static_assert(VoiceButtonEdgeGate::kVoiceHoldMs == 500);
+    static_assert(VoiceButtonEdgeGate::kVoiceHoldMs == 300);
     constexpr uint32_t hold = VoiceButtonEdgeGate::kVoiceHoldMs;
     VoiceButtonEdgeGate gate;
     gate.reset(false);
@@ -1134,15 +1134,15 @@ void test_dispatcher_guard_handles_uint32_wraparound()
     FakeVoiceButtonSink sink;
     VoiceButtonDispatcher dispatcher;
     dispatcher.reset(false);
-    constexpr uint32_t start = UINT32_MAX - 244;
+    constexpr uint32_t start = UINT32_MAX - 144;
 
     dispatch(dispatcher, sink, false, true, false, false, start);
-    dispatch(dispatcher, sink, false, true, false, false, 254);
+    dispatch(dispatcher, sink, false, true, false, false, 154);
     assert(sink.events.empty());
-    dispatch(dispatcher, sink, false, true, false, false, 255);
+    dispatch(dispatcher, sink, false, true, false, false, 155);
     assert(sink.events.size() == 1);
     assert(std::string(sink.events[0]) == "press");
-    assert(sink.times[0] == 255);
+    assert(sink.times[0] == 155);
 }
 
 void test_cancel_waits_for_inflight_producer_cleanup()
@@ -1368,8 +1368,8 @@ int main()
     test_b_then_a_inside_guard_is_reserved_for_home();
     test_a_then_b_is_reserved_for_home();
     test_short_b_tap_does_not_start_voice();
-    test_deliberate_226_ms_b_click_does_not_start_voice();
-    test_b_click_and_hold_boundary_is_500_ms();
+    test_deliberate_299_ms_b_click_does_not_start_voice();
+    test_b_click_and_hold_boundary_is_300_ms();
     test_b_release_is_only_sent_after_press();
     test_late_a_cancels_active_voice_before_home();
     test_wake_consumed_b_is_suppressed_through_release();

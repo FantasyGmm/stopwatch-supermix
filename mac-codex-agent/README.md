@@ -102,7 +102,7 @@ then use its **Voice Input** row:
 
 Inside the watch Codex app, an upper-right single click submits after the
 300 ms double-click window. A fast double click steers the running turn, or
-sends once when idle. Holding for 500 ms still controls Typeless.
+sends once when idle. Holding for 300 ms still controls Typeless.
 
 The click meanings are global across every page and conversation state inside
 the watch Codex app. They are not armed by a voice session and do not apply in

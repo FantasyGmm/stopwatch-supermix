@@ -126,6 +126,12 @@ class FakeRoute:
         self.fail_stop = fail_stop
         self.accepted_frames = accepted_frames
         self.write_error = write_error
+        self.prepared = False
+
+    def prepare(self):
+        if not self.prepared:
+            self.calls.append("prepare")
+            self.prepared = True
 
     def start(self):
         self.calls.append("start")
@@ -147,6 +153,13 @@ class FakeRoute:
         self.active = False
         if self.fail_stop:
             raise RuntimeError("route stop failed")
+
+    def close(self):
+        if not self.prepared:
+            return
+        self.calls.append("close")
+        self.prepared = False
+        self.active = False
 
 
 class FakeShortcut:
@@ -204,8 +217,46 @@ class VoiceSessionServiceTests(unittest.IsolatedAsyncioTestCase):
 
                 self.assertEqual(await service.prepare(), expected)
                 self.assertEqual(service.state, expected)
-                self.assertEqual(route.calls, [])
+                self.assertEqual(
+                    route.calls,
+                    ["prepare"] if expected is VoiceState.READY else [],
+                )
                 self.assertEqual(shortcut.calls, [])
+
+    async def test_disconnect_closes_prepared_route(self):
+        service, route, shortcut = self.make_service()
+
+        self.assertIs(await service.prepare(), VoiceState.READY)
+        await service.disconnect()
+
+        self.assertEqual(route.calls, ["prepare", "close"])
+        self.assertEqual(shortcut.calls, [])
+
+    async def test_bounded_disconnect_closes_prepared_route(self):
+        service, route, shortcut = self.make_service()
+
+        self.assertIs(await service.prepare(), VoiceState.READY)
+        self.assertTrue(await service.disconnect_bounded(0.1))
+
+        self.assertEqual(route.calls, ["prepare", "close"])
+        self.assertEqual(shortcut.calls, [])
+
+    async def test_disconnect_closes_prepared_route_after_stop_failure(self):
+        route = FakeRoute(fail_stop=True)
+        shortcut = FakeShortcut()
+        service = VoiceSessionService(
+            route, shortcut, TEST_KEY, sleep=no_sleep
+        )
+
+        self.assertIs(await service.prepare(), VoiceState.READY)
+        await service.handle(begin_packet())
+        with self.assertRaisesRegex(RuntimeError, "route stop failed"):
+            await service.disconnect()
+
+        self.assertEqual(
+            route.calls, ["prepare", "start", "stop", "close"]
+        )
+        self.assertEqual(shortcut.calls, ["start", "stop"])
 
     async def test_prepare_rejects_recording_without_permitting_second_begin(self):
         readiness = mock.Mock(return_value=VoiceState.READY)

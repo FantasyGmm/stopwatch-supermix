@@ -234,20 +234,33 @@ class VoiceAudioRoute:
         self._opened = False
         self._started = False
 
-    def start(self) -> None:
-        if self._started:
+    def prepare(self) -> None:
+        if self._opened:
             return
 
         try:
             output_uid = self._bridge.find_device_uid(self._device_name)
             self._opened = True
             self._bridge.open(output_uid)
+        except Exception as error:
+            failures = _error_failures("prepare audio route", error)
+            failures.extend(_prioritize_cleanup_failures(self._close()))
+            raise VoiceAudioError(
+                "could not prepare audio route", failures
+            ) from failures[0][1]
+
+    def start(self) -> None:
+        if self._started:
+            return
+
+        try:
+            self.prepare()
             self._bridge.start()
-            self._lease.acquire(self._device_name)
             self._started = True
+            self._lease.acquire(self._device_name)
         except Exception as error:
             failures = _error_failures("start audio route", error)
-            failures.extend(_prioritize_cleanup_failures(self._cleanup()))
+            failures.extend(_prioritize_cleanup_failures(self._close()))
             raise VoiceAudioError(
                 "could not start audio route", failures
             ) from failures[0][1]
@@ -258,29 +271,41 @@ class VoiceAudioRoute:
         return self._bridge.write(samples)
 
     def stop(self) -> None:
-        failures = _prioritize_cleanup_failures(self._cleanup())
+        failures = _prioritize_cleanup_failures(self._stop())
         if failures:
             raise VoiceAudioError(
                 "could not clean up audio route", failures
             ) from failures[0][1]
 
-    def _cleanup(self) -> List[VoiceAudioFailure]:
+    def close(self) -> None:
+        failures = _prioritize_cleanup_failures(self._close())
+        if failures:
+            raise VoiceAudioError(
+                "could not close audio route", failures
+            ) from failures[0][1]
+
+    def _stop(self) -> List[VoiceAudioFailure]:
         failures = []
-        if self._opened:
+        if self._started:
             try:
                 self._bridge.stop()
             except Exception as error:
                 failures.append(("stop audio sink", error))
-            try:
-                self._bridge.close()
-            except Exception as error:
-                failures.append(("close audio sink", error))
-            self._opened = False
+            self._started = False
 
         if self._lease.acquired:
             try:
                 self._lease.release()
             except Exception as error:
                 failures.append(("restore default input", error))
-        self._started = False
+        return failures
+
+    def _close(self) -> List[VoiceAudioFailure]:
+        failures = self._stop()
+        if self._opened:
+            try:
+                self._bridge.close()
+            except Exception as error:
+                failures.append(("close audio sink", error))
+            self._opened = False
         return failures

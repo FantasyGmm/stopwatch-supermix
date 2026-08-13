@@ -79,7 +79,7 @@ menu bar app and are signed before the watch stores or displays them.
 
 Inside the watch Codex app, an upper-right single click submits after the
 300 ms double-click window. A fast double click steers the running turn, or
-sends once when idle. Holding for 500 ms still controls Typeless.
+sends once when idle. Holding for 300 ms still controls Typeless.
 
 These meanings are global across pages and conversation states inside the
 watch Codex app, but do not apply in Launcher or another watch app. A+B Home

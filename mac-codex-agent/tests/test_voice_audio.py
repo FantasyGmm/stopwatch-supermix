@@ -152,16 +152,49 @@ class DefaultInputLeaseTests(unittest.TestCase):
 
 
 class VoiceAudioRouteTests(unittest.TestCase):
+    def test_prepare_opens_without_starting_or_switching_input(self):
+        bridge = FakeBridge(default_uid="BuiltInMic")
+        route = VoiceAudioRoute(bridge)
+
+        route.prepare()
+
+        self.assertEqual(
+            bridge.events,
+            [("find", "BlackHole 2ch"), ("open", "BH2")],
+        )
+        self.assertEqual(bridge.default_uid, "BuiltInMic")
+
+    def test_two_sessions_reuse_one_prepared_sink(self):
+        bridge = FakeBridge(default_uid="BuiltInMic")
+        route = VoiceAudioRoute(bridge)
+
+        route.prepare()
+        route.start()
+        route.stop()
+        route.start()
+        route.stop()
+        route.close()
+
+        self.assertEqual(bridge.events.count(("open", "BH2")), 1)
+        self.assertEqual(bridge.events.count(("start",)), 2)
+        self.assertEqual(bridge.events.count(("stop",)), 2)
+        self.assertEqual(bridge.events.count(("close",)), 1)
+        self.assertEqual(bridge.events.count(("set", "BH2")), 2)
+        self.assertEqual(bridge.events.count(("set", "BuiltInMic")), 2)
+
     def test_route_primes_sink_before_switching_default_input(self):
         bridge = FakeBridge(default_uid="BuiltInMic")
         route = VoiceAudioRoute(bridge)
 
+        route.prepare()
         route.start()
 
         self.assertLess(
             bridge.events.index(("start",)), bridge.events.index(("set", "BH2"))
         )
         route.stop()
+        self.assertNotIn(("close",), bridge.events)
+        route.close()
         self.assertEqual(bridge.default_uid, "BuiltInMic")
 
     def test_route_restores_after_sink_open_failure(self):
@@ -183,7 +216,7 @@ class VoiceAudioRouteTests(unittest.TestCase):
 
         self.assertEqual(
             [name for name, _error in caught.exception.failures],
-            ["start audio route", "close audio sink"],
+            ["prepare audio route", "close audio sink"],
         )
         self.assertEqual(str(caught.exception.__cause__), "open failed")
         self.assertIn("open failed", str(caught.exception))
@@ -199,7 +232,7 @@ class VoiceAudioRouteTests(unittest.TestCase):
         self.assertEqual(bridge.default_uid, "BuiltInMic")
         self.assertIn(("close",), bridge.events)
 
-    def test_stop_restores_input_when_sink_stop_and_close_fail(self):
+    def test_close_restores_input_when_sink_stop_and_close_fail(self):
         bridge = FakeBridge(
             default_uid="External-Mic", fail_stop=True, fail_close=True
         )
@@ -207,7 +240,7 @@ class VoiceAudioRouteTests(unittest.TestCase):
         route.start()
 
         with self.assertRaises(VoiceAudioError):
-            route.stop()
+            route.close()
 
         self.assertEqual(bridge.default_uid, "External-Mic")
         self.assertEqual(bridge.events.count(("set", "External-Mic")), 1)
@@ -225,7 +258,7 @@ class VoiceAudioRouteTests(unittest.TestCase):
         route.start()
 
         with self.assertRaises(VoiceAudioError) as caught:
-            route.stop()
+            route.close()
 
         self.assertEqual(
             [name for name, _error in caught.exception.failures],

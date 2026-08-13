@@ -94,7 +94,7 @@ public:
     // Reserves an initial window for A+B GoHome arbitration.
     static constexpr uint32_t kChordGuardMs = 90;
     // Keeps deliberate clicks distinct from push-to-talk holds.
-    static constexpr uint32_t kVoiceHoldMs = 500;
+    static constexpr uint32_t kVoiceHoldMs = 300;
 
     void reset(bool right_pressed);
     VoiceButtonAction update(

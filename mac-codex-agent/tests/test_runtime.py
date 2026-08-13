@@ -1803,11 +1803,17 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             def __init__(self):
                 self.calls = []
 
+            def prepare(self):
+                pass
+
             def start(self):
                 self.calls.append("start")
 
             def stop(self):
                 self.calls.append("stop")
+
+            def close(self):
+                pass
 
             def write(self, samples):
                 return len(samples)
@@ -1956,11 +1962,17 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             def __init__(self):
                 self.calls = []
 
+            def prepare(self):
+                pass
+
             def start(self):
                 self.calls.append("start")
 
             def stop(self):
                 self.calls.append("stop")
+
+            def close(self):
+                pass
 
             def write(self, samples):
                 return len(samples)
@@ -2208,11 +2220,17 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             def __init__(self):
                 self.calls = []
 
+            def prepare(self):
+                pass
+
             def start(self):
                 self.calls.append("start")
 
             def stop(self):
                 self.calls.append("stop")
+
+            def close(self):
+                pass
 
             def write(self, samples):
                 return len(samples)
@@ -2302,11 +2320,17 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             def __init__(self):
                 self.calls = []
 
+            def prepare(self):
+                pass
+
             def start(self):
                 self.calls.append("start")
 
             def stop(self):
                 self.calls.append("stop")
+
+            def close(self):
+                pass
 
             def write(self, samples):
                 return len(samples)
@@ -3027,6 +3051,9 @@ class AgentControllerTests(unittest.TestCase):
                 self.calls = []
                 self.marks_recording = marks_recording
 
+            def prepare(self):
+                pass
+
             def start(self):
                 self.calls.append("start")
                 if self.marks_recording:
@@ -3034,6 +3061,9 @@ class AgentControllerTests(unittest.TestCase):
 
             def stop(self):
                 self.calls.append("stop")
+
+            def close(self):
+                pass
 
             def write(self, samples):
                 return len(samples)

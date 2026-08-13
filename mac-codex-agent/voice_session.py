@@ -122,6 +122,8 @@ class VoiceSessionService:
             self.state = VoiceState.ERROR
             raise ValueError("readiness checker returned an invalid voice state")
         self.state = state
+        if self.state is VoiceState.READY:
+            self.route.prepare()
         return self.state
 
     async def handle(self, raw: bytes) -> None:
@@ -153,7 +155,7 @@ class VoiceSessionService:
             raise
 
     async def disconnect(self) -> None:
-        await self._cleanup(VoiceState.READY)
+        await self._cleanup(VoiceState.READY, close_route=True)
 
     async def disconnect_bounded(self, timeout: float) -> bool:
         if timeout < 0:
@@ -163,6 +165,7 @@ class VoiceSessionService:
         completion = generation.completion
         interrupted = False
         forced = False
+        failure = None
         try:
             try:
                 done, _ = await asyncio.wait(
@@ -199,17 +202,22 @@ class VoiceSessionService:
                         completion, interrupted
                     )
             failure = completion.result()
-            if interrupted:
-                raise asyncio.CancelledError
-            if failure is not None:
-                raise failure
         finally:
             if completion.done():
                 self._release_cleanup_generation(generation)
+        try:
+            self.route.close()
+        except Exception as close_error:
+            if failure is None:
+                failure = close_error
+        if interrupted:
+            raise asyncio.CancelledError
+        if failure is not None:
+            raise failure
         return not forced
 
     async def close(self) -> None:
-        await self._cleanup(VoiceState.READY)
+        await self._cleanup(VoiceState.READY, close_route=True)
 
     async def _begin(self, packet) -> None:
         self._require_lifecycle_available(allow_active_session=False)
@@ -322,19 +330,29 @@ class VoiceSessionService:
         except Exception as cleanup_error:
             raise operation_error from cleanup_error
 
-    async def _cleanup(self, final_state: VoiceState) -> None:
+    async def _cleanup(
+        self, final_state: VoiceState, *, close_route: bool = False
+    ) -> None:
         generation = self._ensure_cleanup(final_state)
         completion = generation.completion
+        failure = None
+        cancelled = False
         try:
             cancelled = await self._wait_for_cleanup_completion(completion)
             failure = completion.result()
-            if cancelled:
-                raise asyncio.CancelledError
-            if failure is not None:
-                raise failure
         finally:
             if completion.done():
                 self._release_cleanup_generation(generation)
+        if close_route:
+            try:
+                self.route.close()
+            except Exception as close_error:
+                if failure is None:
+                    failure = close_error
+        if cancelled:
+            raise asyncio.CancelledError
+        if failure is not None:
+            raise failure
 
     @staticmethod
     async def _wait_for_cleanup_completion(completion, interrupted=False):
