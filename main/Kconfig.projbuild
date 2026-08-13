@@ -13,6 +13,13 @@ menu "StopWatch Unified Assistant Compatibility"
             Expose the upstream Xiaozhi asset-generator switch without importing
             Xiaozhi's standalone application Kconfig.
 
+    config CODEC_UAC_SUPPORT
+        bool "Enable optional USB Audio Class host support"
+        default n
+        help
+            Keep the upstream optional dependency condition defined while USB
+            Audio Class hosting remains disabled on StopWatch hardware.
+
     config STOPWATCH_DEBUG_COMMANDS
         bool "Enable physical USB debug commands"
         default n

@@ -19,6 +19,18 @@ def sha256(relative_path):
 
 
 class ReproducibleDependencyFirmwareContractTests(unittest.TestCase):
+    def test_optional_usb_uac_condition_has_tracked_disabled_definition(self):
+        project_kconfig = read("main/Kconfig.projbuild")
+
+        self.assertIn("config CODEC_UAC_SUPPORT", project_kconfig)
+        symbol_block = project_kconfig.split(
+            "config CODEC_UAC_SUPPORT", 1
+        )[1].split("config ", 1)[0]
+        self.assertIn("default n", symbol_block)
+
+        for defaults in ("sdkconfig.defaults", "sdkconfig.unified.defaults"):
+            self.assertNotIn("CONFIG_CODEC_UAC_SUPPORT=y", read(defaults))
+
     def test_tracked_xiaozhi_inputs_match_verified_sources(self):
         self.assertEqual(
             sha256("tools/xiaozhi/build_default_assets.py"), ASSET_SCRIPT_SHA256
