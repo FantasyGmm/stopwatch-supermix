@@ -26,6 +26,15 @@ struct EdgeControlHardwareUpdate {
     bool persist = false;
 };
 
+struct EdgeControlRect {
+    int min_x = 0;
+    int min_y = 0;
+    int max_x = -1;
+    int max_y = -1;
+
+    bool contains(int x, int y) const;
+};
+
 class EdgeControlApplyQueue {
 public:
     void push(const EdgeControlUpdate& update);
@@ -39,13 +48,22 @@ private:
 
 class EdgeControlLogic {
 public:
-    void press(int x, int y, int brightness, int volume, uint32_t now_ms);
+    void press(
+        int x,
+        int y,
+        int brightness,
+        int volume,
+        uint32_t now_ms,
+        const EdgeControlRect* exclusion = nullptr
+    );
     EdgeControlUpdate move(int x, int y, uint32_t now_ms);
     EdgeControlUpdate release(uint32_t now_ms);
     EdgeControlUpdate tick(uint32_t now_ms);
     void reset();
+    void cancelCandidate();
 
     bool active() const;
+    bool candidate() const;
     int current_value() const;
     EdgeControlSide visible_side() const;
 

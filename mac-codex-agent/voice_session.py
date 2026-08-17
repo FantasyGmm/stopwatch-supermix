@@ -9,7 +9,6 @@ from ima_adpcm import decode_ima_adpcm_block
 from voice_input_protocol import (
     AUDIO,
     BLOCK_SAMPLES,
-    BEGIN_BODY,
     EXTERNAL_MICROPHONE,
     ERROR_PAYLOAD,
     PTT_BEGIN,
@@ -73,6 +72,9 @@ class VoiceSessionService:
         key_epoch: int,
         readiness_checker=lambda: VoiceState.READY,
         sleep=asyncio.sleep,
+        transcript_source=None,
+        task_submitter=None,
+        transcript_timeout=5.0,
     ):
         self.route = route
         self.shortcut = shortcut
@@ -80,6 +82,9 @@ class VoiceSessionService:
         self._key_epoch = key_epoch
         self._readiness_checker = readiness_checker
         self._sleep = sleep
+        self._transcript_source = transcript_source
+        self._task_submitter = task_submitter
+        self._transcript_timeout = transcript_timeout
         self.state = VoiceState.READY
         self._session = None
         self._session_nonce = None
@@ -89,6 +94,9 @@ class VoiceSessionService:
         self._recent_nonces = deque(maxlen=RECENT_NONCE_LIMIT)
         self._highest_session = 0
         self._cleanup_generation = None
+        self._transcript_cursor = None
+        self._task_target = None
+        self._submission_token = None
 
     @property
     def _cleanup_task(self):
@@ -232,11 +240,19 @@ class VoiceSessionService:
             raise ValueError("session is stale")
         self._recent_nonces.append(packet.session_nonce)
         self._highest_session = packet.session
+        mode = packet.begin.mode
+        if mode == PUSH_TO_TALK and (
+            (self._transcript_source is None) != (self._task_submitter is None)
+        ):
+            raise RuntimeError("Task voice submission is unavailable")
+        if mode == PUSH_TO_TALK and self._transcript_source is not None:
+            self._transcript_cursor = self._transcript_source.mark()
+            self._task_target = self._task_submitter.snapshot(
+                packet.begin.route
+            )
+            self._submission_token = object()
         self.route.start()
         self._route_armed = True
-        _codec, mode, _sample_rate, _block_samples = BEGIN_BODY.unpack(
-            packet.payload
-        )
         if mode == PUSH_TO_TALK:
             self.shortcut.start()
             self._shortcut_armed = True
@@ -291,7 +307,30 @@ class VoiceSessionService:
             )
         ):
             raise ValueError("PTT_END summary does not match the session")
-        await self._cleanup(VoiceState.READY)
+        transcript_cursor = self._transcript_cursor
+        task_target = self._task_target
+        submission_token = self._submission_token
+        self._transcript_cursor = None
+        self._task_target = None
+        await self._cleanup(
+            VoiceState.RECORDING
+            if transcript_cursor is not None
+            else VoiceState.READY,
+            invalidate_submission=False,
+        )
+        if transcript_cursor is not None:
+            try:
+                text = await self._transcript_source.wait_after(
+                    transcript_cursor, self._transcript_timeout
+                )
+                if self._submission_token is not submission_token:
+                    raise RuntimeError("Task voice submission was cancelled")
+                await self._task_submitter.submit(task_target, text)
+            except Exception as error:
+                self.state = VoiceState.ERROR
+                raise RuntimeError("Task voice submission failed") from error
+            self._submission_token = None
+            self.state = VoiceState.READY
 
     async def _voice_error(self, packet) -> None:
         self._require_current_session(packet)
@@ -340,8 +379,14 @@ class VoiceSessionService:
             raise operation_error from cleanup_error
 
     async def _cleanup(
-        self, final_state: VoiceState, *, close_route: bool = False
+        self,
+        final_state: VoiceState,
+        *,
+        close_route: bool = False,
+        invalidate_submission: bool = True,
     ) -> None:
+        if invalidate_submission:
+            self._submission_token = None
         generation = self._ensure_cleanup(final_state)
         completion = generation.completion
         failure = None
@@ -466,6 +511,8 @@ class VoiceSessionService:
         self._session = None
         self._session_nonce = None
         self._last_sequence = None
+        self._transcript_cursor = None
+        self._task_target = None
         self.state = (
             VoiceState.ERROR
             if failures

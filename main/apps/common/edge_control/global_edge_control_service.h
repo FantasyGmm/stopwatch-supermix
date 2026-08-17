@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <lvgl.h>
+#include <optional>
 
 class GlobalEdgeControlService {
 public:
@@ -13,6 +14,7 @@ public:
     void applyPendingHardwareUpdate();
     void shutdown();
     void setEnabled(bool enabled);
+    void setTouchExclusion(std::optional<EdgeControlRect> exclusion);
 
     bool ownsTouch() const;
     bool lastReleaseConsumed() const;
@@ -28,6 +30,7 @@ private:
     bool _enabled = false;
     bool _owns_touch = false;
     bool _last_release_consumed = false;
+    std::optional<EdgeControlRect> _touch_exclusion;
     uint32_t _brightness_revision = 0;
     uint32_t _volume_revision = 0;
 

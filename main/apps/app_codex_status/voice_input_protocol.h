@@ -8,7 +8,7 @@
 
 namespace voice_input {
 
-constexpr uint8_t kProtocolVersion = 5;
+constexpr uint8_t kProtocolVersion = 6;
 constexpr uint32_t kTargetBitrate = 8192;
 constexpr uint8_t kPushToTalkCapability = 1U << 0U;
 constexpr uint8_t kExternalMicrophoneCapability = 1U << 1U;
@@ -21,7 +21,7 @@ constexpr size_t kControlAadSize = 16;
 constexpr size_t kControlBodySize = 4;
 constexpr size_t kControlSize = kControlAadSize + kControlBodySize + crypto::kTagSize;
 constexpr size_t kNotificationHeaderSize = 18;
-constexpr size_t kBeginBodySize = 6;
+constexpr size_t kBeginBodySize = 14;
 constexpr size_t kAudioPlaintextSize = 164;
 constexpr size_t kEndBodySize = 26;
 constexpr size_t kErrorBodySize = 4;
@@ -61,6 +61,7 @@ struct BeginBody {
     } mode = Mode::PushToTalk;
     uint16_t sample_rate = kSampleRate;
     uint16_t block_samples = kBlockSamples;
+    uint64_t route = 0;
 };
 
 struct EndSummary {

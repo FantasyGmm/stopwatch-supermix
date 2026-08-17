@@ -1,4 +1,4 @@
-"""Authenticated version-4 framing for production StopWatch voice input."""
+"""Authenticated version-6 framing for production StopWatch voice input."""
 
 import dataclasses
 import struct
@@ -19,7 +19,7 @@ from voice_input_crypto import (
 )
 
 
-PROTOCOL_VERSION = 5
+PROTOCOL_VERSION = 6
 READY = 1
 UNAVAILABLE = 2
 PTT_BEGIN = 1
@@ -57,7 +57,7 @@ UNAVAILABLE_REASONS = frozenset(
 CONTROL_AAD = struct.Struct("<BBBBI8s")
 CONTROL_BODY = struct.Struct("<I")
 HEADER = struct.Struct("<BBHIIIH")
-BEGIN_BODY = struct.Struct("<BBHH")
+BEGIN_BODY = struct.Struct("<BBHHQ")
 END_PAYLOAD = struct.Struct("<IIIIIIH")
 ERROR_PAYLOAD = struct.Struct("<HH")
 
@@ -87,6 +87,48 @@ class Control:
 
 
 @dataclasses.dataclass(frozen=True)
+class BeginBody:
+    route: int
+    mode: int = PUSH_TO_TALK
+    codec: int = IMA_ADPCM
+    sample_rate: int = SAMPLE_RATE
+    block_samples: int = BLOCK_SAMPLES
+
+    def pack(self) -> bytes:
+        if self.mode not in (PUSH_TO_TALK, EXTERNAL_MICROPHONE):
+            raise ValueError("invalid voice session mode")
+        if (
+            isinstance(self.route, bool)
+            or not isinstance(self.route, int)
+            or not 0 <= self.route <= 0xFFFFFFFFFFFFFFFF
+            or (self.mode == PUSH_TO_TALK and self.route == 0)
+        ):
+            raise ValueError("voice route is invalid for this session mode")
+        if (self.codec, self.sample_rate, self.block_samples) != (
+            IMA_ADPCM,
+            SAMPLE_RATE,
+            BLOCK_SAMPLES,
+        ):
+            raise ValueError("invalid production codec tuple")
+        return BEGIN_BODY.pack(
+            self.codec,
+            self.mode,
+            self.sample_rate,
+            self.block_samples,
+            self.route,
+        )
+
+    @classmethod
+    def from_payload(cls, payload: bytes) -> "BeginBody":
+        if len(payload) != BEGIN_BODY.size:
+            raise ValueError("invalid PTT_BEGIN body size")
+        codec, mode, sample_rate, block_samples, route = BEGIN_BODY.unpack(payload)
+        body = cls(route, mode, codec, sample_rate, block_samples)
+        body.pack()
+        return body
+
+
+@dataclasses.dataclass(frozen=True)
 class Notification:
     kind: int
     session: int
@@ -95,6 +137,7 @@ class Notification:
     key_epoch: int
     payload: bytes
     session_nonce: Optional[bytes] = None
+    begin: Optional[BeginBody] = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -237,19 +280,10 @@ def _validate_header_values(session: int, sequence: int, watch_ms: int) -> None:
         raise ValueError("watch_ms must be 0..4294967295")
 
 
-def _validate_begin(sequence: int, payload: bytes) -> None:
+def _validate_begin(sequence: int, payload: bytes) -> BeginBody:
     if sequence != 0:
         raise ValueError("PTT_BEGIN sequence must be zero")
-    if len(payload) != BEGIN_BODY.size:
-        raise ValueError("invalid PTT_BEGIN body size")
-    codec, mode, sample_rate, block_samples = BEGIN_BODY.unpack(payload)
-    if (
-        codec != IMA_ADPCM
-        or mode not in (PUSH_TO_TALK, EXTERNAL_MICROPHONE)
-        or sample_rate != SAMPLE_RATE
-        or block_samples != BLOCK_SAMPLES
-    ):
-        raise ValueError("invalid production codec tuple")
+    return BeginBody.from_payload(payload)
 
 
 def _validate_notification_payload(
@@ -361,6 +395,7 @@ def decode_notification(
         aad,
     )
     _validate_notification_payload(kind, sequence, payload)
+    begin = BeginBody.from_payload(payload) if kind == PTT_BEGIN else None
     return Notification(
         kind,
         session,
@@ -369,4 +404,5 @@ def decode_notification(
         key_epoch,
         payload,
         packet_nonce,
+        begin,
     )

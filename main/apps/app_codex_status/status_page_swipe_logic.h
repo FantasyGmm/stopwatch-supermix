@@ -8,6 +8,7 @@ enum class StatusPageSwipeResult {
     Codex,
     PinnedMicrophone,
     Trae,
+    OpenTaskDeck,
 };
 
 
@@ -19,7 +20,14 @@ public:
     void cancel();
 
 private:
+    enum class Axis {
+        Undecided,
+        Horizontal,
+        Vertical,
+    };
+
     bool _active = false;
+    Axis _axis = Axis::Undecided;
     int _start_x = 0;
     int _start_y = 0;
     int _last_x = 0;

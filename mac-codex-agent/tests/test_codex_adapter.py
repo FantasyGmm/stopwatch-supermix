@@ -11,6 +11,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from codex_adapter import CodexPaths, CodexStateCollector
 from task_alerts import TaskAlert, TaskAlertSnapshot
+from task_routes import route_id_for_thread
 
 
 class FakeAlertTracker:
@@ -425,6 +426,8 @@ class CodexStateCollectorTests(unittest.TestCase):
                         state="pending",
                         watch_notified=False,
                         outcome="waiting",
+                        turn_id="turn-a",
+                        last_reply="Exact stable reply A",
                     ),
                     TaskAlert(
                         id="thread-b:1",
@@ -436,6 +439,8 @@ class CodexStateCollectorTests(unittest.TestCase):
                         state="running",
                         watch_notified=True,
                         outcome="running",
+                        turn_id="turn-b",
+                        last_reply="Exact stable reply B",
                     ),
                     TaskAlert(
                         id="thread-c:1",
@@ -447,6 +452,8 @@ class CodexStateCollectorTests(unittest.TestCase):
                         state="completed",
                         watch_notified=True,
                         outcome="completed",
+                        turn_id="turn-c",
+                        last_reply="Exact stable reply C",
                     ),
                 ),
             )
@@ -489,25 +496,37 @@ class CodexStateCollectorTests(unittest.TestCase):
             snapshot["codex_alerts"],
             [
                 {
+                    "route": route_id_for_thread("thread-a"),
+                    "thread_id": "thread-a",
                     "project": "StopWatch",
                     "title": "Codex status monitor",
                     "time": "08:15",
                     "state": "pending",
                     "outcome": "waiting",
+                    "turn_id": "turn-a",
+                    "last_reply": "Exact stable reply A",
                 },
                 {
+                    "route": route_id_for_thread("thread-b"),
+                    "thread_id": "thread-b",
                     "project": "docs",
                     "title": "Update guide",
                     "time": "08:12",
                     "state": "running",
                     "outcome": "running",
+                    "turn_id": "turn-b",
+                    "last_reply": "Exact stable reply B",
                 },
                 {
+                    "route": route_id_for_thread("thread-c"),
+                    "thread_id": "thread-c",
                     "project": "webshot",
                     "title": "UI review",
                     "time": "08:08",
                     "state": "completed",
                     "outcome": "completed",
+                    "turn_id": "turn-c",
+                    "last_reply": "Exact stable reply C",
                 },
             ],
         )

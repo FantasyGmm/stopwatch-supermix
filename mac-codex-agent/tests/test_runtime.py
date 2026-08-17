@@ -29,13 +29,17 @@ from input_action_protocol import (
 )
 from protocol import EVENT_MESSAGE, STATUS_MESSAGE
 from runtime import (
+    ActiveRekeyError,
     VOICE_KEY_EPOCH,
     AgentCommand,
     AgentController,
     AgentRuntime,
+    SecureCredentialRefresh,
     SecureConnectionAuthorizer,
     _create_voice_session,
 )
+from codex_task_composer import CodexTaskComposerClient
+from task_routes import route_id_for_thread
 from voice_audio import VoiceAudioDeviceNotFound, VoiceAudioError
 from voice_driver import DriverState
 from voice_input_crypto import VoiceKeyError
@@ -57,6 +61,9 @@ from voice_input_protocol import (
     EndSummary,
 )
 from voice_session import VoiceSessionService as _VoiceSessionService, VoiceState
+
+
+TEST_TASK_ROUTE = 0x0123456789ABCDEF
 
 
 def decode_control(key, raw, *, expected_epoch=VOICE_KEY_EPOCH):
@@ -322,6 +329,450 @@ async def wait_for_messages(transport, count):
 
 
 class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_production_voice_uses_the_active_codex_task_composer(self):
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            transcript_source=object(),
+        )
+
+        self.assertIsInstance(
+            runtime._app_server_client, CodexTaskComposerClient
+        )
+
+    async def test_latest_internal_alerts_refresh_shared_voice_routes(self):
+        class Client:
+            async def close(self):
+                pass
+
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            app_server_client=Client(),
+            transcript_source=object(),
+        )
+        thread_id = "thread-selected"
+        runtime._update_task_routes(
+            {
+                "codex_alert_revision": 8,
+                "codex_alerts": [
+                    {
+                        "route": route_id_for_thread(thread_id),
+                        "thread_id": thread_id,
+                        "state": "running",
+                        "turn_id": "turn-active",
+                    }
+                ],
+            }
+        )
+
+        target = runtime._task_submitter.snapshot(
+            int(route_id_for_thread(thread_id), 16)
+        )
+        self.assertEqual(target.thread_id, thread_id)
+        self.assertEqual(target.expected_turn_id, "turn-active")
+        self.assertEqual(target.revision, 8)
+
+    async def test_completed_alert_remains_available_for_inflight_voice_revalidation(self):
+        class Client:
+            async def close(self):
+                pass
+
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            app_server_client=Client(),
+            transcript_source=object(),
+        )
+        thread_id = "thread-just-completed"
+        route = route_id_for_thread(thread_id)
+        runtime._update_task_routes(
+            {
+                "codex_alert_revision": 9,
+                "codex_alerts": [
+                    {
+                        "route": route,
+                        "thread_id": thread_id,
+                        "state": "completed",
+                        "turn_id": "turn-complete",
+                    }
+                ],
+            }
+        )
+
+        target = runtime._task_route_registry.resolve(route)
+        self.assertIsNotNone(target)
+        self.assertEqual(target.state, "completed")
+        self.assertIsNone(target.expected_turn_id)
+
+    async def test_authenticated_credential_is_injected_into_status_agent(self):
+        credential = WatchCredential(
+            bytes(range(16)),
+            b"K" * 16,
+            9,
+            b"F" * 16,
+            b"\x02" + b"W" * 32,
+        )
+
+        class Authorizer:
+            async def authorize(self, transport, publish):
+                return credential
+
+        captured = []
+
+        class StatusAgentSpy:
+            def __init__(self, collector, transport, **kwargs):
+                captured.append(kwargs)
+                self.transport = transport
+
+            async def sync_time(self):
+                pass
+
+            async def tick(self, status=None):
+                self.transport._connected = False
+
+        voice_service = type(
+            "VoiceSession",
+            (),
+            {
+                "state": VoiceState.ERROR,
+                "prepare": lambda self: asyncio.sleep(0, result=VoiceState.ERROR),
+                "disconnect": lambda self: asyncio.sleep(0),
+            },
+        )()
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            transport_factory=FakeTransportFactory([{}]),
+            secure_authorizer=Authorizer(),
+            voice_session_factory=lambda key, key_epoch: voice_service,
+        )
+
+        with patch("runtime.CodexStatusAgent", StatusAgentSpy):
+            result = await runtime._run_session()
+
+        self.assertEqual(result, "disconnected")
+        self.assertEqual(
+            captured,
+            [{"detail_key": credential.master_key, "detail_key_epoch": 9}],
+        )
+
+    async def test_active_rekey_rotates_status_agent_detail_credential(self):
+        original = WatchCredential(
+            bytes(range(16)),
+            b"K" * 16,
+            9,
+            b"F" * 16,
+            b"\x02" + b"W" * 32,
+        )
+        updated = WatchCredential(
+            original.watch_id,
+            b"N" * 16,
+            10,
+            original.fingerprint,
+            original.watch_identity_public,
+        )
+
+        class Authorizer:
+            async def authorize(self, transport, publish):
+                return original
+
+        rotations = []
+
+        class StatusAgentSpy:
+            def __init__(self, collector, transport, **kwargs):
+                self.transport = transport
+
+            async def sync_time(self):
+                pass
+
+            async def tick(self, status=None):
+                pass
+
+            def update_detail_credential(self, key, epoch):
+                rotations.append((key, epoch))
+
+        class RekeyRuntime(AgentRuntime):
+            async def _refresh_secure_credential(self, context):
+                context.credential = updated
+                context.voice_key = updated.master_key
+                context.voice_key_epoch = updated.key_epoch
+                context.transport._connected = False
+                return True
+
+        voice_service = type(
+            "VoiceSession",
+            (),
+            {
+                "state": VoiceState.ERROR,
+                "prepare": lambda self: asyncio.sleep(0, result=VoiceState.ERROR),
+                "disconnect": lambda self: asyncio.sleep(0),
+            },
+        )()
+        runtime = RekeyRuntime(
+            collector=FakeCollector(),
+            transport_factory=FakeTransportFactory([{}]),
+            secure_authorizer=Authorizer(),
+            voice_session_factory=lambda key, key_epoch: voice_service,
+            status_interval=0,
+        )
+
+        with patch("runtime.CodexStatusAgent", StatusAgentSpy):
+            result = await runtime._run_session()
+
+        self.assertEqual(result, "disconnected")
+        self.assertEqual(rotations, [(updated.master_key, updated.key_epoch)])
+
+    async def test_secure_credential_refresh_precedes_every_status_tick(self):
+        credential = WatchCredential(
+            bytes(range(16)), b"K" * 16, 9, b"F" * 16, b"\x02" + b"W" * 32
+        )
+        events = []
+
+        class Authorizer:
+            async def authorize(self, transport, publish):
+                return credential
+
+            async def refresh_if_needed(self, transport, current, publish):
+                events.append("refresh")
+                return current
+
+        class StatusAgentSpy:
+            def __init__(self, collector, transport, **kwargs):
+                self.transport = transport
+                self.detail_enabled = True
+
+            async def sync_time(self):
+                pass
+
+            async def tick(self, status=None):
+                events.append("detail" if self.detail_enabled else "compact")
+                self.transport._connected = False
+
+            def update_detail_credential(self, key, epoch):
+                events.append("rotate")
+
+            def disable_detail_credential(self):
+                events.append("disable")
+                self.detail_enabled = False
+
+        voice_service = type(
+            "VoiceSession",
+            (),
+            {
+                "state": VoiceState.ERROR,
+                "prepare": lambda self: asyncio.sleep(0, result=VoiceState.ERROR),
+                "disconnect": lambda self: asyncio.sleep(0),
+            },
+        )()
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            transport_factory=FakeTransportFactory([{}]),
+            secure_authorizer=Authorizer(),
+            voice_session_factory=lambda key, key_epoch: voice_service,
+            status_interval=0,
+        )
+
+        with patch("runtime.CodexStatusAgent", StatusAgentSpy):
+            await runtime._run_session()
+
+        self.assertEqual(events[:2], ["refresh", "detail"])
+
+    async def test_rekey_cleanup_failure_disables_detail_before_next_tick(self):
+        original = WatchCredential(
+            bytes(range(16)), b"K" * 16, 9, b"F" * 16, b"\x02" + b"W" * 32
+        )
+        updated = WatchCredential(
+            original.watch_id,
+            b"N" * 16,
+            10,
+            original.fingerprint,
+            original.watch_identity_public,
+        )
+        events = []
+
+        class Authorizer:
+            async def authorize(self, transport, publish):
+                return original
+
+            async def refresh_if_needed(self, transport, current, publish):
+                return updated
+
+        class StatusAgentSpy:
+            def __init__(self, collector, transport, **kwargs):
+                self.transport = transport
+                self.detail_enabled = True
+
+            async def sync_time(self):
+                pass
+
+            async def tick(self, status=None):
+                events.append("detail" if self.detail_enabled else "compact")
+                self.transport._connected = False
+
+            def update_detail_credential(self, key, epoch):
+                events.append(("rotate", key, epoch))
+
+            def disable_detail_credential(self):
+                events.append("disable")
+                self.detail_enabled = False
+
+        class VoiceService:
+            state = VoiceState.ERROR
+
+            async def prepare(self):
+                return VoiceState.ERROR
+
+            async def disconnect_bounded(self, timeout):
+                return False
+
+            async def disconnect(self):
+                pass
+
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            transport_factory=FakeTransportFactory([{}]),
+            secure_authorizer=Authorizer(),
+            voice_session_factory=lambda key, key_epoch: VoiceService(),
+            status_interval=0,
+        )
+
+        with patch("runtime.CodexStatusAgent", StatusAgentSpy):
+            await runtime._run_session()
+
+        self.assertEqual(events, ["disable", "compact"])
+
+    async def test_active_rekey_failure_disables_detail_before_next_tick(self):
+        credential = WatchCredential(
+            bytes(range(16)), b"K" * 16, 9, b"F" * 16, b"\x02" + b"W" * 32
+        )
+        events = []
+
+        class Authorizer:
+            async def authorize(self, transport, publish):
+                return credential
+
+            async def refresh_if_needed(self, transport, current, publish):
+                raise ActiveRekeyError("retired")
+
+        class StatusAgentSpy:
+            def __init__(self, collector, transport, **kwargs):
+                self.transport = transport
+                self.detail_enabled = True
+
+            async def sync_time(self):
+                pass
+
+            async def tick(self, status=None):
+                events.append("detail" if self.detail_enabled else "compact")
+                self.transport._connected = False
+
+            def update_detail_credential(self, key, epoch):
+                events.append("rotate")
+
+            def disable_detail_credential(self):
+                events.append("disable")
+                self.detail_enabled = False
+
+        voice_service = type(
+            "VoiceSession",
+            (),
+            {
+                "state": VoiceState.ERROR,
+                "prepare": lambda self: asyncio.sleep(0, result=VoiceState.ERROR),
+                "disconnect": lambda self: asyncio.sleep(0),
+            },
+        )()
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            transport_factory=FakeTransportFactory([{}]),
+            secure_authorizer=Authorizer(),
+            voice_session_factory=lambda key, key_epoch: voice_service,
+            status_interval=0,
+        )
+
+        with patch("runtime.CodexStatusAgent", StatusAgentSpy):
+            await runtime._run_session()
+
+        self.assertEqual(events, ["disable", "compact"])
+
+    async def test_uncertain_ticks_suppress_details_until_verified_unchanged(self):
+        credential = WatchCredential(
+            bytes(range(16)), b"K" * 16, 9, b"F" * 16, b"\x02" + b"W" * 32
+        )
+        refreshes = iter(
+            (
+                SecureCredentialRefresh(credential, verified=False),
+                RuntimeError("temporary discovery failure"),
+                SecureCredentialRefresh(credential, verified=True),
+            )
+        )
+        events = []
+
+        class Authorizer:
+            async def authorize(self, transport, publish):
+                return credential
+
+            async def refresh_if_needed(self, transport, current, publish):
+                result = next(refreshes)
+                if isinstance(result, Exception):
+                    raise result
+                return result
+
+        class StatusAgentSpy:
+            def __init__(self, collector, transport, **kwargs):
+                self.transport = transport
+                self.detail_enabled = True
+
+            async def sync_time(self):
+                pass
+
+            async def tick(self, status=None):
+                events.append("detail" if self.detail_enabled else "compact")
+                ticks = [
+                    item
+                    for item in events
+                    if item in ("detail", "compact")
+                ]
+                if len(ticks) == 3:
+                    self.transport._connected = False
+
+            def update_detail_credential(self, key, epoch):
+                events.append(("rotate", key, epoch))
+                self.detail_enabled = True
+
+            def disable_detail_credential(self):
+                events.append("disable")
+                self.detail_enabled = False
+
+        voice_service = type(
+            "VoiceSession",
+            (),
+            {
+                "state": VoiceState.ERROR,
+                "prepare": lambda self: asyncio.sleep(0, result=VoiceState.ERROR),
+                "disconnect": lambda self: asyncio.sleep(0),
+            },
+        )()
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            transport_factory=FakeTransportFactory([{}]),
+            secure_authorizer=Authorizer(),
+            voice_session_factory=lambda key, key_epoch: voice_service,
+            status_interval=0,
+        )
+
+        with patch("runtime.CodexStatusAgent", StatusAgentSpy):
+            await runtime._run_session()
+
+        self.assertEqual(
+            events,
+            [
+                "disable",
+                "compact",
+                "disable",
+                "compact",
+                ("rotate", credential.master_key, credential.key_epoch),
+                "detail",
+            ],
+        )
+
     async def test_rollout_change_publishes_before_long_heartbeat(self):
         class ChangeCollector(FakeCollector):
             def __init__(self):
@@ -814,7 +1265,8 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             Transport(), old, lambda *state: states.append(state)
         )
 
-        self.assertEqual(result, updated)
+        self.assertEqual(result.credential, updated)
+        self.assertTrue(result.verified)
         self.assertEqual(client.arguments[2], old)
         self.assertEqual(states[0][0], PairingState.REKEYING)
         self.assertEqual(states[-1][0], PairingState.PAIRED)
@@ -842,7 +1294,8 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             Transport(), credential, lambda *state: states.append(state)
         )
 
-        self.assertEqual(result, credential)
+        self.assertEqual(result.credential, credential)
+        self.assertFalse(result.verified)
         self.assertEqual(states, [])
 
     async def test_runtime_does_not_open_production_surface_before_authorization(self):
@@ -1822,7 +2275,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             7,
             0,
             100,
-            BEGIN_BODY.pack(IMA_ADPCM, PUSH_TO_TALK, 16000, 320),
+            BEGIN_BODY.pack(IMA_ADPCM, PUSH_TO_TALK, 16000, 320, TEST_TASK_ROUTE),
             b"12345678",
         )
         factory = FakeTransportFactory(
@@ -1984,7 +2437,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             9,
             0,
             100,
-            BEGIN_BODY.pack(IMA_ADPCM, PUSH_TO_TALK, 16000, 320),
+            BEGIN_BODY.pack(IMA_ADPCM, PUSH_TO_TALK, 16000, 320, TEST_TASK_ROUTE),
             b"abcdefgh",
         )
 
@@ -2236,7 +2689,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             11,
             0,
             100,
-            BEGIN_BODY.pack(IMA_ADPCM, PUSH_TO_TALK, 16000, 320),
+            BEGIN_BODY.pack(IMA_ADPCM, PUSH_TO_TALK, 16000, 320, TEST_TASK_ROUTE),
             b"abcdefgh",
         )
         drain_started = asyncio.Event()
@@ -2327,7 +2780,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             13,
             0,
             100,
-            BEGIN_BODY.pack(IMA_ADPCM, PUSH_TO_TALK, 16000, 320),
+            BEGIN_BODY.pack(IMA_ADPCM, PUSH_TO_TALK, 16000, 320, TEST_TASK_ROUTE),
             b"abcdefgh",
         )
         end = pack_notification(
@@ -2879,6 +3332,38 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.wait_for(task, 1)
 
 
+class PrivacyDocumentationContractTests(unittest.TestCase):
+    def test_readmes_document_secure_task_detail_boundary(self):
+        root = pathlib.Path(__file__).resolve().parents[2]
+        for path in (root / "README.md", root / "mac-codex-agent/README.md"):
+            with self.subTest(path=path):
+                normalized = " ".join(
+                    path.read_text(encoding="utf-8").split()
+                ).lower()
+                self.assertIn(
+                    "task names and status use the existing status channel",
+                    normalized,
+                )
+                self.assertIn(
+                    "exact last replies are encrypted and authenticated",
+                    normalized,
+                )
+                self.assertIn(
+                    "paired master key and its key epoch", normalized
+                )
+                self.assertIn(
+                    "reply plaintext is never sent or logged", normalized
+                )
+                self.assertIn("route metadata remains visible", normalized)
+                self.assertNotIn(
+                    "never oauth credentials, prompts, responses, or source code",
+                    normalized,
+                )
+                self.assertNotIn(
+                    "does not send response text to the watch", normalized
+                )
+
+
 class FakeRuntime:
     def __init__(self):
         self.commands = []
@@ -3065,7 +3550,7 @@ class AgentControllerTests(unittest.TestCase):
             12,
             0,
             100,
-            BEGIN_BODY.pack(IMA_ADPCM, PUSH_TO_TALK, 16000, 320),
+            BEGIN_BODY.pack(IMA_ADPCM, PUSH_TO_TALK, 16000, 320, TEST_TASK_ROUTE),
             b"abcdefgh",
         )
         recording_started = threading.Event()

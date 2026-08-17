@@ -215,6 +215,8 @@ void VoiceButtonDispatcher::reset(bool right_pressed)
 {
     _gate.reset(right_pressed);
     _gesture.reset();
+    _press_pending = false;
+    _press_delivered = false;
 }
 
 VoiceButtonDispatchDecision VoiceButtonDispatcher::dispatch(
@@ -249,26 +251,38 @@ VoiceButtonDispatchDecision VoiceButtonDispatcher::dispatch(
     case VoiceButtonAction::ShortClick:
         break;
     case VoiceButtonAction::Press:
+        _press_pending = true;
         if (sink) {
             sink->handle_button(true, now_ms);
+            _press_delivered = true;
         }
         break;
     case VoiceButtonAction::Release:
-        if (sink) {
+        if (_press_delivered && sink) {
             sink->handle_button(false, now_ms);
         }
+        _press_pending = false;
+        _press_delivered = false;
         break;
     case VoiceButtonAction::CancelVoice:
         if (sink) {
             sink->cancel_for_home(now_ms);
         }
+        _press_pending = false;
+        _press_delivered = false;
         break;
     case VoiceButtonAction::CancelHome:
         if (sink) {
             sink->cancel_for_home(now_ms);
         }
+        _press_pending = false;
+        _press_delivered = false;
         return VoiceButtonDispatchDecision::Close;
     case VoiceButtonAction::None:
+        if (_press_pending && !_press_delivered && right_pressed && sink) {
+            sink->handle_button(true, now_ms);
+            _press_delivered = true;
+        }
         break;
     }
     return VoiceButtonDispatchDecision::Continue;
@@ -398,6 +412,9 @@ void VoiceInputController::shutdown()
         if (_capture_pipeline != nullptr) {
             _capture_pipeline->close();
         }
+        std::lock_guard<std::mutex> lock(_mutex);
+        _selected_task_route = 0;
+        _session_task_route = 0;
         return;
     }
     _shutdown_requested = true;
@@ -437,6 +454,10 @@ void VoiceInputController::shutdown()
     stop_transmitter_bounded();
     _capture_pipeline->close();
     reset_session(false, true);
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        _selected_task_route = 0;
+    }
     _producer_worker_failed = false;
     _initialized = false;
 }
@@ -506,6 +527,13 @@ void VoiceInputController::set_ready(
     if (!_producer_running.load() && !_terminal_pending) {
         _ui_state = VoiceInputUiState::Ready;
     }
+}
+
+bool VoiceInputController::set_task_route(uint64_t route)
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    _selected_task_route = route;
+    return route != 0;
 }
 
 void VoiceInputController::handle_connection_epoch(uint32_t connection_epoch)
@@ -939,9 +967,16 @@ bool VoiceInputController::start_session(
     }
     {
         std::lock_guard<std::mutex> lock(_mutex);
-        if (!_ready.load() || !_session.press(now_ms)) {
+        if (!_ready.load() ||
+            (mode == voice_input::BeginBody::Mode::PushToTalk &&
+             _selected_task_route == 0)) {
+            _ui_state = VoiceInputUiState::Error;
             return false;
         }
+        if (!_session.press(now_ms)) {
+            return false;
+        }
+        _session_task_route = _selected_task_route;
         _outgoing.clear();
         _queued_audio_packets = 0;
         _graceful_stop = false;
@@ -1010,6 +1045,7 @@ bool VoiceInputController::prepare_begin(
         logical.session_nonce = _session_nonce;
         voice_input::BeginBody begin = {};
         begin.mode = mode;
+        begin.route = _session_task_route;
         logical.payload_size = voice_input::encode_begin_body(
             begin, logical.payload.data(), logical.payload.size());
         voice_input::Notification wire = {};
@@ -1320,6 +1356,7 @@ void VoiceInputController::reset_session(
         _session.set_ready(true);
     }
     _session_nonce = {};
+    _session_task_route = 0;
     if (clear_notifications) {
         _outgoing.clear();
     }

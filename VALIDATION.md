@@ -66,9 +66,9 @@ git diff --check
   probe was skipped because its foreground-app precondition was not present.
 - Focused input protocol and desktop submission: 37 tests passed; the same live
   probe was the only skip.
-- Offline contract: all 58 stages were present and correctly numbered, with 63
+- Offline contract: all 62 stages were present and correctly numbered, with 63
   exact host compile/run pairs.
-- Real host execution: all 58 stages passed with `IDF_PATH` pointing at a local
+- Real host execution: the prior 58-stage baseline passed with `IDF_PATH` pointing at a local
   ESP-IDF 5.5.4 checkout.
 - Firmware clean build: a fresh tracked checkout bootstrapped its locked
   dependencies and produced the ESP32-S3 application and assets successfully.

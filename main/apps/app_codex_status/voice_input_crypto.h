@@ -26,6 +26,7 @@ enum class Domain : uint8_t {
     InputReady = 0x21,
     InputSubmit = 0x22,
     InputForceSteer = 0x23,
+    TaskDetail = 0x24,
 };
 
 bool derive_nonce(

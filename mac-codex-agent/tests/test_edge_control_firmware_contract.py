@@ -149,6 +149,42 @@ class EdgeControlFirmwareContractTests(unittest.TestCase):
         self.assertIn("_page_swipe.cancel()", source)
         self.assertIn("_last_page_touch_state = LV_INDEV_STATE_REL", source)
 
+    def test_codex_scopes_task_deck_exclusion_to_its_lifecycle(self):
+        service_header = (
+            ROOT
+            / "main"
+            / "apps"
+            / "common"
+            / "edge_control"
+            / "global_edge_control_service.h"
+        ).read_text(encoding="utf-8")
+        codex = (
+            ROOT / "main" / "apps" / "app_codex_status" / "app_codex_status.cpp"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(
+            "void setTouchExclusion(std::optional<EdgeControlRect> exclusion)",
+            service_header,
+        )
+        self.assertIn(
+            "constexpr EdgeControlRect kTaskDeckTouchExclusion = {183, 423, 283, 465}",
+            codex,
+        )
+        on_open = codex.index("void AppCodexStatus::onOpen()")
+        on_close = codex.index("void AppCodexStatus::onClose()")
+        destroy_view = codex.index("void AppCodexStatus::destroy_view()")
+        set_exclusion = codex.index(
+            "setTouchExclusion(kTaskDeckTouchExclusion)", on_open
+        )
+        clear_on_close = codex.index("setTouchExclusion(std::nullopt)", on_close)
+        clear_on_destroy = codex.index(
+            "setTouchExclusion(std::nullopt)", destroy_view
+        )
+        self.assertLess(on_open, set_exclusion)
+        self.assertLess(set_exclusion, on_close)
+        self.assertLess(on_close, clear_on_close)
+        self.assertLess(destroy_view, clear_on_destroy)
+
     def test_watch_face_cancels_raw_gesture_when_global_touch_is_owned(self):
         source = (
             ROOT / "main" / "apps" / "app_watch_face" / "view" / "watch_face_manager.cpp"

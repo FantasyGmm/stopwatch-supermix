@@ -14,12 +14,25 @@ constexpr uint32_t kHideDelayMs = 700;
 
 } // namespace
 
-void EdgeControlLogic::press(int x, int y, int brightness, int volume, uint32_t now_ms)
+bool EdgeControlRect::contains(int x, int y) const
+{
+    return x >= min_x && x <= max_x && y >= min_y && y <= max_y;
+}
+
+void EdgeControlLogic::press(
+    int x,
+    int y,
+    int brightness,
+    int volume,
+    uint32_t now_ms,
+    const EdgeControlRect* exclusion
+)
 {
     reset();
     _start_x = x;
     _start_y = y;
-    _candidate = y > kTopExclusionPx
+    _candidate = y > kTopExclusionPx &&
+        (exclusion == nullptr || !exclusion->contains(x, y))
         ? (x < kHalfWidthPx ? EdgeControlSide::Brightness : EdgeControlSide::Volume)
         : EdgeControlSide::None;
     _start_value = normalize_visual(_candidate, _candidate == EdgeControlSide::Brightness ? brightness : volume);
@@ -157,6 +170,18 @@ bool EdgeControlApplyQueue::pending() const
 bool EdgeControlLogic::active() const
 {
     return _active != EdgeControlSide::None;
+}
+
+bool EdgeControlLogic::candidate() const
+{
+    return _candidate != EdgeControlSide::None;
+}
+
+void EdgeControlLogic::cancelCandidate()
+{
+    if (_active == EdgeControlSide::None) {
+        _candidate = EdgeControlSide::None;
+    }
 }
 
 int EdgeControlLogic::current_value() const

@@ -8,6 +8,8 @@ import hashlib
 import json
 import logging
 import math
+import re
+import secrets
 import threading
 import time
 from typing import Any, Callable, Mapping, Optional
@@ -31,6 +33,11 @@ from secure_pairing_wire import (
     encode_pairing_confirmation,
     encode_pairing_request,
 )
+from task_detail_crypto import (
+    MAX_TASK_REVISION,
+    encrypt_task_detail,
+)
+from task_routes import TaskRouteRegistry
 
 
 LOGGER = logging.getLogger(__name__)
@@ -50,25 +57,19 @@ MAX_STATUS_WRITE_SIZE = 256
 FRAME_BURST_SIZE = 8
 FRAME_BURST_PAUSE_SECONDS = 0.02
 MAX_WATCH_ALERTS = 8
+MAX_CODEX_MODEL_LENGTH = 64
+MAX_CODEX_EFFORT_LENGTH = 32
 MAX_PROJECT_LENGTH = 32
 MAX_TITLE_LENGTH = 48
+MAX_TASK_DETAIL_BYTES = 12 * 1024
+MAX_TASK_DETAIL_CHUNK_BYTES = 1300
+TASK_DETAIL_TRUNCATION_MARKER = "\n\n[内容过长，手表仅显示前 12 KiB]"
 MAX_DETAIL_LENGTH = 72
 MAX_TRAE_TASKS = 4
 MAX_TRAE_TASK_COUNT = 65535
 MAX_TRAE_REVISION = 2147483647
 MAX_TRAE_MESSAGE_SIZE = 1024
 TRAE_HEARTBEAT_SECONDS = 6.0
-_CODEX_STATUS_KEYS = (
-    "codex_model",
-    "codex_effort",
-    "codex_5h_left_pct",
-    "codex_week_left_pct",
-    "codex_alert_pending",
-    "codex_alert_running",
-    "codex_alert_completed",
-    "codex_alert_revision",
-    "codex_alerts",
-)
 VOICE_AUDIO_FRAME_MS = 20
 VOICE_STARTUP_BUFFER_MS = 10_000
 VOICE_NOTIFICATION_QUEUE_SIZE = (
@@ -78,6 +79,14 @@ GATT_OPERATION_TIMEOUT_SECONDS = 5.0
 PAIRING_CONFIRM_TIMEOUT_SECONDS = 65.0
 PAIRING_RESPONSE_QUEUE_SIZE = 8
 INPUT_NOTIFICATION_QUEUE_SIZE = 8
+_TASK_ROUTE_PATTERN = re.compile(r"^[0-9a-f]{16}$")
+_CODEX_NUMERIC_LIMITS = {
+    "codex_5h_left_pct": 100,
+    "codex_week_left_pct": 100,
+    "codex_alert_pending": 65535,
+    "codex_alert_running": 65535,
+    "codex_alert_completed": 65535,
+}
 
 
 @dataclasses.dataclass(frozen=True)
@@ -135,6 +144,13 @@ def _utc_offset_minutes() -> int:
     return int(offset.total_seconds() // 60) if offset is not None else 0
 
 
+def _new_task_detail_nonce() -> bytes:
+    nonce = bytes(8)
+    while not any(nonce):
+        nonce = secrets.token_bytes(8)
+    return nonce
+
+
 class CodexStatusAgent:
     def __init__(
         self,
@@ -143,6 +159,9 @@ class CodexStatusAgent:
         time_ms: Callable[[], int] = _unix_time_ms,
         utc_offset_minutes: Callable[[], int] = _utc_offset_minutes,
         monotonic: Callable[[], float] = time.monotonic,
+        detail_key=None,
+        detail_key_epoch=None,
+        detail_nonce_factory: Callable[[], bytes] = _new_task_detail_nonce,
     ):
         self.collector = collector
         self.transport = transport
@@ -153,6 +172,51 @@ class CodexStatusAgent:
         self._last_trae_sent_at = None
         self._delivered_alert_ids = set()
         self._acknowledged_alert_ids = set()
+        self._task_detail_cache = {}
+        self._task_detail_sequence = 0
+        self._task_detail_key = None
+        self._task_detail_key_epoch = None
+        self._task_detail_nonce = None
+        self._task_detail_nonce_factory = detail_nonce_factory
+        self._task_detail_used_nonces = set()
+        # Collision tombstones intentionally live for this connected Agent
+        # instance. A reconnect creates a fresh authoritative registry.
+        self._task_route_registry = TaskRouteRegistry()
+        self.update_detail_credential(detail_key, detail_key_epoch)
+
+    def update_detail_credential(self, detail_key, detail_key_epoch) -> None:
+        self._task_detail_cache = {}
+        self._task_detail_sequence = 0
+        self._task_detail_key = None
+        self._task_detail_key_epoch = None
+        self._task_detail_nonce = None
+        if (
+            isinstance(detail_key, bytes)
+            and len(detail_key) == 16
+            and isinstance(detail_key_epoch, int)
+            and not isinstance(detail_key_epoch, bool)
+            and 1 <= detail_key_epoch <= 0xFFFFFFFF
+        ):
+            for _attempt in range(16):
+                try:
+                    nonce = self._task_detail_nonce_factory()
+                except Exception:
+                    break
+                if (
+                    isinstance(nonce, bytes)
+                    and len(nonce) == 8
+                    and any(nonce)
+                    and nonce not in self._task_detail_used_nonces
+                ):
+                    self._task_detail_used_nonces.add(nonce)
+                    self._task_detail_key = detail_key
+                    self._task_detail_key_epoch = detail_key_epoch
+                    self._task_detail_nonce = nonce
+                    break
+
+    def disable_detail_credential(self) -> None:
+        """Fail closed without affecting compact plaintext status updates."""
+        self.update_detail_credential(None, None)
 
     async def sync_time(self) -> None:
         payload = {
@@ -173,7 +237,10 @@ class CodexStatusAgent:
             if isinstance(raw_alert_ids, (list, tuple))
             else ()
         )
-        watch_status = _watch_codex_status(status)
+        active_alerts = _normalized_active_alerts(
+            status, route_registry=self._task_route_registry
+        )
+        watch_status = _watch_codex_status(status, active_alerts=active_alerts)
         await self.transport.send_json(
             json.dumps(
                 watch_status,
@@ -182,6 +249,62 @@ class CodexStatusAgent:
             ),
             STATUS_MESSAGE,
         )
+
+        retained_routes = {
+            item["route"]
+            for item in watch_status.get("codex_alerts", [])
+        }
+        details = (
+            task_detail_messages(
+                status,
+                retained_routes=retained_routes,
+                active_alerts=active_alerts,
+            )
+            if self._task_detail_key is not None
+            else []
+        )
+        details_by_route = {}
+        for detail in details:
+            details_by_route.setdefault(detail["route"], []).append(detail)
+        self._task_detail_cache = {
+            route: fingerprint
+            for route, fingerprint in self._task_detail_cache.items()
+            if route in details_by_route
+        }
+        for route, messages in details_by_route.items():
+            revision = messages[0]["revision"]
+            bounded_text = "".join(message["text"] for message in messages)
+            fingerprint = (
+                route,
+                revision,
+                hashlib.sha256(bounded_text.encode("utf-8")).hexdigest(),
+            )
+            if self._task_detail_cache.get(route) == fingerprint:
+                continue
+            for message in messages:
+                sequence = self._next_task_detail_sequence()
+                envelope = encrypt_task_detail(
+                    self._task_detail_key,
+                    key_epoch=self._task_detail_key_epoch,
+                    exchange_nonce=self._task_detail_nonce,
+                    sequence=sequence,
+                    route=route,
+                    revision=message["revision"],
+                    index=message["index"],
+                    count=message["count"],
+                    text=message["text"],
+                )
+                if len(_compact_json_bytes(envelope)) > MAX_MESSAGE_SIZE:
+                    raise ValueError("encrypted task detail exceeds BLE limit")
+                await self.transport.send_json(
+                    json.dumps(
+                        envelope,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                    STATUS_MESSAGE,
+                )
+            self._task_detail_cache[route] = fingerprint
 
         if any(str(key).startswith("trae_") for key in status):
             trae_status = _watch_trae_status(status)
@@ -240,35 +363,236 @@ class CodexStatusAgent:
                 self._acknowledged_alert_ids.update(unacknowledged_ids)
         return status
 
+    def _next_task_detail_sequence(self) -> int:
+        if self._task_detail_sequence >= 0xFFFFFFFF:
+            raise OverflowError("task detail sequence exhausted")
+        self._task_detail_sequence += 1
+        return self._task_detail_sequence
 
-def _watch_codex_status(status: Mapping[str, object]):
-    result = {
-        key: status[key]
-        for key in _CODEX_STATUS_KEYS
-        if key in status
-    }
+
+def _normalized_active_alerts(status, route_registry=None):
+    if not isinstance(status, Mapping):
+        return []
+    alerts = status.get("codex_alerts")
+    if not isinstance(alerts, list):
+        return []
+    observed_routes = [
+        item["route"]
+        for item in alerts
+        if isinstance(item, dict)
+        and isinstance(item.get("route"), str)
+        and _TASK_ROUTE_PATTERN.fullmatch(item["route"]) is not None
+    ]
+    registry = route_registry or TaskRouteRegistry()
+    registry.update([], observed_routes=observed_routes)
+    return [
+        item
+        for item in alerts
+        if isinstance(item, dict)
+        and item.get("state") in ("pending", "running")
+        and isinstance(item.get("route"), str)
+        and _TASK_ROUTE_PATTERN.fullmatch(item["route"]) is not None
+        and not registry.is_tombstoned(item["route"])
+    ]
+
+
+def _watch_codex_status(
+    status: Mapping[str, object], active_alerts=None
+):
+    result = {}
+    if "codex_model" in status:
+        result["codex_model"] = _strict_bounded_text(
+            status.get("codex_model"), MAX_CODEX_MODEL_LENGTH
+        ) or ""
+    if "codex_effort" in status:
+        result["codex_effort"] = _strict_bounded_text(
+            status.get("codex_effort"), MAX_CODEX_EFFORT_LENGTH
+        ) or ""
+    for key, maximum in _CODEX_NUMERIC_LIMITS.items():
+        if key not in status:
+            continue
+        value = status.get(key)
+        if value is None and key in (
+            "codex_5h_left_pct",
+            "codex_week_left_pct",
+        ):
+            result[key] = None
+        else:
+            result[key] = min(_nonnegative_integer(value), maximum)
+    if "codex_alert_revision" in status:
+        result["codex_alert_revision"] = _task_revision(
+            status.get("codex_alert_revision")
+        )
     alerts = status.get("codex_alerts")
     if isinstance(alerts, list):
+        normalized_alerts = (
+            _normalized_active_alerts(status)
+            if active_alerts is None
+            else active_alerts
+        )
+        display_alerts = []
+        for item in normalized_alerts:
+            project = _strict_bounded_text(
+                item.get("project"), MAX_PROJECT_LENGTH
+            )
+            title = _strict_bounded_text(item.get("title"), MAX_TITLE_LENGTH)
+            if project is None or title is None:
+                continue
+            display_alerts.append(
+                {
+                    "route": item["route"],
+                    "project": project,
+                    "title": title,
+                    "state": item["state"],
+                }
+            )
+        display_alerts.sort(
+            key=lambda item: 0 if item.get("state") == "pending" else 1
+        )
         result["codex_alerts"] = [
-            {
-                "project": str(item.get("project") or "")[:MAX_PROJECT_LENGTH],
-                "title": str(item.get("title") or "")[:MAX_TITLE_LENGTH],
-                "time": str(item.get("time") or ""),
-                "state": str(item.get("state") or ""),
-                "outcome": (
-                    str(item.get("outcome"))
-                    if item.get("outcome") in ("completed", "waiting", "running")
-                    else "completed"
-                ),
-            }
-            for item in alerts[:MAX_WATCH_ALERTS]
-            if isinstance(item, dict)
+            item
+            for item in display_alerts[:MAX_WATCH_ALERTS]
         ]
         while result["codex_alerts"] and len(
-            json.dumps(result, separators=(",", ":")).encode("utf-8")
+            _compact_json_bytes(result)
         ) > MAX_MESSAGE_SIZE:
             result["codex_alerts"].pop()
+    if len(_compact_json_bytes(result)) > MAX_MESSAGE_SIZE:
+        result.pop("codex_effort", None)
+        result.pop("codex_model", None)
+    if len(_compact_json_bytes(result)) > MAX_MESSAGE_SIZE:
+        result = {
+            key: result[key]
+            for key in tuple(_CODEX_NUMERIC_LIMITS) + ("codex_alert_revision",)
+            if key in result
+        }
+        if isinstance(alerts, list):
+            result["codex_alerts"] = []
     return result
+
+
+def _bounded_task_detail(text: str) -> Optional[str]:
+    prefix = []
+    size = 0
+    for character in text:
+        try:
+            encoded = character.encode("utf-8", errors="strict")
+        except UnicodeEncodeError:
+            return None
+        if size + len(encoded) > MAX_TASK_DETAIL_BYTES:
+            return "".join(prefix) + TASK_DETAIL_TRUNCATION_MARKER
+        prefix.append(character)
+        size += len(encoded)
+    return text
+
+
+def _task_detail_chunks(
+    route: str,
+    revision: int,
+    text: str,
+    max_size: int,
+):
+    if max_size < 1:
+        return []
+    if not text:
+        empty_message = {
+            "type": "task_detail",
+            "route": route,
+            "revision": revision,
+            "index": 0,
+            "count": 1,
+            "text": "",
+        }
+        return [""] if len(_compact_json_bytes(empty_message)) <= max_size else []
+    chunks = []
+    characters = []
+    chunk_size = 0
+    byte_limit = min(MAX_TASK_DETAIL_CHUNK_BYTES, max_size)
+    for character in text:
+        encoded = character.encode("utf-8", errors="strict")
+        if characters and chunk_size + len(encoded) > byte_limit:
+            chunks.append("".join(characters))
+            characters = []
+            chunk_size = 0
+        if len(encoded) > byte_limit:
+            return []
+        characters.append(character)
+        chunk_size += len(encoded)
+    if characters:
+        chunks.append("".join(characters))
+    return chunks
+
+
+def task_detail_messages(
+    status,
+    max_size=MAX_MESSAGE_SIZE,
+    retained_routes=None,
+    active_alerts=None,
+):
+    """Return detail payloads with at most 12 KiB of reply plus a marker."""
+    if not isinstance(status, Mapping):
+        return []
+    revision = _task_revision(status.get("codex_alert_revision"))
+    alerts = status.get("codex_alerts")
+    if not isinstance(alerts, list):
+        return []
+    messages = []
+    normalized_alerts = (
+        _normalized_active_alerts(status)
+        if active_alerts is None
+        else active_alerts
+    )
+    if retained_routes is None:
+        compact_status = _watch_codex_status(status)
+        retained_routes = {
+            item["route"]
+            for item in compact_status.get("codex_alerts", [])
+        }
+    allowed_routes = set(retained_routes)
+    for alert in normalized_alerts:
+        route = alert["route"]
+        if route not in allowed_routes:
+            continue
+        reply = alert.get("last_reply")
+        if not isinstance(reply, str):
+            continue
+        bounded = _bounded_task_detail(reply)
+        if bounded is None:
+            continue
+        chunks = _task_detail_chunks(route, revision, bounded, max_size)
+        count = len(chunks)
+        messages.extend(
+            {
+                "type": "task_detail",
+                "route": route,
+                "revision": revision,
+                "index": index,
+                "count": count,
+                "text": chunk,
+            }
+            for index, chunk in enumerate(chunks)
+        )
+    return messages
+
+
+def _task_revision(value) -> int:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or not 0 <= value <= MAX_TASK_REVISION
+    ):
+        return 0
+    return value
+
+
+def _strict_bounded_text(value, limit):
+    if not isinstance(value, str):
+        return None
+    try:
+        value.encode("utf-8", errors="strict")
+    except UnicodeEncodeError:
+        return None
+    return value[:limit]
 
 
 def _watch_trae_status(status: Mapping[str, object]):

@@ -30,6 +30,7 @@ from app_state import (
     UserDefaultsPreferences,
 )
 from codex_adapter import CodexStateCollector
+from codex_task_composer import CodexTaskComposerClient
 from combined_collector import CompositeStateCollector
 from pairing_client import PairingClient, WatchCredential
 from codex_submit import CodexSubmitController, MacOSCodexAccessibility
@@ -39,7 +40,10 @@ from input_action_protocol import (
     encode_ready as encode_input_ready,
 )
 from task_alerts import TaskAlertTracker
+from task_routes import TaskRouteRegistry, TaskRouteTarget, route_id_for_thread
+from task_voice_submitter import TaskVoiceSubmitter
 from trae_adapter import TraeStateCollector
+from typeless_transcripts import TypelessTranscriptSource
 from watch_credentials import WatchCredentialStore
 from voice_audio import (
     VoiceAudioBridge,
@@ -101,6 +105,14 @@ def _status_publication_view(status):
 
 class ActiveRekeyError(RuntimeError):
     """The watch confirmed a new epoch but active rekey did not complete."""
+
+
+@dataclasses.dataclass(frozen=True)
+class SecureCredentialRefresh:
+    """Credential retained for voice plus its task-detail epoch confidence."""
+
+    credential: WatchCredential
+    verified: bool
 
 
 @dataclasses.dataclass
@@ -242,13 +254,13 @@ class SecureConnectionAuthorizer:
         transport,
         credential: WatchCredential,
         publish,
-    ) -> WatchCredential:
+    ) -> SecureCredentialRefresh:
         watch_suffix = credential.watch_id.hex()[-4:].upper()
         try:
             discovery = await transport.discover_watch()
         except Exception as error:
             LOGGER.warning("Active watch epoch check failed: %s", error)
-            return credential
+            return SecureCredentialRefresh(credential, verified=False)
         identity = await _run_in_daemon_thread(
             self._identity_store.load_or_create
         )
@@ -266,7 +278,7 @@ class SecureConnectionAuthorizer:
                     "active watch identity does not match Keychain"
                 )
             if discovery.key_epoch == credential.key_epoch:
-                return credential
+                return SecureCredentialRefresh(credential, verified=True)
             if discovery.key_epoch < credential.key_epoch:
                 raise PermissionError("watch credential epoch rolled back")
             publish(
@@ -297,7 +309,7 @@ class SecureConnectionAuthorizer:
                 watch_suffix,
                 identity.display_name,
             )
-            return updated
+            return SecureCredentialRefresh(updated, verified=True)
         except Exception as error:
             publish(
                 PairingState.ERROR,
@@ -344,6 +356,9 @@ def _blackhole_receipt_present() -> bool:
 def _create_voice_session(
     key: bytes,
     key_epoch: int = VOICE_KEY_EPOCH,
+    *,
+    transcript_source=None,
+    task_submitter=None,
 ) -> VoiceSessionService:
     bridge = VoiceAudioBridge()
     route = VoiceAudioRoute(bridge)
@@ -370,6 +385,8 @@ def _create_voice_session(
         key,
         key_epoch=key_epoch,
         readiness_checker=readiness,
+        transcript_source=transcript_source,
+        task_submitter=task_submitter,
     )
 
 
@@ -397,6 +414,10 @@ class AgentRuntime:
         submit_controller_factory=None,
         accessibility_checker=None,
         typeless_checker=None,
+        task_route_registry=None,
+        app_server_client=None,
+        transcript_source=None,
+        task_submitter=None,
     ):
         self._collector = collector
         self._transport_factory = transport_factory
@@ -418,6 +439,14 @@ class AgentRuntime:
             accessibility_checker or _is_accessibility_trusted
         )
         self._typeless_checker = typeless_checker or _is_typeless_running
+        self._task_route_registry = task_route_registry or TaskRouteRegistry()
+        self._app_server_client = (
+            app_server_client or CodexTaskComposerClient()
+        )
+        self._transcript_source = transcript_source or TypelessTranscriptSource()
+        self._task_submitter = task_submitter or TaskVoiceSubmitter(
+            self._task_route_registry, self._app_server_client
+        )
         self._state_lock = threading.Lock()
         self._snapshot = AgentSnapshot(
             ConnectionState.SCANNING
@@ -677,6 +706,7 @@ class AgentRuntime:
             with self._command_lock:
                 self._loop = None
                 self._commands = None
+            await self._app_server_client.close()
 
     async def _collect_status(self) -> None:
         while True:
@@ -697,6 +727,7 @@ class AgentRuntime:
                 )
                 self._latest_status = status
                 self._latest_status_publication_view = publication_view
+                self._update_task_routes(status)
                 if status_changed:
                     codex = CodexSnapshot.from_status(status)
                     trae = TraeSnapshot.from_status(status)
@@ -738,6 +769,49 @@ class AgentRuntime:
                     )
                     await asyncio.sleep(self._status_interval)
 
+    def _update_task_routes(self, status) -> None:
+        alerts = status.get("codex_alerts")
+        revision = status.get("codex_alert_revision", 0)
+        if isinstance(revision, bool) or not isinstance(revision, int) or revision < 0:
+            revision = 0
+        targets = []
+        observed_routes = []
+        if isinstance(alerts, list):
+            for alert in alerts:
+                if not isinstance(alert, dict):
+                    continue
+                route = alert.get("route")
+                thread_id = alert.get("thread_id")
+                state = alert.get("state")
+                if isinstance(route, str):
+                    observed_routes.append(route)
+                if (
+                    not isinstance(thread_id, str)
+                    or not thread_id
+                    or state not in ("pending", "running", "completed")
+                ):
+                    continue
+                derived_route = route_id_for_thread(thread_id)
+                if route != derived_route:
+                    continue
+                targets.append(
+                    TaskRouteTarget(
+                        route=derived_route,
+                        thread_id=thread_id,
+                        state=state,
+                        expected_turn_id=(
+                            alert.get("turn_id") if state == "running" else None
+                        ),
+                        revision=revision,
+                    )
+                )
+        try:
+            self._task_route_registry.update(
+                targets, observed_routes=observed_routes
+            )
+        except ValueError:
+            self._task_route_registry.update(())
+
     async def _run_session(self) -> str:
         context = _BleSessionContext(self._transport_factory())
         transport = context.transport
@@ -756,11 +830,17 @@ class AgentRuntime:
                 context.voice_key = credential.master_key
                 context.voice_key_epoch = credential.key_epoch
             self._transition(ConnectionState.CONNECTED)
-            status_agent = CodexStatusAgent(self._collector, transport)
+            status_agent = CodexStatusAgent(
+                self._collector,
+                transport,
+                detail_key=context.voice_key,
+                detail_key_epoch=context.voice_key_epoch,
+            )
             await status_agent.sync_time()
             await self._prepare_voice(context)
             if self._status_ready is not None:
                 await self._status_ready.wait()
+            task_details_enabled = context.voice_key is not None
             while transport.connected:
                 if self._voice_refresh_requested.is_set():
                     self._voice_refresh_requested.clear()
@@ -769,8 +849,25 @@ class AgentRuntime:
                 if failure is not None:
                     await self._isolate_voice_failure(context, failure)
                 sent_generation = self._status_generation
+                detail_credential = (
+                    context.voice_key,
+                    context.voice_key_epoch,
+                )
+                detail_safe = await self._refresh_secure_credential(context)
+                if detail_safe is False:
+                    status_agent.disable_detail_credential()
+                    task_details_enabled = False
+                elif (
+                    not task_details_enabled
+                    or detail_credential
+                    != (context.voice_key, context.voice_key_epoch)
+                ):
+                    status_agent.update_detail_credential(
+                        context.voice_key,
+                        context.voice_key_epoch,
+                    )
+                    task_details_enabled = context.voice_key is not None
                 await status_agent.tick(status=dict(self._latest_status))
-                await self._refresh_secure_credential(context)
                 failure = await self._wait_for_status_interval(
                     transport,
                     ignore_voice_failure=context.voice_failed,
@@ -787,14 +884,14 @@ class AgentRuntime:
 
     async def _refresh_secure_credential(
         self, context: _BleSessionContext
-    ) -> None:
+    ) -> bool:
         if self._secure_authorizer is None or context.credential is None:
-            return
+            return True
         refresh = getattr(self._secure_authorizer, "refresh_if_needed", None)
         if refresh is None:
-            return
+            return True
         try:
-            updated = await refresh(
+            refresh_result = await refresh(
                 context.transport,
                 context.credential,
                 self._transition_pairing,
@@ -803,22 +900,30 @@ class AgentRuntime:
             if not context.voice_failed:
                 await self._isolate_voice_failure(context, error)
             LOGGER.exception("Active Agent rekey failed; status remains active")
-            return
+            return False
         except Exception as error:
             LOGGER.warning(
-                "Active Agent epoch check deferred; existing voice remains active: %s",
+                "Active Agent epoch check unverified; task details paused: %s",
                 error,
             )
-            return
+            return False
+        if isinstance(refresh_result, SecureCredentialRefresh):
+            if not refresh_result.verified:
+                return False
+            updated = refresh_result.credential
+        else:
+            # Compatibility for injected test/development authorizers. The
+            # production authorizer always returns SecureCredentialRefresh.
+            updated = refresh_result
         if updated == context.credential:
-            return
-        await self._replace_voice_credential(context, updated)
+            return True
+        return await self._replace_voice_credential(context, updated)
 
     async def _replace_voice_credential(
         self,
         context: _BleSessionContext,
         credential: WatchCredential,
-    ) -> None:
+    ) -> bool:
         context.input_active = False
         await self._bounded_cleanup(
             context.transport.disable_input_actions(),
@@ -841,7 +946,7 @@ class AgentRuntime:
                     VoiceState.ERROR,
                     "Voice session could not restart after rekey",
                 )
-                return
+                return False
             context.voice_service = None
         if retired_consumer is not None:
             await self._bounded_cleanup(
@@ -853,6 +958,7 @@ class AgentRuntime:
         context.voice_key_epoch = credential.key_epoch
         context.voice_failed = False
         await self._prepare_voice(context)
+        return True
 
     async def _prepare_voice(self, context: _BleSessionContext) -> None:
         key = context.voice_key
@@ -876,11 +982,26 @@ class AgentRuntime:
 
         try:
             if self._secure_authorizer is None:
-                service = self._voice_session_factory(key)
+                try:
+                    service = self._voice_session_factory(
+                        key,
+                        transcript_source=self._transcript_source,
+                        task_submitter=self._task_submitter,
+                    )
+                except TypeError:
+                    service = self._voice_session_factory(key)
             else:
-                service = self._voice_session_factory(
-                    key, key_epoch=context.voice_key_epoch
-                )
+                try:
+                    service = self._voice_session_factory(
+                        key,
+                        key_epoch=context.voice_key_epoch,
+                        transcript_source=self._transcript_source,
+                        task_submitter=self._task_submitter,
+                    )
+                except TypeError:
+                    service = self._voice_session_factory(
+                        key, key_epoch=context.voice_key_epoch
+                    )
         except Exception as error:
             await self._isolate_voice_failure(context, error)
             return

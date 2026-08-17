@@ -16,6 +16,10 @@
 #include <esp_event_base.h>
 #include "codex_alert_carousel.h"
 #include "codex_pending_soft_glow.h"
+#include "codex_task_detail_store.h"
+#include "codex_task_focus_deck.h"
+#include "codex_task_focus_gesture.h"
+#include "codex_task_focus_view.h"
 #include "agent_panel_model.h"
 #include "agent_panel_ui_layout.h"
 #include "agent_registry_store.h"
@@ -37,6 +41,12 @@ class BleVoiceProbeController;
 struct esp_websocket_event_data;
 typedef struct esp_websocket_client* esp_websocket_client_handle_t;
 
+enum class CodexTaskFocusMode : uint8_t {
+    Status,
+    TaskDeck,
+    TaskDetail,
+};
+
 class AppCodexStatus : public mooncake::AppAbility,
                        public CodexButtonActionSink {
 public:
@@ -52,6 +62,8 @@ private:
     std::unique_ptr<input::KeyManager> _key_manager;
     std::unique_ptr<CodexPendingSoftGlow> _pending_glow;
     std::unique_ptr<TraeStatusPage> _trae_status_page;
+    std::unique_ptr<CodexTaskFocusView> _task_focus_view;
+    std::unique_ptr<voice_input::crypto::CcmContext> _task_detail_crypto;
 
     lv_obj_t* _panel             = nullptr;
     lv_obj_t* _page_strip        = nullptr;
@@ -134,13 +146,27 @@ private:
     int _current_page            = 1;
     lv_indev_state_t _last_page_touch_state = LV_INDEV_STATE_REL;
     lv_indev_state_t _last_agent_touch_state = LV_INDEV_STATE_REL;
+    lv_indev_state_t _last_task_touch_state = LV_INDEV_STATE_REL;
     int _agent_panel_drag_start_y = 0;
     int _agent_revealed_delete_index = -1;
     bool _agent_reset_hold_active = false;
     bool _agent_reset_hold_queued = false;
     bool _agent_pairing_expired = false;
+    int _task_touch_start_x = 0;
+    int _task_touch_start_y = 0;
+    int _task_touch_last_y = 0;
+    bool _task_touch_moved = false;
+    bool _task_detail_started_at_top = false;
+    codex_task_focus_gesture::TaskFocusGestureAxis _task_touch_axis =
+        codex_task_focus_gesture::TaskFocusGestureAxis::Undecided;
     bool _suppress_task_navigation = false;
     CodexAlertCarousel _alert_carousel;
+    CodexTaskFocusDeck _task_focus_deck;
+    CodexTaskDetailStore _task_detail_store;
+    CodexTaskFocusMode _task_focus_mode = CodexTaskFocusMode::Status;
+    uint32_t _task_detail_key_epoch = 0;
+    std::mutex _task_state_mutex;
+    std::mutex _task_controller_mutex;
     TraeStatusSnapshot _trae_snapshot;
     TraeTaskCarousel _trae_carousel;
     StatusPageSwipeLogic _page_swipe;
@@ -173,6 +199,7 @@ private:
     bool _production_voice_ready = false;
     bool _production_voice_link_usable = false;
     uint8_t _production_voice_capabilities = 0;
+    bool _task_voice_ready_applied = false;
     uint16_t _production_voice_mtu = 23;
     uint32_t _production_voice_connection_epoch = 0;
     std::mutex _status_mutex;
@@ -180,6 +207,17 @@ private:
     uint32_t _base_status_color = 0;
     bool _base_status_is_error = false;
     std::atomic<VoiceInputUiState> _voice_status{VoiceInputUiState::Off};
+
+    struct TaskFocusStateSnapshot {
+        CodexTaskFocusDeck deck;
+        CodexTaskFocusMode mode = CodexTaskFocusMode::Status;
+        CodexTaskAlert selected_task;
+        std::string detail_text;
+        int32_t detail_revision = -1;
+        uint64_t selected_route = 0;
+        bool has_selected_task = false;
+        bool has_detail = false;
+    };
 
     void create_view();
     void destroy_view();
@@ -198,6 +236,19 @@ private:
     void render_pinned_microphone();
     void sync_pending_glow();
     void update_page_swipe(uint32_t now_ms);
+    void update_task_focus_touch(uint32_t now_ms);
+    void cancel_task_focus_touch();
+    void open_task_deck();
+    void render_task_focus();
+    void render_task_focus_detail();
+    void sync_task_focus_visibility();
+    void sync_task_voice_route();
+    void sync_task_voice_readiness();
+    bool sync_task_detail_credential();
+    void sync_task_edge_exclusion(CodexTaskFocusMode mode);
+    TaskFocusStateSnapshot snapshot_task_focus_state();
+    VoiceButtonSink* task_focus_voice_sink();
+    bool sync_agent_panel_for_task_mode(CodexTaskFocusMode task_mode);
     void update_agent_panel_touch(uint32_t now_ms);
     void render_agent_panel();
     void update_agent_panel_runtime(uint32_t now_ms);

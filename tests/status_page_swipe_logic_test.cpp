@@ -75,6 +75,78 @@ static void assert_pinned_page_does_not_wrap_right()
 }
 
 
+static void assert_bottom_center_upward_swipe_opens_codex_deck()
+{
+    StatusPageSwipeLogic fast;
+    fast.press(233, 440, 1000);
+    fast.move(235, 403);
+    assert(fast.release(1260, 1) == StatusPageSwipeResult::OpenTaskDeck);
+
+    StatusPageSwipeLogic long_drag;
+    long_drag.press(183, 465, 1000);
+    long_drag.move(185, 365);
+    assert(long_drag.release(1600, 1) == StatusPageSwipeResult::OpenTaskDeck);
+}
+
+
+static void assert_deck_entry_safe_zone_is_inclusive_and_codex_only()
+{
+    StatusPageSwipeLogic right_boundary;
+    right_boundary.press(283, 423, 1000);
+    right_boundary.move(283, 380);
+    assert(right_boundary.release(1200, 1) == StatusPageSwipeResult::OpenTaskDeck);
+
+    StatusPageSwipeLogic outside_x;
+    outside_x.press(182, 440, 1000);
+    outside_x.move(182, 390);
+    assert(outside_x.release(1200, 1) == StatusPageSwipeResult::Stay);
+
+    StatusPageSwipeLogic outside_y;
+    outside_y.press(233, 422, 1000);
+    outside_y.move(233, 370);
+    assert(outside_y.release(1200, 1) == StatusPageSwipeResult::Stay);
+
+    StatusPageSwipeLogic trae;
+    trae.press(233, 440, 1000);
+    trae.move(233, 390);
+    assert(trae.release(1200, 2) == StatusPageSwipeResult::Stay);
+}
+
+
+static void assert_vertical_owner_never_becomes_horizontal_page_swipe()
+{
+    StatusPageSwipeLogic swipe;
+    swipe.press(233, 440, 1000);
+    swipe.move(235, 425);  // Vertical ownership after the 12 px dead zone.
+    swipe.move(100, 420);
+    assert(swipe.release(1200, 1) == StatusPageSwipeResult::Stay);
+}
+
+
+static void assert_horizontal_owner_preserves_existing_paging()
+{
+    StatusPageSwipeLogic swipe;
+    swipe.press(233, 440, 1000);
+    swipe.move(218, 438);  // Horizontal ownership after the 12 px dead zone.
+    swipe.move(180, 360);
+    assert(swipe.release(1200, 1) == StatusPageSwipeResult::Trae);
+}
+
+
+static void assert_downward_safe_zone_and_edge_vertical_gestures_stay()
+{
+    StatusPageSwipeLogic downward;
+    downward.press(233, 423, 1000);
+    downward.move(233, 465);
+    assert(downward.release(1200, 1) == StatusPageSwipeResult::Stay);
+
+    StatusPageSwipeLogic edge;
+    edge.press(10, 440, 1000);
+    edge.move(10, 380);
+    assert(edge.release(1200, 1) == StatusPageSwipeResult::Stay);
+}
+
+
 static void assert_trae_page_does_not_wrap_left()
 {
     StatusPageSwipeLogic swipe;
@@ -105,5 +177,10 @@ int main()
     assert(short_slow_drag_snaps_back());
     assert_pinned_page_does_not_wrap_right();
     assert_trae_page_does_not_wrap_left();
+    assert_bottom_center_upward_swipe_opens_codex_deck();
+    assert_deck_entry_safe_zone_is_inclusive_and_codex_only();
+    assert_vertical_owner_never_becomes_horizontal_page_swipe();
+    assert_horizontal_owner_preserves_existing_paging();
+    assert_downward_safe_zone_and_edge_vertical_gestures_stay();
     assert_cancel_clears_active_gesture();
 }

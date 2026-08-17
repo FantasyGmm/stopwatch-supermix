@@ -23,6 +23,8 @@ from agent import (
     CodexStatusAgent,
     WatchDiscovery,
     _compact_json_bytes,
+    _new_task_detail_nonce,
+    task_detail_messages,
     _watch_codex_status,
     _watch_trae_status,
 )
@@ -32,6 +34,12 @@ from secure_pairing_wire import (
     encode_discovery_response,
 )
 from protocol import EVENT_MESSAGE, MAX_MESSAGE_SIZE, STATUS_MESSAGE, encode_message
+from task_detail_crypto import decrypt_task_detail
+
+
+TEST_DETAIL_KEY = bytes.fromhex("000102030405060708090a0b0c0d0e0f")
+TEST_DETAIL_NONCE = bytes.fromhex("1011121314151617")
+TEST_DETAIL_EPOCH = 7
 
 
 async def _append_async(target, value):
@@ -79,6 +87,16 @@ class Clock:
         return self.values.pop(0)
 
 
+def secure_status_agent(collector, transport, nonce=TEST_DETAIL_NONCE):
+    return CodexStatusAgent(
+        collector=collector,
+        transport=transport,
+        detail_key=TEST_DETAIL_KEY,
+        detail_key_epoch=TEST_DETAIL_EPOCH,
+        detail_nonce_factory=lambda: nonce,
+    )
+
+
 def trae_status(model="Model A", detail="Building status"):
     return {
         "codex_model": "gpt-5.6-sol",
@@ -101,6 +119,39 @@ def trae_status(model="Model A", detail="Building status"):
 
 
 class CodexStatusAgentTests(unittest.TestCase):
+    def test_production_task_detail_nonce_rejects_zero(self):
+        expected = bytes.fromhex("2021222324252627")
+        with patch(
+            "agent.secrets.token_bytes",
+            side_effect=(bytes(8), expected),
+        ) as token_bytes:
+            nonce = _new_task_detail_nonce()
+
+        self.assertEqual(nonce, expected)
+        self.assertEqual(token_bytes.call_count, 2)
+
+    def test_default_status_agent_sessions_receive_distinct_random_nonces(self):
+        first = bytes.fromhex("1011121314151617")
+        second = bytes.fromhex("2021222324252627")
+        with patch(
+            "agent.secrets.token_bytes",
+            side_effect=(first, second),
+        ):
+            agents = [
+                CodexStatusAgent(
+                    collector=FakeCollector(),
+                    transport=FakeTransport(),
+                    detail_key=TEST_DETAIL_KEY,
+                    detail_key_epoch=TEST_DETAIL_EPOCH,
+                )
+                for _ in range(2)
+            ]
+
+        self.assertEqual(
+            [agent._task_detail_nonce for agent in agents],
+            [first, second],
+        )
+
     def test_sync_time_sends_current_epoch_and_timezone_offset(self):
         collector = FakeCollector()
         transport = FakeTransport()
@@ -252,7 +303,7 @@ class CodexStatusAgentTests(unittest.TestCase):
         )
         self.assertEqual(collector.notified, [])
 
-    def test_watch_payload_limits_and_truncates_alerts(self):
+    def test_watch_payload_is_active_pending_first_and_excludes_private_fields(self):
         collector = FakeCollector()
         collector.pending_ids = ()
         transport = FakeTransport()
@@ -260,26 +311,46 @@ class CodexStatusAgentTests(unittest.TestCase):
         status = {
             "codex_alerts": [
                 {
-                    "project": "p" * 40,
-                    "title": "t" * 60,
-                    "time": "00:{:02d}".format(index),
-                    "state": ("pending", "running", "completed")[index % 3],
-                    "outcome": ("waiting", "running", "completed")[index % 3],
+                    "route": "{:016x}".format(index),
+                    "project": "项目" * 40,
+                    "title": "进展" * 60,
+                    "time": "00:00",
+                    "state": state,
+                    "outcome": "waiting",
+                    "turn_id": "private-turn",
+                    "last_reply": "private reply",
+                    "thread_id": "private-thread",
                 }
-                for index in range(10)
+                for index, state in enumerate(
+                    ("running", "completed", "pending", "running", "pending")
+                )
             ]
         }
 
         asyncio.run(agent.tick(status=status))
 
         sent = transport.messages[0][1]["codex_alerts"]
-        self.assertEqual(len(sent), 8)
+        self.assertEqual(
+            [item["state"] for item in sent],
+            ["pending", "pending", "running", "running"],
+        )
+        self.assertEqual(
+            [item["route"] for item in sent],
+            [
+                "0000000000000002",
+                "0000000000000004",
+                "0000000000000000",
+                "0000000000000003",
+            ],
+        )
+        self.assertTrue(
+            all(
+                set(item) == {"route", "project", "title", "state"}
+                for item in sent
+            )
+        )
         self.assertEqual(len(sent[0]["project"]), 32)
         self.assertEqual(len(sent[0]["title"]), 48)
-        self.assertEqual(sent[0]["outcome"], "waiting")
-        self.assertEqual(sent[1]["state"], "running")
-        self.assertEqual(sent[1]["outcome"], "running")
-        self.assertEqual(sent[2]["state"], "completed")
 
     def test_multibyte_alerts_stay_within_ble_message_limit(self):
         collector = FakeCollector()
@@ -290,22 +361,988 @@ class CodexStatusAgentTests(unittest.TestCase):
             "codex_model": "gpt-5.6-sol",
             "codex_alerts": [
                 {
+                    "route": "{:016x}".format(index),
                     "project": "项目" * 32,
                     "title": "进展" * 48,
                     "time": "10:00",
                     "state": "pending",
                     "outcome": "completed",
                 }
-                for _ in range(8)
+                for index in range(8)
             ],
         }
 
         asyncio.run(agent.tick(status=status))
 
         payload = transport.messages[0][1]
-        encoded = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+        encoded = json.dumps(
+            payload, ensure_ascii=False, separators=(",", ":")
+        ).encode("utf-8")
         self.assertLessEqual(len(encoded), 2048)
         self.assertLess(len(payload["codex_alerts"]), 8)
+
+    def test_watch_payload_keeps_at_most_eight_active_tasks(self):
+        payload = _watch_codex_status(
+            {
+                "codex_alerts": [
+                    {
+                        "route": "{:016x}".format(index),
+                        "project": "p",
+                        "title": "t",
+                        "state": "running",
+                    }
+                    for index in range(10)
+                ]
+            }
+        )
+
+        self.assertEqual(len(payload["codex_alerts"]), 8)
+
+    def test_watch_payload_does_not_forward_malformed_raw_alert_container(self):
+        payload = _watch_codex_status(
+            {"codex_alerts": {"last_reply": "private", "thread_id": "private"}}
+        )
+
+        self.assertNotIn("codex_alerts", payload)
+
+    def test_watch_payload_bounds_oversize_scalar_fields_with_no_alerts(self):
+        payload = _watch_codex_status(
+            {
+                "codex_model": "模型" * 3000,
+                "codex_effort": "extremely-high" * 3000,
+                "codex_5h_left_pct": 72,
+                "codex_week_left_pct": 64,
+                "codex_alert_pending": 123,
+                "codex_alert_running": 45,
+                "codex_alert_completed": 678,
+                "codex_alert_revision": 901,
+                "codex_alerts": [],
+            }
+        )
+
+        self.assertLessEqual(len(_compact_json_bytes(payload)), MAX_MESSAGE_SIZE)
+        self.assertLessEqual(len(payload["codex_model"]), 64)
+        self.assertLessEqual(len(payload["codex_effort"]), 32)
+        self.assertEqual(payload["codex_5h_left_pct"], 72)
+        self.assertEqual(payload["codex_week_left_pct"], 64)
+        self.assertEqual(payload["codex_alert_pending"], 123)
+        self.assertEqual(payload["codex_alert_running"], 45)
+        self.assertEqual(payload["codex_alert_completed"], 678)
+        self.assertEqual(payload["codex_alert_revision"], 901)
+
+    def test_watch_payload_fails_safe_and_keeps_pending_first_tasks_that_fit(self):
+        payload = _watch_codex_status(
+            {
+                "codex_model": "m" * 3000,
+                "codex_effort": "e" * 3000,
+                "codex_alert_pending": 4,
+                "codex_alert_running": 4,
+                "codex_alert_revision": 8,
+                "codex_alerts": [
+                    {
+                        "route": "{:016x}".format(index),
+                        "project": "项目" * 1000,
+                        "title": "任务" * 1000,
+                        "state": "pending" if index % 2 else "running",
+                    }
+                    for index in range(8)
+                ],
+            }
+        )
+
+        self.assertLessEqual(len(_compact_json_bytes(payload)), MAX_MESSAGE_SIZE)
+        self.assertGreater(len(payload["codex_alerts"]), 0)
+        states = [task["state"] for task in payload["codex_alerts"]]
+        self.assertEqual(states, sorted(states, key=lambda state: state != "pending"))
+
+    def test_task_detail_messages_split_multibyte_text_on_character_boundaries(self):
+        text = "进展🙂" * 900
+        messages = task_detail_messages(
+            {
+                "codex_alert_revision": 7,
+                "codex_alerts": [
+                    {
+                        "route": "0123456789abcdef",
+                        "project": "p",
+                        "title": "t",
+                        "state": "running",
+                        "last_reply": text,
+                    }
+                ],
+            }
+        )
+
+        self.assertGreater(len(messages), 1)
+        self.assertEqual("".join(message["text"] for message in messages), text)
+        self.assertEqual(
+            [message["index"] for message in messages], list(range(len(messages)))
+        )
+        self.assertTrue(
+            all(message["count"] == len(messages) for message in messages)
+        )
+        self.assertTrue(
+            all(
+                len(_compact_json_bytes(message)) <= MAX_MESSAGE_SIZE
+                for message in messages
+            )
+        )
+
+    def test_task_detail_messages_bound_long_reply_including_explicit_marker(self):
+        marker = "\n\n[内容过长，手表仅显示前 12 KiB]"
+        messages = task_detail_messages(
+            {
+                "codex_alert_revision": 3,
+                "codex_alerts": [
+                    {
+                        "route": "fedcba9876543210",
+                        "project": "p",
+                        "title": "t",
+                        "state": "pending",
+                        "last_reply": "🙂" * 4000,
+                    }
+                ],
+            }
+        )
+        bounded = "".join(message["text"] for message in messages)
+        prefix = bounded[: -len(marker)]
+
+        self.assertTrue(bounded.endswith(marker))
+        self.assertEqual(len(prefix.encode("utf-8")), 12 * 1024)
+        self.assertEqual(prefix, "🙂" * 3072)
+        self.assertEqual(
+            len(bounded.encode("utf-8")),
+            12 * 1024 + len(marker.encode("utf-8")),
+        )
+        self.assertTrue(
+            all(
+                len(_compact_json_bytes(message)) <= MAX_MESSAGE_SIZE
+                for message in messages
+            )
+        )
+
+    def test_task_detail_bounding_does_not_encode_the_unbounded_source(self):
+        class NoWholeEncode(str):
+            def encode(self, *args, **kwargs):
+                raise AssertionError("unbounded source was encoded as a whole")
+
+        source = NoWholeEncode("🙂" * 1_000_000)
+        messages = task_detail_messages(
+            {
+                "codex_alert_revision": 3,
+                "codex_alerts": [
+                    {
+                        "route": "fedcba9876543210",
+                        "project": "p",
+                        "title": "t",
+                        "state": "pending",
+                        "last_reply": source,
+                    }
+                ],
+            }
+        )
+        bounded = "".join(message["text"] for message in messages)
+
+        self.assertTrue(bounded.endswith("[内容过长，手表仅显示前 12 KiB]"))
+
+    def test_task_detail_prefix_stops_before_a_split_multibyte_character(self):
+        marker = "\n\n[内容过长，手表仅显示前 12 KiB]"
+        source = "a" + "🙂" * 4000
+        messages = task_detail_messages(
+            {
+                "codex_alert_revision": 3,
+                "codex_alerts": [
+                    {
+                        "route": "fedcba9876543210",
+                        "project": "p",
+                        "title": "t",
+                        "state": "pending",
+                        "last_reply": source,
+                    }
+                ],
+            }
+        )
+        bounded = "".join(message["text"] for message in messages)
+        prefix = bounded[: -len(marker)]
+
+        self.assertEqual(prefix, "a" + "🙂" * 3071)
+        self.assertEqual(len(prefix.encode("utf-8")), 12 * 1024 - 3)
+        self.assertTrue(source.startswith(prefix))
+        self.assertTrue(bounded.endswith(marker))
+
+    def test_task_detail_messages_emit_empty_reply(self):
+        messages = task_detail_messages(
+            {
+                "codex_alert_revision": 5,
+                "codex_alerts": [
+                    {
+                        "route": "0123456789abcdef",
+                        "project": "p",
+                        "title": "t",
+                        "state": "pending",
+                        "last_reply": "",
+                    }
+                ],
+            }
+        )
+
+        self.assertEqual(
+            messages,
+            [
+                {
+                    "type": "task_detail",
+                    "route": "0123456789abcdef",
+                    "revision": 5,
+                    "index": 0,
+                    "count": 1,
+                    "text": "",
+                }
+            ],
+        )
+
+    def test_task_detail_messages_do_not_emit_an_oversize_empty_envelope(self):
+        messages = task_detail_messages(
+            {
+                "codex_alert_revision": 5,
+                "codex_alerts": [
+                    {
+                        "route": "0123456789abcdef",
+                        "project": "p",
+                        "title": "t",
+                        "state": "pending",
+                        "last_reply": "",
+                    }
+                ],
+            },
+            max_size=1,
+        )
+
+        self.assertEqual(messages, [])
+
+    def test_task_detail_messages_validate_inputs_and_fail_closed_on_collision(self):
+        valid = {
+            "route": "0123456789abcdef",
+            "project": "p",
+            "title": "t",
+            "state": "running",
+            "last_reply": "first",
+        }
+        status = {
+            "codex_alert_revision": True,
+            "codex_alerts": [
+                None,
+                {"route": "INVALID", "state": "pending", "last_reply": "bad"},
+                {
+                    "route": "abcdefabcdefabcd",
+                    "state": "completed",
+                    "last_reply": "done",
+                },
+                {
+                    "route": "1111111111111111",
+                    "state": "running",
+                    "last_reply": 42,
+                },
+                valid,
+                dict(valid, last_reply="duplicate"),
+            ],
+        }
+
+        self.assertEqual(task_detail_messages(status), [])
+
+    def test_task_detail_messages_default_each_invalid_revision_to_zero(self):
+        for invalid_revision in (-1, 1.5, "7", True):
+            with self.subTest(revision=invalid_revision):
+                messages = task_detail_messages(
+                    {
+                        "codex_alert_revision": invalid_revision,
+                        "codex_alerts": [
+                            {
+                                "route": "0123456789abcdef",
+                                "project": "p",
+                                "title": "t",
+                                "state": "running",
+                                "last_reply": "reply",
+                            }
+                        ],
+                    }
+                )
+
+                self.assertEqual(messages[0]["revision"], 0)
+
+    def test_task_detail_helper_uses_only_final_retained_routes_by_default(self):
+        messages = task_detail_messages(
+            {
+                "codex_alert_revision": 3,
+                "codex_alerts": [
+                    {
+                        "route": "{:016x}".format(index),
+                        "project": "p",
+                        "title": "t",
+                        "state": "pending" if index % 2 else "running",
+                        "last_reply": "reply-{}".format(index),
+                    }
+                    for index in range(10)
+                ],
+            }
+        )
+
+        self.assertEqual(
+            {message["route"] for message in messages},
+            {
+                "0000000000000001",
+                "0000000000000003",
+                "0000000000000005",
+                "0000000000000007",
+                "0000000000000009",
+                "0000000000000000",
+                "0000000000000002",
+                "0000000000000004",
+            },
+        )
+
+    def test_task_details_follow_status_and_unchanged_content_is_suppressed(self):
+        collector = FakeCollector()
+        collector.pending_ids = ()
+        transport = FakeTransport()
+        agent = secure_status_agent(collector, transport)
+        status = {
+            "codex_alert_revision": 2,
+            "codex_alerts": [
+                {
+                    "route": "0123456789abcdef",
+                    "project": "p",
+                    "title": "t",
+                    "state": "running",
+                    "last_reply": "exact",
+                }
+            ],
+        }
+
+        asyncio.run(agent.tick(status=status))
+        asyncio.run(agent.tick(status=status))
+
+        self.assertEqual(
+            [kind for kind, _ in transport.messages],
+            [STATUS_MESSAGE, STATUS_MESSAGE, STATUS_MESSAGE],
+        )
+        self.assertNotEqual(transport.messages[0][1].get("type"), "task_detail")
+        self.assertEqual(transport.messages[1][1]["type"], "task_detail")
+        self.assertNotIn("text", transport.messages[1][1])
+        self.assertEqual(
+            decrypt_task_detail(TEST_DETAIL_KEY, transport.messages[1][1]),
+            "exact",
+        )
+
+    def test_missing_detail_credential_fails_closed_but_status_still_sends(self):
+        collector = FakeCollector()
+        collector.pending_ids = ()
+        transport = FakeTransport()
+        agent = CodexStatusAgent(collector=collector, transport=transport)
+        status = {
+            "codex_alert_revision": 2,
+            "codex_alerts": [
+                {
+                    "route": "0123456789abcdef",
+                    "project": "p",
+                    "title": "t",
+                    "state": "running",
+                    "last_reply": "must remain private",
+                }
+            ],
+        }
+
+        asyncio.run(agent.tick(status=status))
+
+        self.assertEqual(len(transport.messages), 1)
+        self.assertNotIn("must remain private", json.dumps(transport.messages))
+
+    def test_details_are_generated_only_for_routes_retained_by_main_status(self):
+        collector = FakeCollector()
+        collector.pending_ids = ()
+        transport = FakeTransport()
+        agent = secure_status_agent(collector, transport)
+        status = {
+            "codex_alert_revision": 2,
+            "codex_alerts": [
+                {
+                    "route": "{:016x}".format(index),
+                    "project": "p",
+                    "title": "t",
+                    "state": "pending" if index % 2 else "running",
+                    "last_reply": "reply-{}".format(index),
+                }
+                for index in range(10)
+            ],
+        }
+
+        asyncio.run(agent.tick(status=status))
+
+        retained = {
+            item["route"] for item in transport.messages[0][1]["codex_alerts"]
+        }
+        detail_routes = {
+            payload["route"]
+            for _, payload in transport.messages[1:]
+            if payload.get("type") == "task_detail"
+        }
+        self.assertEqual(len(retained), 8)
+        self.assertEqual(detail_routes, retained)
+
+    def test_byte_budget_evicted_routes_do_not_send_or_enter_detail_cache(self):
+        collector = FakeCollector()
+        collector.pending_ids = ()
+        transport = FakeTransport()
+        agent = secure_status_agent(collector, transport)
+        status = {
+            "codex_alert_revision": 2,
+            "codex_alerts": [
+                {
+                    "route": "{:016x}".format(index),
+                    "project": "项目" * 32,
+                    "title": "进展" * 48,
+                    "state": "pending",
+                    "last_reply": "reply-{}".format(index),
+                }
+                for index in range(8)
+            ],
+        }
+
+        asyncio.run(agent.tick(status=status))
+
+        retained = {
+            item["route"] for item in transport.messages[0][1]["codex_alerts"]
+        }
+        self.assertLess(len(retained), 8)
+        self.assertEqual(set(agent._task_detail_cache), retained)
+        self.assertEqual(
+            {
+                payload["route"]
+                for _, payload in transport.messages[1:]
+                if payload.get("type") == "task_detail"
+            },
+            retained,
+        )
+
+    def test_colliding_active_routes_fail_closed_for_list_and_details(self):
+        collector = FakeCollector()
+        collector.pending_ids = ()
+        transport = FakeTransport()
+        agent = secure_status_agent(collector, transport)
+        collision = "0123456789abcdef"
+        status = {
+            "codex_alert_revision": 2,
+            "codex_alerts": [
+                {
+                    "route": collision,
+                    "project": "p1",
+                    "title": "t1",
+                    "state": "pending",
+                    "last_reply": "secret one",
+                },
+                {
+                    "route": collision,
+                    "project": "p2",
+                    "title": "t2",
+                    "state": "running",
+                    "last_reply": "secret two",
+                },
+                {
+                    "route": "fedcba9876543210",
+                    "project": "safe",
+                    "title": "safe",
+                    "state": "running",
+                    "last_reply": "safe reply",
+                },
+            ],
+        }
+
+        asyncio.run(agent.tick(status=status))
+
+        self.assertEqual(
+            [item["route"] for item in transport.messages[0][1]["codex_alerts"]],
+            ["fedcba9876543210"],
+        )
+        details = [
+            payload
+            for _, payload in transport.messages
+            if payload.get("type") == "task_detail"
+        ]
+        self.assertEqual([item["route"] for item in details], ["fedcba9876543210"])
+
+    def test_active_and_completed_collision_stays_excluded_for_agent_lifetime(self):
+        collector = FakeCollector()
+        collector.pending_ids = ()
+        transport = FakeTransport()
+        agent = secure_status_agent(collector, transport)
+        route = "0123456789abcdef"
+        active = {
+            "route": route,
+            "project": "active",
+            "title": "active",
+            "state": "running",
+            "last_reply": "must never be first wins",
+        }
+        completed = {
+            "route": route,
+            "project": "completed",
+            "title": "completed",
+            "state": "completed",
+            "last_reply": "old",
+        }
+
+        asyncio.run(
+            agent.tick(
+                status={
+                    "codex_alert_revision": 1,
+                    "codex_alerts": [active, completed],
+                }
+            )
+        )
+        asyncio.run(
+            agent.tick(
+                status={
+                    "codex_alert_revision": 2,
+                    "codex_alerts": [active],
+                }
+            )
+        )
+
+        compact = [
+            payload
+            for _, payload in transport.messages
+            if payload.get("type") != "task_detail"
+        ]
+        self.assertEqual(
+            [payload.get("codex_alerts") for payload in compact], [[], []]
+        )
+        self.assertFalse(
+            any(
+                payload.get("type") == "task_detail"
+                for _, payload in transport.messages
+            )
+        )
+
+    def test_fresh_agent_can_use_route_after_authoritative_clean_snapshot(self):
+        collector = FakeCollector()
+        collector.pending_ids = ()
+        route = "0123456789abcdef"
+        task = {
+            "route": route,
+            "project": "safe",
+            "title": "safe",
+            "state": "running",
+            "last_reply": "fresh reply",
+        }
+        collided = dict(task, project="peer", title="peer")
+        retired_transport = FakeTransport()
+        retired_agent = secure_status_agent(collector, retired_transport)
+        asyncio.run(
+            retired_agent.tick(
+                status={"codex_alert_revision": 1, "codex_alerts": [task, collided]}
+            )
+        )
+        fresh_transport = FakeTransport()
+
+        asyncio.run(
+            secure_status_agent(collector, fresh_transport).tick(
+                status={"codex_alert_revision": 2, "codex_alerts": [task]}
+            )
+        )
+
+        self.assertEqual(
+            fresh_transport.messages[0][1]["codex_alerts"][0]["route"],
+            route,
+        )
+        detail = next(
+            payload
+            for _, payload in fresh_transport.messages
+            if payload.get("type") == "task_detail"
+        )
+        self.assertEqual(decrypt_task_detail(TEST_DETAIL_KEY, detail), "fresh reply")
+
+    def test_noncolliding_route_can_disappear_and_reappear(self):
+        collector = FakeCollector()
+        collector.pending_ids = ()
+        transport = FakeTransport()
+        agent = secure_status_agent(collector, transport)
+        task = {
+            "route": "0123456789abcdef",
+            "project": "safe",
+            "title": "safe",
+            "state": "running",
+            "last_reply": "reply",
+        }
+
+        asyncio.run(
+            agent.tick(
+                status={"codex_alert_revision": 1, "codex_alerts": [task]}
+            )
+        )
+        asyncio.run(
+            agent.tick(status={"codex_alert_revision": 2, "codex_alerts": []})
+        )
+        asyncio.run(
+            agent.tick(
+                status={"codex_alert_revision": 3, "codex_alerts": [task]}
+            )
+        )
+
+        details = [
+            payload
+            for _, payload in transport.messages
+            if payload.get("type") == "task_detail"
+        ]
+        self.assertEqual(
+            [decrypt_task_detail(TEST_DETAIL_KEY, payload) for payload in details],
+            ["reply", "reply"],
+        )
+
+    def test_nested_task_values_require_strict_utf8_strings(self):
+        collector = FakeCollector()
+        collector.pending_ids = ()
+        transport = FakeTransport()
+        agent = secure_status_agent(collector, transport)
+        status = {
+            "codex_alert_revision": 0x80000000,
+            "codex_alerts": [
+                {
+                    "route": "0000000000000001",
+                    "project": ["private-project"],
+                    "title": "t",
+                    "state": "pending",
+                    "last_reply": "private one",
+                },
+                {
+                    "route": "0000000000000002",
+                    "project": "p",
+                    "title": "t" * 48 + "\ud800",
+                    "state": "pending",
+                    "last_reply": "private two",
+                },
+                {
+                    "route": "0000000000000003",
+                    "project": "p",
+                    "title": "t",
+                    "state": "running",
+                    "last_reply": {"private": "container"},
+                },
+                {
+                    "route": "0000000000000004",
+                    "project": "p",
+                    "title": "t",
+                    "state": "running",
+                    "last_reply": "bad\ud800",
+                },
+            ],
+        }
+
+        asyncio.run(agent.tick(status=status))
+
+        self.assertEqual(
+            [item["route"] for item in transport.messages[0][1]["codex_alerts"]],
+            ["0000000000000003", "0000000000000004"],
+        )
+        self.assertFalse(
+            any(
+                payload.get("type") == "task_detail"
+                for _, payload in transport.messages
+            )
+        )
+        self.assertEqual(transport.messages[0][1]["codex_alert_revision"], 0)
+
+    def test_new_agent_session_resends_unchanged_task_details(self):
+        collector = FakeCollector()
+        collector.pending_ids = ()
+        transport = FakeTransport()
+        status = {
+            "codex_alert_revision": 2,
+            "codex_alerts": [
+                {
+                    "route": "0123456789abcdef",
+                    "project": "p",
+                    "title": "t",
+                    "state": "running",
+                    "last_reply": "exact",
+                }
+            ],
+        }
+
+        asyncio.run(secure_status_agent(collector, transport).tick(status=status))
+        asyncio.run(
+            secure_status_agent(
+                collector,
+                transport,
+                nonce=bytes.fromhex("2021222324252627"),
+            ).tick(status=status)
+        )
+
+        details = [
+            payload
+            for _, payload in transport.messages
+            if payload.get("type") == "task_detail"
+        ]
+        self.assertEqual(
+            [decrypt_task_detail(TEST_DETAIL_KEY, message) for message in details],
+            ["exact", "exact"],
+        )
+        self.assertNotEqual(details[0]["nonce"], details[1]["nonce"])
+
+    def test_detail_credential_rotation_resets_nonce_sequence_and_cache(self):
+        collector = FakeCollector()
+        collector.pending_ids = ()
+        transport = FakeTransport()
+        nonces = iter(
+            (
+                TEST_DETAIL_NONCE,
+                bytes.fromhex("2021222324252627"),
+            )
+        )
+        agent = CodexStatusAgent(
+            collector=collector,
+            transport=transport,
+            detail_key=TEST_DETAIL_KEY,
+            detail_key_epoch=TEST_DETAIL_EPOCH,
+            detail_nonce_factory=lambda: next(nonces),
+        )
+        status = {
+            "codex_alert_revision": 2,
+            "codex_alerts": [
+                {
+                    "route": "0123456789abcdef",
+                    "project": "p",
+                    "title": "t",
+                    "state": "running",
+                    "last_reply": "exact",
+                }
+            ],
+        }
+
+        asyncio.run(agent.tick(status=status))
+        agent.update_detail_credential(b"N" * 16, TEST_DETAIL_EPOCH + 1)
+        asyncio.run(agent.tick(status=status))
+
+        details = [
+            payload
+            for _, payload in transport.messages
+            if payload.get("type") == "task_detail"
+        ]
+        self.assertEqual([item["sequence"] for item in details], [1, 1])
+        self.assertNotEqual(details[0]["nonce"], details[1]["nonce"])
+        self.assertEqual(decrypt_task_detail(TEST_DETAIL_KEY, details[0]), "exact")
+        self.assertEqual(decrypt_task_detail(b"N" * 16, details[1]), "exact")
+
+    def test_detail_credential_rotation_never_reuses_a_session_nonce(self):
+        collector = FakeCollector()
+        transport = FakeTransport()
+        replacement = bytes.fromhex("2021222324252627")
+        nonces = iter((TEST_DETAIL_NONCE, TEST_DETAIL_NONCE, replacement))
+        agent = CodexStatusAgent(
+            collector=collector,
+            transport=transport,
+            detail_key=TEST_DETAIL_KEY,
+            detail_key_epoch=TEST_DETAIL_EPOCH,
+            detail_nonce_factory=lambda: next(nonces),
+        )
+
+        agent.update_detail_credential(b"N" * 16, TEST_DETAIL_EPOCH + 1)
+
+        self.assertEqual(agent._task_detail_nonce, replacement)
+
+    def test_detail_reenable_with_same_credential_uses_fresh_nonce_and_sequence(self):
+        collector = FakeCollector()
+        collector.pending_ids = ()
+        transport = FakeTransport()
+        replacement = bytes.fromhex("2021222324252627")
+        nonces = iter((TEST_DETAIL_NONCE, replacement))
+        agent = CodexStatusAgent(
+            collector=collector,
+            transport=transport,
+            detail_key=TEST_DETAIL_KEY,
+            detail_key_epoch=TEST_DETAIL_EPOCH,
+            detail_nonce_factory=lambda: next(nonces),
+        )
+        status = {
+            "codex_alert_revision": 2,
+            "codex_alerts": [
+                {
+                    "route": "0123456789abcdef",
+                    "project": "p",
+                    "title": "t",
+                    "state": "running",
+                    "last_reply": "exact",
+                }
+            ],
+        }
+
+        asyncio.run(agent.tick(status=status))
+        agent.disable_detail_credential()
+        asyncio.run(agent.tick(status=status))
+        agent.update_detail_credential(TEST_DETAIL_KEY, TEST_DETAIL_EPOCH)
+        asyncio.run(agent.tick(status=status))
+
+        details = [
+            payload
+            for _, payload in transport.messages
+            if payload.get("type") == "task_detail"
+        ]
+        self.assertEqual([item["sequence"] for item in details], [1, 1])
+        self.assertEqual(
+            [bytes.fromhex(item["nonce"]) for item in details],
+            [TEST_DETAIL_NONCE, replacement],
+        )
+
+    def test_task_detail_change_resends_and_disappearance_allows_reappearance(self):
+        collector = FakeCollector()
+        collector.pending_ids = ()
+        transport = FakeTransport()
+        agent = secure_status_agent(collector, transport)
+        task = {
+            "route": "0123456789abcdef",
+            "project": "p",
+            "title": "t",
+            "state": "running",
+            "last_reply": "one",
+        }
+
+        asyncio.run(
+            agent.tick(status={"codex_alert_revision": 1, "codex_alerts": [task]})
+        )
+        asyncio.run(
+            agent.tick(
+                status={
+                    "codex_alert_revision": 1,
+                    "codex_alerts": [dict(task, last_reply="two")],
+                }
+            )
+        )
+        asyncio.run(
+            agent.tick(
+                status={
+                    "codex_alert_revision": 2,
+                    "codex_alerts": [dict(task, last_reply="two")],
+                }
+            )
+        )
+        asyncio.run(
+            agent.tick(status={"codex_alert_revision": 3, "codex_alerts": []})
+        )
+        asyncio.run(
+            agent.tick(
+                status={
+                    "codex_alert_revision": 2,
+                    "codex_alerts": [dict(task, last_reply="two")],
+                }
+            )
+        )
+
+        details = [
+            payload
+            for _, payload in transport.messages
+            if payload.get("type") == "task_detail"
+        ]
+        self.assertEqual(
+            [
+                (item["revision"], decrypt_task_detail(TEST_DETAIL_KEY, item))
+                for item in details
+            ],
+            [(1, "one"), (1, "two"), (2, "two"), (2, "two")],
+        )
+
+    def test_failed_detail_set_retries_from_first_chunk(self):
+        class FailSecondDetailOnce(FakeTransport):
+            def __init__(self):
+                super().__init__()
+                self.detail_calls = 0
+
+            async def send_json(self, payload, message_type):
+                parsed = json.loads(payload)
+                if parsed.get("type") == "task_detail":
+                    self.detail_calls += 1
+                    if self.detail_calls == 2:
+                        raise ConnectionError("detail write failed")
+                self.messages.append((message_type, parsed))
+
+        collector = FakeCollector()
+        collector.pending_ids = ()
+        transport = FailSecondDetailOnce()
+        agent = secure_status_agent(collector, transport)
+        status = {
+            "codex_alert_revision": 8,
+            "codex_alerts": [
+                {
+                    "route": "0123456789abcdef",
+                    "project": "p",
+                    "title": "t",
+                    "state": "running",
+                    "last_reply": "x" * 5000,
+                }
+            ],
+        }
+
+        with self.assertRaises(ConnectionError):
+            asyncio.run(agent.tick(status=status))
+        asyncio.run(agent.tick(status=status))
+        asyncio.run(agent.tick(status=status))
+
+        detail_indexes = [
+            payload["index"]
+            for _, payload in transport.messages
+            if payload.get("type") == "task_detail"
+        ]
+        complete_set = task_detail_messages(status)
+        self.assertGreater(len(complete_set), 1)
+        self.assertEqual(
+            detail_indexes,
+            [0] + list(range(len(complete_set))),
+        )
+        sequences = [
+            payload["sequence"]
+            for _, payload in transport.messages
+            if payload.get("type") == "task_detail"
+        ]
+        self.assertEqual(sequences, [1] + list(range(3, 3 + len(complete_set))))
+        encrypted = [
+            payload
+            for _, payload in transport.messages
+            if payload.get("type") == "task_detail"
+        ]
+        self.assertNotEqual(encrypted[0]["ciphertext"], encrypted[1]["ciphertext"])
+        self.assertTrue(
+            all(
+                len(_compact_json_bytes(payload)) <= MAX_MESSAGE_SIZE
+                for payload in encrypted
+            )
+        )
+        retried = [
+            payload for payload in encrypted[1:]
+        ]
+        self.assertEqual(
+            "".join(decrypt_task_detail(TEST_DETAIL_KEY, item) for item in retried),
+            "x" * 5000,
+        )
+
+    def test_detail_sequence_exhaustion_fails_closed_after_main_status(self):
+        collector = FakeCollector()
+        collector.pending_ids = ()
+        transport = FakeTransport()
+        agent = secure_status_agent(collector, transport)
+        agent._task_detail_sequence = 0xFFFFFFFF
+        status = {
+            "codex_alert_revision": 1,
+            "codex_alerts": [
+                {
+                    "route": "0123456789abcdef",
+                    "project": "p",
+                    "title": "t",
+                    "state": "running",
+                    "last_reply": "secret",
+                }
+            ],
+        }
+
+        with self.assertRaises(OverflowError):
+            asyncio.run(agent.tick(status=status))
+
+        self.assertEqual(len(transport.messages), 1)
 
     def test_codex_payload_excludes_all_trae_fields(self):
         payload = _watch_codex_status(trae_status())

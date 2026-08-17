@@ -11,7 +11,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from completion_classifier import CLASSIFIER_VERSION
-from task_alerts import TaskAlertTracker, classify_outcome
+from task_alerts import TaskAlert, TaskAlertTracker, classify_outcome
 
 
 UTC = datetime.timezone.utc
@@ -223,6 +223,163 @@ class TaskAlertTrackerTests(unittest.TestCase):
         persisted = json.loads(self.ledger.read_text(encoding="utf-8"))
         self.assertEqual(persisted["classifier_version"], CLASSIFIER_VERSION)
         self.assertEqual(persisted["classifier_retry_threads"], [])
+
+    def test_classifier_upgrade_recovers_reply_missing_from_older_ledger(self):
+        reply = "精确回复：第一行\n第二行 🕰️"
+        tracker = self.tracker()
+        tracker.refresh()
+        append_event(
+            self.rollout,
+            "task_complete",
+            "2026-07-12T00:01:00Z",
+            last_agent_message=reply,
+        )
+        tracker.refresh()
+        saved = json.loads(self.ledger.read_text(encoding="utf-8"))
+        saved["classifier_version"] = CLASSIFIER_VERSION - 1
+        saved["alerts"][-1].pop("last_reply", None)
+        self.ledger.write_text(json.dumps(saved), encoding="utf-8")
+
+        reconciled = self.tracker().refresh()
+
+        self.assertEqual(reconciled.alerts[0].last_reply, reply)
+        persisted = json.loads(self.ledger.read_text(encoding="utf-8"))
+        self.assertEqual(persisted["alerts"][-1]["last_reply"], reply)
+
+    def test_reply_metadata_upgrade_recovers_reply_from_unchanged_v3_ledger(self):
+        reply = "旧版账本回复\n保持原样 🕰️"
+        tracker = self.tracker()
+        tracker.refresh()
+        append_event(
+            self.rollout,
+            "task_complete",
+            "2026-07-12T00:01:00Z",
+            last_agent_message=reply,
+        )
+        tracker.refresh()
+        saved = json.loads(self.ledger.read_text(encoding="utf-8"))
+        self.assertEqual(saved["version"], 3)
+        self.assertEqual(saved["classifier_version"], CLASSIFIER_VERSION)
+        saved["alerts"][-1].pop("last_reply", None)
+        saved.pop("reply_metadata_version", None)
+        saved.pop("reply_metadata_retry_threads", None)
+        self.ledger.write_text(json.dumps(saved), encoding="utf-8")
+
+        reconciled = self.tracker().refresh()
+
+        self.assertEqual(reconciled.alerts[0].last_reply, reply)
+        persisted = json.loads(self.ledger.read_text(encoding="utf-8"))
+        self.assertEqual(persisted["reply_metadata_version"], 1)
+        self.assertEqual(persisted["reply_metadata_retry_threads"], [])
+        self.assertEqual(persisted["alerts"][-1]["last_reply"], reply)
+
+    def test_reply_metadata_upgrade_backfills_deployed_running_alert(self):
+        reply = "previous stable reply\nwith exact formatting"
+        tracker = self.tracker()
+        tracker.refresh()
+        append_event(
+            self.rollout,
+            "task_complete",
+            "2026-07-12T00:01:00Z",
+            last_agent_message=reply,
+        )
+        append_event(self.rollout, "user_message", "2026-07-12T00:01:30Z")
+        append_event(
+            self.rollout,
+            "task_started",
+            "2026-07-12T00:02:00Z",
+            turn_id="turn-running",
+        )
+        tracker.refresh()
+        saved = json.loads(self.ledger.read_text(encoding="utf-8"))
+        self.assertEqual(saved["version"], 3)
+        self.assertEqual(saved["classifier_version"], CLASSIFIER_VERSION)
+        for alert in saved["alerts"]:
+            alert.pop("last_reply", None)
+        saved.pop("reply_metadata_version", None)
+        saved.pop("reply_metadata_retry_threads", None)
+        self.ledger.write_text(json.dumps(saved), encoding="utf-8")
+
+        migrated = self.tracker().refresh()
+
+        running = next(alert for alert in migrated.alerts if alert.state == "running")
+        self.assertEqual(running.turn_id, "turn-running")
+        self.assertEqual(running.last_reply, reply)
+
+    def test_reply_metadata_upgrade_preserves_undiscovered_thread_for_retry(self):
+        reply = "reply recovered after database returns"
+        tracker = self.tracker()
+        tracker.refresh()
+        append_event(
+            self.rollout,
+            "task_complete",
+            "2026-07-12T00:01:00Z",
+            last_agent_message=reply,
+        )
+        append_event(
+            self.rollout,
+            "task_started",
+            "2026-07-12T00:02:00Z",
+            turn_id="turn-running",
+        )
+        tracker.refresh()
+        saved = json.loads(self.ledger.read_text(encoding="utf-8"))
+        for alert in saved["alerts"]:
+            alert.pop("last_reply", None)
+        saved.pop("reply_metadata_version", None)
+        saved.pop("reply_metadata_retry_threads", None)
+        self.ledger.write_text(json.dumps(saved), encoding="utf-8")
+
+        with patch(
+            "task_alerts.sqlite3.connect",
+            side_effect=sqlite3.OperationalError("database temporarily unavailable"),
+        ):
+            unavailable = self.tracker().refresh()
+
+        self.assertIsNone(unavailable.alerts[0].last_reply)
+        waiting = json.loads(self.ledger.read_text(encoding="utf-8"))
+        self.assertEqual(waiting["reply_metadata_version"], 1)
+        self.assertEqual(waiting["reply_metadata_retry_threads"], ["thread-a"])
+
+        recovered = self.tracker().refresh()
+
+        self.assertEqual(recovered.alerts[0].last_reply, reply)
+        persisted = json.loads(self.ledger.read_text(encoding="utf-8"))
+        self.assertEqual(persisted["reply_metadata_retry_threads"], [])
+
+    def test_reply_metadata_upgrade_retries_incomplete_rollout(self):
+        reply = "retry-safe reply"
+        tracker = self.tracker()
+        tracker.refresh()
+        append_event(
+            self.rollout,
+            "task_complete",
+            "2026-07-12T00:01:00Z",
+            last_agent_message=reply,
+        )
+        tracker.refresh()
+        saved = json.loads(self.ledger.read_text(encoding="utf-8"))
+        saved["alerts"][-1].pop("last_reply", None)
+        saved.pop("reply_metadata_version", None)
+        saved.pop("reply_metadata_retry_threads", None)
+        self.ledger.write_text(json.dumps(saved), encoding="utf-8")
+        with self.rollout.open("ab") as stream:
+            stream.write(b'{"ignored":true}')
+
+        retrying = self.tracker().refresh()
+
+        self.assertIsNone(retrying.alerts[0].last_reply)
+        persisted = json.loads(self.ledger.read_text(encoding="utf-8"))
+        self.assertEqual(persisted["reply_metadata_version"], 1)
+        self.assertEqual(persisted["reply_metadata_retry_threads"], ["thread-a"])
+
+        with self.rollout.open("ab") as stream:
+            stream.write(b"\n")
+        recovered = self.tracker().refresh()
+
+        self.assertEqual(recovered.alerts[0].last_reply, reply)
+        persisted = json.loads(self.ledger.read_text(encoding="utf-8"))
+        self.assertEqual(persisted["reply_metadata_retry_threads"], [])
 
     def test_classifier_upgrade_does_not_resurrect_after_later_user_message(self):
         tracker = self.tracker()
@@ -815,6 +972,201 @@ class TaskAlertTrackerTests(unittest.TestCase):
         self.assertEqual(snapshot.alerts[0].state, "completed")
         self.assertEqual(snapshot.alerts[0].outcome, "completed")
         self.assertEqual(tracker.pending_watch_notification_ids(), ())
+
+    def test_task_alert_new_fields_default_to_none(self):
+        alert = TaskAlert(
+            id="alert-a",
+            thread_id="thread-a",
+            project="StopWatch",
+            title="Monitor",
+            progress_at="2026-07-12T00:02:30Z",
+            handled_at=None,
+            state="running",
+            watch_notified=True,
+            outcome="running",
+        )
+
+        self.assertIsNone(alert.turn_id)
+        self.assertIsNone(alert.last_reply)
+
+    def test_completion_retains_exact_reply_and_turn_in_snapshot(self):
+        reply = "完成 ✅\n\n第二段保留空行。\n最后一行"
+        tracker = self.tracker()
+        tracker.refresh()
+        append_event(
+            self.rollout,
+            "task_started",
+            "2026-07-12T00:02:00Z",
+            turn_id="turn-exact",
+        )
+        append_event(
+            self.rollout,
+            "task_complete",
+            "2026-07-12T00:02:30Z",
+            turn_id="turn-exact",
+            last_agent_message=reply,
+        )
+
+        alert = tracker.refresh().alerts[0]
+
+        self.assertEqual(alert.turn_id, "turn-exact")
+        self.assertEqual(alert.last_reply, reply)
+        saved = json.loads(self.ledger.read_text(encoding="utf-8"))
+        self.assertEqual(saved["alerts"][-1]["last_reply"], reply)
+
+    def test_new_running_alert_inherits_latest_same_thread_reply(self):
+        tracker = self.tracker()
+        tracker.refresh()
+        append_event(
+            self.rollout,
+            "task_complete",
+            "2026-07-12T00:01:00Z",
+            last_agent_message="older reply",
+        )
+        append_event(
+            self.rollout,
+            "task_complete",
+            "2026-07-12T00:02:00Z",
+            last_agent_message="最新回复\n原样保留",
+        )
+        append_event(
+            self.rollout,
+            "task_started",
+            "2026-07-12T00:03:00Z",
+            turn_id="turn-next",
+        )
+
+        alert = tracker.refresh().alerts[0]
+
+        self.assertEqual(alert.state, "running")
+        self.assertEqual(alert.turn_id, "turn-next")
+        self.assertEqual(alert.last_reply, "最新回复\n原样保留")
+
+    def test_new_running_alert_ignores_newer_other_thread_reply(self):
+        rollout_b = self.root / "rollout-b.jsonl"
+        rollout_b.touch()
+        add_thread(
+            self.state_db,
+            "thread-b",
+            "/workspace/OtherProject",
+            "Other task",
+            rollout_b,
+            2,
+        )
+        tracker = self.tracker()
+        tracker.refresh()
+        append_event(
+            self.rollout,
+            "task_complete",
+            "2026-07-12T00:02:00Z",
+            last_agent_message="thread-a stable reply",
+        )
+        append_event(
+            rollout_b,
+            "task_complete",
+            "2026-07-12T00:02:30Z",
+            last_agent_message="newer thread-b reply",
+        )
+        append_event(
+            self.rollout,
+            "task_started",
+            "2026-07-12T00:03:00Z",
+            turn_id="turn-next",
+        )
+
+        by_thread = {
+            alert.thread_id: alert for alert in tracker.refresh().alerts
+        }
+
+        self.assertEqual(by_thread["thread-a"].last_reply, "thread-a stable reply")
+        self.assertEqual(by_thread["thread-b"].last_reply, "newer thread-b reply")
+
+    def test_nonstring_completion_reply_is_not_persisted_or_coerced(self):
+        tracker = self.tracker()
+        tracker.refresh()
+        append_event(
+            self.rollout,
+            "task_complete",
+            "2026-07-12T00:02:30Z",
+            last_agent_message={"text": "not a stable reply"},
+        )
+
+        alert = tracker.refresh().alerts[0]
+
+        self.assertIsNone(alert.last_reply)
+        saved = json.loads(self.ledger.read_text(encoding="utf-8"))
+        self.assertNotIn("last_reply", saved["alerts"][-1])
+
+    def test_nonstring_completion_reply_content_is_not_logged(self):
+        tracker = self.tracker()
+        tracker.refresh()
+        append_event(
+            self.rollout,
+            "task_complete",
+            "2026-07-12T00:02:30Z",
+            last_agent_message={"text": "SECRET_REPLY_CONTENT"},
+        )
+
+        with self.assertLogs("task_alerts", level="INFO") as captured:
+            tracker.refresh()
+
+        self.assertEqual(
+            captured.output,
+            [
+                "INFO:task_alerts:Task alert classified: "
+                "thread=thread-a outcome=completed reason=completion_only"
+            ],
+        )
+        self.assertNotIn("SECRET_REPLY_CONTENT", "\n".join(captured.output))
+
+    def test_ledger_without_turn_or_reply_keys_remains_compatible(self):
+        tracker = self.tracker()
+        tracker.refresh()
+        saved = json.loads(self.ledger.read_text(encoding="utf-8"))
+        saved["alerts"] = [
+            {
+                "id": "thread-a:2026-07-12T00:02:00Z",
+                "thread_id": "thread-a",
+                "project": "StopWatch",
+                "title": "Codex status monitor",
+                "progress_at": "2026-07-12T00:02:00Z",
+                "handled_at": None,
+                "state": "running",
+                "watch_notified": True,
+                "outcome": "running",
+                "unrelated_alert_metadata": {"preserve": True},
+            },
+            {
+                "id": "thread-unrelated:2026-07-12T00:01:00Z",
+                "thread_id": "thread-unrelated",
+                "project": "OtherProject",
+                "title": "Unrelated alert",
+                "progress_at": "2026-07-12T00:01:00Z",
+                "handled_at": "2026-07-12T00:01:00Z",
+                "state": "completed",
+                "watch_notified": True,
+                "outcome": "completed",
+            }
+        ]
+        saved["unrelated_ledger_metadata"] = {
+            "preserve": ["contents", "and", "formatting"]
+        }
+        before = json.dumps(
+            saved,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        self.ledger.write_bytes(before)
+
+        snapshot = self.tracker().refresh()
+        alert = next(
+            item for item in snapshot.alerts if item.thread_id == "thread-a"
+        )
+
+        self.assertIsNone(alert.turn_id)
+        self.assertIsNone(alert.last_reply)
+        self.assertEqual(self.ledger.read_bytes(), before)
+        self.assertEqual(json.loads(self.ledger.read_bytes()), saved)
 
     def test_waiting_outcome_is_persisted_across_restart(self):
         tracker = self.tracker()

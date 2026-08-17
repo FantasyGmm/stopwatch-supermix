@@ -19,6 +19,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 from completion_classifier import CLASSIFIER_VERSION, classify_completion
 from codex_turn_evidence import (
     RolloutReplayError,
+    latest_stable_reply,
     latest_unsuperseded_completion,
     matching_turn_abort,
     new_turn_signal,
@@ -36,6 +37,7 @@ DEFAULT_CODEX_BINARIES = (
 )
 LEDGER_VERSION = 3
 ABORT_REDUCER_VERSION = 1
+REPLY_METADATA_VERSION = 1
 RETENTION_DAYS = 7
 MAX_DISCOVERED_THREADS = 50
 THREAD_LIST_LIMIT = 200
@@ -188,6 +190,8 @@ class TaskAlert:
     state: str
     watch_notified: bool
     outcome: str
+    turn_id: Optional[str] = None
+    last_reply: Optional[str] = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -278,6 +282,8 @@ class TaskAlertTracker:
             if self._reconcile_abort_reducer_version(threads):
                 changed = True
             if self._reconcile_classifier_version(threads):
+                changed = True
+            if self._reconcile_reply_metadata_version(threads):
                 changed = True
             if self._sync_thread_metadata(threads):
                 changed = True
@@ -430,6 +436,8 @@ class TaskAlertTracker:
             "version": LEDGER_VERSION,
             "classifier_version": CLASSIFIER_VERSION,
             "classifier_retry_threads": [],
+            "reply_metadata_version": REPLY_METADATA_VERSION,
+            "reply_metadata_retry_threads": [],
             "abort_reducer_version": ABORT_REDUCER_VERSION,
             "abort_retry_threads": [],
             "initialized_at": now,
@@ -544,6 +552,8 @@ class TaskAlertTracker:
                 "handled_at": completion_time if next_state == "completed" else None,
                 "watch_notified": next_notified,
             }
+            if isinstance(completion.last_agent_message, str):
+                updates["last_reply"] = completion.last_agent_message
             if any(alert.get(key) != value for key, value in updates.items()):
                 alert.update(updates)
                 changed = True
@@ -554,6 +564,76 @@ class TaskAlertTracker:
         next_retry_threads = sorted(retryable_failures)
         if previous_retry_threads != next_retry_threads:
             self._state["classifier_retry_threads"] = next_retry_threads
+            changed = True
+        if changed:
+            self._state["revision"] = int(self._state.get("revision", 0)) + 1
+        return changed
+
+    def _reconcile_reply_metadata_version(
+        self,
+        threads: List[_ThreadInfo],
+    ) -> bool:
+        current = self._state.get("reply_metadata_version", 0)
+        retry_threads = set(
+            self._state.get("reply_metadata_retry_threads", [])
+        )
+        version_changed = current != REPLY_METADATA_VERSION
+        if not version_changed and not retry_threads:
+            return False
+
+        previous_retry_threads = sorted(retry_threads)
+        changed = False
+        latest_alert_by_thread = {}
+        for item in self._state["alerts"]:
+            timestamp = _parse_timestamp(item.get("progress_at"))
+            thread_id = item.get("thread_id")
+            if timestamp is None or not isinstance(thread_id, str):
+                continue
+            existing = latest_alert_by_thread.get(thread_id)
+            if existing is None or timestamp >= existing[0]:
+                latest_alert_by_thread[thread_id] = (timestamp, item)
+
+        relevant_thread_ids = {
+            thread_id
+            for thread_id, (_timestamp, alert) in latest_alert_by_thread.items()
+            if not isinstance(alert.get("last_reply"), str)
+        }
+        if not version_changed:
+            relevant_thread_ids.intersection_update(retry_threads)
+        discovered_thread_ids = {thread.id for thread in threads}
+        retryable_failures = relevant_thread_ids - discovered_thread_ids
+
+        for thread in threads:
+            if thread.id not in relevant_thread_ids:
+                continue
+            existing = latest_alert_by_thread[thread.id]
+            try:
+                reply = latest_stable_reply(thread.rollout_path, existing[0])
+            except RolloutReplayError as error:
+                LOGGER.warning(
+                    "Unable to reconcile Codex reply metadata: thread=%s",
+                    thread.id,
+                    exc_info=True,
+                )
+                if error.retryable:
+                    retryable_failures.add(thread.id)
+                continue
+            if reply is None:
+                continue
+
+            alert = existing[1]
+            alert["last_reply"] = reply.last_reply
+            changed = True
+
+        if current != REPLY_METADATA_VERSION:
+            self._state["reply_metadata_version"] = REPLY_METADATA_VERSION
+            changed = True
+        next_retry_threads = sorted(retryable_failures)
+        if (
+            "reply_metadata_retry_threads" not in self._state
+            or previous_retry_threads != next_retry_threads
+        ):
+            self._state["reply_metadata_retry_threads"] = next_retry_threads
             changed = True
         if changed:
             self._state["revision"] = int(self._state.get("revision", 0)) + 1
@@ -703,6 +783,19 @@ class TaskAlertTracker:
             alert_id = "{}:{}".format(thread.id, timestamp_text)
             if any(entry.get("id") == alert_id for entry in self._state["alerts"]):
                 return signal_changed
+            latest_reply = None
+            latest_reply_at = None
+            for entry in self._state["alerts"]:
+                progress = _parse_timestamp(entry.get("progress_at"))
+                if (
+                    entry.get("thread_id") == thread.id
+                    and isinstance(entry.get("last_reply"), str)
+                    and progress is not None
+                    and progress < timestamp
+                    and (latest_reply_at is None or progress >= latest_reply_at)
+                ):
+                    latest_reply = entry["last_reply"]
+                    latest_reply_at = progress
             alert = {
                 "id": alert_id,
                 "thread_id": thread.id,
@@ -716,6 +809,8 @@ class TaskAlertTracker:
             }
             if isinstance(turn_id, str) and turn_id:
                 alert["turn_id"] = turn_id
+            if isinstance(latest_reply, str):
+                alert["last_reply"] = latest_reply
             self._state["alerts"].append(alert)
             self._state["revision"] = int(self._state.get("revision", 0)) + 1
             return True
@@ -747,6 +842,7 @@ class TaskAlertTracker:
             )
             outcome = classification.outcome
             state = "pending" if outcome == "waiting" else "completed"
+            last_reply = payload.get("last_agent_message")
             running = []
             for entry in self._state["alerts"]:
                 progress = _parse_timestamp(entry.get("progress_at"))
@@ -759,39 +855,43 @@ class TaskAlertTracker:
                     running.append((progress, entry))
             if running:
                 target = max(running, key=lambda candidate: candidate[0])[1]
-                target.update(
-                    {
-                        "id": "{}:{}".format(thread.id, timestamp_text),
-                        "project": thread.project,
-                        "title": thread.title,
-                        "progress_at": timestamp_text,
-                        "handled_at": timestamp_text if state == "completed" else None,
-                        "state": state,
-                        "watch_notified": state != "pending",
-                        "outcome": outcome,
-                        "reason": classification.reason,
-                    }
-                )
+                updates = {
+                    "id": "{}:{}".format(thread.id, timestamp_text),
+                    "project": thread.project,
+                    "title": thread.title,
+                    "progress_at": timestamp_text,
+                    "handled_at": timestamp_text if state == "completed" else None,
+                    "state": state,
+                    "watch_notified": state != "pending",
+                    "outcome": outcome,
+                    "reason": classification.reason,
+                }
+                if isinstance(last_reply, str):
+                    updates["last_reply"] = last_reply
+                target.update(updates)
             else:
                 alert_id = "{}:{}".format(thread.id, timestamp_text)
                 if any(
                     entry.get("id") == alert_id for entry in self._state["alerts"]
                 ):
                     return False
-                self._state["alerts"].append(
-                    {
-                        "id": alert_id,
-                        "thread_id": thread.id,
-                        "project": thread.project,
-                        "title": thread.title,
-                        "progress_at": timestamp_text,
-                        "handled_at": timestamp_text if state == "completed" else None,
-                        "state": state,
-                        "watch_notified": state != "pending",
-                        "outcome": outcome,
-                        "reason": classification.reason,
-                    }
-                )
+                alert = {
+                    "id": alert_id,
+                    "thread_id": thread.id,
+                    "project": thread.project,
+                    "title": thread.title,
+                    "progress_at": timestamp_text,
+                    "handled_at": timestamp_text if state == "completed" else None,
+                    "state": state,
+                    "watch_notified": state != "pending",
+                    "outcome": outcome,
+                    "reason": classification.reason,
+                }
+                if isinstance(turn_id, str) and turn_id:
+                    alert["turn_id"] = turn_id
+                if isinstance(last_reply, str):
+                    alert["last_reply"] = last_reply
+                self._state["alerts"].append(alert)
             if (
                 thread.id in signals
                 and signals[thread.id].get("turn_id") == turn_id
@@ -963,6 +1063,16 @@ class TaskAlertTracker:
                     state=state,
                     watch_notified=bool(item.get("watch_notified", False)),
                     outcome=outcome,
+                    turn_id=(
+                        item.get("turn_id")
+                        if isinstance(item.get("turn_id"), str)
+                        else None
+                    ),
+                    last_reply=(
+                        item.get("last_reply")
+                        if isinstance(item.get("last_reply"), str)
+                        else None
+                    ),
                 )
             )
         priority = {"pending": 0, "running": 1, "completed": 2}
@@ -1035,6 +1145,21 @@ class TaskAlertTracker:
                 isinstance(thread_id, str) for thread_id in retry_threads
             ):
                 raise ValueError("invalid classifier retry threads")
+            reply_metadata_version = state.get("reply_metadata_version", 0)
+            if (
+                not isinstance(reply_metadata_version, int)
+                or isinstance(reply_metadata_version, bool)
+                or reply_metadata_version < 0
+            ):
+                raise ValueError("invalid reply metadata version")
+            reply_metadata_retry_threads = state.get(
+                "reply_metadata_retry_threads", []
+            )
+            if not isinstance(reply_metadata_retry_threads, list) or not all(
+                isinstance(thread_id, str)
+                for thread_id in reply_metadata_retry_threads
+            ):
+                raise ValueError("invalid reply metadata retry threads")
             abort_reducer_version = state.get("abort_reducer_version", 0)
             if (
                 not isinstance(abort_reducer_version, int)

@@ -2,8 +2,68 @@
 
 #include <cassert>
 
+
+static void assert_touch_exclusion_is_inclusive_and_scoped()
+{
+    EdgeControlLogic logic;
+    const EdgeControlRect exclusion = {183, 423, 283, 465};
+
+    const int boundary_points[][2] = {
+        {183, 423}, {283, 423}, {183, 465}, {283, 465},
+    };
+    for (const auto& point : boundary_points) {
+        logic.press(point[0], point[1], 50, 60, 1000, &exclusion);
+        const EdgeControlUpdate update = logic.move(point[0], point[1] - 50, 1040);
+        assert(!update.activated);
+        assert(!update.consumed);
+        assert(!logic.release(1080).consumed);
+    }
+
+    logic.press(182, 440, 50, 60, 2000, &exclusion);
+    assert(logic.move(182, 390, 2040).activated);
+    assert(logic.release(2080).consumed);
+
+    logic.press(284, 440, 50, 60, 3000, &exclusion);
+    assert(logic.move(284, 390, 3040).activated);
+    assert(logic.release(3080).consumed);
+
+    logic.press(233, 422, 50, 60, 4000, &exclusion);
+    assert(logic.move(233, 370, 4040).activated);
+    assert(logic.release(4080).consumed);
+
+    logic.press(233, 466, 50, 60, 5000, &exclusion);
+    assert(logic.move(233, 410, 5040).activated);
+    assert(logic.release(5080).consumed);
+
+    // Clearing the app-specific exclusion restores the normal global gesture.
+    logic.press(233, 440, 50, 60, 6000, nullptr);
+    assert(logic.move(233, 390, 6040).activated);
+    assert(logic.release(6080).consumed);
+}
+
+
+static void assert_exclusion_changes_cancel_only_unowned_candidates()
+{
+    EdgeControlLogic logic;
+    logic.press(80, 300, 50, 60, 1000);
+    assert(logic.candidate());
+    logic.cancelCandidate();
+    assert(!logic.candidate());
+    assert(!logic.move(80, 240, 1040).activated);
+    assert(!logic.release(1080).consumed);
+
+    logic.press(80, 300, 50, 60, 2000);
+    assert(logic.move(80, 250, 2040).activated);
+    assert(logic.active());
+    logic.cancelCandidate();
+    assert(logic.active());
+    assert(logic.release(2080).consumed);
+}
+
 int main()
 {
+    assert_touch_exclusion_is_inclusive_and_scoped();
+    assert_exclusion_changes_cancel_only_unowned_candidates();
     EdgeControlLogic logic;
 
     logic.press(80, 300, 50, 60, 1000);

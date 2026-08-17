@@ -67,7 +67,8 @@ void GlobalEdgeControlService::update()
             _last_release_consumed = false;
             _overlay.hide();
             _logic.press(point.x, point.y, GetHAL().getUserBackLightBrightness(),
-                         GetHAL().getSpeakerVolume(), now_ms);
+                         GetHAL().getSpeakerVolume(), now_ms,
+                         _touch_exclusion ? &*_touch_exclusion : nullptr);
         }
 
         apply(_logic.move(point.x, point.y, now_ms), indev);
@@ -106,6 +107,7 @@ void GlobalEdgeControlService::shutdown()
     _enabled = false;
     _owns_touch = false;
     _last_release_consumed = false;
+    _touch_exclusion.reset();
 }
 
 void GlobalEdgeControlService::setEnabled(bool enabled)
@@ -127,6 +129,16 @@ void GlobalEdgeControlService::setEnabled(bool enabled)
         indev == nullptr || protection.touchInputSuppressed()
         ? LV_INDEV_STATE_REL
         : lv_indev_get_state(indev);
+}
+
+void GlobalEdgeControlService::setTouchExclusion(
+    std::optional<EdgeControlRect> exclusion
+)
+{
+    _touch_exclusion = exclusion;
+    if (!_logic.active()) {
+        _logic.cancelCandidate();
+    }
 }
 
 bool GlobalEdgeControlService::ownsTouch() const

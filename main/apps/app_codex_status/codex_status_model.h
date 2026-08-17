@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -18,6 +19,19 @@ struct CodexTaskAlert {
     std::string title;
     std::string time;
     CodexTaskState state = CodexTaskState::Completed;
+    uint64_t route = 0;
+};
+
+struct CodexTaskDetailEnvelope {
+    uint64_t route = 0;
+    std::string route_hex;
+    int32_t revision = 0;
+    uint32_t index = 0;
+    uint32_t count = 0;
+    uint32_t key_epoch = 0;
+    std::array<uint8_t, 8> exchange_nonce = {};
+    uint32_t sequence = 0;
+    std::vector<uint8_t> ciphertext;
 };
 
 struct CodexStatusSnapshot {
@@ -33,6 +47,7 @@ struct CodexStatusSnapshot {
     int alert_revision = 0;
     std::vector<CodexTaskAlert> alerts;
     bool alerts_valid = false;
+    CodexTaskDetailEnvelope task_detail;
 };
 
 
@@ -41,6 +56,7 @@ enum class CodexMessageKind {
     Status,
     Chime,
     TimeSync,
+    TaskDetail,
 };
 
 

@@ -15,18 +15,20 @@ constexpr voice_input::crypto::ExchangeNonce kTestNonce = {
     0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
 };
 constexpr uint32_t kTestEpoch = 7;
+constexpr uint64_t kTestRoute = UINT64_C(0x0123456789abcdef);
 constexpr std::array<uint8_t, 28> kReadyVector = {
-    0x05, 0x01, 0x00, 0x03, 0x07, 0x00, 0x00, 0x00,
+    0x06, 0x01, 0x00, 0x03, 0x07, 0x00, 0x00, 0x00,
     0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
-    0xb0, 0xf4, 0xd7, 0xed, 0xdf, 0x85, 0xdd, 0x43,
-    0x64, 0x15, 0x4e, 0x5b,
+    0xb0, 0xf4, 0xd7, 0xed, 0x9e, 0xdc, 0xb0, 0xed,
+    0xfe, 0x71, 0x3c, 0xd1,
 };
-constexpr std::array<uint8_t, 40> kBeginVector = {
-    0x05, 0x01, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00,
+constexpr std::array<uint8_t, 48> kBeginVector = {
+    0x06, 0x01, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x64, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00,
-    0x16, 0x00, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15,
+    0x1e, 0x00, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15,
     0x16, 0x17, 0xdb, 0xfb, 0x82, 0x53, 0xdc, 0xc6,
-    0x5f, 0xb7, 0xbc, 0x0c, 0x1a, 0x57, 0x56, 0x94,
+    0xca, 0xb4, 0x54, 0x89, 0x13, 0x0b, 0x3d, 0x3f,
+    0xa9, 0x9d, 0x7b, 0xb6, 0x26, 0x88, 0x26, 0xd0,
 };
 
 }  // namespace
@@ -110,7 +112,13 @@ int main()
     begin.key_epoch = kTestEpoch;
     begin.session_nonce = kTestNonce;
     begin.payload_size = encode_begin_body(
-        BeginBody{}, begin.payload.data(), begin.payload.size());
+        BeginBody{
+            kImaAdpcmCodec,
+            BeginBody::Mode::PushToTalk,
+            kSampleRate,
+            kBlockSamples,
+            kTestRoute},
+        begin.payload.data(), begin.payload.size());
     std::array<uint8_t, kMaxNotificationSize> encoded = {};
     const size_t begin_size = encode_notification(
         begin, context, encoded.data(), encoded.size());
@@ -137,6 +145,7 @@ int main()
     assert(decoded_body.mode == BeginBody::Mode::PushToTalk);
     assert(decoded_body.sample_rate == kSampleRate);
     assert(decoded_body.block_samples == kBlockSamples);
+    assert(decoded_body.route == kTestRoute);
 
     VoiceNotification audio = {};
     audio.kind = NotificationKind::Audio;
@@ -235,6 +244,10 @@ int main()
     assert(decoded_error_body.detail == 0x1234);
 
     auto rejected = kReadyVector;
+    rejected[0] = 4;
+    assert(!decode_control(
+        rejected.data(), rejected.size(), context, kTestEpoch, ready));
+    rejected = kReadyVector;
     rejected[0] = 2;
     assert(!decode_control(
         rejected.data(), rejected.size(), context, kTestEpoch, ready));
@@ -249,7 +262,7 @@ int main()
 
     auto tampered_begin = kBeginVector;
     for (const size_t index : {size_t{0}, size_t{2}, size_t{12}, size_t{18},
-                               size_t{26},
+                               size_t{26}, size_t{31},
                                tampered_begin.size() - 1}) {
         auto changed = tampered_begin;
         changed[index] ^= 1;
@@ -271,6 +284,9 @@ int main()
     assert(encode_notification(invalid, context, encoded.data(), encoded.size()) == 0);
     invalid = begin;
     invalid.payload[0] = 2;
+    assert(encode_notification(invalid, context, encoded.data(), encoded.size()) == 0);
+    invalid = begin;
+    std::fill_n(invalid.payload.begin() + 5, sizeof(uint64_t), 0);
     assert(encode_notification(invalid, context, encoded.data(), encoded.size()) == 0);
     invalid = audio;
     invalid.payload_size = kAudioPlaintextSize - 1;
@@ -299,7 +315,8 @@ int main()
         kTestNonce.end(),
         authenticated_bad_codec.begin() + kNotificationHeaderSize);
     const std::array<uint8_t, kBeginBodySize> invalid_codec = {
-        2, 0x80, 0x3e, 0x40, 0x01,
+        2, 0x80, 0x3e, 0x40, 0x01, 0xef, 0xcd, 0xab,
+        0x89, 0x67, 0x45, 0x23, 0x01,
     };
     size_t encrypted_body_size = 0;
     assert(context.encrypt(

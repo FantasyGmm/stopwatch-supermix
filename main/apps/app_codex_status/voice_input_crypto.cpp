@@ -20,6 +20,7 @@ bool valid_domain(Domain domain)
         case Domain::InputReady:
         case Domain::InputSubmit:
         case Domain::InputForceSteer:
+        case Domain::TaskDetail:
             return true;
     }
     return false;

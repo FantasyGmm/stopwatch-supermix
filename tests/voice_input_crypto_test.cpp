@@ -36,6 +36,7 @@ int main()
     static_assert(static_cast<uint8_t>(Domain::Audio) == 0x12);
     static_assert(static_cast<uint8_t>(Domain::PttEnd) == 0x13);
     static_assert(static_cast<uint8_t>(Domain::VoiceError) == 0x14);
+    static_assert(static_cast<uint8_t>(Domain::TaskDetail) == 0x24);
 
     for (const Domain domain : {
              Domain::Ready,
@@ -44,6 +45,7 @@ int main()
              Domain::Audio,
              Domain::PttEnd,
              Domain::VoiceError,
+             Domain::TaskDetail,
          }) {
         Nonce nonce = {};
         assert(derive_nonce(domain, kTestNonce, 0x04030201U, nonce));
