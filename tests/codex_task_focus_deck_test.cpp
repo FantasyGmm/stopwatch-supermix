@@ -94,7 +94,7 @@ void assert_selection_changes_only_explicitly()
 }
 
 
-void assert_refresh_preserves_selection_and_refocuses_it()
+void assert_refresh_preserves_selection_and_browsed_focus()
 {
     CodexTaskFocusDeck deck;
     assert(deck.apply(snapshot({
@@ -114,8 +114,8 @@ void assert_refresh_preserves_selection_and_refocuses_it()
         task(2, "Pending B", CodexTaskState::Pending),
     })));
     assert(deck.selected_route() == 2);
-    assert(deck.focused()->route == 2);
-    assert(deck.focused_index() == 1);
+    assert(deck.focused()->route == 3);
+    assert(deck.focused_index() == 2);
 }
 
 
@@ -200,7 +200,7 @@ int main()
     assert_pending_first_stable_order_and_completed_filtering();
     assert_browse_is_bounded_and_does_not_select();
     assert_selection_changes_only_explicitly();
-    assert_refresh_preserves_selection_and_refocuses_it();
+    assert_refresh_preserves_selection_and_browsed_focus();
     assert_missing_selection_falls_back_while_focus_clamps_nearest_index();
     assert_empty_refresh_clears_state();
     assert_invalid_snapshots_fail_without_mutation();

@@ -138,6 +138,8 @@ public:
 
 private:
     VoiceButtonEdgeGate _gate;
+    bool _press_pending = false;
+    bool _press_delivered = false;
 };
 
 class VoiceInputController : public VoiceButtonSink {

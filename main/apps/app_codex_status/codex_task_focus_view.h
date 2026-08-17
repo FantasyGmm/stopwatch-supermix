@@ -2,6 +2,7 @@
 
 #include "codex_task_focus_deck.h"
 #include "codex_task_focus_preview.h"
+#include "codex_task_focus_text.h"
 
 #include <lvgl.h>
 
@@ -26,6 +27,7 @@ public:
     void show_detail(
         const CodexTaskAlert* task,
         const char* reply,
+        int32_t revision,
         bool connected
     );
     void set_recording(bool recording);
@@ -49,20 +51,26 @@ private:
 
     lv_obj_t* _root = nullptr;
     lv_obj_t* _deck_layer = nullptr;
+    lv_obj_t* _deck_project_pill = nullptr;
     lv_obj_t* _deck_project = nullptr;
     lv_obj_t* _deck_title = nullptr;
     lv_obj_t* _deck_status = nullptr;
+    lv_obj_t* _deck_target = nullptr;
+    lv_obj_t* _deck_open = nullptr;
+    lv_obj_t* _deck_next = nullptr;
     lv_obj_t* _deck_empty = nullptr;
     lv_obj_t* _connection_hint = nullptr;
     lv_obj_t* _track_layer = nullptr;
-    lv_obj_t* _track_arc = nullptr;
     std::array<lv_obj_t*, 8> _track_nodes{};
     lv_obj_t* _detail_layer = nullptr;
     lv_obj_t* _detail_project = nullptr;
     lv_obj_t* _detail_title = nullptr;
     lv_obj_t* _detail_status = nullptr;
+    lv_obj_t* _detail_divider = nullptr;
+    lv_obj_t* _detail_label = nullptr;
     lv_obj_t* _detail_body = nullptr;
-    lv_obj_t* _detail_reply = nullptr;
+    std::array<lv_obj_t*, 16> _detail_paragraphs{};
+    lv_obj_t* _detail_footer_label = nullptr;
     lv_obj_t* _detail_footer = nullptr;
     lv_obj_t* _detail_recording_dot = nullptr;
     CodexTaskFocusViewMode _mode = CodexTaskFocusViewMode::Hidden;
@@ -71,6 +79,10 @@ private:
     bool _visible = true;
     bool _connected = false;
     bool _recording = false;
+    int _deck_status_y = 0;
     std::string _deck_title_text;
     std::string _detail_title_text;
+    std::array<std::string, 16> _detail_paragraph_text{};
+    codex_task_focus_layout::TaskDetailScrollIdentity
+        _detail_scroll_identity;
 };

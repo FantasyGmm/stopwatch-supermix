@@ -18,65 +18,89 @@ constexpr uint32_t kRunningCyan = 0x49C9EE;
 constexpr uint32_t kSignalWhite = 0xF2F6F8;
 constexpr uint32_t kEtchedGray = 0x788391;
 constexpr uint32_t kPendingVermilion = 0xFF6248;
+constexpr uint32_t kProjectViolet = 0x9FB5FF;
+constexpr uint32_t kProjectPill = 0x161D30;
+constexpr uint32_t kPendingPill = 0xB54635;
+constexpr uint32_t kRunningText = 0x6ED8EF;
+constexpr uint32_t kRunningBorder = 0x318095;
+constexpr uint32_t kSecondaryText = 0xC8D2DC;
+constexpr uint32_t kDeckHint = 0x9BA6B1;
+constexpr uint32_t kDetailLabel = 0xB0BCC8;
+constexpr uint32_t kDetailState = 0xFF7F69;
+constexpr uint32_t kScrollbar = 0x4B5662;
 
-constexpr int kContentWidth = 336;
-constexpr int kContentCenterX = kViewportWidth / 2 - 18;
+constexpr int kContentWidth = 326;
+constexpr int kContentCenterX = kViewportWidth / 2;
 constexpr int kContentX = kContentCenterX - kContentWidth / 2;
-constexpr int kProjectY = 72;
-constexpr int kProjectHeight = 24;
-constexpr int kTaskTitleY = 154;
-constexpr int kTaskTitleHeight = 104;
+constexpr int kProjectY = 134;
+constexpr int kProjectHeight = 22;
+constexpr int kProjectPillHorizontalPadding = 16;
+constexpr int kTaskTitleX = 98;
+constexpr int kTaskTitleY = 177;
+constexpr int kTaskTitleWidth = 270;
+constexpr int kTaskTitleLineHeight = 33;
+constexpr int kTaskTitleHeight = kTaskTitleLineHeight * 3;
 constexpr int kTaskTitleMaxLines = 3;
-constexpr size_t kDeckTitleCjkMaxScalars = 36;
-constexpr size_t kDeckTitleLatinMaxScalars = 54;
+constexpr size_t kDeckTitleCjkMaxScalars = 30;
+constexpr size_t kDeckTitleLatinMaxScalars = 48;
 constexpr size_t kDetailTitleMaxScalars = 30;
-constexpr int kLatinTitleScale = 315;  // 26 px source rendered at 32 px.
-constexpr int kCjkTitleScale = 476;   // 14 px source rendered at 26 px.
-constexpr int kCjkBodyScale = 293;    // 14 px source rendered at 16 px.
-constexpr int kStatusCenterY = 305;
-constexpr int kStatusHeight = 30;
-constexpr int kStatusPendingWidth = 142;
-constexpr int kStatusRunningWidth = 112;
-constexpr int kStatusRadius = 15;
-constexpr int kConnectionHintY = 344;
+constexpr int kLatinTitleScale = 266;  // 26 px source rendered at 27 px.
+constexpr int kCjkTitleScale = 432;   // 16 px source rendered at 27 px.
+constexpr int kDetailBodyFontPx = 16;
+constexpr int kStatusCenterY = 241;
+constexpr int kStatusHeight = 27;
+constexpr int kStatusPendingWidth = 90;
+constexpr int kStatusRunningWidth = 70;
+constexpr int kStatusRunningHeight = 29;
+constexpr int kStatusRadius = 14;
+constexpr int kDeckTargetY = 268;
+constexpr int kDeckTargetHeight = 13;
+constexpr int kDeckOpenY = 294;
+constexpr int kDeckOpenHeight = 23;
+constexpr int kDeckNextY = 411;
+constexpr int kDeckNextHeight = 23;
+constexpr int kConnectionHintY = 352;
 constexpr int kConnectionHintHeight = 22;
-constexpr int kFocusTargetX = 36;
+constexpr int kFocusTargetX = 70;
 constexpr int kFocusTargetY = 120;
-constexpr int kFocusTargetWidth = 358;
-constexpr int kFocusTargetHeight = 210;
+constexpr int kFocusTargetWidth = 326;
+constexpr int kFocusTargetHeight = 230;
 constexpr int kMinimumHitSize = 44;
 
-constexpr int kDetailProjectY = 44;
-constexpr int kDetailProjectHeight = 22;
-constexpr int kDetailTitleY = 68;
-constexpr int kDetailTitleHeight = 48;
-constexpr int kDetailStatusY = 119;
-constexpr int kDetailStatusHeight = 22;
-constexpr int kDetailBodyX = 54;
-constexpr int kDetailBodyY = 145;
-constexpr int kDetailBodyWidth = 338;
-constexpr int kDetailBodyHeight = 222;
-constexpr int kDetailFooterX = 48;
-constexpr int kDetailFooterY = 382;
-constexpr int kDetailFooterWidth = 370;
-constexpr int kDetailFooterHeight = 44;
+constexpr int kDetailHeaderX = 80;
+constexpr int kDetailHeaderWidth = 306;
+constexpr int kDetailProjectY = 28;
+constexpr int kDetailProjectHeight = 12;
+constexpr int kDetailTitleY = 47;
+constexpr int kDetailTitleHeight = 20;
+constexpr int kDetailStatusY = 73;
+constexpr int kDetailStatusHeight = 13;
+constexpr int kDetailLabelX = 108;
+constexpr int kDetailLabelY = 105;
+constexpr int kDetailLabelWidth = 250;
+constexpr int kDetailLabelHeight = 24;
+constexpr int kDetailLabelTextY = 114;
+constexpr int kDetailBodyX = 60;
+constexpr int kDetailBodyY = 132;
+constexpr int kDetailBodyWidth = 346;
+constexpr int kDetailBodyHeight = 253;
+constexpr int kDetailReplyLineSpace = 5;
+constexpr int kDetailReplyLineHeight = 25;
+constexpr int kDetailParagraphGap = 13;
+constexpr size_t kDetailParagraphLimit = 16;
+constexpr int kDetailFooterX = 116;
+constexpr int kDetailFooterY = 401;
+constexpr int kDetailFooterWidth = 234;
+constexpr int kDetailFooterHeight = 31;
 
-constexpr int kTrackCenterX = 421;
-constexpr int kTrackCenterY = 234;
-constexpr int kTrackRadius = 132;
-constexpr int kTrackSafeMaxX = 426;
-// LVGL angles increase clockwise: 90 is bottom, 180 left, 270 top.
-constexpr int kTrackArcStartAngleDegrees = 92;
-constexpr int kTrackArcEndAngleDegrees = 268;
-constexpr int kTrackNodeStartAngleDegrees = 268;
-constexpr int kTrackNodeEndAngleDegrees = 92;
-constexpr int kTrackTopY = 102;
-constexpr int kTrackBottomY = 366;
-constexpr int kTrackRadiusTolerance = 2;
+constexpr int kTrackCenterX = 420;
+constexpr int kTrackTopY = 147;
+constexpr int kTrackHeight = 195;
+constexpr int kTrackSafeMaxX = 424;
 constexpr size_t kMaxTrackNodes = 8;
-constexpr int kInactiveNodeSize = 8;
-constexpr int kFocusedNodeWidth = 10;
-constexpr int kFocusedNodeHeight = 24;
+constexpr int kInactiveNodeSize = 6;
+constexpr int kFocusedNodeWidth = 8;
+constexpr int kFocusedNodeHeight = 18;
 
 constexpr bool kUsesCards = false;
 constexpr bool kUsesGradients = false;
@@ -123,21 +147,18 @@ inline TaskTrackNodes make_track_nodes(
         return result;
     }
     result.count = count < kMaxTrackNodes ? count : kMaxTrackNodes;
+    const bool has_focus = focused_index < result.count;
+    const int occupied_height = has_focus
+        ? kFocusedNodeHeight +
+            kInactiveNodeSize * static_cast<int>(result.count - 1)
+        : kInactiveNodeSize * static_cast<int>(result.count);
+    const double gap = static_cast<double>(kTrackHeight - occupied_height) /
+        static_cast<double>(result.count);
+    double top = kTrackTopY + gap / 2.0;
 
     for (size_t index = 0; index < result.count; ++index) {
-        const double angle_degrees = result.count == 1
-            ? 180.0
-            : kTrackNodeStartAngleDegrees +
-                static_cast<double>(index) *
-                    (kTrackNodeEndAngleDegrees -
-                     kTrackNodeStartAngleDegrees) /
-                    static_cast<double>(result.count - 1);
-        const double angle = angle_degrees * 3.14159265358979323846 / 180.0;
         TaskTrackNode& node = result.items[index];
-        node.center_x = static_cast<int>(std::lround(
-            kTrackCenterX + kTrackRadius * std::cos(angle)));
-        node.center_y = static_cast<int>(std::lround(
-            kTrackCenterY + kTrackRadius * std::sin(angle)));
+        node.center_x = kTrackCenterX;
         node.color = states[index] == TaskTrackState::Pending
             ? kPendingVermilion
             : kRunningCyan;
@@ -153,6 +174,9 @@ inline TaskTrackNodes make_track_nodes(
             node.width = kInactiveNodeSize;
             node.height = kInactiveNodeSize;
         }
+        node.center_y = static_cast<int>(std::lround(
+            top + static_cast<double>(node.height) / 2.0));
+        top += node.height + gap;
     }
     return result;
 }

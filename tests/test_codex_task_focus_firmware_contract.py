@@ -58,6 +58,21 @@ class CodexTaskFocusFirmwareContractTests(unittest.TestCase):
         self.assertIn("task_mode == CodexTaskFocusMode::Status",
                       running)
 
+    def test_task_modes_hide_dormant_agent_handle_and_skip_its_touch(self):
+        self.assertIn("sync_agent_panel_for_task_mode", self.header)
+        helper = self.source.split(
+            "bool AppCodexStatus::sync_agent_panel_for_task_mode", 1
+        )[1].split("\n}", 1)[0]
+        self.assertIn("task_mode != CodexTaskFocusMode::Status", helper)
+        self.assertIn("!snapshot.visible", helper)
+        self.assertIn("LV_OBJ_FLAG_HIDDEN", helper)
+        self.assertIn("_agent_panel_model.cancel_touch()", helper)
+        running = self.source.split(
+            "const bool agent_panel_available =", 1
+        )[1].split("bool alert_changed", 1)[0]
+        self.assertIn("if (agent_panel_available)", running)
+        self.assertIn("update_agent_panel_touch(now)", running)
+
     def test_voice_and_lifecycle_fail_closed(self):
         self.assertIn("task_focus_voice_sink()", self.source)
         sink = self.source.split("VoiceButtonSink* AppCodexStatus::task_focus_voice_sink", 1)[1]

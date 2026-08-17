@@ -12,6 +12,7 @@ enum class TaskFocusPreviewScenario {
     PendingDeck,
     RunningDeck,
     MixedBoundary,
+    OriginalEDetail,
     LongCjkDetail,
     EmptyDeck,
     RecordingDetail,
@@ -64,6 +65,16 @@ inline TaskFocusPreviewData task_focus_preview(TaskFocusPreviewScenario scenario
         data.project = "Agent";
         data.title = "整理协议实现并核对正式构建验证结果";
         data.focused_index = 3;
+        break;
+    case TaskFocusPreviewScenario::OriginalEDetail:
+        data.detail = true;
+        data.reply =
+            "语音传输竞态已经修复。手表结束录音后会可靠发送结束帧，Agent "
+            "也不会再因为工作线程退出顺序而卡在录音状态。\n\n"
+            "本轮同时补上了连接代次校验、撤销授权检查和发送超时保护。"
+            "完整离线验证共 54 项，当前全部通过。\n\n"
+            "下一步建议进行两轮真机录音：一轮短句、一轮连续讲话 30 秒，"
+            "确认不会提前结束。";
         break;
     case TaskFocusPreviewScenario::LongCjkDetail:
         data.project = "超长项目名称用于验证圆形屏幕安全区域";

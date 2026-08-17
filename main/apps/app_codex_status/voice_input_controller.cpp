@@ -203,6 +203,8 @@ VoiceButtonAction VoiceButtonEdgeGate::update(
 void VoiceButtonDispatcher::reset(bool right_pressed)
 {
     _gate.reset(right_pressed);
+    _press_pending = false;
+    _press_delivered = false;
 }
 
 VoiceButtonDispatchDecision VoiceButtonDispatcher::dispatch(
@@ -217,26 +219,38 @@ VoiceButtonDispatchDecision VoiceButtonDispatcher::dispatch(
         left_pressed, right_pressed, woke_screen, go_home, now_ms);
     switch (action) {
     case VoiceButtonAction::Press:
+        _press_pending = true;
         if (sink) {
             sink->handle_button(true, now_ms);
+            _press_delivered = true;
         }
         break;
     case VoiceButtonAction::Release:
-        if (sink) {
+        if (_press_delivered && sink) {
             sink->handle_button(false, now_ms);
         }
+        _press_pending = false;
+        _press_delivered = false;
         break;
     case VoiceButtonAction::CancelVoice:
         if (sink) {
             sink->cancel_for_home(now_ms);
         }
+        _press_pending = false;
+        _press_delivered = false;
         break;
     case VoiceButtonAction::CancelHome:
         if (sink) {
             sink->cancel_for_home(now_ms);
         }
+        _press_pending = false;
+        _press_delivered = false;
         return VoiceButtonDispatchDecision::Close;
     case VoiceButtonAction::None:
+        if (_press_pending && !_press_delivered && right_pressed && sink) {
+            sink->handle_button(true, now_ms);
+            _press_delivered = true;
+        }
         break;
     }
     return VoiceButtonDispatchDecision::Continue;

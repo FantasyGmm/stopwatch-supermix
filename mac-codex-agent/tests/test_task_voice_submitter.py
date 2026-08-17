@@ -36,6 +36,49 @@ class TaskVoiceSubmitterTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(client.calls, [("start", "p", "one"), ("steer", "r", "turn-r", "two")])
 
+    async def test_revision_refresh_does_not_invalidate_the_same_pending_target(self):
+        registry = TaskRouteRegistry()
+        route = route_id_for_thread("p")
+        captured = TaskRouteTarget(route, "p", "pending", None, 4)
+        registry.update((captured,))
+        client = FakeClient()
+        submitter = TaskVoiceSubmitter(registry, client)
+        snapshot = submitter.snapshot(int(route, 16))
+        registry.update((TaskRouteTarget(route, "p", "pending", None, 5),))
+
+        await submitter.submit(snapshot, "next")
+
+        self.assertEqual(client.calls, [("start", "p", "next")])
+
+    async def test_running_task_that_finishes_during_recording_starts_next_turn(self):
+        registry = TaskRouteRegistry()
+        route = route_id_for_thread("r")
+        running = TaskRouteTarget(route, "r", "running", "turn-r", 4)
+        registry.update((running,))
+        client = FakeClient()
+        submitter = TaskVoiceSubmitter(registry, client)
+        snapshot = submitter.snapshot(int(route, 16))
+        registry.update((TaskRouteTarget(route, "r", "completed", None, 5),))
+
+        await submitter.submit(snapshot, "continue")
+
+        self.assertEqual(client.calls, [("start", "r", "continue")])
+
+    async def test_changed_running_turn_still_fails_closed(self):
+        registry = TaskRouteRegistry()
+        route = route_id_for_thread("r")
+        running = TaskRouteTarget(route, "r", "running", "turn-old", 4)
+        registry.update((running,))
+        client = FakeClient()
+        submitter = TaskVoiceSubmitter(registry, client)
+        snapshot = submitter.snapshot(int(route, 16))
+        registry.update((TaskRouteTarget(route, "r", "running", "turn-new", 5),))
+
+        with self.assertRaises(VoiceSubmitError):
+            await submitter.submit(snapshot, "must not redirect")
+
+        self.assertEqual(client.calls, [])
+
     async def test_missing_stale_collision_and_missing_turn_fail_closed(self):
         registry = TaskRouteRegistry()
         target = TaskRouteTarget(route_id_for_thread("a"), "a", "pending", None, 1)

@@ -32,6 +32,7 @@ from runtime import (
     SecureConnectionAuthorizer,
     _create_voice_session,
 )
+from codex_task_composer import CodexTaskComposerClient
 from task_routes import route_id_for_thread
 from voice_audio import VoiceAudioDeviceNotFound, VoiceAudioError
 from voice_driver import DriverState
@@ -282,6 +283,16 @@ async def wait_for_messages(transport, count):
 
 
 class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_production_voice_uses_the_active_codex_task_composer(self):
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            transcript_source=object(),
+        )
+
+        self.assertIsInstance(
+            runtime._app_server_client, CodexTaskComposerClient
+        )
+
     async def test_latest_internal_alerts_refresh_shared_voice_routes(self):
         class Client:
             async def close(self):
@@ -313,6 +324,37 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(target.thread_id, thread_id)
         self.assertEqual(target.expected_turn_id, "turn-active")
         self.assertEqual(target.revision, 8)
+
+    async def test_completed_alert_remains_available_for_inflight_voice_revalidation(self):
+        class Client:
+            async def close(self):
+                pass
+
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            app_server_client=Client(),
+            transcript_source=object(),
+        )
+        thread_id = "thread-just-completed"
+        route = route_id_for_thread(thread_id)
+        runtime._update_task_routes(
+            {
+                "codex_alert_revision": 9,
+                "codex_alerts": [
+                    {
+                        "route": route,
+                        "thread_id": thread_id,
+                        "state": "completed",
+                        "turn_id": "turn-complete",
+                    }
+                ],
+            }
+        )
+
+        target = runtime._task_route_registry.resolve(route)
+        self.assertIsNotNone(target)
+        self.assertEqual(target.state, "completed")
+        self.assertIsNone(target.expected_turn_id)
 
     async def test_authenticated_credential_is_injected_into_status_agent(self):
         credential = WatchCredential(

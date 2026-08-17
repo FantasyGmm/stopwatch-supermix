@@ -30,7 +30,7 @@ from app_state import (
     UserDefaultsPreferences,
 )
 from codex_adapter import CodexStateCollector
-from codex_app_server import CodexAppServerClient
+from codex_task_composer import CodexTaskComposerClient
 from combined_collector import CompositeStateCollector
 from pairing_client import PairingClient, WatchCredential
 from task_alerts import TaskAlertTracker
@@ -407,7 +407,9 @@ class AgentRuntime:
         self._voice_nonce_factory = voice_nonce_factory or _new_voice_nonce
         self._secure_authorizer = secure_authorizer
         self._task_route_registry = task_route_registry or TaskRouteRegistry()
-        self._app_server_client = app_server_client or CodexAppServerClient()
+        self._app_server_client = (
+            app_server_client or CodexTaskComposerClient()
+        )
         self._transcript_source = transcript_source or TypelessTranscriptSource()
         self._task_submitter = task_submitter or TaskVoiceSubmitter(
             self._task_route_registry, self._app_server_client
@@ -736,7 +738,7 @@ class AgentRuntime:
                 if (
                     not isinstance(thread_id, str)
                     or not thread_id
-                    or state not in ("pending", "running")
+                    or state not in ("pending", "running", "completed")
                 ):
                     continue
                 derived_route = route_id_for_thread(thread_id)
@@ -747,7 +749,9 @@ class AgentRuntime:
                         route=derived_route,
                         thread_id=thread_id,
                         state=state,
-                        expected_turn_id=alert.get("turn_id"),
+                        expected_turn_id=(
+                            alert.get("turn_id") if state == "running" else None
+                        ),
                         revision=revision,
                     )
                 )

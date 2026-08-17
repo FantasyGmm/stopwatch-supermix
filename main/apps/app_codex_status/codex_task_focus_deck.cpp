@@ -76,7 +76,11 @@ bool CodexTaskFocusDeck::apply(const CodexStatusSnapshot& snapshot)
     }
 
     const size_t old_focus = _focused_index;
+    const uint64_t old_focused_route =
+        _tasks.empty() ? 0 : _tasks[_focused_index].route;
     const uint64_t old_selection = _selected_route;
+    const bool focus_survives =
+        old_focused_route != 0 && find_route(next, old_focused_route) != nullptr;
     const bool selection_survives =
         old_selection != 0 && find_route(next, old_selection) != nullptr;
 
@@ -87,7 +91,9 @@ bool CodexTaskFocusDeck::apply(const CodexStatusSnapshot& snapshot)
 
     size_t next_focus = 0;
     if (!next.empty()) {
-        if (selection_survives || old_selection == 0) {
+        if (focus_survives) {
+            next_focus = route_index(next, old_focused_route);
+        } else if (old_focused_route == 0) {
             next_focus = route_index(next, next_selection);
         } else {
             next_focus = std::min(old_focus, next.size() - 1);

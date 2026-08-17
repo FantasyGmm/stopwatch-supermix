@@ -26,17 +26,22 @@ class TaskVoiceSubmitter:
 
     async def submit(self, target: TaskRouteTarget, text: str) -> None:
         current = self._registry.resolve(target.route)
-        if current is None or current != target:
+        if current is None or current.thread_id != target.thread_id:
             raise VoiceSubmitError("Task route is stale")
         try:
-            if target.state == "pending":
-                await self._client.start_turn(target.thread_id, text)
-            elif target.state == "running" and target.expected_turn_id:
+            if current.state in ("pending", "completed"):
+                await self._client.start_turn(current.thread_id, text)
+            elif (
+                current.state == "running"
+                and target.state == "running"
+                and current.expected_turn_id == target.expected_turn_id
+                and current.expected_turn_id
+            ):
                 await self._client.steer_turn(
-                    target.thread_id, target.expected_turn_id, text
+                    current.thread_id, current.expected_turn_id, text
                 )
             else:
-                raise VoiceSubmitError("Task route is unavailable")
+                raise VoiceSubmitError("Task route is stale")
         except VoiceSubmitError:
             raise
         except Exception as error:

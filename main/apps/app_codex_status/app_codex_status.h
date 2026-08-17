@@ -18,6 +18,7 @@
 #include "codex_pending_soft_glow.h"
 #include "codex_task_detail_store.h"
 #include "codex_task_focus_deck.h"
+#include "codex_task_focus_gesture.h"
 #include "codex_task_focus_view.h"
 #include "agent_panel_model.h"
 #include "agent_registry_store.h"
@@ -122,6 +123,8 @@ private:
     int _task_touch_last_y = 0;
     bool _task_touch_moved = false;
     bool _task_detail_started_at_top = false;
+    codex_task_focus_gesture::TaskFocusGestureAxis _task_touch_axis =
+        codex_task_focus_gesture::TaskFocusGestureAxis::Undecided;
     bool _suppress_task_navigation = false;
     CodexAlertCarousel _alert_carousel;
     CodexTaskFocusDeck _task_focus_deck;
@@ -172,6 +175,7 @@ private:
         CodexTaskFocusMode mode = CodexTaskFocusMode::Status;
         CodexTaskAlert selected_task;
         std::string detail_text;
+        int32_t detail_revision = -1;
         uint64_t selected_route = 0;
         bool has_selected_task = false;
         bool has_detail = false;
@@ -205,6 +209,7 @@ private:
     void sync_task_edge_exclusion(CodexTaskFocusMode mode);
     TaskFocusStateSnapshot snapshot_task_focus_state();
     VoiceButtonSink* task_focus_voice_sink();
+    bool sync_agent_panel_for_task_mode(CodexTaskFocusMode task_mode);
     void update_agent_panel_touch(uint32_t now_ms);
     void render_agent_panel();
     void settle_agent_panel(bool animate);

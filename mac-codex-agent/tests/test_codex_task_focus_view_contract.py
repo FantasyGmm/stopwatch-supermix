@@ -28,10 +28,13 @@ class CodexTaskFocusViewContractTests(unittest.TestCase):
             self.assertIn(signature, header)
 
         self.assertIn("std::array<lv_obj_t*, 8> _track_nodes", header)
-        self.assertIn("lv_obj_t* _track_arc", header)
+        self.assertIn("std::array<lv_obj_t*, 16> _detail_paragraphs", header)
+        self.assertNotIn("_track_arc", header)
         self.assertNotIn("_track_accents", header)
-        self.assertIn("lv_arc_create(_track_layer)", source)
-        self.assertIn("lv_arc_set_bg_angles(", source)
+        self.assertNotIn("_detail_back", header)
+        self.assertNotIn("lv_arc_create(_track_layer)", source)
+        self.assertNotIn("lv_arc_set_bg_angles(", source)
+        self.assertNotIn('"‹ 返回任务"', source)
         self.assertIn("shutdown();", source)
         self.assertEqual(source.count("lv_obj_create(_track_layer)"), 1)
         self.assertNotIn("LV_GRAD_DIR", source)
@@ -47,6 +50,11 @@ class CodexTaskFocusViewContractTests(unittest.TestCase):
             '"正在执行"',
             '"暂无进行中的任务"',
             '"暂无完整回复"',
+            '"当前语音目标"',
+            '"点击后设为语音目标"',
+            '"点击查看原文"',
+            '"上下滑动切换　↓"',
+            '"Agent 最后一条完整回复"',
             '"按住右键 · 发送下一步"',
             '"按住右键 · 引导当前任务"',
         ):
@@ -55,13 +63,19 @@ class CodexTaskFocusViewContractTests(unittest.TestCase):
         self.assertIn("TaskTrackShape::RunningCircle", source)
         self.assertIn("TaskTrackShape::FocusedCapsule", source)
         self.assertIn("? kBeaconViolet", source)
-        self.assertIn("lv_label_set_text(_detail_reply, reply)", source)
+        self.assertIn("split_detail_reply(", source)
+        self.assertIn("detail_display_text(reply)", source)
+        self.assertIn("if (reset_scroll)", source)
+        self.assertIn("_detail_paragraph_text[index].c_str()", source)
+        self.assertIn("kDetailReplyLineHeight", source)
+        self.assertIn("kDetailParagraphGap", source)
         self.assertIn("LV_LABEL_LONG_MODE_DOTS", source)
         self.assertIn("kDeckTitleCjkMaxScalars", source)
         self.assertIn("kDeckTitleLatinMaxScalars", source)
         self.assertIn("lv_obj_set_style_transform_scale_x", source)
         self.assertIn("kCjkTitleScale", source)
-        self.assertIn("kCjkBodyScale", source)
+        self.assertIn("detail_body_font()", source)
+        self.assertNotIn("set_text_scale(paragraph", source)
         self.assertIn("kLatinTitleScale", source)
         self.assertNotIn("snprintf", source)
         self.assertNotIn("printf", source)
@@ -73,7 +87,7 @@ class CodexTaskFocusViewContractTests(unittest.TestCase):
         self.assertIn("TaskFocusPreviewScenario scenario", header)
         self.assertIn("task_focus_preview(scenario)", source)
         self.assertIn("show_deck(deck, data.connected)", source)
-        self.assertIn("show_detail(&task, data.reply, data.connected)", source)
+        self.assertIn("show_detail(&task, data.reply, 0, data.connected)", source)
         self.assertIn("set_recording(data.recording)", source)
         self.assertIn("set_visible(true)", source)
 
@@ -81,9 +95,16 @@ class CodexTaskFocusViewContractTests(unittest.TestCase):
         source = SOURCE.read_text(encoding="utf-8")
         self.assertIn("Size: 26 px", MONTSERRAT.read_text(encoding="utf-8")[:200])
         self.assertIn("Size: 14 px", PUHUI.read_text(encoding="utf-8")[:200])
-        self.assertIn("kLatinTitleScale = 315", (ROOT / "main/apps/app_codex_status/codex_task_focus_layout.h").read_text())
-        self.assertIn("kCjkTitleScale = 476", (ROOT / "main/apps/app_codex_status/codex_task_focus_layout.h").read_text())
-        self.assertIn("kCjkBodyScale = 293", (ROOT / "main/apps/app_codex_status/codex_task_focus_layout.h").read_text())
+        layout = (ROOT / "main/apps/app_codex_status/codex_task_focus_layout.h").read_text()
+        self.assertIn("kLatinTitleScale = 266", layout)
+        self.assertIn("kCjkTitleScale = 432", layout)
+        self.assertIn("kDetailBodyFontPx = 16", layout)
+        self.assertIn("kDetailReplyLineHeight = 25", layout)
+        self.assertIn("LV_FONT_DECLARE(lv_font_source_han_sans_sc_16_cjk)", source)
+        for size in (9, 10, 11, 16):
+            static_font = ROOT / f"main/assets/fonts/CodexFocusStatic{size}.c"
+            self.assertTrue(static_font.is_file())
+            self.assertIn(f"Size: {size} px", static_font.read_text()[:200])
 
 
 if __name__ == "__main__":
