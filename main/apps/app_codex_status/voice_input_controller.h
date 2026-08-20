@@ -55,6 +55,7 @@ public:
 enum class VoiceInputUiState : uint8_t {
     Off,
     Ready,
+    Starting,
     Active,
     Error,
 };
@@ -193,6 +194,7 @@ public:
     bool start_continuous(uint32_t now_ms) override;
     bool stop_continuous(uint32_t now_ms) override;
     void cancel_continuous(uint32_t now_ms) override;
+    bool starting() const override;
     bool active() const override;
     void handle_button(bool pressed, uint32_t now_ms) override;
     void cancel_for_home(uint32_t now_ms) override;
@@ -222,6 +224,13 @@ private:
     void transmitter_loop();
     bool transmitter_step(uint32_t now_ms);
     bool start_session(uint32_t now_ms, voice_input::BeginBody::Mode mode);
+    bool prepare_session_start(
+        uint32_t now_ms,
+        voice_input::BeginBody::Mode mode);
+    bool complete_session_start(
+        uint32_t now_ms,
+        voice_input::BeginBody::Mode mode);
+    bool process_continuous_start_request(uint32_t now_ms);
     bool prepare_begin(uint32_t now_ms, voice_input::BeginBody::Mode mode);
     bool prepare_audio(
         const std::array<uint8_t, VoiceCapturePipeline::kAdpcmBytesPerBlock>& adpcm,
@@ -265,6 +274,8 @@ private:
     std::deque<voice_input::Notification> _outgoing;
     mutable std::mutex _mutex;
     std::atomic<bool> _producer_running{false};
+    std::atomic<bool> _continuous_start_pending{false};
+    std::atomic<bool> _continuous_stop_requested{false};
     std::atomic<bool> _producer_step_active{false};
     std::atomic<bool> _external_failure_requested{false};
     std::atomic<bool> _shutdown_requested{false};
@@ -286,6 +297,7 @@ private:
     uint32_t _last_accepted_sequence = 0;
     uint32_t _congestion_started_ms = 0;
     uint32_t _last_accepted_ms = 0;
+    uint32_t _continuous_start_ms = 0;
     uint64_t _selected_task_route = 0;
     uint64_t _session_task_route = 0;
     VoiceTransportDiagnostics _transport_diagnostics = {};

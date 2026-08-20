@@ -12,7 +12,7 @@ public:
         if (!start_ok || active_value) {
             return false;
         }
-        active_value = true;
+        active_value = activate_on_start;
         return true;
     }
 
@@ -32,9 +32,12 @@ public:
         active_value = false;
     }
 
+    bool starting() const override { return starting_value; }
     bool active() const override { return active_value; }
 
     bool start_ok = true;
+    bool activate_on_start = true;
+    bool starting_value = false;
     bool active_value = false;
     int starts = 0;
     int stops = 0;
@@ -95,6 +98,27 @@ void test_runtime_loss_clears_stale_latch()
     assert(controller.state() == PinnedMicrophoneState::Error);
 }
 
+void test_enable_publishes_starting_until_voice_becomes_active()
+{
+    FakeVoice voice;
+    voice.activate_on_start = false;
+    voice.starting_value = true;
+    PinnedMicrophoneController controller;
+
+    assert(controller.set_enabled(true, true, voice, 50));
+    assert(controller.enabled());
+    assert(controller.state() == PinnedMicrophoneState::Starting);
+
+    controller.sync(true, false, voice);
+    assert(controller.enabled());
+    assert(controller.state() == PinnedMicrophoneState::Starting);
+
+    voice.active_value = true;
+    voice.starting_value = false;
+    controller.sync(true, false, voice);
+    assert(controller.state() == PinnedMicrophoneState::Active);
+}
+
 }  // namespace
 
 int main()
@@ -103,4 +127,5 @@ int main()
     test_unready_or_failed_start_does_not_latch();
     test_page_navigation_preserves_but_safety_boundary_clears();
     test_runtime_loss_clears_stale_latch();
+    test_enable_publishes_starting_until_voice_becomes_active();
 }

@@ -5,6 +5,7 @@
 enum class PinnedMicrophoneState : uint8_t {
     Unavailable,
     Ready,
+    Starting,
     Active,
     Error,
 };
@@ -15,6 +16,7 @@ public:
     virtual bool start_continuous(uint32_t now_ms) = 0;
     virtual bool stop_continuous(uint32_t now_ms) = 0;
     virtual void cancel_continuous(uint32_t now_ms) = 0;
+    virtual bool starting() const = 0;
     virtual bool active() const = 0;
 };
 

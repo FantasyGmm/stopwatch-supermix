@@ -1406,6 +1406,46 @@ void test_continuous_voice_is_idempotent_and_does_not_require_button_hold()
     assert(backend.release_calls == 1);
 }
 
+void test_external_microphone_start_is_deferred_from_the_ui_caller()
+{
+    FakeBackend backend;
+    FakeEntropy entropy;
+    voice_input::crypto::CcmContext crypto(kKey);
+    VoiceInputController controller(backend, crypto, entropy);
+    controller.set_ready(true, 256);
+
+    assert(controller.start_continuous(62500));
+    assert(controller.ui_state() == VoiceInputUiState::Starting);
+    assert(backend.acquire_calls == 0);
+    assert(backend.open_recorder_calls == 0);
+    assert(!controller.start_continuous(62501));
+
+    controller.run_capture_worker_once_for_test(62502);
+    assert(backend.acquire_calls == 1);
+    assert(backend.open_recorder_calls == 1);
+    assert(controller.ui_state() == VoiceInputUiState::Active);
+    controller.cancel_continuous(62503);
+}
+
+void test_shutdown_clears_a_pending_external_microphone_start()
+{
+    FakeBackend backend;
+    FakeEntropy entropy;
+    voice_input::crypto::CcmContext crypto(kKey);
+    VoiceInputController controller(backend, crypto, entropy);
+    controller.set_ready(true, 256);
+
+    assert(controller.start_continuous(62600));
+    assert(controller.ui_state() == VoiceInputUiState::Starting);
+    controller.shutdown();
+
+    controller.set_ready(true, 256);
+    assert(controller.start_continuous(62601));
+    controller.run_capture_worker_once_for_test(62602);
+    assert(controller.ui_state() == VoiceInputUiState::Active);
+    controller.cancel_continuous(62603);
+}
+
 void test_voice_capabilities_gate_ptt_and_external_microphone_independently()
 {
     FakeBackend backend;
@@ -1603,6 +1643,8 @@ int main()
     test_cancel_waits_for_inflight_producer_cleanup();
     test_sixty_seconds_of_voice_does_not_depend_on_ui_polling();
     test_continuous_voice_is_idempotent_and_does_not_require_button_hold();
+    test_external_microphone_start_is_deferred_from_the_ui_caller();
+    test_shutdown_clears_a_pending_external_microphone_start();
     test_voice_capabilities_gate_ptt_and_external_microphone_independently();
     test_immediate_begin_send_failure_cannot_be_overwritten_by_startup();
     test_cancel_waits_for_inflight_transmission();

@@ -19,7 +19,7 @@ bool PinnedMicrophoneController::set_enabled(
             return false;
         }
         _enabled = true;
-        _state = PinnedMicrophoneState::Active;
+        _state = PinnedMicrophoneState::Starting;
         return true;
     }
 
@@ -52,15 +52,31 @@ void PinnedMicrophoneController::sync(
     bool voice_error,
     const PinnedMicrophoneVoice& voice)
 {
-    if (_enabled && !voice.active()) {
+    if (_enabled) {
+        if (voice_error) {
+            _enabled = false;
+            _state = PinnedMicrophoneState::Error;
+            return;
+        }
+        if (!voice_ready) {
+            _enabled = false;
+            _state = PinnedMicrophoneState::Unavailable;
+            return;
+        }
+        if (voice.starting()) {
+            _state = PinnedMicrophoneState::Starting;
+            return;
+        }
+        if (voice.active()) {
+            _state = PinnedMicrophoneState::Active;
+            return;
+        }
         _enabled = false;
     }
-    _state = _enabled
-                 ? PinnedMicrophoneState::Active
-                 : (voice_error
-                        ? PinnedMicrophoneState::Error
-                        : (voice_ready ? PinnedMicrophoneState::Ready
-                                       : PinnedMicrophoneState::Unavailable));
+    _state = voice_error
+                 ? PinnedMicrophoneState::Error
+                 : (voice_ready ? PinnedMicrophoneState::Ready
+                                : PinnedMicrophoneState::Unavailable);
 }
 
 void PinnedMicrophoneController::page_changed(int page)

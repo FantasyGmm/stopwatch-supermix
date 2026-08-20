@@ -409,6 +409,9 @@ void VoiceInputController::shutdown()
 {
     if (!_initialized && _producer_task == nullptr &&
         _transmitter_task == nullptr) {
+        _continuous_start_pending = false;
+        _continuous_stop_requested = false;
+        _producer_running = false;
         if (_capture_pipeline != nullptr) {
             _capture_pipeline->close();
         }
@@ -420,6 +423,7 @@ void VoiceInputController::shutdown()
     _shutdown_requested = true;
     _transmitter_shutdown_requested = true;
     _ready = false;
+    _continuous_stop_requested = true;
     _capture_pipeline->requestStop();
     wake_producer();
     wake_transmitter();
@@ -451,6 +455,8 @@ void VoiceInputController::shutdown()
     }
 #endif
     _producer_running = false;
+    _continuous_start_pending = false;
+    _continuous_stop_requested = false;
     stop_transmitter_bounded();
     _capture_pipeline->close();
     reset_session(false, true);
@@ -569,17 +575,31 @@ void VoiceInputController::handle_button(bool pressed, uint32_t now_ms)
 
 bool VoiceInputController::start_continuous(uint32_t now_ms)
 {
-    if (!_ready.load() ||
+    if (!initialize() || !_ready.load() ||
         (_capabilities.load() & voice_input::kExternalMicrophoneCapability) == 0 ||
-        _negotiated_mtu < kMinimumAudioMtu || active()) {
+        _negotiated_mtu < kMinimumAudioMtu || active() ||
+        _continuous_start_pending.load()) {
         return false;
     }
-    return start_session(
-        now_ms, voice_input::BeginBody::Mode::ExternalMicrophone);
+    if (!prepare_session_start(
+            now_ms, voice_input::BeginBody::Mode::ExternalMicrophone)) {
+        return false;
+    }
+    _continuous_stop_requested = false;
+    _continuous_start_pending = true;
+    _producer_running = true;
+    wake_producer();
+    return true;
 }
 
 bool VoiceInputController::stop_continuous(uint32_t now_ms)
 {
+    if (_continuous_start_pending.load()) {
+        _continuous_stop_requested = true;
+        _capture_pipeline->requestStop();
+        wake_producer();
+        return true;
+    }
     bool should_stop = false;
     {
         std::lock_guard<std::mutex> lock(_mutex);
@@ -617,6 +637,12 @@ bool VoiceInputController::active() const
            state == voice_input::VoiceInputState::Stopping;
 }
 
+bool VoiceInputController::starting() const
+{
+    std::lock_guard<std::mutex> lock(_mutex);
+    return _ui_state == VoiceInputUiState::Starting;
+}
+
 void VoiceInputController::cancel_continuous(uint32_t now_ms)
 {
     cancel_for_home(now_ms);
@@ -625,12 +651,15 @@ void VoiceInputController::cancel_continuous(uint32_t now_ms)
 void VoiceInputController::cancel_for_home(uint32_t now_ms)
 {
     (void)now_ms;
+    _continuous_stop_requested = true;
     _capture_pipeline->requestStop();
     wake_producer();
     stop_capture_bounded();
     _capture_pipeline->close();
     {
         std::lock_guard<std::mutex> lock(_mutex);
+        _continuous_start_pending = false;
+        _continuous_stop_requested = false;
         _session.cancel_for_home();
         _outgoing.clear();
         _queued_audio_packets = 0;
@@ -650,11 +679,14 @@ void VoiceInputController::handle_disconnect()
     _ready = false;
     _capabilities = 0;
     _button_pressed = false;
+    _continuous_stop_requested = true;
     _capture_pipeline->requestStop();
     wake_producer();
     stop_capture_bounded();
     _capture_pipeline->close();
     reset_session(false, true);
+    _continuous_start_pending = false;
+    _continuous_stop_requested = false;
     if (!wait_transmitter_idle_bounded()) {
         std::lock_guard<std::mutex> lock(_mutex);
         _ui_state = VoiceInputUiState::Error;
@@ -664,6 +696,7 @@ void VoiceInputController::handle_disconnect()
 void VoiceInputController::poll(uint32_t now_ms)
 {
 #if defined(STOPWATCH_HOST_TEST)
+    (void)process_continuous_start_request(now_ms);
     if (_producer_running.load()) {
         producer_step(now_ms);
     }
@@ -792,6 +825,7 @@ void VoiceInputController::set_next_connection_session_for_test(uint16_t session
 
 void VoiceInputController::run_capture_worker_once_for_test(uint32_t now_ms)
 {
+    (void)process_continuous_start_request(now_ms);
     if (_producer_running.load()) {
         producer_step(now_ms);
     }
@@ -832,6 +866,7 @@ void VoiceInputController::producer_loop()
 #if !defined(STOPWATCH_HOST_TEST)
     while (!_shutdown_requested.load()) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        (void)process_continuous_start_request(monotonic_ms());
         while (_producer_running.load() && !_shutdown_requested.load()) {
             producer_step(monotonic_ms());
         }
@@ -965,6 +1000,17 @@ bool VoiceInputController::start_session(
         _ui_state = VoiceInputUiState::Error;
         return false;
     }
+    if (!prepare_session_start(now_ms, mode)) {
+        return false;
+    }
+    return complete_session_start(now_ms, mode);
+}
+
+bool VoiceInputController::prepare_session_start(
+    uint32_t now_ms,
+    voice_input::BeginBody::Mode mode)
+{
+    (void)mode;
     {
         std::lock_guard<std::mutex> lock(_mutex);
         if (!_ready.load()) {
@@ -987,8 +1033,16 @@ bool VoiceInputController::start_session(
         _transport_diagnostics = {};
         _congestion_active = false;
         _has_accepted_timestamp = false;
+        _continuous_start_ms = now_ms;
+        _ui_state = VoiceInputUiState::Starting;
     }
+    return true;
+}
 
+bool VoiceInputController::complete_session_start(
+    uint32_t now_ms,
+    voice_input::BeginBody::Mode mode)
+{
     VoiceCaptureError capture_error = VoiceCaptureError::None;
     if (!_capture_pipeline->open(capture_error)) {
         fail(failure_code(capture_error), 0, now_ms);
@@ -1025,6 +1079,47 @@ bool VoiceInputController::start_session(
     }
     wake_transmitter();
     wake_producer();
+    return true;
+}
+
+bool VoiceInputController::process_continuous_start_request(uint32_t now_ms)
+{
+    if (!_continuous_start_pending.load()) {
+        return false;
+    }
+
+    uint32_t start_ms = 0;
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        start_ms = _continuous_start_ms;
+    }
+    if (_continuous_stop_requested.load()) {
+        _continuous_start_pending = false;
+        _continuous_stop_requested = false;
+        _producer_running = false;
+        std::lock_guard<std::mutex> lock(_mutex);
+        (void)_session.cancel_for_home();
+        _ui_state = _ready.load() ? VoiceInputUiState::Ready
+                                  : VoiceInputUiState::Off;
+        return true;
+    }
+
+    const bool started = complete_session_start(
+        start_ms, voice_input::BeginBody::Mode::ExternalMicrophone);
+    _continuous_start_pending = false;
+    if (!started) {
+        _producer_running = false;
+    }
+    if (_continuous_stop_requested.exchange(false)) {
+        if (started) {
+            (void)stop_continuous(now_ms);
+        } else {
+            std::lock_guard<std::mutex> lock(_mutex);
+            (void)_session.cancel_for_home();
+            _ui_state = _ready.load() ? VoiceInputUiState::Ready
+                                      : VoiceInputUiState::Off;
+        }
+    }
     return true;
 }
 
@@ -1263,6 +1358,7 @@ void VoiceInputController::stop_capture_bounded()
     const int64_t deadline_us =
         esp_timer_get_time() + static_cast<int64_t>(kProducerStopTimeoutMs) * 1000;
     while (_producer_running.load() && esp_timer_get_time() < deadline_us) {
+        _capture_pipeline->requestStop();
         vTaskDelay(1);
     }
     if (_producer_running.load() && _producer_task != nullptr) {
@@ -1281,6 +1377,8 @@ void VoiceInputController::stop_capture_bounded()
     }
 #else
     while (_producer_running.load()) {
+        _capture_pipeline->requestStop();
+        (void)process_continuous_start_request(0);
         producer_step(0);
         if (_producer_running.load()) {
             std::this_thread::yield();
