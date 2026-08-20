@@ -101,10 +101,11 @@ then use its **Voice Input** row:
   reports `Voice Input: Restart Required` if macOS has installed the receipt
   but Core Audio cannot see the device yet; restart the Mac once.
 - `Voice Input: Accessibility Required`: use the menu action to open
-  Accessibility settings and allow **StopWatch Codex Agent** to send the left
-  Option shortcut.
+  Accessibility settings and allow **StopWatch Codex Agent** to send the
+  Typeless shortcut.
 - `Voice Input: Typeless Not Running`: start Typeless and confirm Typeless is
-  configured to start and stop dictation with left Option.
+  configured with a dictation shortcut. The Agent reads that shortcut once at
+  startup; restart the Agent after changing it in Typeless.
 - `Voice Input: Ready`: open Codex on the watch and wait for the normal BLE
   connection before speaking.
 - `Voice Input: Error`: release the right button, inspect **Open Log**, and use
@@ -201,8 +202,9 @@ flash encryption is a separate feature and is not enabled or validated here.
   Agent never restarts the Mac or starts itself.
 - **Accessibility Required**: grant Accessibility to **StopWatch Codex Agent**,
   not to a separately selected Python executable, then refresh or reconnect.
-- **Typeless Not Running**: open Typeless, set its shortcut to left Option, and
-  leave it running before holding the watch button.
+- **Typeless Not Running**: open Typeless, configure a dictation shortcut, and
+  leave it running before holding the watch button. Restart the Agent after
+  changing the shortcut so it reloads Typeless' current setting.
 - **Voice Error**: release the button first. Open the Agent log and check audio
   routing, key mismatch, authentication, queue, and shortcut errors. The prior
   default input should already have been restored.

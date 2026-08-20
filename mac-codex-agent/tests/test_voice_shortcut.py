@@ -1,5 +1,6 @@
 import pathlib
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -11,14 +12,68 @@ sys.path.insert(0, str(AGENT_ROOT))
 from voice_shortcut import (  # noqa: E402
     AccessibilityRequired,
     FnShortcutController,
-    LEFT_OPTION_KEY_CODE,
     TypelessNotRunning,
-    _post_left_option,
+    TypelessShortcutUnavailable,
+    _post_key,
 )
 
 
 class FnShortcutControllerTests(unittest.TestCase):
-    def test_default_shortcut_posts_left_option(self):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.settings = pathlib.Path(self.directory.name) / "app-settings.json"
+        self.settings.write_text(
+            '{"featureShortcutBindings": '
+            '{"dictationMode": ["LeftOption"]}}',
+            encoding="utf-8",
+        )
+
+    def test_startup_loads_current_typeless_dictation_chord_once(self):
+        with tempfile.TemporaryDirectory() as directory:
+            settings = pathlib.Path(directory) / "app-settings.json"
+            settings.write_text(
+                '{"featureShortcutBindings": '
+                '{"dictationMode": ["LeftOption+Space"]}}',
+                encoding="utf-8",
+            )
+            events = []
+            try:
+                controller = FnShortcutController(
+                    trusted=lambda: True,
+                    typeless_running=lambda: True,
+                    post_key=lambda key_code, down: events.append(
+                        (key_code, down)
+                    ),
+                    sleep=lambda _seconds: None,
+                    settings_path=settings,
+                )
+            except TypeError as error:
+                self.fail(f"controller cannot load Typeless settings: {error}")
+
+            settings.write_text(
+                '{"featureShortcutBindings": '
+                '{"dictationMode": ["LeftCtrl"]}}',
+                encoding="utf-8",
+            )
+            controller.start()
+            controller.stop()
+
+        self.assertEqual(
+            events,
+            [
+                (0x3A, True),
+                (0x31, True),
+                (0x31, False),
+                (0x3A, False),
+                (0x3A, True),
+                (0x31, True),
+                (0x31, False),
+                (0x3A, False),
+            ],
+        )
+
+    def test_post_key_uses_resolved_virtual_key_code(self):
         with mock.patch(
             "voice_shortcut.Quartz.CGEventCreateKeyboardEvent"
         ) as create:
@@ -26,10 +81,9 @@ class FnShortcutControllerTests(unittest.TestCase):
                 event = object()
                 create.return_value = event
 
-                _post_left_option(True)
+                _post_key(0x31, True)
 
-        self.assertEqual(LEFT_OPTION_KEY_CODE, 0x3A)
-        create.assert_called_once_with(None, LEFT_OPTION_KEY_CODE, True)
+        create.assert_called_once_with(None, 0x31, True)
         post.assert_called_once_with(mock.ANY, event)
 
     def test_start_and_stop_emit_complete_shortcut_taps(self):
@@ -37,14 +91,18 @@ class FnShortcutControllerTests(unittest.TestCase):
         controller = FnShortcutController(
             trusted=lambda: True,
             typeless_running=lambda: True,
-            post_key=lambda down: events.append(down),
+            post_key=lambda key_code, down: events.append((key_code, down)),
             sleep=lambda _seconds: None,
+            settings_path=self.settings,
         )
 
         controller.start()
         controller.stop()
 
-        self.assertEqual(events, [True, False, True, False])
+        self.assertEqual(
+            events,
+            [(0x3A, True), (0x3A, False), (0x3A, True), (0x3A, False)],
+        )
         self.assertFalse(controller.active)
 
     def test_start_requires_accessibility_before_typeless_check(self):
@@ -52,6 +110,7 @@ class FnShortcutControllerTests(unittest.TestCase):
         controller = FnShortcutController(
             trusted=lambda: False,
             typeless_running=lambda: typeless_checks.append(True),
+            settings_path=self.settings,
         )
 
         with self.assertRaises(AccessibilityRequired):
@@ -65,7 +124,8 @@ class FnShortcutControllerTests(unittest.TestCase):
         controller = FnShortcutController(
             trusted=lambda: True,
             typeless_running=lambda: False,
-            post_key=lambda down: events.append(down),
+            post_key=lambda key_code, down: events.append((key_code, down)),
+            settings_path=self.settings,
         )
 
         with self.assertRaises(TypelessNotRunning):
@@ -80,15 +140,42 @@ class FnShortcutControllerTests(unittest.TestCase):
         controller = FnShortcutController(
             trusted=lambda: True,
             typeless_running=lambda: True,
-            post_key=lambda down: events.append(down),
+            post_key=lambda key_code, down: events.append((key_code, down)),
             sleep=lambda _seconds: None,
+            settings_path=self.settings,
         )
 
         controller.start()
         controller.stop()
         controller.stop()
 
-        self.assertEqual(events, [True, False, True, False])
+        self.assertEqual(
+            events,
+            [(0x3A, True), (0x3A, False), (0x3A, True), (0x3A, False)],
+        )
+
+    def test_unknown_startup_shortcut_fails_closed_without_fallback(self):
+        self.settings.write_text(
+            '{"featureShortcutBindings": '
+            '{"dictationMode": ["HyperKey"]}}',
+            encoding="utf-8",
+        )
+        events = []
+        controller = FnShortcutController(
+            trusted=lambda: True,
+            typeless_running=lambda: True,
+            post_key=lambda key_code, down: events.append((key_code, down)),
+            settings_path=self.settings,
+        )
+
+        with self.assertRaisesRegex(
+            TypelessShortcutUnavailable,
+            "Unsupported Typeless shortcut key: HyperKey",
+        ):
+            controller.start()
+
+        self.assertEqual(events, [])
+        self.assertFalse(controller.active)
 
     def test_requirements_pin_importable_quartz(self):
         requirements = (AGENT_ROOT / "requirements.txt").read_text(encoding="utf-8")
