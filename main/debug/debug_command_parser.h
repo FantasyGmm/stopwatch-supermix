@@ -16,6 +16,9 @@ enum class DebugCommandKind : uint8_t {
     AssistantTraceClear,
     AssistantWifiCycle,
     DisplayProtectionStatus,
+    BatteryStart,
+    BatteryStatus,
+    BatteryExport,
     VolumeSet,
 };
 

@@ -73,6 +73,12 @@ int main()
            DebugCommandKind::AssistantWifiCycle);
     assert(ParseDebugCommand("debug display protection").kind ==
            DebugCommandKind::DisplayProtectionStatus);
+    assert(ParseDebugCommand("debug battery start").kind ==
+           DebugCommandKind::BatteryStart);
+    assert(ParseDebugCommand("debug battery status\r").kind ==
+           DebugCommandKind::BatteryStatus);
+    assert(ParseDebugCommand("debug battery export").kind ==
+           DebugCommandKind::BatteryExport);
 
     const auto muted = ParseDebugCommand("debug volume 0");
     assert(muted.kind == DebugCommandKind::VolumeSet);
@@ -83,6 +89,8 @@ int main()
     assert(ParseDebugCommand("debug volume 101").error ==
            DebugCommandError::InvalidCommand);
     assert(ParseDebugCommand("debug volume -1").error ==
+           DebugCommandError::InvalidCommand);
+    assert(ParseDebugCommand("debug battery erase").error ==
            DebugCommandError::InvalidCommand);
 
     assert(ParseDebugCommand("app open assistant").error ==

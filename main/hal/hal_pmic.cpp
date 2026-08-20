@@ -61,6 +61,7 @@ constexpr uint16_t _bat_filter_weight_sum = _bat_filter_weight_old + _bat_filter
 
 uint8_t _bat_level             = 0;
 uint32_t _bat_sample_revision  = 0;
+uint16_t _bat_raw_mv           = 0;
 uint16_t _bat_filtered_mv      = 0;
 std::mutex _bat_level_mutex;
 ExternalPowerTracker _external_power_tracker;
@@ -74,15 +75,10 @@ auto with_pmic_io_lock(Operation&& operation)
     return operation();
 }
 
-void update_bat_level(uint8_t level)
-{
-    std::lock_guard<std::mutex> lock(_bat_level_mutex);
-    _bat_level = level;
-    _bat_sample_revision++;
-}
-
 void update_bat_level_from_mv(uint16_t millivolts)
 {
+    std::lock_guard<std::mutex> lock(_bat_level_mutex);
+    _bat_raw_mv = millivolts;
     if (_bat_filtered_mv == 0) {
         _bat_filtered_mv = millivolts;
     } else {
@@ -91,7 +87,8 @@ void update_bat_level_from_mv(uint16_t millivolts)
         _bat_filtered_mv = static_cast<uint16_t>((filtered + (_bat_filter_weight_sum / 2)) / _bat_filter_weight_sum);
     }
 
-    update_bat_level(battery_millivolts_to_percent(_bat_filtered_mv));
+    _bat_level = battery_millivolts_to_percent(_bat_filtered_mv);
+    ++_bat_sample_revision;
 }
 
 void bat_reading_task(void* param)
@@ -200,7 +197,7 @@ uint8_t Hal::getBatteryLevel()
 BatterySampleSnapshot Hal::batterySampleSnapshot()
 {
     std::lock_guard<std::mutex> lock(_bat_level_mutex);
-    return {_bat_level, _bat_sample_revision};
+    return {_bat_level, _bat_sample_revision, _bat_raw_mv, _bat_filtered_mv};
 }
 
 uint32_t Hal::batterySampleRevision()

@@ -16,6 +16,7 @@
 #include <sdkconfig.h>
 #if CONFIG_STOPWATCH_DEBUG_COMMANDS
 #include <debug/debug_command_service.h>
+#include <runtime/power/battery_calibration_service.h>
 #endif
 
 using namespace mooncake;
@@ -73,6 +74,7 @@ extern "C" void app_main(void)
         GetHAL().updatePowerLed();
 #if CONFIG_STOPWATCH_DEBUG_COMMANDS
         GetDebugCommandService().update();
+        GetBatteryCalibrationService().update();
 #endif
         GetRuntimeSupervisor().update(GetHAL().millis());
         GetGlobalLowBatteryAlertService().update();
