@@ -147,6 +147,21 @@ int main()
     assert(decoded_body.block_samples == kBlockSamples);
     assert(decoded_body.route == kTestRoute);
 
+    BeginBody plain_body = {
+        kImaAdpcmCodec,
+        BeginBody::Mode::PushToTalk,
+        kSampleRate,
+        kBlockSamples,
+        0};
+    std::array<uint8_t, kBeginBodySize> plain_bytes = {};
+    assert(encode_begin_body(
+               plain_body, plain_bytes.data(), plain_bytes.size()) ==
+           kBeginBodySize);
+    BeginBody decoded_plain = {};
+    assert(decode_begin_body(
+        plain_bytes.data(), plain_bytes.size(), decoded_plain));
+    assert(decoded_plain.route == 0);
+
     VoiceNotification audio = {};
     audio.kind = NotificationKind::Audio;
     audio.session = 7;

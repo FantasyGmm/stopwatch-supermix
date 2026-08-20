@@ -241,11 +241,12 @@ class VoiceSessionService:
         self._recent_nonces.append(packet.session_nonce)
         self._highest_session = packet.session
         mode = packet.begin.mode
-        if mode == PUSH_TO_TALK and (
-            (self._transcript_source is None) != (self._task_submitter is None)
+        task_submission = mode == PUSH_TO_TALK and packet.begin.route != 0
+        if task_submission and (
+            self._transcript_source is None or self._task_submitter is None
         ):
             raise RuntimeError("Task voice submission is unavailable")
-        if mode == PUSH_TO_TALK and self._transcript_source is not None:
+        if task_submission:
             self._transcript_cursor = self._transcript_source.mark()
             self._task_target = self._task_submitter.snapshot(
                 packet.begin.route

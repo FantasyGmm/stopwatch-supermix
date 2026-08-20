@@ -967,9 +967,7 @@ bool VoiceInputController::start_session(
     }
     {
         std::lock_guard<std::mutex> lock(_mutex);
-        if (!_ready.load() ||
-            (mode == voice_input::BeginBody::Mode::PushToTalk &&
-             _selected_task_route == 0)) {
+        if (!_ready.load()) {
             _ui_state = VoiceInputUiState::Error;
             return false;
         }

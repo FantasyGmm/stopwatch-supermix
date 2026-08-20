@@ -253,7 +253,7 @@ uint64_t decode_begin_route(
     return body.route;
 }
 
-void test_task_route_is_required_and_zero_clears_selection()
+void test_zero_route_starts_plain_push_to_talk()
 {
     FakeBackend backend;
     FakeEntropy entropy;
@@ -262,20 +262,27 @@ void test_task_route_is_required_and_zero_clears_selection()
     controller.set_ready(true, 256);
 
     controller.handle_button(true, 1);
-    assert(backend.acquire_calls == 0);
-    assert(controller.ui_state() == VoiceInputUiState::Error);
-    controller.handle_button(false, 2);
+    assert(backend.acquire_calls == 1);
+    voice_input::Notification plain_begin = {};
+    assert(controller.take_notification(plain_begin));
+    assert(decode_begin_route(plain_begin, crypto) == 0);
+    controller.cancel_for_home(2);
+    controller.handle_button(false, 3);
 
     assert(controller.set_task_route(kFirstTaskRoute));
-    controller.handle_button(true, 3);
-    assert(backend.acquire_calls == 1);
-    controller.cancel_for_home(4);
-    controller.handle_button(false, 5);
+    controller.handle_button(true, 4);
+    assert(backend.acquire_calls == 2);
+    controller.cancel_for_home(5);
+    controller.handle_button(false, 6);
 
     assert(!controller.set_task_route(0));
-    controller.handle_button(true, 6);
-    assert(backend.acquire_calls == 1);
-    assert(controller.ui_state() == VoiceInputUiState::Error);
+    controller.handle_button(true, 7);
+    assert(backend.acquire_calls == 3);
+    voice_input::Notification second_plain_begin = {};
+    assert(controller.take_notification(second_plain_begin));
+    assert(decode_begin_route(second_plain_begin, crypto) == 0);
+    controller.cancel_for_home(8);
+    controller.handle_button(false, 9);
 }
 
 void test_begin_snapshots_route_and_selection_survives_reconnect()
@@ -316,8 +323,12 @@ void test_shutdown_clears_task_route()
     controller.shutdown();
     controller.set_ready(true, 256);
     controller.handle_button(true, 20);
-    assert(backend.acquire_calls == 0);
-    assert(controller.ui_state() == VoiceInputUiState::Error);
+    assert(backend.acquire_calls == 1);
+    voice_input::Notification begin = {};
+    assert(controller.take_notification(begin));
+    assert(decode_begin_route(begin, crypto) == 0);
+    controller.cancel_for_home(21);
+    controller.handle_button(false, 22);
 }
 
 void test_runtime_credential_gates_readiness_and_clears_active_key()
@@ -1544,7 +1555,7 @@ void test_sustained_congestion_fails_after_elapsed_deadline()
 
 int main()
 {
-    test_task_route_is_required_and_zero_clears_selection();
+    test_zero_route_starts_plain_push_to_talk();
     test_begin_snapshots_route_and_selection_survives_reconnect();
     test_shutdown_clears_task_route();
     test_runtime_credential_gates_readiness_and_clears_active_key();

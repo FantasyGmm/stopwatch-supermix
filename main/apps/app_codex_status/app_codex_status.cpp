@@ -3634,7 +3634,9 @@ bool AppCodexStatus::sync_task_detail_credential()
 
 void AppCodexStatus::sync_task_voice_route()
 {
-    const uint64_t route = snapshot_task_focus_state().selected_route;
+    const TaskFocusStateSnapshot task = snapshot_task_focus_state();
+    const uint64_t route =
+        task.mode == CodexTaskFocusMode::TaskDetail ? task.selected_route : 0;
     {
         std::lock_guard<std::mutex> controller_lock(_task_controller_mutex);
         if (_voice_input != nullptr) {
@@ -3666,14 +3668,10 @@ void AppCodexStatus::sync_task_voice_readiness()
 
 VoiceButtonSink* AppCodexStatus::task_focus_voice_sink()
 {
-    const TaskFocusStateSnapshot task = snapshot_task_focus_state();
     std::lock_guard<std::mutex> controller_lock(_task_controller_mutex);
     return _voice_input != nullptr &&
-               _voice_input->ui_state() == VoiceInputUiState::Active
-        ? _voice_input.get()
-        : task.mode == CodexTaskFocusMode::TaskDetail &&
-               task.selected_route != 0 &&
-               _production_voice_link_usable
+               (_voice_input->ui_state() == VoiceInputUiState::Active ||
+                _production_voice_link_usable)
         ? _voice_input.get()
         : nullptr;
 }

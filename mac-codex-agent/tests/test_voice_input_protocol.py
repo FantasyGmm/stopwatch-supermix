@@ -180,12 +180,16 @@ class VoiceInputProtocolTests(unittest.TestCase):
         with self.assertRaises(dataclasses.FrozenInstanceError):
             packet.sequence = 1
 
-    def test_begin_route_rejects_boolean_zero_and_overflow(self):
+    def test_begin_route_accepts_zero_and_rejects_boolean_and_overflow(self):
         self.assertEqual(
             BeginBody.from_payload(BeginBody(0xFFFFFFFFFFFFFFFF).pack()),
             BeginBody(0xFFFFFFFFFFFFFFFF),
         )
-        for route in (True, 0, 0x10000000000000000):
+        self.assertEqual(
+            BeginBody.from_payload(BeginBody(0).pack()),
+            BeginBody(0),
+        )
+        for route in (True, 0x10000000000000000):
             with self.subTest(route=route), self.assertRaises(ValueError):
                 BeginBody(route).pack()
 
@@ -266,15 +270,6 @@ class VoiceInputProtocolTests(unittest.TestCase):
             ),
             lambda: pack_notification(
                 TEST_KEY, PTT_BEGIN, 7, 0, 100, begin_body[:-1], TEST_NONCE
-            ),
-            lambda: pack_notification(
-                TEST_KEY,
-                PTT_BEGIN,
-                7,
-                0,
-                100,
-                BeginBody(0, PUSH_TO_TALK).pack(),
-                TEST_NONCE,
             ),
             lambda: pack_notification(
                 TEST_KEY, AUDIO, 7, 0, 100, audio_payload, TEST_NONCE

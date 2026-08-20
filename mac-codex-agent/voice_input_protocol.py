@@ -101,7 +101,6 @@ class BeginBody:
             isinstance(self.route, bool)
             or not isinstance(self.route, int)
             or not 0 <= self.route <= 0xFFFFFFFFFFFFFFFF
-            or (self.mode == PUSH_TO_TALK and self.route == 0)
         ):
             raise ValueError("voice route is invalid for this session mode")
         if (self.codec, self.sample_rate, self.block_samples) != (

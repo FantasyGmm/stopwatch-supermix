@@ -73,18 +73,27 @@ class CodexTaskFocusFirmwareContractTests(unittest.TestCase):
         self.assertIn("if (agent_panel_available)", running)
         self.assertIn("update_agent_panel_touch(now)", running)
 
-    def test_voice_and_lifecycle_fail_closed(self):
+    def test_voice_is_available_across_codex_pages_and_lifecycle_fails_closed(self):
         self.assertIn("task_focus_voice_sink()", self.source)
         sink = self.source.split("VoiceButtonSink* AppCodexStatus::task_focus_voice_sink", 1)[1]
         sink = sink.split("\n}", 1)[0]
-        self.assertIn("CodexTaskFocusMode::TaskDetail", sink)
         self.assertIn("_production_voice_link_usable", sink)
-        self.assertIn("task.selected_route != 0", sink)
+        self.assertIn("_voice_input.get()", sink)
+        self.assertNotIn("CodexTaskFocusMode", sink)
+        self.assertNotIn("selected_route", sink)
         self.assertIn("_task_detail_store.reset_connection()", self.source)
         self.assertIn("_task_detail_store.reset_for_credential", self.source)
         self.assertIn("_task_detail_store.reset()", self.source)
         self.assertIn("_voice_input->set_task_route(0)", self.source)
         self.assertNotIn("task detail plaintext", self.source.lower())
+
+    def test_only_task_detail_assigns_task_voice_route(self):
+        helper = self.source.split(
+            "void AppCodexStatus::sync_task_voice_route", 1
+        )[1].split("\n}", 1)[0]
+        self.assertIn("CodexTaskFocusMode::TaskDetail", helper)
+        self.assertIn("? task.selected_route", helper)
+        self.assertIn(": 0", helper)
 
     def test_task_modes_update_edge_exclusion_and_close_clears_it(self):
         self.assertIn("sync_task_edge_exclusion", self.header)

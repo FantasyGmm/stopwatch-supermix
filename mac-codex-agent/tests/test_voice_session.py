@@ -80,11 +80,16 @@ def encrypted_packet(kind, sequence, payload, session=7, nonce=TEST_NONCE):
     )
 
 
-def begin_packet(session=7, nonce=TEST_NONCE, mode=PUSH_TO_TALK):
+def begin_packet(
+    session=7,
+    nonce=TEST_NONCE,
+    mode=PUSH_TO_TALK,
+    route=0,
+):
     return encrypted_packet(
         PTT_BEGIN,
         0,
-        BEGIN_BODY.pack(IMA_ADPCM, mode, 16000, 320, TEST_ROUTE),
+        BEGIN_BODY.pack(IMA_ADPCM, mode, 16000, 320, route),
         session,
         nonce,
     )
@@ -255,7 +260,7 @@ class VoiceSessionServiceTests(unittest.IsolatedAsyncioTestCase):
             transcript_timeout=3,
         )
 
-        await service.handle(begin_packet())
+        await service.handle(begin_packet(route=TEST_ROUTE))
         await service.handle(
             end_packet(1, EndSummary(0, 0, 0, 0, 0, 10, 256))
         )
@@ -264,6 +269,29 @@ class VoiceSessionServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertLess(events.index("shortcut.stop"), events.index(("wait", "cursor", 3)))
         self.assertLess(events.index("route.stop"), events.index(("wait", "cursor", 3)))
         self.assertEqual(events[-1], ("submit", "target", "转写结果"))
+        self.assertIs(service.state, VoiceState.READY)
+
+    async def test_route_zero_runs_plain_typeless_without_task_submission(self):
+        events = []
+        route = FakeRoute()
+        shortcut = FakeShortcut()
+        service = VoiceSessionService(
+            route,
+            shortcut,
+            TEST_KEY,
+            sleep=no_sleep,
+            transcript_source=FakeTranscriptSource(events),
+            task_submitter=FakeTaskSubmitter(events),
+        )
+
+        await service.handle(begin_packet(route=0))
+        await service.handle(
+            end_packet(1, EndSummary(0, 0, 0, 0, 0, 10, 256))
+        )
+
+        self.assertEqual(route.calls, ["start", "stop"])
+        self.assertEqual(shortcut.calls, ["start", "stop"])
+        self.assertEqual(events, [])
         self.assertIs(service.state, VoiceState.READY)
 
     async def test_disconnect_never_polls_or_submits_captured_voice(self):
@@ -276,7 +304,7 @@ class VoiceSessionServiceTests(unittest.IsolatedAsyncioTestCase):
             transcript_source=FakeTranscriptSource(events),
             task_submitter=FakeTaskSubmitter(events),
         )
-        await service.handle(begin_packet())
+        await service.handle(begin_packet(route=TEST_ROUTE))
         await service.disconnect()
 
         self.assertFalse(any(isinstance(item, tuple) and item[0] in ("wait", "submit") for item in events))
@@ -297,7 +325,7 @@ class VoiceSessionServiceTests(unittest.IsolatedAsyncioTestCase):
             transcript_source=FakeTranscriptSource(events, secret),
             task_submitter=FailingSubmitter(events),
         )
-        await service.handle(begin_packet())
+        await service.handle(begin_packet(route=TEST_ROUTE))
         with self.assertRaises(RuntimeError) as raised:
             await service.handle(
                 end_packet(1, EndSummary(0, 0, 0, 0, 0, 10, 256))

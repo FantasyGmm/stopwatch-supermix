@@ -371,8 +371,7 @@ size_t encode_begin_body(const BeginBody& body, uint8_t* output, size_t capacity
         (body.mode != BeginBody::Mode::PushToTalk &&
          body.mode != BeginBody::Mode::ExternalMicrophone) ||
         body.sample_rate != kSampleRate ||
-        body.block_samples != kBlockSamples ||
-        (body.mode == BeginBody::Mode::PushToTalk && body.route == 0)) {
+        body.block_samples != kBlockSamples) {
         return 0;
     }
     output[0] = body.codec;
@@ -398,8 +397,7 @@ bool decode_begin_body(const uint8_t* bytes, size_t length, BeginBody& body)
         (candidate.mode != BeginBody::Mode::PushToTalk &&
          candidate.mode != BeginBody::Mode::ExternalMicrophone) ||
         candidate.sample_rate != kSampleRate ||
-        candidate.block_samples != kBlockSamples ||
-        (candidate.mode == BeginBody::Mode::PushToTalk && candidate.route == 0)) {
+        candidate.block_samples != kBlockSamples) {
         return false;
     }
     body = candidate;
