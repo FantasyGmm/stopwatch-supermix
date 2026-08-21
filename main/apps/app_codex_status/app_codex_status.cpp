@@ -4078,7 +4078,7 @@ void AppCodexStatus::sync_task_focus_visibility()
     (void)sync_agent_panel_for_task_mode(task.mode);
     const bool visible =
         task.mode != CodexTaskFocusMode::Status &&
-        _current_page == 0 &&
+        _current_page == 1 &&
         !_agent_panel_model.snapshot().visible &&
         !_agent_panel_model.owns_touch();
     _task_focus_view->set_visible(visible);
@@ -4126,7 +4126,7 @@ void AppCodexStatus::render_task_focus_detail()
 
 void AppCodexStatus::open_task_deck()
 {
-    if (_current_page != 0) {
+    if (_current_page != 1) {
         return;
     }
     _page_swipe.cancel();

@@ -420,6 +420,36 @@ class PreparedCodexSubmissionTests(unittest.TestCase):
                 current = self.adapter(fixture).snapshot()
                 self.assertEqual(current, snapshot(semantic))
 
+    def test_current_direct_composer_body_shape_is_supported(self):
+        fixture = RealComposerFixture(
+            description="随心输入", label="发送", value="hello"
+        )
+        fixture.attributes[(fixture.focused, "AXParent")] = fixture.composer_body
+        fixture.attributes[(fixture.composer_body, "AXChildren")] = (
+            fixture.focused,
+            fixture.button,
+        )
+
+        current = self.adapter(fixture).snapshot()
+
+        self.assertEqual(current, snapshot(SubmitSemantic.SEND))
+        self.assertIsNotNone(self.adapter(fixture).prepare())
+
+    def test_direct_parent_without_exact_composer_body_marker_is_rejected(self):
+        fixture = RealComposerFixture()
+        unrelated_parent = Node("unrelated-parent")
+        fixture.attributes[(unrelated_parent, "AXDOMClassList")] = ("relative",)
+        fixture.attributes[(unrelated_parent, "AXChildren")] = (
+            fixture.focused,
+            fixture.button,
+        )
+        fixture.attributes[(fixture.focused, "AXParent")] = unrelated_parent
+
+        current = self.adapter(fixture).snapshot()
+
+        self.assertFalse(current.editable)
+        self.assertEqual(current.semantic, SubmitSemantic.UNKNOWN)
+
     def test_bridged_nsarray_classes_and_children_are_normalized(self):
         fixture = RealComposerFixture()
         for element in (
