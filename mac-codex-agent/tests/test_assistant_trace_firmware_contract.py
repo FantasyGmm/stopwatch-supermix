@@ -6,6 +6,55 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
 class AssistantTraceFirmwareContractTests(unittest.TestCase):
+    def test_release_guards_assistant_memory_diagnostics(self):
+        runtime = (
+            ROOT / "main/runtime/assistant/assistant_runtime.cpp"
+        ).read_text(encoding="utf-8")
+        memory_helper = runtime.split(
+            "void log_memory_stage(const char* boundary)", 1
+        )[1].split("\n}", 1)[0]
+
+        self.assertIn("#if CONFIG_STOPWATCH_DEBUG_COMMANDS", memory_helper)
+        self.assertIn("#else", memory_helper)
+        self.assertIn("(void)boundary;", memory_helper)
+
+    def test_release_guards_runtime_snapshot_collection_and_success_logs(self):
+        supervisor = (
+            ROOT / "main/runtime/runtime_supervisor.cpp"
+        ).read_text(encoding="utf-8")
+        start = supervisor.split(
+            "AssistantStartResult RuntimeSupervisor::startAssistant()", 1
+        )[1].split("bool RuntimeSupervisor::requestStopAssistant()", 1)[0]
+        update = supervisor.split(
+            "void RuntimeSupervisor::update(uint32_t now_ms)", 1
+        )[1].split("AssistantRuntimeState RuntimeSupervisor::assistantState", 1)[0]
+        stopped = supervisor.split(
+            "void RuntimeSupervisor::finishStoppedBoundary()", 1
+        )[1].split("\n}", 1)[0]
+
+        for body in (start, update, stopped):
+            self.assertIn("#if CONFIG_STOPWATCH_DEBUG_COMMANDS", body)
+        self.assertIn("CaptureRuntimeDiagnosticSnapshot()", start)
+        self.assertIn("CaptureRuntimeDiagnosticSnapshot()", update)
+        self.assertIn("CaptureRuntimeDiagnosticSnapshot()", stopped)
+
+    def test_release_keeps_field_evidence_without_transient_trace_spam(self):
+        defaults = (ROOT / "sdkconfig.unified.defaults").read_text(
+            encoding="utf-8"
+        )
+        codex = (
+            ROOT / "main/apps/app_codex_status/codex_ble_transport.cpp"
+        ).read_text(encoding="utf-8")
+        status = (
+            ROOT / "main/apps/app_codex_status/app_codex_status.cpp"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("CONFIG_BT_NIMBLE_LOG_LEVEL_WARNING=y", defaults)
+        self.assertNotIn("CONFIG_BT_NIMBLE_LOG_LEVEL_INFO=y", defaults)
+        self.assertIn('ESP_LOGI(kTag, "connected pending Agent")', codex)
+        self.assertIn('ESP_LOGE(kTag, "NimBLE reset: %d", reason)', codex)
+        self.assertNotIn('"PINMIC"', status)
+
     def test_trace_header_reads_firmware_debug_configuration(self):
         header = (ROOT / "main/runtime/assistant/assistant_trace.h").read_text(
             encoding="utf-8"

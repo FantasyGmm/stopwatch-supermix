@@ -7,6 +7,7 @@
 #include "services/stopwatch_audio_device.h"
 #include <brookesia/service_manager.hpp>
 #include <mooncake_log.h>
+#include <sdkconfig.h>
 
 namespace {
 ServiceRuntime service_runtime;
@@ -36,6 +37,8 @@ bool ServiceRuntime::start()
     }
 
     _started = true;
+#if CONFIG_STOPWATCH_DEBUG_COMMANDS
     mclog::tagInfo(tag, "Brookesia service manager started");
+#endif
     return true;
 }

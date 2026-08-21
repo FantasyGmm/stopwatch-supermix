@@ -1,16 +1,22 @@
 # Formal Release Convergence
 
-## Current state
+## Current source state
 
-The currently deployed watch firmware is a release candidate rather than a
-traditional Debug build:
+The unified firmware defaults now describe the formal build:
 
 - release/size compiler optimization;
 - INFO maximum logging;
 - assertions enabled;
-- USB development commands enabled through
-  `CONFIG_STOPWATCH_DEBUG_COMMANDS=y`;
-- temporary development diagnostics may still be present.
+- USB Serial/JTAG output retained for field evidence;
+- USB development commands, Assistant lifecycle trace, and battery calibration
+  runtime disabled through `CONFIG_STOPWATCH_DEBUG_COMMANDS=n`;
+- Assistant heap/task/resource success snapshots compiled only for an explicit
+  development build;
+- low-frequency warning/error and BLE/security/storage/reset evidence retained.
+
+The state of an installed watch is a separate gate. A clean configure, build,
+flash, boot, and physical smoke check are required before calling the device a
+formal build.
 
 ## Trigger
 

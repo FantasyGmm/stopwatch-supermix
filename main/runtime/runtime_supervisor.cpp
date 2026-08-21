@@ -16,6 +16,7 @@ namespace {
 RuntimeSupervisor runtime_supervisor;
 constexpr const char* tag = "RuntimeSupervisor";
 
+#if CONFIG_STOPWATCH_DEBUG_COMMANDS
 void trace_snapshot(uint64_t session_id, AssistantTraceDetail detail,
                     const RuntimeDiagnosticSnapshot& snapshot,
                     AssistantTraceResult result = AssistantTraceResult::Ok)
@@ -34,6 +35,7 @@ void trace_snapshot(uint64_t session_id, AssistantTraceDetail detail,
         .value3 = static_cast<int32_t>(snapshot.resources.playback_owner),
     });
 }
+#endif
 } // namespace
 
 RuntimeSupervisor& GetRuntimeSupervisor()
@@ -53,7 +55,9 @@ bool RuntimeSupervisor::start()
     _runtime_thread = xTaskGetCurrentTaskHandle();
     _last_assistant_state = GetAssistantRuntime().state();
     _started = true;
+#if CONFIG_STOPWATCH_DEBUG_COMMANDS
     mclog::tagInfo(tag, "runtime facade started");
+#endif
     return true;
 }
 
@@ -68,13 +72,16 @@ AssistantStartResult RuntimeSupervisor::startAssistant()
         return AssistantStartResult::AlreadyActive;
     }
 
+    const uint64_t previous_session_id = assistant.sessionId();
+#if CONFIG_STOPWATCH_DEBUG_COMMANDS
     _before_snapshot = CaptureRuntimeDiagnosticSnapshot();
     logSnapshot("before-start", _before_snapshot);
-    const uint64_t previous_session_id = assistant.sessionId();
     trace_snapshot(previous_session_id + 1, AssistantTraceDetail::BeforeStart,
                    _before_snapshot);
+#endif
     const AssistantStartResult result = assistant.start();
     _last_assistant_state = assistant.state();
+#if CONFIG_STOPWATCH_DEBUG_COMMANDS
     GetAssistantTrace().record({
         .session_id = assistant.sessionId(),
         .timestamp_ms = _before_snapshot.captured_at_ms,
@@ -87,6 +94,7 @@ AssistantStartResult RuntimeSupervisor::startAssistant()
                       : AssistantTraceResult::Rejected,
         .value0 = static_cast<int32_t>(result),
     });
+#endif
 
     if (assistant.sessionId() != previous_session_id) {
         _tracked_session_id = assistant.sessionId();
@@ -129,6 +137,7 @@ void RuntimeSupervisor::update(uint32_t now_ms)
     const AssistantRuntimeState current = assistant.state();
 
     if (_session_pending && assistant.sessionId() == _tracked_session_id) {
+#if CONFIG_STOPWATCH_DEBUG_COMMANDS
         if (current == AssistantRuntimeState::Running && !_running_captured) {
             _running_snapshot = CaptureRuntimeDiagnosticSnapshot();
             _running_captured = true;
@@ -136,13 +145,16 @@ void RuntimeSupervisor::update(uint32_t now_ms)
             trace_snapshot(_tracked_session_id, AssistantTraceDetail::FirstRunning,
                            _running_snapshot);
         }
+#endif
         if (current == AssistantRuntimeState::Stopped &&
             _last_assistant_state != AssistantRuntimeState::Stopped) {
             finishStoppedBoundary();
         }
     }
     _last_assistant_state = current;
+#if CONFIG_STOPWATCH_DEBUG_COMMANDS
     GetAssistantTrace().flush();
+#endif
 }
 
 AssistantRuntimeState RuntimeSupervisor::assistantState() const
@@ -173,6 +185,7 @@ bool RuntimeSupervisor::onRuntimeThread() const
 void RuntimeSupervisor::logSnapshot(const char* boundary,
                                     const RuntimeDiagnosticSnapshot& snapshot)
 {
+#if CONFIG_STOPWATCH_DEBUG_COMMANDS
     mclog::tagInfo(tag,
                    "diagnostic {} t={} internal={}/{} largest={} psram={} tasks={} state={} bindings={} "
                    "subscriptions={} wifi={} capture={} playback={} ap={} blocked={}",
@@ -184,6 +197,10 @@ void RuntimeSupervisor::logSnapshot(const char* boundary,
                    static_cast<unsigned>(snapshot.resources.capture_owner),
                    static_cast<unsigned>(snapshot.resources.playback_owner),
                    snapshot.resources.wifi_ap_active, snapshot.resources.blocked);
+#else
+    (void)boundary;
+    (void)snapshot;
+#endif
 }
 
 void RuntimeSupervisor::finishStoppedBoundary()
@@ -192,8 +209,9 @@ void RuntimeSupervisor::finishStoppedBoundary()
         return;
     }
 
-    _stopped_snapshot = CaptureRuntimeDiagnosticSnapshot();
     _stopped_captured = true;
+#if CONFIG_STOPWATCH_DEBUG_COMMANDS
+    _stopped_snapshot = CaptureRuntimeDiagnosticSnapshot();
     logSnapshot("stopped", _stopped_snapshot);
     const RuntimeDiagnosticDelta delta = CompareRuntimeSnapshots(_before_snapshot, _stopped_snapshot);
     GetAssistantTrace().record({
@@ -214,5 +232,6 @@ void RuntimeSupervisor::finishStoppedBoundary()
     mclog::tagInfo(tag, "session {} stopped: internal_loss={} psram_loss={} task_delta={} gate={}",
                    _tracked_session_id, delta.internal_heap_loss, delta.psram_loss,
                    delta.task_delta, PassesSingleSessionLeakGate(delta));
+#endif
     _session_pending = false;
 }

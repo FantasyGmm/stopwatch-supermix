@@ -13,6 +13,12 @@ file(GLOB_RECURSE MY_SRCS
     "runtime/*.cpp"
 )
 
+if(NOT CONFIG_STOPWATCH_DEBUG_COMMANDS)
+    list(REMOVE_ITEM MY_SRCS
+        "${CMAKE_CURRENT_SOURCE_DIR}/runtime/power/battery_calibration_service.cpp"
+    )
+endif()
+
 if(CONFIG_STOPWATCH_DEBUG_COMMANDS)
     file(GLOB_RECURSE DEBUG_SRCS
         "debug/*.c"

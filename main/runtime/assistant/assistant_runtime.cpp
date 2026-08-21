@@ -140,7 +140,9 @@ bool load_unified_wake_models()
             ESP_LOGE(tag, "failed to load srmodels asset");
             return false;
         }
+#if CONFIG_STOPWATCH_DEBUG_COMMANDS
         ESP_LOGI(tag, "loaded wake model from the assets partition");
+#endif
         return true;
     }
 
@@ -206,6 +208,7 @@ std::string xiaozhi_event_name(XiaozhiHelper::EventId event)
 
 void log_memory_stage(const char* boundary)
 {
+#if CONFIG_STOPWATCH_DEBUG_COMMANDS
     const RuntimeDiagnosticSnapshot snapshot = CaptureRuntimeDiagnosticSnapshot();
     ESP_LOGI(tag, "memory %s internal=%u/%u largest=%u psram=%u tasks=%u", boundary,
              static_cast<unsigned>(snapshot.internal_free_heap),
@@ -213,6 +216,9 @@ void log_memory_stage(const char* boundary)
              static_cast<unsigned>(snapshot.internal_largest_free_block),
              static_cast<unsigned>(snapshot.psram_free),
              static_cast<unsigned>(snapshot.task_count));
+#else
+    (void)boundary;
+#endif
 }
 } // namespace
 
@@ -630,7 +636,9 @@ bool AssistantRuntime::Impl::configurePlaybackBeforeStart()
         ESP_LOGE(tag, "failed to configure playback task: %s", result.error().c_str());
         return false;
     }
+#if CONFIG_STOPWATCH_DEBUG_COMMANDS
     ESP_LOGI(tag, "configured playback task stack in PSRAM");
+#endif
     return true;
 }
 

@@ -6,7 +6,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
 class DebugCommandFirmwareContractTests(unittest.TestCase):
-    def test_usb_debug_command_is_gated_and_task_free(self):
+    def test_usb_debug_command_is_available_in_source_but_disabled_in_release(self):
         kconfig = (ROOT / "main" / "Kconfig.projbuild").read_text(encoding="utf-8")
         defaults = (ROOT / "sdkconfig.unified.defaults").read_text(encoding="utf-8")
         cmake = (ROOT / "main" / "CMakeLists.txt").read_text(encoding="utf-8")
@@ -16,7 +16,8 @@ class DebugCommandFirmwareContractTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("config STOPWATCH_DEBUG_COMMANDS", kconfig)
         self.assertIn("default n", kconfig)
-        self.assertIn("CONFIG_STOPWATCH_DEBUG_COMMANDS=y", defaults)
+        self.assertIn("# CONFIG_STOPWATCH_DEBUG_COMMANDS is not set", defaults)
+        self.assertNotIn("CONFIG_STOPWATCH_DEBUG_COMMANDS=y", defaults)
         self.assertIn("CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y", defaults)
         self.assertIn('"debug/*.cpp"', cmake)
         self.assertIn("GetDebugCommandService().update();", main)
@@ -31,6 +32,18 @@ class DebugCommandFirmwareContractTests(unittest.TestCase):
             "while (1)",
         ):
             self.assertNotIn(forbidden, service)
+
+    def test_release_excludes_battery_calibration_runtime(self):
+        cmake = (ROOT / "main" / "CMakeLists.txt").read_text(encoding="utf-8")
+
+        self.assertIn("if(NOT CONFIG_STOPWATCH_DEBUG_COMMANDS)", cmake)
+        release_sources = cmake.split(
+            "if(NOT CONFIG_STOPWATCH_DEBUG_COMMANDS)", 1
+        )[1].split("endif()", 1)[0]
+        self.assertIn("list(REMOVE_ITEM MY_SRCS", release_sources)
+        self.assertIn(
+            "runtime/power/battery_calibration_service.cpp", release_sources
+        )
 
     def test_launcher_owns_debug_open_lifecycle(self):
         launcher = (
