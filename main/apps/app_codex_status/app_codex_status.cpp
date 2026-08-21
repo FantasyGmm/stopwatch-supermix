@@ -23,6 +23,7 @@
 #include <runtime/display/global_display_protection_service.h>
 #include <wifi_manager.h>
 #include <esp_websocket_client.h>
+#include <esp_log.h>
 #include <esp_random.h>
 #include <mbedtls/sha256.h>
 #include <mooncake_log.h>
@@ -1197,11 +1198,10 @@ void AppCodexStatus::create_view()
     lv_obj_set_style_bg_color(
         _pinned_microphone_touch_target, lv_color_hex(kInstrumentBlack), 0);
     lv_obj_set_style_bg_opa(_pinned_microphone_touch_target, LV_OPA_COVER, 0);
-    lv_obj_set_ext_click_area(_pinned_microphone_touch_target, 48);
     lv_obj_add_event_cb(
         _pinned_microphone_touch_target,
         AppCodexStatus::pinned_microphone_touch_event_cb,
-        LV_EVENT_CLICKED,
+        LV_EVENT_ALL,
         this);
 
     _pinned_microphone_capsule = lv_obj_create(_pinned_microphone_page);
@@ -1241,13 +1241,6 @@ void AppCodexStatus::create_view()
         333,
         &PinnedMicState22,
         kSignalWhite);
-    lv_obj_add_flag(
-        _pinned_microphone_prompt_label, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(
-        _pinned_microphone_prompt_label,
-        AppCodexStatus::pinned_microphone_touch_event_cb,
-        LV_EVENT_CLICKED,
-        this);
     render_pinned_microphone();
 
     _page_dot_pinned_microphone = make_page_dot(_panel, 213);
@@ -1546,22 +1539,58 @@ void AppCodexStatus::render_pinned_microphone()
 void AppCodexStatus::pinned_microphone_touch_event_cb(lv_event_t* event)
 {
     auto* self = static_cast<AppCodexStatus*>(lv_event_get_user_data(event));
+    const lv_event_code_t code = lv_event_get_code(event);
+    if (code == LV_EVENT_PRESSED || code == LV_EVENT_RELEASED ||
+        code == LV_EVENT_PRESS_LOST || code == LV_EVENT_CLICKED) {
+        lv_point_t point = {-1, -1};
+        lv_indev_t* indev = lv_event_get_indev(event);
+        if (indev != nullptr) {
+            lv_indev_get_point(indev, &point);
+        }
+        ESP_LOGI(
+            "PINMIC",
+            "widget event=%d x=%ld y=%ld enabled=%d state=%d",
+            static_cast<int>(code),
+            static_cast<long>(point.x),
+            static_cast<long>(point.y),
+            self != nullptr && self->_pinned_microphone_controller.enabled(),
+            self != nullptr
+                ? static_cast<int>(self->_pinned_microphone_controller.state())
+                : -1);
+    }
+    if (code != LV_EVENT_CLICKED) {
+        return;
+    }
     if (self == nullptr || self->_voice_input == nullptr ||
         self->_pinned_microphone_touch_target == nullptr ||
         self->_pinned_microphone_controller.state() ==
             PinnedMicrophoneState::Starting ||
         self->_pinned_microphone_controller.state() ==
             PinnedMicrophoneState::Stopping) {
+        ESP_LOGI("PINMIC", "click ignored: unavailable or transitional state");
         return;
     }
     const bool enabled = !self->_pinned_microphone_controller.enabled();
-    (void)self->_pinned_microphone_controller.set_enabled(
-        enabled,
+    const bool voice_ready =
         self->_production_voice_link_usable &&
-            (self->_production_voice_capabilities &
-             voice_input::kExternalMicrophoneCapability) != 0,
+        (self->_production_voice_capabilities &
+         voice_input::kExternalMicrophoneCapability) != 0;
+    const bool voice_active_before = self->_voice_input->active();
+    const bool accepted = self->_pinned_microphone_controller.set_enabled(
+        enabled,
+        voice_ready,
         *self->_voice_input,
         GetHAL().millis());
+    ESP_LOGI(
+        "PINMIC",
+        "toggle requested=%d accepted=%d voice_ready=%d voice_active_before=%d voice_active_after=%d enabled_after=%d state_after=%d",
+        enabled,
+        accepted,
+        voice_ready,
+        voice_active_before,
+        self->_voice_input->active(),
+        self->_pinned_microphone_controller.enabled(),
+        static_cast<int>(self->_pinned_microphone_controller.state()));
     self->render_pinned_microphone();
 }
 
@@ -4393,25 +4422,42 @@ void AppCodexStatus::update_page_swipe(uint32_t now_ms)
         return;
     }
 
-    if (GetGlobalDisplayProtectionService().touchInputSuppressed()) {
-        _page_swipe.cancel();
-        _trae_card_tap.cancel();
-        _last_page_touch_state = LV_INDEV_STATE_REL;
-        return;
-    }
     const lv_indev_state_t state = lv_indev_get_state(indev);
-
-    auto& controls = GetGlobalEdgeControlService();
-    if (_screen_off ||
-        controls.ownsTouch() || controls.lastReleaseConsumed()) {
-        _page_swipe.cancel();
-        _trae_card_tap.cancel();
-        _last_page_touch_state = LV_INDEV_STATE_REL;
-        return;
-    }
-
     lv_point_t point;
     lv_indev_get_point(indev, &point);
+    auto& controls = GetGlobalEdgeControlService();
+    const bool display_suppressed =
+        GetGlobalDisplayProtectionService().touchInputSuppressed();
+    const bool edge_owned = controls.ownsTouch();
+    const bool edge_consumed = controls.lastReleaseConsumed();
+    if (_current_page == 0 &&
+        state != _last_pinned_microphone_debug_touch_state) {
+        ESP_LOGI(
+            "PINMIC",
+            "raw state=%d x=%ld y=%ld screen_off=%d display_suppressed=%d edge_owned=%d edge_consumed=%d",
+            static_cast<int>(state),
+            static_cast<long>(point.x),
+            static_cast<long>(point.y),
+            _screen_off,
+            display_suppressed,
+            edge_owned,
+            edge_consumed);
+    }
+    _last_pinned_microphone_debug_touch_state = state;
+
+    if (display_suppressed) {
+        _page_swipe.cancel();
+        _trae_card_tap.cancel();
+        _last_page_touch_state = LV_INDEV_STATE_REL;
+        return;
+    }
+    if (_screen_off ||
+        edge_owned || edge_consumed) {
+        _page_swipe.cancel();
+        _trae_card_tap.cancel();
+        _last_page_touch_state = LV_INDEV_STATE_REL;
+        return;
+    }
     if (state == LV_INDEV_STATE_PR) {
         if (_last_page_touch_state == LV_INDEV_STATE_REL) {
             _page_swipe.press(point.x, point.y, now_ms);

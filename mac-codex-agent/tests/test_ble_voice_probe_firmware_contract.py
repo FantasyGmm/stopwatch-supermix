@@ -503,16 +503,6 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         self.assertIn("kRunningCyan", source)
         self.assertIn("pinned_microphone_touch_event_cb", source)
         self.assertIn("LV_EVENT_CLICKED", source)
-        self.assertIn(
-            "lv_obj_set_ext_click_area(_pinned_microphone_touch_target, 48)",
-            source,
-        )
-        prompt_setup = source.split(
-            "_pinned_microphone_prompt_label = make_center_label(", 1
-        )[1].split("render_pinned_microphone();", 1)[0]
-        self.assertIn("LV_OBJ_FLAG_CLICKABLE", prompt_setup)
-        self.assertIn("pinned_microphone_touch_event_cb", prompt_setup)
-        self.assertIn("LV_EVENT_CLICKED", prompt_setup)
         self.assertNotIn("lv_switch_create(_pinned_microphone_page)", source)
         pager = source.split("void AppCodexStatus::update_page_indicator", 1)[1].split(
             "void AppCodexStatus::page_animation_cb", 1

@@ -154,6 +154,8 @@ private:
     bool _trae_stale             = false;
     int _current_page            = 1;
     lv_indev_state_t _last_page_touch_state = LV_INDEV_STATE_REL;
+    lv_indev_state_t _last_pinned_microphone_debug_touch_state =
+        LV_INDEV_STATE_REL;
     lv_indev_state_t _last_agent_touch_state = LV_INDEV_STATE_REL;
     lv_indev_state_t _last_task_touch_state = LV_INDEV_STATE_REL;
     int _agent_panel_drag_start_y = 0;
