@@ -6,7 +6,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
 class AgentPanelFirmwareContractTests(unittest.TestCase):
-    def test_focus_rail_uses_approved_structure_and_copy(self):
+    def test_full_info_ledger_is_default_and_focus_rail_is_management(self):
         header = (
             ROOT / "main/apps/app_codex_status/app_codex_status.h"
         ).read_text()
@@ -14,10 +14,22 @@ class AgentPanelFirmwareContractTests(unittest.TestCase):
             ROOT / "main/apps/app_codex_status/app_codex_status.cpp"
         ).read_text()
         self.assertIn('#include "agent_panel_ui_layout.h"', header)
+        self.assertIn('#include "agent_panel_presenter.h"', source)
+        self.assertIn("_agent_manage_button", header)
+        self.assertIn("_agent_manage_done_button", header)
+        self.assertIn("_agent_panel_manage_mode", header)
+        self.assertIn("_agent_row_ids", header)
+        self.assertIn("else if (!_agent_panel_manage_mode)", source)
+        self.assertIn("ledger_row_layout", source)
+        self.assertIn("ledger_metadata_layout", source)
+        self.assertIn("format_last_connected", source)
+        self.assertIn("presentation_state", source)
+        self.assertIn("short_id.data()", source)
+        self.assertIn('"MANAGE"', source)
+        self.assertIn('"DONE"', source)
         self.assertIn("_agent_rail", header)
         self.assertIn("lv_obj_set_scroll_snap_y", source)
         self.assertIn('"Switch request"', source)
-        self.assertIn('"%u PAIRED"', source)
         self.assertIn('"Hold to reset"', source)
         self.assertIn('"PAIRING REQUEST"', source)
         self.assertIn('"Allow + Switch"', source)
@@ -30,6 +42,59 @@ class AgentPanelFirmwareContractTests(unittest.TestCase):
         self.assertIn("lv_obj_set_flex_flow", source)
         self.assertIn("lv_obj_set_style_opa", source)
         self.assertNotIn('make_button("×"', source)
+
+    def test_agent_panel_interactive_surfaces_strip_lvgl_button_theme(self):
+        source = (
+            ROOT / "main/apps/app_codex_status/app_codex_status.cpp"
+        ).read_text()
+        self.assertIn("make_unstyled_button", source)
+        self.assertIn("lv_obj_remove_style_all(button)", source)
+        self.assertIn("LV_OBJ_FLAG_SCROLL_ON_FOCUS", source)
+        panel_source = source[
+            source.index("void AppCodexStatus::render_agent_panel()") :
+            source.index("void AppCodexStatus::sync_agent_rail_focus()")
+        ]
+        self.assertEqual(panel_source.count("lv_button_create("), 1)
+        self.assertGreaterEqual(
+            panel_source.count("make_unstyled_button("),
+            3,
+        )
+
+    def test_connected_row_uses_fading_horizontal_wash(self):
+        source = (
+            ROOT / "main/apps/app_codex_status/app_codex_status.cpp"
+        ).read_text()
+        ledger_source = source[
+            source.index("} else if (!_agent_panel_manage_mode)") :
+            source.index("} else {", source.index("} else if (!_agent_panel_manage_mode)"))
+        ]
+        self.assertEqual(ledger_source.count("make_connected_wash_half("), 2)
+        self.assertIn("agent_panel_ui::kBackground", ledger_source)
+        self.assertIn("agent_panel_ui::kSelection", ledger_source)
+        self.assertIn("agent_panel_ui::kConnectedWashOpacity", ledger_source)
+        self.assertIn("LV_GRAD_DIR_HOR", source)
+
+    def test_locked_ledger_visual_primitives_are_explicit(self):
+        layout = (
+            ROOT / "main/apps/app_codex_status/agent_panel_ui_layout.h"
+        ).read_text()
+        source = (
+            ROOT / "main/apps/app_codex_status/app_codex_status.cpp"
+        ).read_text()
+        cmake = (ROOT / "main/CMakeLists.txt").read_text()
+        self.assertIn("agent_panel_ui::kHandleOpacity", source)
+        self.assertIn("AgentPanelTitle16", source)
+        self.assertIn("assets/fonts/AgentPanelTitle16.c", cmake)
+        self.assertIn("agent_title", source)
+        self.assertIn("lv_obj_set_style_text_letter_space(agent_title, 2, 0)", source)
+        self.assertIn("request_halo", source)
+        self.assertIn("agent_panel_ui::kRequestHaloOpacity", source)
+        self.assertIn("dot_border_width", source)
+        self.assertIn("agent_panel_ui::kDivider", source)
+        self.assertIn("agent_panel_ui::kDividerOpacity", source)
+        self.assertIn("kBackground = 0x000000", layout)
+        self.assertIn("kCollapsedVisibleHeight = 14", layout)
+        self.assertIn("agent_panel_ui::panel_hint_y", source)
 
     def test_focus_rail_secondary_states_match_approved_contract(self):
         header = (
@@ -167,10 +232,13 @@ class AgentPanelFirmwareContractTests(unittest.TestCase):
         dispatch = source.split(
             "void AppCodexStatus::dispatch_agent_panel_decision", 1
         )[1].split("void AppCodexStatus::", 1)[0]
-        self.assertIn("cancel_for_home", dispatch)
-        self.assertIn("voice_cleanup_complete", dispatch)
-        self.assertIn("request_active_disconnect", dispatch)
-        self.assertNotIn("LvglLockGuard", dispatch)
+        switch_flow = dispatch.split(
+            "decision.action != AgentPanelAction::SwitchAgent", 1
+        )[1]
+        self.assertIn("cancel_for_home", switch_flow)
+        self.assertIn("voice_cleanup_complete", switch_flow)
+        self.assertIn("request_active_disconnect", switch_flow)
+        self.assertNotIn("LvglLockGuard", switch_flow)
 
     def test_key_rotation_terminates_every_inflight_pairing_session(self):
         source = (

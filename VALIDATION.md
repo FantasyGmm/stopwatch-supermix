@@ -79,6 +79,23 @@ git diff --check
   `4001f5fba27eb73c5166a945bcf8c104c198379f46bc0efa898084c23d233a1e`.
 - `git diff --check`: passed.
 
+### Agent selector Option A evidence (2026-08-21)
+
+- Focused Agent panel model, UI layout, presentation, firmware-contract, and
+  unified-validation contract tests passed with `IDF_PATH` pointing at a local
+  ESP-IDF 5.5.4 checkout.
+- Incremental ESP-IDF 5.5.4 firmware build succeeded. The application image
+  used `0x6523b0` bytes and retained `0x76dc50` bytes (54%) in the smallest
+  application partition.
+- The capacity-gated four-image candidate was flashed without erasing NVS.
+  Independent `verify_flash` checks matched the bootloader, partition table,
+  application, and assets digests. Serial validation loaded the application
+  from `0x20000`, reached `[Launcher] on open`, and found no panic or watchdog
+  reset.
+- The user physically confirmed the collapsed Codex header and expanded Agent
+  selector on the AMOLED: the pull hint no longer covers the Codex mark and the
+  Agent page background is pure black.
+
 Normal project flashing does not create or require a firmware backup. The
 candidate flasher still requires the exact bootloader, partition table,
 application, and assets artifacts and enforces partition and capacity limits.

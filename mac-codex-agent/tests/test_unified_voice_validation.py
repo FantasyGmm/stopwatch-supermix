@@ -41,6 +41,9 @@ EXPECTED_HOST_TESTS = (
     "trae_task_carousel_test",
     "codex_status_model_test",
     "codex_button_gesture_test",
+    "codex_task_detail_store_test",
+    "codex_task_focus_deck_test",
+    "codex_task_focus_layout_test",
     "status_page_swipe_logic_test",
     "trae_card_tap_logic_test",
     "display_protection_config_test",
@@ -66,7 +69,9 @@ EXPECTED_HOST_TESTS = (
     "agent_connection_router_test",
     "agent_panel_model_test",
     "agent_panel_ui_layout_test",
+    "agent_panel_presenter_test",
     "voice_input_crypto_test",
+    "codex_task_detail_crypto_test",
     "voice_input_protocol_test",
     "input_action_protocol_test",
     "input_action_controller_test",
@@ -211,7 +216,7 @@ output.chmod(0o700)
         declared_total = re.search(r"^TOTAL_STAGES=(\d+)$", runner, re.MULTILINE)
         self.assertIsNotNone(declared_total)
         self.assertEqual(total, int(declared_total.group(1)))
-        self.assertEqual(total, 58)
+        self.assertEqual(total, 63)
         self.assertEqual(len(stages), total)
         self.assertEqual([stage[0] for stage in stages], list(range(1, total + 1)))
         self.assertEqual({stage[1] for stage in stages}, {total})

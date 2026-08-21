@@ -37,6 +37,8 @@ struct AgentPanelRow {
     secure_pairing::AgentFingerprint fingerprint = {};
     std::array<char, kAgentPanelDisplayNameBytes + 1> display_name = {};
     size_t display_name_size = 0;
+    std::array<char, 5> short_id = {};
+    int64_t last_connected_at = 0;
     AgentPanelRowState state = AgentPanelRowState::Offline;
 };
 

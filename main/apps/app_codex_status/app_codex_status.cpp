@@ -10,6 +10,7 @@
 #include "codex_pending_glow_logic.h"
 #include "ble_voice_probe_controller.h"
 #include "voice_input_controller.h"
+#include "agent_panel_presenter.h"
 #include "codex_status_ui_layout.h"
 #include "codex_status_model.h"
 #include "codex_task_detail_crypto.h"
@@ -30,11 +31,13 @@
 #include <cctype>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 
 using namespace mooncake;
 
 extern "C" const lv_image_dsc_t logo_codex;
 LV_FONT_DECLARE(font_puhui_14_1)
+LV_FONT_DECLARE(AgentPanelTitle16)
 LV_FONT_DECLARE(PinnedMicTitle24)
 LV_FONT_DECLARE(PinnedMicState22)
 
@@ -59,10 +62,23 @@ constexpr uint32_t kTraeStatusStaleMs    = 15000;
 constexpr uint32_t kScreenOffHoldMs      = 2000;
 constexpr int kPageWidth                 = 466;
 constexpr int kPageCount                 = 3;
-constexpr int kAgentPanelHiddenY         = -430;
+constexpr int kAgentPanelHiddenY         = agent_panel_ui::kPanelHiddenY;
 constexpr int kAgentPanelVisibleY        = 0;
 constexpr int kTaskSwipeThreshold        = 36;
 constexpr int kTaskTapTolerance          = 12;
+
+int64_t current_unix_milliseconds()
+{
+    const std::time_t now = std::time(nullptr);
+    if (now <= 0) {
+        return 0;
+    }
+    const int64_t milliseconds = static_cast<int64_t>(now) * 1000LL;
+    return milliseconds >=
+            agent_panel_presentation::kMinimumUnixMilliseconds
+        ? milliseconds
+        : 0;
+}
 
 bool fill_agent_entropy(void*, uint8_t* output, size_t size)
 {
@@ -400,6 +416,7 @@ void AppCodexStatus::onOpen()
     _agent_reset_hold_active = false;
     _agent_reset_hold_queued = false;
     _agent_pairing_expired = false;
+    _agent_panel_manage_mode = false;
     _agent_panel_notice = {};
     clear_pairing_runtime();
     {
@@ -1331,6 +1348,7 @@ void AppCodexStatus::destroy_view()
     _host_label     = nullptr;
     _pet_image      = nullptr;
     _agent_panel_root = nullptr;
+    _agent_panel_hint = nullptr;
     _agent_rail = nullptr;
     _agent_focus_band_left = nullptr;
     _agent_focus_band_right = nullptr;
@@ -1346,7 +1364,11 @@ void AppCodexStatus::destroy_view()
     _agent_delete_buttons = {};
     _agent_row_names = {};
     _agent_row_states = {};
+    _agent_row_ids = {};
+    _agent_row_times = {};
     _agent_row_dots = {};
+    _agent_manage_button = nullptr;
+    _agent_manage_done_button = nullptr;
     _agent_allow_button = nullptr;
     _agent_allow_switch_button = nullptr;
     _agent_reject_button = nullptr;
@@ -1360,6 +1382,7 @@ void AppCodexStatus::destroy_view()
     _agent_reset_hold_active = false;
     _agent_reset_hold_queued = false;
     _agent_pairing_expired = false;
+    _agent_panel_manage_mode = false;
     _agent_panel_notice = {};
     _pet_frame      = 0;
 }
@@ -1938,6 +1961,7 @@ void AppCodexStatus::render_agent_panel()
         _agent_reset_hold_queued = false;
     }
     lv_obj_clean(_agent_panel_root);
+    _agent_panel_hint = nullptr;
     _agent_rail = nullptr;
     _agent_focus_band_left = nullptr;
     _agent_focus_band_right = nullptr;
@@ -1949,7 +1973,11 @@ void AppCodexStatus::render_agent_panel()
     _agent_delete_buttons = {};
     _agent_row_names = {};
     _agent_row_states = {};
+    _agent_row_ids = {};
+    _agent_row_times = {};
     _agent_row_dots = {};
+    _agent_manage_button = nullptr;
+    _agent_manage_done_button = nullptr;
     _agent_allow_button = nullptr;
     _agent_allow_switch_button = nullptr;
     _agent_reject_button = nullptr;
@@ -1972,33 +2000,28 @@ void AppCodexStatus::render_agent_panel()
     lv_obj_set_style_border_width(drag_handle, 0, 0);
     lv_obj_set_style_bg_color(
         drag_handle, lv_color_hex(agent_panel_ui::kSecondaryText), 0);
-    lv_obj_set_style_bg_opa(drag_handle, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_opa(
+        drag_handle,
+        static_cast<lv_opa_t>(agent_panel_ui::kHandleOpacity),
+        0);
     lv_obj_clear_flag(drag_handle, LV_OBJ_FLAG_SCROLLABLE);
 
-    make_center_label(
+    lv_obj_t* agent_title = make_center_label(
         _agent_panel_root,
         "AGENTS",
-        34,
-        &lv_font_montserrat_16,
+        28,
+        &AgentPanelTitle16,
         agent_panel_ui::kPrimaryText);
+    lv_obj_set_style_text_letter_space(agent_title, 2, 0);
 
-    if (snapshot.confirmation == AgentPanelConfirmation::None &&
-        !snapshot.request.present) {
-        char count_text[24] = {};
-        std::snprintf(
-            count_text,
-            sizeof(count_text),
-            "%u PAIRED",
-            static_cast<unsigned>(snapshot.count));
-        _agent_count_label = make_center_label(
-            _agent_panel_root,
-            count_text,
-            58,
-            &lv_font_montserrat_14,
-            agent_panel_ui::kSecondaryText);
-    }
+    auto make_unstyled_button = [](lv_obj_t* parent) {
+        lv_obj_t* button = lv_button_create(parent);
+        lv_obj_remove_style_all(button);
+        lv_obj_clear_flag(button, LV_OBJ_FLAG_SCROLL_ON_FOCUS);
+        return button;
+    };
 
-    auto make_button = [this](
+    auto make_button = [this, &make_unstyled_button](
                            lv_obj_t* parent,
                            const char* text,
                            int x,
@@ -2007,7 +2030,7 @@ void AppCodexStatus::render_agent_panel()
                            int height,
                            uint32_t color,
                            bool filled = true) {
-        lv_obj_t* button = lv_button_create(parent);
+        lv_obj_t* button = make_unstyled_button(parent);
         lv_obj_set_size(button, width, height);
         lv_obj_set_pos(button, x, y);
         lv_obj_set_style_radius(button, height / 2, 0);
@@ -2034,6 +2057,50 @@ void AppCodexStatus::render_agent_panel()
             this);
         return button;
     };
+
+    auto make_connected_wash_half = [](
+                                        lv_obj_t* parent,
+                                        int x,
+                                        int width,
+                                        int height,
+                                        uint32_t start_color,
+                                        uint32_t end_color,
+                                        uint8_t opacity) {
+        lv_obj_t* wash = lv_obj_create(parent);
+        lv_obj_set_pos(wash, x, 0);
+        lv_obj_set_size(wash, width, height);
+        lv_obj_set_style_radius(wash, 0, 0);
+        lv_obj_set_style_border_width(wash, 0, 0);
+        lv_obj_set_style_pad_all(wash, 0, 0);
+        lv_obj_set_style_bg_color(wash, lv_color_hex(start_color), 0);
+        lv_obj_set_style_bg_grad_color(wash, lv_color_hex(end_color), 0);
+        lv_obj_set_style_bg_grad_dir(wash, LV_GRAD_DIR_HOR, 0);
+        lv_obj_set_style_bg_opa(wash, static_cast<lv_opa_t>(opacity), 0);
+        lv_obj_clear_flag(wash, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_clear_flag(wash, LV_OBJ_FLAG_CLICKABLE);
+        return wash;
+    };
+
+    if (snapshot.confirmation == AgentPanelConfirmation::None &&
+        !snapshot.request.present && snapshot.count > 0) {
+        lv_obj_t*& header_action = _agent_panel_manage_mode
+            ? _agent_manage_done_button
+            : _agent_manage_button;
+        header_action = make_button(
+            _agent_panel_root,
+            _agent_panel_manage_mode ? "DONE" : "MANAGE",
+            agent_panel_ui::kManageRect.x,
+            agent_panel_ui::kManageRect.y,
+            agent_panel_ui::kManageRect.w,
+            agent_panel_ui::kManageRect.h,
+            agent_panel_ui::kSecondaryText,
+            false);
+        lv_obj_set_style_border_width(header_action, 0, 0);
+        lv_obj_t* action_label = lv_obj_get_child(header_action, 0);
+        if (action_label != nullptr) {
+            lv_obj_align(action_label, LV_ALIGN_TOP_MID, 0, 31);
+        }
+    }
 
     if (snapshot.confirmation != AgentPanelConfirmation::None) {
         const bool deleting =
@@ -2235,6 +2302,224 @@ void AppCodexStatus::render_agent_panel()
                 agent_panel_ui::kSecondaryText);
             lv_obj_set_width(helper, 300);
             lv_obj_set_style_text_align(helper, LV_TEXT_ALIGN_CENTER, 0);
+        } else if (!_agent_panel_manage_mode) {
+            const int64_t now_unix_ms = current_unix_milliseconds();
+            for (size_t index = 0; index < snapshot.count; ++index) {
+                const AgentPanelRow& row = snapshot.rows[index];
+                const agent_panel_ui::Rect row_rect =
+                    agent_panel_ui::ledger_row_layout(
+                        snapshot.count, index);
+                lv_obj_t* row_button =
+                    make_unstyled_button(_agent_panel_root);
+                _agent_row_buttons[index] = row_button;
+                lv_obj_set_pos(row_button, row_rect.x, row_rect.y);
+                lv_obj_set_size(row_button, row_rect.w, row_rect.h);
+                lv_obj_set_style_radius(row_button, 0, 0);
+                lv_obj_set_style_border_width(row_button, 0, 0);
+                lv_obj_set_style_pad_all(row_button, 0, 0);
+                lv_obj_set_style_shadow_width(row_button, 0, 0);
+                lv_obj_set_style_bg_color(
+                    row_button,
+                    lv_color_hex(agent_panel_ui::kSelection),
+                    0);
+                lv_obj_set_style_bg_opa(row_button, LV_OPA_TRANSP, 0);
+                lv_obj_add_event_cb(
+                    row_button,
+                    AppCodexStatus::agent_panel_event_cb,
+                    LV_EVENT_CLICKED,
+                    this);
+
+                uint32_t state_color = agent_panel_ui::kOffline;
+                const char* state_text = "Offline";
+                bool filled_dot = false;
+                bool request_ring = false;
+                int dot_border_width = 1;
+                if (row.state == AgentPanelRowState::Connected) {
+                    state_color = agent_panel_ui::kConnected;
+                    state_text = "Connected";
+                    filled_dot = true;
+                    dot_border_width = 0;
+                } else if (row.state == AgentPanelRowState::Requesting) {
+                    state_color = agent_panel_ui::kRequesting;
+                    state_text = "Switch request";
+                    request_ring = true;
+                    dot_border_width = 2;
+                }
+                if (_agent_switch_pending &&
+                    row.fingerprint == _agent_switch_target) {
+                    state_color = agent_panel_ui::kSelection;
+                    state_text = "Switching...";
+                    filled_dot = true;
+                    request_ring = false;
+                    dot_border_width = 0;
+                }
+
+                if (row.state == AgentPanelRowState::Connected) {
+                    const int left_width = row_rect.w / 2;
+                    make_connected_wash_half(
+                        row_button,
+                        0,
+                        left_width,
+                        row_rect.h,
+                        agent_panel_ui::kBackground,
+                        agent_panel_ui::kSelection,
+                        agent_panel_ui::kConnectedWashOpacity);
+                    make_connected_wash_half(
+                        row_button,
+                        left_width,
+                        row_rect.w - left_width,
+                        row_rect.h,
+                        agent_panel_ui::kSelection,
+                        agent_panel_ui::kBackground,
+                        agent_panel_ui::kConnectedWashOpacity);
+                    lv_obj_t* marker = lv_obj_create(row_button);
+                    lv_obj_set_pos(marker, 3, row_rect.h / 4);
+                    lv_obj_set_size(marker, 3, row_rect.h / 2);
+                    lv_obj_set_style_radius(marker, 2, 0);
+                    lv_obj_set_style_border_width(marker, 0, 0);
+                    lv_obj_set_style_bg_color(
+                        marker,
+                        lv_color_hex(agent_panel_ui::kSelection),
+                        0);
+                    lv_obj_set_style_bg_opa(marker, LV_OPA_COVER, 0);
+                    lv_obj_clear_flag(marker, LV_OBJ_FLAG_SCROLLABLE);
+                    lv_obj_clear_flag(marker, LV_OBJ_FLAG_CLICKABLE);
+                }
+
+                const int dot_y = (row_rect.h - 8) / 2;
+                if (request_ring) {
+                    lv_obj_t* request_halo = lv_obj_create(row_button);
+                    lv_obj_set_pos(request_halo, 10, dot_y - 2);
+                    lv_obj_set_size(request_halo, 12, 12);
+                    lv_obj_set_style_radius(
+                        request_halo, LV_RADIUS_CIRCLE, 0);
+                    lv_obj_set_style_border_width(request_halo, 2, 0);
+                    lv_obj_set_style_border_color(
+                        request_halo, lv_color_hex(state_color), 0);
+                    lv_obj_set_style_border_opa(
+                        request_halo,
+                        static_cast<lv_opa_t>(
+                            agent_panel_ui::kRequestHaloOpacity),
+                        0);
+                    lv_obj_set_style_bg_opa(
+                        request_halo, LV_OPA_TRANSP, 0);
+                    lv_obj_clear_flag(
+                        request_halo, LV_OBJ_FLAG_SCROLLABLE);
+                    lv_obj_clear_flag(
+                        request_halo, LV_OBJ_FLAG_CLICKABLE);
+                }
+
+                lv_obj_t* dot = lv_obj_create(row_button);
+                _agent_row_dots[index] = dot;
+                lv_obj_set_pos(dot, 12, dot_y);
+                lv_obj_set_size(dot, 8, 8);
+                lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
+                lv_obj_set_style_border_width(dot, dot_border_width, 0);
+                lv_obj_set_style_border_color(
+                    dot, lv_color_hex(state_color), 0);
+                lv_obj_set_style_bg_color(
+                    dot, lv_color_hex(state_color), 0);
+                lv_obj_set_style_bg_opa(
+                    dot, filled_dot ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+                lv_obj_clear_flag(dot, LV_OBJ_FLAG_SCROLLABLE);
+                lv_obj_clear_flag(dot, LV_OBJ_FLAG_CLICKABLE);
+
+                const int name_y = row_rect.h <= 44 ? 0 : 7;
+                const int metadata_y = row_rect.h <= 44 ? 23 : 34;
+                const lv_font_t* name_font =
+                    is_ascii_text(row.display_name.data())
+                        ? (row_rect.h <= 44
+                               ? &lv_font_montserrat_16
+                               : &lv_font_montserrat_18)
+                        : &font_puhui_14_1;
+                _agent_row_names[index] = make_label(
+                    row_button,
+                    row.display_name.data(),
+                    30,
+                    name_y,
+                    name_font,
+                    agent_panel_ui::kPrimaryText);
+                lv_obj_set_width(
+                    _agent_row_names[index], row_rect.w - 42);
+                lv_label_set_long_mode(
+                    _agent_row_names[index], LV_LABEL_LONG_MODE_DOTS);
+
+                const agent_panel_ui::LedgerMetadataLayout metadata =
+                    agent_panel_ui::ledger_metadata_layout(row_rect.w);
+                _agent_row_states[index] = make_label(
+                    row_button,
+                    state_text,
+                    metadata.state.x,
+                    metadata_y,
+                    &lv_font_montserrat_14,
+                    state_color);
+                lv_obj_set_width(
+                    _agent_row_states[index], metadata.state.w);
+                lv_obj_set_style_text_letter_space(
+                    _agent_row_states[index], -1, 0);
+
+                char short_id[12] = {};
+                std::snprintf(
+                    short_id,
+                    sizeof(short_id),
+                    "ID %s",
+                    row.short_id.data());
+                _agent_row_ids[index] = make_label(
+                    row_button,
+                    short_id,
+                    metadata.id.x,
+                    metadata_y,
+                    &lv_font_montserrat_14,
+                    agent_panel_ui::kSecondaryText);
+                lv_obj_set_width(_agent_row_ids[index], metadata.id.w);
+                lv_obj_set_style_text_letter_space(
+                    _agent_row_ids[index], -1, 0);
+
+                char last_connected[16] = {};
+                const AgentPanelRowState presentation_state =
+                    _agent_switch_pending &&
+                        row.fingerprint == _agent_switch_target
+                    ? AgentPanelRowState::Requesting
+                    : row.state;
+                agent_panel_presentation::format_last_connected(
+                    presentation_state,
+                    row.last_connected_at,
+                    now_unix_ms,
+                    last_connected,
+                    sizeof(last_connected));
+                _agent_row_times[index] = make_label(
+                    row_button,
+                    last_connected,
+                    metadata.time.x,
+                    metadata_y,
+                    &lv_font_montserrat_14,
+                    agent_panel_ui::kSecondaryText);
+                lv_obj_set_width(
+                    _agent_row_times[index], metadata.time.w);
+                lv_obj_set_style_text_align(
+                    _agent_row_times[index], LV_TEXT_ALIGN_RIGHT, 0);
+                lv_obj_set_style_text_letter_space(
+                    _agent_row_times[index], -1, 0);
+
+                if (index + 1 < snapshot.count) {
+                    lv_obj_t* divider = lv_obj_create(row_button);
+                    lv_obj_set_pos(divider, 10, row_rect.h - 1);
+                    lv_obj_set_size(divider, row_rect.w - 20, 1);
+                    lv_obj_set_style_radius(divider, 0, 0);
+                    lv_obj_set_style_border_width(divider, 0, 0);
+                    lv_obj_set_style_bg_color(
+                        divider,
+                        lv_color_hex(agent_panel_ui::kDivider),
+                        0);
+                    lv_obj_set_style_bg_opa(
+                        divider,
+                        static_cast<lv_opa_t>(
+                            agent_panel_ui::kDividerOpacity),
+                        0);
+                    lv_obj_clear_flag(divider, LV_OBJ_FLAG_SCROLLABLE);
+                    lv_obj_clear_flag(divider, LV_OBJ_FLAG_CLICKABLE);
+                }
+            }
         } else {
             const int half_width = agent_panel_ui::kFocusBand.w / 2;
             _agent_focus_band_left = lv_obj_create(_agent_panel_root);
@@ -2391,7 +2676,7 @@ void AppCodexStatus::render_agent_panel()
                 _agent_delete_buttons[index] = delete_button;
                 lv_obj_add_flag(delete_button, LV_OBJ_FLAG_HIDDEN);
 
-                lv_obj_t* row_button = lv_button_create(wrapper);
+                lv_obj_t* row_button = make_unstyled_button(wrapper);
                 _agent_row_buttons[index] = row_button;
                 lv_obj_set_pos(row_button, 0, 3);
                 lv_obj_set_size(
@@ -2500,21 +2785,27 @@ void AppCodexStatus::render_agent_panel()
             agent_panel_ui::kDestructive);
     }
 
-    lv_obj_t* close_hint = lv_obj_create(_agent_panel_root);
+    _agent_panel_hint = lv_obj_create(_agent_panel_root);
     lv_obj_set_pos(
-        close_hint,
+        _agent_panel_hint,
         agent_panel_ui::kCloseHint.x,
-        agent_panel_ui::kCloseHint.y);
+        agent_panel_ui::panel_hint_y(
+            lv_obj_get_y(_agent_panel_root)));
     lv_obj_set_size(
-        close_hint,
+        _agent_panel_hint,
         agent_panel_ui::kCloseHint.w,
         agent_panel_ui::kCloseHint.h);
-    lv_obj_set_style_radius(close_hint, 2, 0);
-    lv_obj_set_style_border_width(close_hint, 0, 0);
+    lv_obj_set_style_radius(_agent_panel_hint, 2, 0);
+    lv_obj_set_style_border_width(_agent_panel_hint, 0, 0);
     lv_obj_set_style_bg_color(
-        close_hint, lv_color_hex(agent_panel_ui::kSecondaryText), 0);
-    lv_obj_set_style_bg_opa(close_hint, LV_OPA_50, 0);
-    lv_obj_clear_flag(close_hint, LV_OBJ_FLAG_SCROLLABLE);
+        _agent_panel_hint,
+        lv_color_hex(agent_panel_ui::kSecondaryText),
+        0);
+    lv_obj_set_style_bg_opa(
+        _agent_panel_hint,
+        static_cast<lv_opa_t>(agent_panel_ui::kHandleOpacity),
+        0);
+    lv_obj_clear_flag(_agent_panel_hint, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_move_foreground(_agent_panel_root);
     if (_last_agent_touch_state == LV_INDEV_STATE_REL) {
         settle_agent_panel(true);
@@ -2706,6 +2997,19 @@ void AppCodexStatus::show_agent_panel_notice(
     _agent_panel_dirty = true;
 }
 
+void AppCodexStatus::set_agent_panel_y(int y)
+{
+    if (_agent_panel_root == nullptr) {
+        return;
+    }
+    lv_obj_set_y(_agent_panel_root, y);
+    if (_agent_panel_hint != nullptr) {
+        lv_obj_set_y(
+            _agent_panel_hint,
+            agent_panel_ui::panel_hint_y(y));
+    }
+}
+
 void AppCodexStatus::settle_agent_panel(bool animate)
 {
     if (_agent_panel_root == nullptr) {
@@ -2717,6 +3021,10 @@ void AppCodexStatus::settle_agent_panel(bool animate)
         GetGlobalEdgeControlService().setEnabled(false);
     } else {
         close_agent_delete_reveal();
+        if (_agent_panel_manage_mode) {
+            _agent_panel_manage_mode = false;
+            _agent_panel_dirty = true;
+        }
     }
     const int target_y =
         snapshot.visible ? kAgentPanelVisibleY : kAgentPanelHiddenY;
@@ -2724,7 +3032,7 @@ void AppCodexStatus::settle_agent_panel(bool animate)
 
     lv_anim_delete(this, agent_panel_animation_cb);
     if (!animate || current_y == target_y) {
-        lv_obj_set_y(_agent_panel_root, target_y);
+        set_agent_panel_y(target_y);
         controls.setEnabled(!snapshot.visible);
         return;
     }
@@ -2744,7 +3052,7 @@ void AppCodexStatus::agent_panel_animation_cb(void* target, int32_t y)
 {
     auto* self = static_cast<AppCodexStatus*>(target);
     if (self != nullptr && self->_agent_panel_root != nullptr) {
-        lv_obj_set_y(self->_agent_panel_root, y);
+        self->set_agent_panel_y(y);
         if (y <= kAgentPanelHiddenY) {
             GetGlobalEdgeControlService().setEnabled(true);
         }
@@ -2781,13 +3089,11 @@ void AppCodexStatus::update_agent_panel_touch(uint32_t now_ms)
             !_agent_panel_model.owns_touch()) {
             return;
         }
-        lv_obj_set_y(
-            _agent_panel_root,
-            std::clamp(
-                _agent_panel_drag_start_y +
-                    _agent_panel_model.vertical_drag_offset(),
-                kAgentPanelHiddenY,
-                kAgentPanelVisibleY));
+        set_agent_panel_y(std::clamp(
+            _agent_panel_drag_start_y +
+                _agent_panel_model.vertical_drag_offset(),
+            kAgentPanelHiddenY,
+            kAgentPanelVisibleY));
     };
     if (state == LV_INDEV_STATE_PR) {
         if (_last_agent_touch_state == LV_INDEV_STATE_REL) {
@@ -2827,8 +3133,22 @@ void AppCodexStatus::agent_panel_event_cb(lv_event_t* event)
         static_cast<lv_obj_t*>(lv_event_get_target(event));
     const AgentPanelSnapshot snapshot =
         self->_agent_panel_model.snapshot();
+    if (target == self->_agent_manage_button) {
+        self->_agent_panel_manage_mode = true;
+        self->_agent_panel_dirty = true;
+        return;
+    }
+    if (target == self->_agent_manage_done_button) {
+        self->close_agent_delete_reveal();
+        self->_agent_panel_manage_mode = false;
+        self->_agent_panel_dirty = true;
+        return;
+    }
     for (size_t index = 0; index < snapshot.count; ++index) {
         if (target == self->_agent_row_buttons[index]) {
+            if (self->_agent_panel_manage_mode) {
+                return;
+            }
             if (self->_agent_switch_pending) {
                 return;
             }
@@ -3120,9 +3440,17 @@ void AppCodexStatus::dispatch_agent_panel_decision(
         return;
     }
     const auto before_selection = _agent_registry.snapshot();
+    int64_t connected_at = current_unix_milliseconds();
+    if (connected_at == 0) {
+        const secure_pairing::AgentRecord* existing =
+            _agent_registry.find(switch_decision.fingerprint);
+        connected_at = existing == nullptr
+            ? 0
+            : existing->last_connected_at;
+    }
     if (_agent_registry.select(
             switch_decision.fingerprint,
-            static_cast<int64_t>(now_ms)) !=
+            connected_at) !=
             secure_pairing::RegistryResult::Ok ||
         !save_agent_registry()) {
         (void)secure_pairing::AgentRegistry::restore(
@@ -3248,9 +3576,17 @@ void AppCodexStatus::complete_authenticated_pending(
                                      const secure_pairing::AgentFingerprint&
                                          fingerprint) {
         const auto before = _agent_registry.snapshot();
+        int64_t connected_at = current_unix_milliseconds();
+        if (connected_at == 0) {
+            const secure_pairing::AgentRecord* existing =
+                _agent_registry.find(fingerprint);
+            connected_at = existing == nullptr
+                ? 0
+                : existing->last_connected_at;
+        }
         if (_agent_registry.select(
                 fingerprint,
-                static_cast<int64_t>(GetHAL().millis())) ==
+                connected_at) ==
                 secure_pairing::RegistryResult::Ok &&
             save_agent_registry()) {
             return true;

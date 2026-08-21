@@ -18,20 +18,6 @@ size_t stored_name_size(const secure_pairing::AgentName& name)
     return static_cast<size_t>(end - name.begin());
 }
 
-bool same_name(
-    const secure_pairing::AgentRecord& lhs,
-    const secure_pairing::AgentRecord& rhs)
-{
-    const size_t lhs_size = stored_name_size(lhs.display_name);
-    const size_t rhs_size = stored_name_size(rhs.display_name);
-    return lhs_size == rhs_size &&
-           std::equal(
-               lhs.display_name.begin(),
-               lhs.display_name.begin() +
-                   static_cast<std::ptrdiff_t>(lhs_size),
-               rhs.display_name.begin());
-}
-
 bool valid_code(const char* code)
 {
     if (code == nullptr || std::strlen(code) != 6) {
@@ -66,14 +52,6 @@ void AgentPanelModel::sync_registry(
         AgentPanelRow& row = _snapshot.rows[index];
         row.fingerprint = record.fingerprint;
         const size_t raw_size = stored_name_size(record.display_name);
-        const bool duplicate = std::any_of(
-            registry.records().begin(),
-            registry.records().begin() +
-                static_cast<std::ptrdiff_t>(_snapshot.count),
-            [&record](const secure_pairing::AgentRecord& candidate) {
-                return &candidate != &record &&
-                       same_name(candidate, record);
-            });
         const size_t copy_size =
             std::min(raw_size, kAgentPanelDisplayNameBytes);
         std::copy_n(
@@ -81,19 +59,14 @@ void AgentPanelModel::sync_registry(
             copy_size,
             row.display_name.begin());
         row.display_name_size = copy_size;
-        if (duplicate &&
-            row.display_name_size + 8 <= kAgentPanelDisplayNameBytes) {
-            const int written = std::snprintf(
-                row.display_name.data() + row.display_name_size,
-                row.display_name.size() - row.display_name_size,
-                " \xC2\xB7 %02X%02X",
-                record.fingerprint[0],
-                record.fingerprint[1]);
-            if (written == 8) {
-                row.display_name_size += 8;
-            }
-        }
         row.display_name[row.display_name_size] = '\0';
+        std::snprintf(
+            row.short_id.data(),
+            row.short_id.size(),
+            "%02X%02X",
+            record.fingerprint[0],
+            record.fingerprint[1]);
+        row.last_connected_at = record.last_connected_at;
         if (active != nullptr && record.fingerprint == *active) {
             row.state = AgentPanelRowState::Connected;
         } else if (
@@ -231,12 +204,9 @@ AgentPanelDecision AgentPanelModel::confirm_destructive(bool accepted)
 void AgentPanelModel::touch_press(int x, int y)
 {
     const bool can_start = _snapshot.visible || y <= kPanelPullStartMaxY;
-    const int rail_bottom =
-        agent_panel_ui::kRailViewport.y +
-        agent_panel_ui::kRailViewport.h;
     const bool in_panel_drag_region =
-        y <= agent_panel_ui::kPanelHeaderBottomY ||
-        y >= rail_bottom;
+        y < agent_panel_ui::kPanelHeaderBottomY ||
+        y >= agent_panel_ui::kCloseHint.y;
     _touch_active = can_start;
     _panel_drag_active =
         can_start &&

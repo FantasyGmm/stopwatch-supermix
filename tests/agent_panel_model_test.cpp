@@ -32,6 +32,8 @@ secure_pairing::AgentEnrollment enrollment(uint8_t scalar, const char* name)
     value.display_name_size = std::strlen(name);
     std::copy_n(
         name, value.display_name_size, value.display_name.begin());
+    value.last_connected_at =
+        1700000000000LL + static_cast<int64_t>(scalar) * 60000LL;
     return value;
 }
 
@@ -73,10 +75,14 @@ int main()
     assert(snapshot.rows[0].state == AgentPanelRowState::Connected);
     assert(snapshot.rows[1].state == AgentPanelRowState::Requesting);
     assert(snapshot.rows[2].state == AgentPanelRowState::Offline);
-    assert(row_name(snapshot.rows[0]).find("Studio") == 0);
-    assert(row_name(snapshot.rows[1]).find("Studio") == 0);
-    assert(row_name(snapshot.rows[0]) != row_name(snapshot.rows[1]));
+    assert(row_name(snapshot.rows[0]) == "Studio");
+    assert(row_name(snapshot.rows[1]) == "Studio");
     assert(row_name(snapshot.rows[0]).size() <= kAgentPanelDisplayNameBytes);
+    assert(std::strlen(snapshot.rows[0].short_id.data()) == 4);
+    assert(std::strlen(snapshot.rows[1].short_id.data()) == 4);
+    assert(snapshot.rows[0].short_id != snapshot.rows[1].short_id);
+    assert(snapshot.rows[0].last_connected_at == 1700000060000LL);
+    assert(snapshot.rows[1].last_connected_at == 1700000120000LL);
 
     const auto pending = enrollment(9, "Travel Mac");
     secure_pairing::AgentFingerprint pending_fingerprint = {};
@@ -160,9 +166,21 @@ int main()
     assert(model.touch_release() == AgentPanelAction::None);
     assert(model.snapshot().visible);
 
-    model.touch_press(220, 440);
+    model.touch_press(220, 400);
+    model.touch_move(220, 340);
+    assert(model.vertical_drag_offset() == 0);
+    assert(model.touch_release() == AgentPanelAction::None);
+    assert(model.snapshot().visible);
+
+    model.touch_press(220, 74);
+    model.touch_move(220, 20);
+    assert(model.vertical_drag_offset() == 0);
+    assert(model.touch_release() == AgentPanelAction::None);
+    assert(model.snapshot().visible);
+
+    model.touch_press(220, 438);
     model.touch_move(220, 360);
-    assert(model.vertical_drag_offset() == -74);
+    assert(model.vertical_drag_offset() == -72);
     assert(
         model.touch_release() ==
         AgentPanelAction::Close);

@@ -102,6 +102,7 @@ private:
     lv_obj_t* _host_label        = nullptr;
     lv_obj_t* _pet_image         = nullptr;
     lv_obj_t* _agent_panel_root  = nullptr;
+    lv_obj_t* _agent_panel_hint = nullptr;
     lv_obj_t* _agent_rail = nullptr;
     lv_obj_t* _agent_focus_band_left = nullptr;
     lv_obj_t* _agent_focus_band_right = nullptr;
@@ -115,7 +116,11 @@ private:
     std::array<lv_obj_t*, secure_pairing::kMaxAgents> _agent_delete_buttons = {};
     std::array<lv_obj_t*, secure_pairing::kMaxAgents> _agent_row_names = {};
     std::array<lv_obj_t*, secure_pairing::kMaxAgents> _agent_row_states = {};
+    std::array<lv_obj_t*, secure_pairing::kMaxAgents> _agent_row_ids = {};
+    std::array<lv_obj_t*, secure_pairing::kMaxAgents> _agent_row_times = {};
     std::array<lv_obj_t*, secure_pairing::kMaxAgents> _agent_row_dots = {};
+    lv_obj_t* _agent_manage_button = nullptr;
+    lv_obj_t* _agent_manage_done_button = nullptr;
     lv_obj_t* _agent_allow_button = nullptr;
     lv_obj_t* _agent_allow_switch_button = nullptr;
     lv_obj_t* _agent_reject_button = nullptr;
@@ -163,6 +168,7 @@ private:
     bool _task_detail_started_at_top = false;
     codex_task_focus_gesture::TaskFocusGestureAxis _task_touch_axis =
         codex_task_focus_gesture::TaskFocusGestureAxis::Undecided;
+    bool _agent_panel_manage_mode = false;
     bool _suppress_task_navigation = false;
     CodexAlertCarousel _alert_carousel;
     CodexTaskFocusDeck _task_focus_deck;
@@ -259,6 +265,7 @@ private:
     void show_agent_panel_notice(const char* text, uint32_t now_ms);
     void sync_agent_rail_focus();
     void close_agent_delete_reveal();
+    void set_agent_panel_y(int y);
     void settle_agent_panel(bool animate);
     void queue_agent_panel_decision(const AgentPanelDecision& decision);
     bool take_agent_panel_decision(AgentPanelDecision& decision);

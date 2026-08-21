@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CXX="${CXX:-c++}"
 PYTHON="${PYTHON:-$ROOT/mac-codex-agent/.venv/bin/python}"
-TOTAL_STAGES=62
+TOTAL_STAGES=63
 STAGE_INDEX=0
 CONTRACT_ONLY=0
 HOST_TESTS_ONLY=0
@@ -454,6 +454,12 @@ stage "Agent panel UI layout host test"
 run_host_test agent_panel_ui_layout_test \
     -std=c++17 -Wall -Wextra -Werror -I. \
     tests/agent_panel_ui_layout_test.cpp
+
+stage "Agent panel presentation host test"
+run_host_test agent_panel_presenter_test \
+    -std=c++17 -Wall -Wextra -Werror -I. \
+    tests/agent_panel_presenter_test.cpp \
+    main/apps/app_codex_status/agent_panel_presenter.cpp
 
 stage "Production voice crypto host test"
 run_host_test voice_input_crypto_test \
