@@ -67,7 +67,11 @@ from voice_input_protocol import (
     encode_ready,
     encode_unavailable,
 )
-from voice_session import VoiceSessionService, VoiceState
+from voice_session import (
+    TaskVoiceSubmissionError,
+    VoiceSessionService,
+    VoiceState,
+)
 from voice_shortcut import (
     FnShortcutController,
     _is_accessibility_trusted,
@@ -1172,6 +1176,11 @@ class AgentRuntime:
         async def handle_notification(payload: bytes) -> None:
             try:
                 await service.handle(payload)
+            except TaskVoiceSubmissionError:
+                LOGGER.warning(
+                    "Task voice submission failed; voice remains ready"
+                )
+                self._transition_voice(service.state)
             except Exception as error:
                 self._transition_voice(service.state, str(error))
                 raise

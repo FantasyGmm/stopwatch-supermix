@@ -133,6 +133,7 @@ class FakeTransport:
         block_voice_disable=False,
         block_voice_enable=False,
         voice_notification=None,
+        voice_notifications=None,
         input_enable_error=None,
         input_notifications=None,
         block_input_disable=False,
@@ -150,6 +151,7 @@ class FakeTransport:
         self.block_voice_disable = block_voice_disable
         self.block_voice_enable = block_voice_enable
         self.voice_notification = voice_notification
+        self.voice_notifications = list(voice_notifications or [])
         self.input_enable_error = input_enable_error
         self.input_notifications = list(input_notifications or [])
         self.block_input_disable = block_input_disable
@@ -222,6 +224,10 @@ class FakeTransport:
             self.voice_failure.set_result(self.voice_failure_error)
         if self.voice_notification is not None:
             await handler(self.voice_notification)
+            self.voice_notification_handled.set()
+        for notification in self.voice_notifications:
+            await handler(notification)
+        if self.voice_notifications:
             self.voice_notification_handled.set()
         if self.block_voice_enable:
             await asyncio.Event().wait()
@@ -2491,6 +2497,103 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(shortcut.calls, ["start", "stop"])
         self.assertEqual(route.calls, ["start", "stop"])
+
+    async def test_task_submission_failure_does_not_poison_voice_readiness(self):
+        key = bytes(range(16))
+        session_nonce = b"12345678"
+        begin = pack_notification(
+            key,
+            PTT_BEGIN,
+            7,
+            0,
+            100,
+            BEGIN_BODY.pack(
+                IMA_ADPCM,
+                PUSH_TO_TALK,
+                16000,
+                320,
+                TEST_TASK_ROUTE,
+            ),
+            session_nonce,
+        )
+        end = pack_notification(
+            key,
+            PTT_END,
+            7,
+            1,
+            110,
+            EndSummary(0, 0, 0, 0, 0, 10, 256).pack(),
+            session_nonce,
+        )
+
+        class Route:
+            def prepare(self):
+                pass
+
+            def start(self):
+                pass
+
+            def write(self, samples):
+                return len(samples)
+
+            def stop(self):
+                pass
+
+            def close(self):
+                pass
+
+        class Shortcut:
+            def start(self):
+                pass
+
+            def stop(self):
+                pass
+
+        class TranscriptSource:
+            def mark(self):
+                return "cursor"
+
+            async def wait_after(self, cursor, timeout):
+                return "transcript"
+
+        class FailingSubmitter:
+            def snapshot(self, route):
+                return "target"
+
+            async def submit(self, target, text):
+                raise RuntimeError("desktop target disappeared")
+
+        service = VoiceSessionService(
+            Route(),
+            Shortcut(),
+            key,
+            readiness_checker=lambda: VoiceState.READY,
+            sleep=lambda _delay: asyncio.sleep(0),
+            transcript_source=TranscriptSource(),
+            task_submitter=FailingSubmitter(),
+        )
+        factory = FakeTransportFactory(
+            [
+                {
+                    "voice_notifications": [begin, end],
+                    "disconnect_after_messages": 2,
+                }
+            ]
+        )
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            transport_factory=factory,
+            voice_key_loader=lambda: key,
+            voice_session_factory=lambda _key: service,
+            voice_nonce_factory=lambda: session_nonce,
+            status_interval=0.01,
+        )
+
+        result = await runtime._run_session()
+
+        self.assertEqual(result, "disconnected")
+        self.assertIs(runtime.snapshot().voice_state, VoiceState.READY)
+        self.assertEqual(runtime.snapshot().voice_detail, "")
 
     async def test_voice_consumer_failure_isolated_from_status_session(self):
         events = []

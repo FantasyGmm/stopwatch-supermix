@@ -40,6 +40,10 @@ class VoiceState(enum.Enum):
     ERROR = "error"
 
 
+class TaskVoiceSubmissionError(RuntimeError):
+    """The captured transcript could not be delivered to its Codex task."""
+
+
 READINESS_STATES = frozenset(
     {
         VoiceState.DRIVER_REQUIRED,
@@ -161,6 +165,8 @@ class VoiceSessionService:
                 await self._voice_error(packet)
             else:
                 raise ValueError("unknown voice notification kind")
+        except TaskVoiceSubmissionError:
+            raise
         except Exception as operation_error:
             await self._abort_preserving(operation_error)
             raise
@@ -328,8 +334,11 @@ class VoiceSessionService:
                     raise RuntimeError("Task voice submission was cancelled")
                 await self._task_submitter.submit(task_target, text)
             except Exception as error:
-                self.state = VoiceState.ERROR
-                raise RuntimeError("Task voice submission failed") from error
+                self._submission_token = None
+                self.state = VoiceState.READY
+                raise TaskVoiceSubmissionError(
+                    "Task voice submission failed"
+                ) from error
             self._submission_token = None
             self.state = VoiceState.READY
 

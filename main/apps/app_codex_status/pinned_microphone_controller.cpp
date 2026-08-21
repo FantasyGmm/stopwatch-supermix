@@ -1,5 +1,30 @@
 #include "pinned_microphone_controller.h"
 
+PinnedMicrophoneStatusText pinned_microphone_status_text(
+    bool bluetooth_connected,
+    PinnedMicrophoneState state)
+{
+    if (!bluetooth_connected) {
+        return {"等待 Mac 连接", "等待 Mac 连接"};
+    }
+
+    switch (state) {
+        case PinnedMicrophoneState::Ready:
+            return {"已连接到 Mac", "轻触开启"};
+        case PinnedMicrophoneState::Starting:
+            return {"已连接到 Mac", "正在启动音频…"};
+        case PinnedMicrophoneState::Active:
+            return {"已连接到 Mac", "轻触关闭"};
+        case PinnedMicrophoneState::Stopping:
+            return {"已连接到 Mac", "正在关闭…"};
+        case PinnedMicrophoneState::Error:
+            return {"已连接到 Mac", "语音异常 · 轻触重试"};
+        case PinnedMicrophoneState::Unavailable:
+            return {"已连接到 Mac", "语音暂不可用"};
+    }
+    return {"已连接到 Mac", "语音暂不可用"};
+}
+
 bool PinnedMicrophoneController::set_enabled(
     bool enabled,
     bool voice_ready,

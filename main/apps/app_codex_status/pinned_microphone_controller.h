@@ -11,6 +11,15 @@ enum class PinnedMicrophoneState : uint8_t {
     Error,
 };
 
+struct PinnedMicrophoneStatusText {
+    const char* connection;
+    const char* prompt;
+};
+
+PinnedMicrophoneStatusText pinned_microphone_status_text(
+    bool bluetooth_connected,
+    PinnedMicrophoneState state);
+
 class PinnedMicrophoneVoice {
 public:
     virtual ~PinnedMicrophoneVoice() = default;

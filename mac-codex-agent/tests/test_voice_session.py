@@ -309,7 +309,7 @@ class VoiceSessionServiceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(any(isinstance(item, tuple) and item[0] in ("wait", "submit") for item in events))
 
-    async def test_submit_failure_sets_error_without_exposing_transcript(self):
+    async def test_submit_failure_is_nonfatal_and_next_session_can_start(self):
         secret = "do not expose transcript"
         events = []
 
@@ -331,7 +331,14 @@ class VoiceSessionServiceTests(unittest.IsolatedAsyncioTestCase):
                 end_packet(1, EndSummary(0, 0, 0, 0, 0, 10, 256))
             )
         self.assertNotIn(secret, str(raised.exception))
-        self.assertIs(service.state, VoiceState.ERROR)
+        self.assertEqual(
+            raised.exception.__class__.__name__, "TaskVoiceSubmissionError"
+        )
+        self.assertIs(service.state, VoiceState.READY)
+
+        await service.handle(begin_packet(session=8, nonce=nonce_for(8)))
+        self.assertIs(service.state, VoiceState.RECORDING)
+        await service.disconnect()
 
     async def test_prepare_uses_injected_readiness_without_starting_resources(self):
         states = (

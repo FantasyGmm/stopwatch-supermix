@@ -1,6 +1,7 @@
 #include "main/apps/app_codex_status/pinned_microphone_controller.h"
 
 #include <cassert>
+#include <cstring>
 
 namespace {
 
@@ -145,6 +146,26 @@ void test_disable_publishes_stopping_until_voice_finishes()
     assert(controller.state() == PinnedMicrophoneState::Ready);
 }
 
+void test_status_text_distinguishes_bluetooth_from_voice_readiness()
+{
+    const PinnedMicrophoneStatusText disconnected =
+        pinned_microphone_status_text(
+            false, PinnedMicrophoneState::Unavailable);
+    assert(std::strcmp(disconnected.connection, "等待 Mac 连接") == 0);
+    assert(std::strcmp(disconnected.prompt, "等待 Mac 连接") == 0);
+
+    const PinnedMicrophoneStatusText voice_unavailable =
+        pinned_microphone_status_text(
+            true, PinnedMicrophoneState::Unavailable);
+    assert(std::strcmp(voice_unavailable.connection, "已连接到 Mac") == 0);
+    assert(std::strcmp(voice_unavailable.prompt, "语音暂不可用") == 0);
+
+    const PinnedMicrophoneStatusText voice_error =
+        pinned_microphone_status_text(true, PinnedMicrophoneState::Error);
+    assert(std::strcmp(voice_error.connection, "已连接到 Mac") == 0);
+    assert(std::strcmp(voice_error.prompt, "语音异常 · 轻触重试") == 0);
+}
+
 }  // namespace
 
 int main()
@@ -155,4 +176,5 @@ int main()
     test_runtime_loss_clears_stale_latch();
     test_enable_publishes_starting_until_voice_becomes_active();
     test_disable_publishes_stopping_until_voice_finishes();
+    test_status_text_distinguishes_bluetooth_from_voice_readiness();
 }

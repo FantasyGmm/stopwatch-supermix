@@ -1367,36 +1367,35 @@ void AppCodexStatus::render_pinned_microphone()
     const bool stopping = state == PinnedMicrophoneState::Stopping;
     const bool unavailable = state == PinnedMicrophoneState::Unavailable;
     const bool error = state == PinnedMicrophoneState::Error;
-    const char* connection = unavailable ? "等待 Mac 连接" : "已连接到 Mac";
-    const char* prompt = "轻触开启";
+    const bool bluetooth_connected =
+        _ble_transport != nullptr && _ble_transport->connected();
+    const PinnedMicrophoneStatusText status_text =
+        pinned_microphone_status_text(bluetooth_connected, state);
     uint32_t prompt_color = kSignalWhite;
     uint32_t icon_color = kEtchedGray;
     if (active) {
-        prompt = "轻触关闭";
         icon_color = kRunningCyan;
     } else if (starting) {
-        prompt = "正在启动音频…";
         prompt_color = kBeaconViolet;
         icon_color = kBeaconViolet;
     } else if (stopping) {
-        prompt = "正在关闭…";
         prompt_color = kEtchedGray;
     } else if (unavailable) {
-        prompt = "等待 Mac 连接";
         prompt_color = kEtchedGray;
     } else if (error) {
-        prompt = "启动失败 · 轻触重试";
         prompt_color = kAlertVermilion;
         icon_color = kAlertVermilion;
     }
-    const int render_state = static_cast<int>(state);
+    const int render_state =
+        (static_cast<int>(state) << 1) | (bluetooth_connected ? 1 : 0);
     if (render_state == _last_pinned_microphone_render_state) {
         return;
     }
     _last_pinned_microphone_render_state = render_state;
 
-    lv_label_set_text(_pinned_microphone_connection_label, connection);
-    lv_label_set_text(_pinned_microphone_prompt_label, prompt);
+    lv_label_set_text(
+        _pinned_microphone_connection_label, status_text.connection);
+    lv_label_set_text(_pinned_microphone_prompt_label, status_text.prompt);
     lv_obj_set_style_text_color(
         _pinned_microphone_prompt_label, lv_color_hex(prompt_color), 0);
     lv_obj_set_style_bg_color(

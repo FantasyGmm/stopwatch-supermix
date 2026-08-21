@@ -474,6 +474,11 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
     def test_pinned_microphone_page_uses_approved_three_page_layout(self):
         header = (ROOT / "main/apps/app_codex_status/app_codex_status.h").read_text()
         source = (ROOT / "main/apps/app_codex_status/app_codex_status.cpp").read_text()
+        presenter = (
+            ROOT
+            / "main/apps/app_codex_status/pinned_microphone_controller.cpp"
+        ).read_text()
+        presentation = source + presenter
 
         self.assertIn("PinnedMicrophoneController", header)
         self.assertIn("_pinned_microphone_page", header)
@@ -494,12 +499,13 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         self.assertIn("lv_obj_set_pos(_codex_page, 466, 0)", source)
         self.assertIn("lv_obj_set_pos(_trae_page_root, 932, 0)", source)
         self.assertIn('"固定麦克风"', source)
-        self.assertIn('"已连接到 Mac"', source)
-        self.assertIn('"轻触开启"', source)
-        self.assertIn('"正在启动音频…"', source)
-        self.assertIn('"轻触关闭"', source)
-        self.assertIn('"正在关闭…"', source)
-        self.assertIn('"启动失败 · 轻触重试"', source)
+        self.assertIn('"已连接到 Mac"', presentation)
+        self.assertIn('"轻触开启"', presentation)
+        self.assertIn('"正在启动音频…"', presentation)
+        self.assertIn('"轻触关闭"', presentation)
+        self.assertIn('"正在关闭…"', presentation)
+        self.assertIn('"语音暂不可用"', presentation)
+        self.assertIn('"语音异常 · 轻触重试"', presentation)
         self.assertNotIn('"收音中"', source)
         self.assertNotIn('"MAC · EXTERNAL MIC"', source)
         self.assertIn("kQuotaMint", source)
