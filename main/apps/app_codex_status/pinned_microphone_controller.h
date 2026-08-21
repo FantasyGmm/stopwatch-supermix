@@ -7,6 +7,7 @@ enum class PinnedMicrophoneState : uint8_t {
     Ready,
     Starting,
     Active,
+    Stopping,
     Error,
 };
 

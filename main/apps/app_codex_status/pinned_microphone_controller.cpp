@@ -30,8 +30,7 @@ bool PinnedMicrophoneController::set_enabled(
         return false;
     }
     _enabled = false;
-    _state = voice_ready ? PinnedMicrophoneState::Ready
-                         : PinnedMicrophoneState::Unavailable;
+    _state = PinnedMicrophoneState::Stopping;
     return true;
 }
 
@@ -52,6 +51,16 @@ void PinnedMicrophoneController::sync(
     bool voice_error,
     const PinnedMicrophoneVoice& voice)
 {
+    if (_state == PinnedMicrophoneState::Stopping) {
+        if (voice_error) {
+            _state = PinnedMicrophoneState::Error;
+        } else if (!voice_ready) {
+            _state = PinnedMicrophoneState::Unavailable;
+        } else if (!voice.active()) {
+            _state = PinnedMicrophoneState::Ready;
+        }
+        return;
+    }
     if (_enabled) {
         if (voice_error) {
             _enabled = false;

@@ -36,6 +36,7 @@ immediately even when recorder initialization is still running.
 | Ready/off | Etched gray | Dark circular well | `轻触开启` | None |
 | Starting | Violet outline | Violet-to-cyan progress ring | `正在启动音频…` | Ring rotates continuously |
 | Active | Running cyan | Cyan edge and subtle glow | `轻触关闭` | Two cyan sound waves expand from the control |
+| Stopping | Etched gray | Cyan progress ring | `正在关闭…` | Ring rotates until the final encrypted end frame is drained |
 | Unavailable | Etched gray | Disabled dark well | `等待 Mac 连接` | None |
 | Error | Vermilion | Vermilion edge | `启动失败 · 轻触重试` | None |
 
@@ -49,6 +50,9 @@ ring and Active uses two fixed sound-wave arcs.
 - Recorder initialization runs off the LVGL/UI thread.
 - Duplicate taps while Starting are ignored.
 - Tapping Active requests the existing graceful stop.
+- A valid stop tap publishes Stopping immediately; capture stop is requested in
+  the same call, while the bounded transport drain completes asynchronously.
+- Duplicate taps while Starting or Stopping are ignored.
 - Home, app close, disconnect, credential/epoch change, unusable voice link,
   and controller error cancel a pending or active session exactly once.
 - Swiping to another Codex page does not stop an active pinned microphone.

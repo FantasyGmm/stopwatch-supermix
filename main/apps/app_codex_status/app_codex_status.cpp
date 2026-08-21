@@ -1400,6 +1400,7 @@ void AppCodexStatus::render_pinned_microphone()
     const PinnedMicrophoneState state = _pinned_microphone_controller.state();
     const bool starting = state == PinnedMicrophoneState::Starting;
     const bool active = state == PinnedMicrophoneState::Active;
+    const bool stopping = state == PinnedMicrophoneState::Stopping;
     const bool unavailable = state == PinnedMicrophoneState::Unavailable;
     const bool error = state == PinnedMicrophoneState::Error;
     const char* connection = unavailable ? "等待 Mac 连接" : "已连接到 Mac";
@@ -1413,6 +1414,9 @@ void AppCodexStatus::render_pinned_microphone()
         prompt = "正在启动音频…";
         prompt_color = kBeaconViolet;
         icon_color = kBeaconViolet;
+    } else if (stopping) {
+        prompt = "正在关闭…";
+        prompt_color = kEtchedGray;
     } else if (unavailable) {
         prompt = "等待 Mac 连接";
         prompt_color = kEtchedGray;
@@ -1473,8 +1477,12 @@ void AppCodexStatus::render_pinned_microphone()
         }
     }
 
-    if (starting) {
+    if (starting || stopping) {
         lv_obj_remove_flag(_pinned_microphone_start_ring, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_style_arc_color(
+            _pinned_microphone_start_ring,
+            lv_color_hex(starting ? kBeaconViolet : kRunningCyan),
+            LV_PART_MAIN);
         const int angle = static_cast<int>(
             (GetHAL().millis() % 900U) * 360U / 900U);
         lv_arc_set_bg_angles(
@@ -1533,7 +1541,9 @@ void AppCodexStatus::pinned_microphone_touch_event_cb(lv_event_t* event)
     if (self == nullptr || self->_voice_input == nullptr ||
         self->_pinned_microphone_touch_target == nullptr ||
         self->_pinned_microphone_controller.state() ==
-            PinnedMicrophoneState::Starting) {
+            PinnedMicrophoneState::Starting ||
+        self->_pinned_microphone_controller.state() ==
+            PinnedMicrophoneState::Stopping) {
         return;
     }
     const bool enabled = !self->_pinned_microphone_controller.enabled();

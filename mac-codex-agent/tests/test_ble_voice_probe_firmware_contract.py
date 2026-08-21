@@ -494,6 +494,7 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         self.assertIn('"轻触开启"', source)
         self.assertIn('"正在启动音频…"', source)
         self.assertIn('"轻触关闭"', source)
+        self.assertIn('"正在关闭…"', source)
         self.assertIn('"启动失败 · 轻触重试"', source)
         self.assertNotIn('"收音中"', source)
         self.assertNotIn('"MAC · EXTERNAL MIC"', source)
