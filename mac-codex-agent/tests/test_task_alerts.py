@@ -88,6 +88,20 @@ def append_event(
             stream.write(b"\n")
 
 
+def append_agent_message(path, timestamp, message, phase="commentary"):
+    item = {
+        "timestamp": timestamp,
+        "type": "event_msg",
+        "payload": {
+            "type": "agent_message",
+            "message": message,
+            "phase": phase,
+        },
+    }
+    with path.open("ab") as stream:
+        stream.write(json.dumps(item).encode("utf-8") + b"\n")
+
+
 def append_function_call(
     path,
     timestamp,
@@ -1013,6 +1027,96 @@ class TaskAlertTrackerTests(unittest.TestCase):
         self.assertEqual(alert.last_reply, reply)
         saved = json.loads(self.ledger.read_text(encoding="utf-8"))
         self.assertEqual(saved["alerts"][-1]["last_reply"], reply)
+
+    def test_running_agent_message_replaces_cached_reply_and_advances_revision(self):
+        tracker = self.tracker()
+        tracker.refresh()
+        append_event(
+            self.rollout,
+            "task_started",
+            "2026-07-12T00:02:00Z",
+            turn_id="turn-live",
+        )
+        started = tracker.refresh()
+        append_agent_message(
+            self.rollout,
+            "2026-07-12T00:02:05Z",
+            "正在检查真实事件流。",
+        )
+
+        live = tracker.refresh()
+
+        self.assertEqual(live.running_count, 1)
+        self.assertGreater(live.revision, started.revision)
+        self.assertEqual(live.alerts[0].turn_id, "turn-live")
+        self.assertEqual(live.alerts[0].last_reply, "正在检查真实事件流。")
+        saved = json.loads(self.ledger.read_text(encoding="utf-8"))
+        self.assertEqual(saved["alerts"][-1]["last_reply"], "正在检查真实事件流。")
+
+    def test_running_agent_message_ignores_empty_nonstring_and_unchanged_text(self):
+        tracker = self.tracker()
+        tracker.refresh()
+        append_event(
+            self.rollout,
+            "task_started",
+            "2026-07-12T00:02:00Z",
+            turn_id="turn-live",
+        )
+        append_agent_message(
+            self.rollout,
+            "2026-07-12T00:02:05Z",
+            "最新进展",
+        )
+        live = tracker.refresh()
+        baseline_revision = live.revision
+        append_agent_message(
+            self.rollout,
+            "2026-07-12T00:02:06Z",
+            "最新进展",
+        )
+        append_agent_message(
+            self.rollout,
+            "2026-07-12T00:02:07Z",
+            "   ",
+        )
+        append_agent_message(
+            self.rollout,
+            "2026-07-12T00:02:08Z",
+            {"text": "not safe"},
+        )
+
+        unchanged = tracker.refresh()
+
+        self.assertEqual(unchanged.revision, baseline_revision)
+        self.assertEqual(unchanged.alerts[0].last_reply, "最新进展")
+
+    def test_agent_message_after_completion_does_not_replace_final_reply(self):
+        tracker = self.tracker()
+        tracker.refresh()
+        append_event(
+            self.rollout,
+            "task_started",
+            "2026-07-12T00:02:00Z",
+            turn_id="turn-live",
+        )
+        append_event(
+            self.rollout,
+            "task_complete",
+            "2026-07-12T00:02:30Z",
+            turn_id="turn-live",
+            last_agent_message="最终回复",
+        )
+        completed = tracker.refresh()
+        append_agent_message(
+            self.rollout,
+            "2026-07-12T00:02:31Z",
+            "迟到的旧消息",
+        )
+
+        stale = tracker.refresh()
+
+        self.assertEqual(stale.revision, completed.revision)
+        self.assertEqual(stale.alerts[0].last_reply, "最终回复")
 
     def test_new_running_alert_inherits_latest_same_thread_reply(self):
         tracker = self.tracker()

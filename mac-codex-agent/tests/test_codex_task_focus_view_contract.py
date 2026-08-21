@@ -30,6 +30,8 @@ class CodexTaskFocusViewContractTests(unittest.TestCase):
 
         self.assertIn("std::array<lv_obj_t*, 8> _track_nodes", header)
         self.assertIn("std::array<lv_obj_t*, 16> _detail_paragraphs", header)
+        self.assertIn("lv_obj_t* _detail_drag_handle", header)
+        self.assertIn("lv_obj_t* _detail_live_dot", header)
         self.assertNotIn("_track_arc", header)
         self.assertNotIn("_track_accents", header)
         self.assertNotIn("_detail_back", header)
@@ -56,11 +58,19 @@ class CodexTaskFocusViewContractTests(unittest.TestCase):
             '"点击查看原文"',
             '"上下滑动切换　↓"',
             '"Agent 最后一条完整回复"',
+            '"Agent 实时进展"',
             '"按住右键 · 发送下一步"',
             '"按住右键 · 引导当前任务"',
         ):
             self.assertIn(copy, source)
         self.assertIn("TaskTrackShape::PendingDiamond", source)
+        self.assertIn("task->state == CodexTaskState::Running", source)
+        self.assertIn("set_hidden(_detail_live_dot, !live)", source)
+        self.assertIn("kDetailDragHandleX", source)
+        self.assertIn("kDetailDragHandleY", source)
+        self.assertIn("kDetailDragHandleWidth", source)
+        self.assertIn("kDetailDragHandleHeight", source)
+        self.assertIn("kDetailHandleOpacity", source)
         self.assertIn("TaskTrackShape::RunningCircle", source)
         self.assertIn("TaskTrackShape::FocusedCapsule", source)
         self.assertIn("? kBeaconViolet", source)

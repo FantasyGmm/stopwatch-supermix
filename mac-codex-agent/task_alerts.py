@@ -764,12 +764,47 @@ class TaskAlertTracker:
 
         event_type = payload.get("type")
         if event_type not in (
+            "agent_message",
             "task_started",
             "task_complete",
             "turn_aborted",
             "user_message",
         ):
             return False
+
+        if event_type == "agent_message":
+            message = payload.get("message")
+            if (
+                payload.get("phase") not in ("commentary", "final_answer")
+                or not isinstance(message, str)
+                or not message.strip()
+            ):
+                return False
+            signal = self._state.setdefault("turn_signals", {}).get(thread.id)
+            if not isinstance(signal, dict):
+                return False
+            turn_id = signal.get("turn_id")
+            if not isinstance(turn_id, str) or not turn_id:
+                return False
+            running = []
+            for entry in self._state["alerts"]:
+                progress = _parse_timestamp(entry.get("progress_at"))
+                if (
+                    entry.get("thread_id") == thread.id
+                    and entry.get("state") == "running"
+                    and entry.get("turn_id") == turn_id
+                    and progress is not None
+                    and progress <= timestamp
+                ):
+                    running.append((progress, entry))
+            if not running:
+                return False
+            target = max(running, key=lambda candidate: candidate[0])[1]
+            if target.get("last_reply") == message:
+                return False
+            target["last_reply"] = message
+            self._state["revision"] = int(self._state.get("revision", 0)) + 1
+            return True
 
         if event_type == "task_started":
             turn_id = payload.get("turn_id")

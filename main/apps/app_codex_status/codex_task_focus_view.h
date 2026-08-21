@@ -65,11 +65,13 @@ private:
     lv_obj_t* _track_layer = nullptr;
     std::array<lv_obj_t*, 8> _track_nodes{};
     lv_obj_t* _detail_layer = nullptr;
+    lv_obj_t* _detail_drag_handle = nullptr;
     lv_obj_t* _detail_project = nullptr;
     lv_obj_t* _detail_title = nullptr;
     lv_obj_t* _detail_status = nullptr;
     lv_obj_t* _detail_divider = nullptr;
     lv_obj_t* _detail_label = nullptr;
+    lv_obj_t* _detail_live_dot = nullptr;
     lv_obj_t* _detail_body = nullptr;
     std::array<lv_obj_t*, 16> _detail_paragraphs{};
     lv_obj_t* _detail_footer_label = nullptr;

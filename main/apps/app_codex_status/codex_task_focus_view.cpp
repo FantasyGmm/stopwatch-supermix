@@ -348,6 +348,20 @@ void CodexTaskFocusView::init(lv_obj_t* parent)
     }
 
     _detail_layer = make_layer(_root);
+    _detail_drag_handle = make_geometry(_detail_layer);
+    lv_obj_set_pos(
+        _detail_drag_handle, kDetailDragHandleX, kDetailDragHandleY);
+    lv_obj_set_size(
+        _detail_drag_handle,
+        kDetailDragHandleWidth,
+        kDetailDragHandleHeight);
+    lv_obj_set_style_radius(_detail_drag_handle, 2, 0);
+    lv_obj_set_style_bg_color(
+        _detail_drag_handle, lv_color_hex(kEtchedGray), 0);
+    lv_obj_set_style_bg_opa(
+        _detail_drag_handle,
+        static_cast<lv_opa_t>(kDetailHandleOpacity),
+        0);
     _detail_project = make_label(
         _detail_layer, "", kDetailHeaderX, kDetailProjectY,
         kDetailHeaderWidth, kDetailProjectHeight, &lv_font_montserrat_10,
@@ -373,6 +387,12 @@ void CodexTaskFocusView::init(lv_obj_t* parent)
         kDetailLabelX, kDetailLabelTextY,
         kDetailLabelWidth, 14, &CodexFocusStatic10, kDetailLabel,
         LV_TEXT_ALIGN_CENTER, LV_LABEL_LONG_MODE_CLIP);
+    _detail_live_dot = make_geometry(_detail_layer);
+    lv_obj_set_pos(_detail_live_dot, kDetailLiveDotX, kDetailLiveDotY);
+    lv_obj_set_size(_detail_live_dot, kDetailLiveDotSize, kDetailLiveDotSize);
+    lv_obj_set_style_radius(_detail_live_dot, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(
+        _detail_live_dot, lv_color_hex(kRunningCyan), 0);
 
     _detail_body = lv_obj_create(_detail_layer);
     lv_obj_set_pos(_detail_body, kDetailBodyX, kDetailBodyY);
@@ -416,6 +436,7 @@ void CodexTaskFocusView::init(lv_obj_t* parent)
     set_hidden(_detail_layer, true);
     set_hidden(_deck_empty, true);
     set_hidden(_connection_hint, true);
+    set_hidden(_detail_live_dot, true);
     set_hidden(_detail_recording_dot, true);
     for (size_t index = 0; index < _track_nodes.size(); ++index) {
         set_hidden(_track_nodes[index], true);
@@ -444,11 +465,13 @@ void CodexTaskFocusView::shutdown()
     _track_layer = nullptr;
     _track_nodes = {};
     _detail_layer = nullptr;
+    _detail_drag_handle = nullptr;
     _detail_project = nullptr;
     _detail_title = nullptr;
     _detail_status = nullptr;
     _detail_divider = nullptr;
     _detail_label = nullptr;
+    _detail_live_dot = nullptr;
     _detail_body = nullptr;
     _detail_paragraphs.fill(nullptr);
     for (std::string& paragraph : _detail_paragraph_text) {
@@ -596,6 +619,11 @@ void CodexTaskFocusView::show_detail(
     lv_obj_set_size(
         _detail_status, kDetailHeaderWidth, kDetailStatusHeight);
     render_status(task, false);
+    const bool live = task->state == CodexTaskState::Running;
+    lv_label_set_text(
+        _detail_label,
+        live ? "Agent 实时进展" : "Agent 最后一条完整回复");
+    set_hidden(_detail_live_dot, !live);
     const bool reset_scroll =
         _detail_scroll_identity.update(task->route, revision);
     const std::string display_reply = detail_display_text(reply);
@@ -864,6 +892,7 @@ void CodexTaskFocusView::apply_connection(bool connected)
     lv_obj_set_style_opa(_detail_status, content_opacity, 0);
     lv_obj_set_style_opa(_detail_divider, content_opacity, 0);
     lv_obj_set_style_opa(_detail_label, content_opacity, 0);
+    lv_obj_set_style_opa(_detail_live_dot, content_opacity, 0);
     lv_obj_set_style_opa(_detail_body, content_opacity, 0);
     lv_obj_set_style_opa(_detail_footer_label, content_opacity, 0);
     lv_obj_set_style_opa(_detail_footer, content_opacity, 0);

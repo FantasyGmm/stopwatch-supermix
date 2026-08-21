@@ -67,6 +67,11 @@ void assert_fixed_original_e_contract()
     static_assert(kFocusTargetHeight >= kMinimumHitSize);
 
     static_assert(kDetailProjectY == 28);
+    static_assert(kDetailDragHandleX == 209);
+    static_assert(kDetailDragHandleY == 12);
+    static_assert(kDetailDragHandleWidth == 48);
+    static_assert(kDetailDragHandleHeight == 4);
+    static_assert(kDetailHandleOpacity == 184);
     static_assert(kDetailTitleY == 47);
     static_assert(kDetailStatusY == 73);
     static_assert(kDetailLabelY == 105);
