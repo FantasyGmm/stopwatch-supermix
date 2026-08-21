@@ -388,7 +388,7 @@ static void lvgl_flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px
 
 static void lvgl_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
 {
-    M5GFX &gfx = *(M5GFX *)lv_indev_get_driver_data(indev);
+    (void)indev;
 
     auto tp = GetHAL().getTouchPoint();
     const bool pressed = GetHAL().filterTouchInputForLvgl(tp.num > 0);

@@ -479,11 +479,15 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         self.assertIn("_pinned_microphone_page", header)
         self.assertIn("_page_dot_pinned_microphone", header)
         self.assertIn("_pinned_microphone_touch_target", header)
-        self.assertIn("_pinned_microphone_start_ring", header)
-        self.assertIn("_pinned_microphone_wave_inner_left", header)
-        self.assertIn("_pinned_microphone_wave_outer_right", header)
+        self.assertNotIn("_pinned_microphone_start_ring", header)
+        self.assertNotIn("_pinned_microphone_wave_inner_left", header)
+        self.assertNotIn("_pinned_microphone_wave_outer_right", header)
         self.assertIn("_pinned_microphone_connection_label", header)
         self.assertIn("_pinned_microphone_prompt_label", header)
+        self.assertIn("_pinned_microphone_capsule", header)
+        self.assertIn("_pinned_microphone_cup", header)
+        self.assertIn("_pinned_microphone_stem", header)
+        self.assertIn("_pinned_microphone_base", header)
         self.assertIn("kPageCount                 = 3", source)
         self.assertIn("lv_obj_set_size(_page_strip, 1398, 466)", source)
         self.assertIn("lv_obj_set_pos(_pinned_microphone_page, 0, 0)", source)
@@ -503,6 +507,24 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         self.assertIn("kRunningCyan", source)
         self.assertIn("pinned_microphone_touch_event_cb", source)
         self.assertIn("LV_EVENT_CLICKED", source)
+        self.assertIn(
+            "lv_obj_set_style_border_width(\n"
+            "        _pinned_microphone_touch_target, 0, 0)",
+            source,
+        )
+        self.assertIn(
+            "lv_obj_set_style_bg_opa(\n"
+            "        _pinned_microphone_touch_target, LV_OPA_TRANSP, 0)",
+            source,
+        )
+        pinned_render = source.split(
+            "void AppCodexStatus::render_pinned_microphone", 1
+        )[1].split(
+            "void AppCodexStatus::pinned_microphone_touch_event_cb", 1
+        )[0]
+        self.assertNotIn("lv_obj_set_style_shadow", pinned_render)
+        self.assertNotIn("_pinned_microphone_wave_", source)
+        self.assertNotIn("_pinned_microphone_start_ring", source)
         pinned_callback = source.split(
             "void AppCodexStatus::pinned_microphone_touch_event_cb", 1
         )[1].split("void AppCodexStatus::update_battery", 1)[0]

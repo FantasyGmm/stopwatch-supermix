@@ -74,11 +74,6 @@ private:
     lv_obj_t* _page_dot_pinned_microphone = nullptr;
     lv_obj_t* _page_dot_trae     = nullptr;
     lv_obj_t* _pinned_microphone_touch_target = nullptr;
-    lv_obj_t* _pinned_microphone_start_ring = nullptr;
-    lv_obj_t* _pinned_microphone_wave_inner_left = nullptr;
-    lv_obj_t* _pinned_microphone_wave_inner_right = nullptr;
-    lv_obj_t* _pinned_microphone_wave_outer_left = nullptr;
-    lv_obj_t* _pinned_microphone_wave_outer_right = nullptr;
     lv_obj_t* _pinned_microphone_connection_dot = nullptr;
     lv_obj_t* _pinned_microphone_connection_label = nullptr;
     lv_obj_t* _pinned_microphone_capsule = nullptr;
@@ -154,9 +149,7 @@ private:
     bool _trae_stale             = false;
     int _current_page            = 1;
     lv_indev_state_t _last_page_touch_state = LV_INDEV_STATE_REL;
-    lv_indev_state_t _last_pinned_microphone_debug_touch_state =
-        LV_INDEV_STATE_REL;
-    int _last_pinned_microphone_debug_render_state = -1;
+    int _last_pinned_microphone_render_state = -1;
     lv_indev_state_t _last_agent_touch_state = LV_INDEV_STATE_REL;
     lv_indev_state_t _last_task_touch_state = LV_INDEV_STATE_REL;
     int _agent_panel_drag_start_y = 0;
