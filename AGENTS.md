@@ -74,6 +74,16 @@ explicitly changes the decision.
 - Use `rg`/`rg --files` for discovery and `apply_patch` for manual edits.
 - Before committing, inspect the exact diff and stage only files belonging to
   the current task.
+- When subagents are explicitly requested or required by an applicable skill,
+  use `gpt-5.6-sol` for high-risk implementation work involving security,
+  protocol, persistent data, destructive operations, release integrity, or
+  similarly consequential cross-system changes.
+- Use `gpt-5.6-terra` for complex but non-high-risk implementation,
+  architecture, investigation, or review work.
+- Use `gpt-5.6-luna` for lightweight, well-bounded, low-risk subtasks where
+  turnaround matters more than deep cross-system reasoning. Choose among Sol,
+  Terra, and Luna based on task risk and complexity without asking the user
+  each time.
 
 ## 3. Source of Truth and Evidence
 
