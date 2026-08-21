@@ -1398,7 +1398,11 @@ void AppCodexStatus::render_pinned_microphone()
         return;
     }
 
-    const PinnedMicrophoneState state = _pinned_microphone_controller.state();
+    PinnedMicrophoneState state = PinnedMicrophoneState::Unavailable;
+    {
+        std::lock_guard<std::mutex> controller_lock(_task_controller_mutex);
+        state = _pinned_microphone_controller.state();
+    }
     const bool starting = state == PinnedMicrophoneState::Starting;
     const bool active = state == PinnedMicrophoneState::Active;
     const bool stopping = state == PinnedMicrophoneState::Stopping;
@@ -1425,6 +1429,12 @@ void AppCodexStatus::render_pinned_microphone()
         prompt = "启动失败 · 轻触重试";
         prompt_color = kAlertVermilion;
         icon_color = kAlertVermilion;
+    }
+    const int render_state = static_cast<int>(state);
+    if (render_state != _last_pinned_microphone_debug_render_state) {
+        ESP_LOGI(
+            "PINMIC", "render state=%d prompt=%s", render_state, prompt);
+        _last_pinned_microphone_debug_render_state = render_state;
     }
 
     lv_label_set_text(_pinned_microphone_connection_label, connection);
@@ -1547,40 +1557,67 @@ void AppCodexStatus::pinned_microphone_touch_event_cb(lv_event_t* event)
         if (indev != nullptr) {
             lv_indev_get_point(indev, &point);
         }
+        bool enabled = false;
+        int state = -1;
+        if (self != nullptr) {
+            std::lock_guard<std::mutex> controller_lock(
+                self->_task_controller_mutex);
+            enabled = self->_pinned_microphone_controller.enabled();
+            state = static_cast<int>(
+                self->_pinned_microphone_controller.state());
+        }
         ESP_LOGI(
             "PINMIC",
             "widget event=%d x=%ld y=%ld enabled=%d state=%d",
             static_cast<int>(code),
             static_cast<long>(point.x),
             static_cast<long>(point.y),
-            self != nullptr && self->_pinned_microphone_controller.enabled(),
-            self != nullptr
-                ? static_cast<int>(self->_pinned_microphone_controller.state())
-                : -1);
+            enabled,
+            state);
     }
     if (code != LV_EVENT_CLICKED) {
         return;
     }
-    if (self == nullptr || self->_voice_input == nullptr ||
-        self->_pinned_microphone_touch_target == nullptr ||
-        self->_pinned_microphone_controller.state() ==
-            PinnedMicrophoneState::Starting ||
-        self->_pinned_microphone_controller.state() ==
-            PinnedMicrophoneState::Stopping) {
+    if (self == nullptr) {
         ESP_LOGI("PINMIC", "click ignored: unavailable or transitional state");
         return;
     }
-    const bool enabled = !self->_pinned_microphone_controller.enabled();
-    const bool voice_ready =
-        self->_production_voice_link_usable &&
-        (self->_production_voice_capabilities &
-         voice_input::kExternalMicrophoneCapability) != 0;
-    const bool voice_active_before = self->_voice_input->active();
-    const bool accepted = self->_pinned_microphone_controller.set_enabled(
-        enabled,
-        voice_ready,
-        *self->_voice_input,
-        GetHAL().millis());
+    bool enabled = false;
+    bool voice_ready = false;
+    bool voice_active_before = false;
+    bool voice_active_after = false;
+    bool enabled_after = false;
+    bool accepted = false;
+    int state_after = -1;
+    {
+        std::lock_guard<std::mutex> controller_lock(
+            self->_task_controller_mutex);
+        if (self->_voice_input == nullptr ||
+            self->_pinned_microphone_touch_target == nullptr ||
+            self->_pinned_microphone_controller.state() ==
+                PinnedMicrophoneState::Starting ||
+            self->_pinned_microphone_controller.state() ==
+                PinnedMicrophoneState::Stopping) {
+            ESP_LOGI(
+                "PINMIC", "click ignored: unavailable or transitional state");
+            return;
+        }
+        enabled = !self->_pinned_microphone_controller.enabled();
+        voice_ready =
+            self->_production_voice_link_usable &&
+            (self->_production_voice_capabilities &
+             voice_input::kExternalMicrophoneCapability) != 0;
+        voice_active_before = self->_voice_input->active();
+        accepted = self->_pinned_microphone_controller.set_enabled(
+            enabled,
+            voice_ready,
+            *self->_voice_input,
+            GetHAL().millis());
+        voice_active_after = self->_voice_input->active();
+        enabled_after = self->_pinned_microphone_controller.enabled();
+        state_after = static_cast<int>(
+            self->_pinned_microphone_controller.state());
+    }
     ESP_LOGI(
         "PINMIC",
         "toggle requested=%d accepted=%d voice_ready=%d voice_active_before=%d voice_active_after=%d enabled_after=%d state_after=%d",
@@ -1588,9 +1625,9 @@ void AppCodexStatus::pinned_microphone_touch_event_cb(lv_event_t* event)
         accepted,
         voice_ready,
         voice_active_before,
-        self->_voice_input->active(),
-        self->_pinned_microphone_controller.enabled(),
-        static_cast<int>(self->_pinned_microphone_controller.state()));
+        voice_active_after,
+        enabled_after,
+        state_after);
     self->render_pinned_microphone();
 }
 

@@ -503,6 +503,14 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         self.assertIn("kRunningCyan", source)
         self.assertIn("pinned_microphone_touch_event_cb", source)
         self.assertIn("LV_EVENT_CLICKED", source)
+        pinned_callback = source.split(
+            "void AppCodexStatus::pinned_microphone_touch_event_cb", 1
+        )[1].split("void AppCodexStatus::update_battery", 1)[0]
+        self.assertIn("_task_controller_mutex", pinned_callback)
+        self.assertLess(
+            pinned_callback.index("_task_controller_mutex"),
+            pinned_callback.index("set_enabled("),
+        )
         self.assertNotIn("lv_switch_create(_pinned_microphone_page)", source)
         pager = source.split("void AppCodexStatus::update_page_indicator", 1)[1].split(
             "void AppCodexStatus::page_animation_cb", 1
