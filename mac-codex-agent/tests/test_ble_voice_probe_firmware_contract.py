@@ -599,6 +599,12 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         self.assertIn("ble_hs_cfg.sm_their_key_dist = 0", source)
         self.assertIn("CONFIG_BT_NIMBLE_NVS_PERSIST=n", unified_defaults)
 
+    def test_nimble_does_not_log_every_streaming_notification(self):
+        unified_defaults = (ROOT / "sdkconfig.unified.defaults").read_text()
+
+        self.assertIn("CONFIG_BT_NIMBLE_LOG_LEVEL_WARNING=y", unified_defaults)
+        self.assertNotIn("CONFIG_BT_NIMBLE_LOG_LEVEL_INFO=y", unified_defaults)
+
     def test_transport_uses_persisted_random_identity_to_avoid_stale_pairing_cache(self):
         source = (ROOT / "main/apps/app_codex_status/codex_ble_transport.cpp").read_text()
 
