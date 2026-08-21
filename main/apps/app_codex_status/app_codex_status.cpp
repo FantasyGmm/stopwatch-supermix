@@ -1241,6 +1241,13 @@ void AppCodexStatus::create_view()
         333,
         &PinnedMicState22,
         kSignalWhite);
+    lv_obj_add_flag(
+        _pinned_microphone_prompt_label, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(
+        _pinned_microphone_prompt_label,
+        AppCodexStatus::pinned_microphone_touch_event_cb,
+        LV_EVENT_CLICKED,
+        this);
     render_pinned_microphone();
 
     _page_dot_pinned_microphone = make_page_dot(_panel, 213);
