@@ -1197,6 +1197,7 @@ void AppCodexStatus::create_view()
     lv_obj_set_style_bg_color(
         _pinned_microphone_touch_target, lv_color_hex(kInstrumentBlack), 0);
     lv_obj_set_style_bg_opa(_pinned_microphone_touch_target, LV_OPA_COVER, 0);
+    lv_obj_set_ext_click_area(_pinned_microphone_touch_target, 48);
     lv_obj_add_event_cb(
         _pinned_microphone_touch_target,
         AppCodexStatus::pinned_microphone_touch_event_cb,
