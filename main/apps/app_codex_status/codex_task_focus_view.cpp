@@ -14,6 +14,7 @@
 
 LV_FONT_DECLARE(font_puhui_14_1)
 LV_FONT_DECLARE(lv_font_source_han_sans_sc_16_cjk)
+LV_FONT_DECLARE(CodexDetail16)
 LV_FONT_DECLARE(CodexFocusStatic9)
 LV_FONT_DECLARE(CodexFocusStatic10)
 LV_FONT_DECLARE(CodexFocusStatic11)
@@ -142,12 +143,7 @@ const lv_font_t* detail_title_font(const char* text)
 
 const lv_font_t* detail_body_font()
 {
-    static lv_font_t body_font = [] {
-        lv_font_t font = lv_font_source_han_sans_sc_16_cjk;
-        font.fallback = &font_puhui_14_1;
-        return font;
-    }();
-    return &body_font;
+    return &CodexDetail16;
 }
 
 
@@ -641,6 +637,20 @@ void CodexTaskFocusView::set_recording(bool recording)
     _recording = recording && _connected &&
         _mode == CodexTaskFocusViewMode::Detail;
     render_footer();
+}
+
+
+void CodexTaskFocusView::set_vertical_offset(int y)
+{
+    if (_root != nullptr) {
+        lv_obj_set_y(_root, y);
+    }
+}
+
+
+int CodexTaskFocusView::vertical_offset() const
+{
+    return _root == nullptr ? 0 : lv_obj_get_y(_root);
 }
 
 

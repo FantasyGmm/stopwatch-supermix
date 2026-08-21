@@ -153,6 +153,7 @@ private:
     lv_indev_state_t _last_agent_touch_state = LV_INDEV_STATE_REL;
     lv_indev_state_t _last_task_touch_state = LV_INDEV_STATE_REL;
     int _agent_panel_drag_start_y = 0;
+    int _task_deck_drag_start_y = 466;
     int _agent_revealed_delete_index = -1;
     bool _agent_reset_hold_active = false;
     bool _agent_reset_hold_queued = false;
@@ -161,6 +162,7 @@ private:
     int _task_touch_start_y = 0;
     int _task_touch_last_y = 0;
     bool _task_touch_moved = false;
+    bool _task_deck_drag_active = false;
     bool _task_detail_started_at_top = false;
     codex_task_focus_gesture::TaskFocusGestureAxis _task_touch_axis =
         codex_task_focus_gesture::TaskFocusGestureAxis::Undecided;
@@ -245,6 +247,8 @@ private:
     void update_task_focus_touch(uint32_t now_ms);
     void cancel_task_focus_touch();
     void open_task_deck();
+    void set_task_focus_y(int y);
+    void settle_task_deck_entry(bool open, bool animate);
     void render_task_focus();
     void render_task_focus_detail();
     void sync_task_focus_visibility();
@@ -290,6 +294,8 @@ private:
     static void agent_panel_row_gesture_cb(lv_event_t* event);
     static void agent_reset_hold_event_cb(lv_event_t* event);
     static void agent_panel_animation_cb(void* target, int32_t y);
+    static void task_deck_animation_cb(void* target, int32_t y);
+    static void task_deck_animation_completed_cb(lv_anim_t* animation);
     static void pinned_microphone_touch_event_cb(lv_event_t* event);
     void set_page(int page, bool animate);
     void update_page_indicator();

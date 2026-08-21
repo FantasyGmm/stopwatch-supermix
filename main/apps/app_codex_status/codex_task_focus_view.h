@@ -35,6 +35,8 @@ public:
         codex_task_focus_layout::TaskFocusPreviewScenario scenario
     );
     void set_visible(bool visible);
+    void set_vertical_offset(int y);
+    int vertical_offset() const;
     bool contains_focus_point(int x, int y) const;
     void detail_scroll_by(int delta_y);
     bool detail_at_top() const;

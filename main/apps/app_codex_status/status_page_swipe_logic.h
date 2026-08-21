@@ -16,6 +16,8 @@ class StatusPageSwipeLogic {
 public:
     void press(int x, int y, uint32_t now_ms);
     void move(int x, int y);
+    bool task_deck_drag_active(int current_page) const;
+    int task_deck_drag_offset(int current_page) const;
     StatusPageSwipeResult release(uint32_t now_ms, int current_page);
     void cancel();
 

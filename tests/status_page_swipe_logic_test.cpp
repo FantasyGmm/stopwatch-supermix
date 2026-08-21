@@ -89,6 +89,44 @@ static void assert_bottom_center_upward_swipe_opens_codex_deck()
 }
 
 
+static void assert_codex_deck_drag_reports_continuous_finger_progress()
+{
+    StatusPageSwipeLogic swipe;
+    swipe.press(233, 440, 1000);
+    assert(!swipe.task_deck_drag_active(1));
+    assert(swipe.task_deck_drag_offset(1) == 0);
+
+    swipe.move(234, 427);
+    assert(swipe.task_deck_drag_active(1));
+    assert(swipe.task_deck_drag_offset(1) == 13);
+
+    swipe.move(235, 390);
+    assert(swipe.task_deck_drag_active(1));
+    assert(swipe.task_deck_drag_offset(1) == 50);
+
+    swipe.move(235, -100);
+    assert(swipe.task_deck_drag_offset(1) == 466);
+    assert(!swipe.task_deck_drag_active(0));
+    assert(swipe.task_deck_drag_offset(2) == 0);
+}
+
+
+static void assert_non_entry_gestures_never_report_deck_progress()
+{
+    StatusPageSwipeLogic horizontal;
+    horizontal.press(233, 440, 1000);
+    horizontal.move(190, 438);
+    assert(!horizontal.task_deck_drag_active(1));
+    assert(horizontal.task_deck_drag_offset(1) == 0);
+
+    StatusPageSwipeLogic outside;
+    outside.press(150, 440, 1000);
+    outside.move(150, 380);
+    assert(!outside.task_deck_drag_active(1));
+    assert(outside.task_deck_drag_offset(1) == 0);
+}
+
+
 static void assert_deck_entry_safe_zone_is_inclusive_and_codex_only()
 {
     StatusPageSwipeLogic right_boundary;
@@ -178,6 +216,8 @@ int main()
     assert_pinned_page_does_not_wrap_right();
     assert_trae_page_does_not_wrap_left();
     assert_bottom_center_upward_swipe_opens_codex_deck();
+    assert_codex_deck_drag_reports_continuous_finger_progress();
+    assert_non_entry_gestures_never_report_deck_progress();
     assert_deck_entry_safe_zone_is_inclusive_and_codex_only();
     assert_vertical_owner_never_becomes_horizontal_page_swipe();
     assert_horizontal_owner_preserves_existing_paging();

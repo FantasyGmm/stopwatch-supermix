@@ -22,6 +22,31 @@ class CodexTaskNavigationFirmwareContractTests(unittest.TestCase):
         self.assertIn("_current_page == 1", visibility)
         self.assertIn("if (_current_page != 1)", opener)
 
+    def test_task_deck_entry_follows_finger_and_settles_like_agent_panel(self):
+        header = (
+            ROOT / "main/apps/app_codex_status/app_codex_status.h"
+        ).read_text()
+        app = (
+            ROOT / "main/apps/app_codex_status/app_codex_status.cpp"
+        ).read_text()
+        update = app.split(
+            "void AppCodexStatus::update_page_swipe", 1
+        )[1].split("void AppCodexStatus::set_page", 1)[0]
+        settle = app.split(
+            "void AppCodexStatus::settle_task_deck_entry", 1
+        )[1].split("void AppCodexStatus::update_page_swipe", 1)[0]
+
+        self.assertIn("bool _task_deck_drag_active", header)
+        self.assertIn("int _task_deck_drag_start_y", header)
+        self.assertIn("task_deck_drag_offset(1)", update)
+        self.assertIn("set_task_focus_y(std::clamp(", update)
+        self.assertIn("settle_task_deck_entry(true, true)", update)
+        self.assertIn("settle_task_deck_entry(false, true)", update)
+        self.assertIn("lv_anim_set_duration(&animation, 180)", settle)
+        self.assertIn("lv_anim_path_ease_out", settle)
+        self.assertIn("task_deck_animation_cb", settle)
+        self.assertNotIn("render_task_focus();", update)
+
     def test_carousel_exposes_manual_step_with_rotation_deadline_reset(self):
         header = (
             ROOT / "main/apps/app_codex_status/codex_alert_carousel.h"

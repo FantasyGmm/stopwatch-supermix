@@ -14,6 +14,7 @@ constexpr int kDeckMinX = 183;
 constexpr int kDeckMaxX = 283;
 constexpr int kDeckMinY = 423;
 constexpr int kDeckMaxY = 465;
+constexpr int kViewportHeight = 466;
 
 }  // namespace
 
@@ -48,6 +49,24 @@ void StatusPageSwipeLogic::move(int x, int y)
         return;
     }
     _axis = abs_x > abs_y ? Axis::Horizontal : Axis::Vertical;
+}
+
+
+bool StatusPageSwipeLogic::task_deck_drag_active(int current_page) const
+{
+    return _active && current_page == 1 && _axis == Axis::Vertical &&
+        _start_x >= kDeckMinX && _start_x <= kDeckMaxX &&
+        _start_y >= kDeckMinY && _start_y <= kDeckMaxY &&
+        _last_y < _start_y;
+}
+
+
+int StatusPageSwipeLogic::task_deck_drag_offset(int current_page) const
+{
+    if (!task_deck_drag_active(current_page)) {
+        return 0;
+    }
+    return std::clamp(_start_y - _last_y, 0, kViewportHeight);
 }
 
 

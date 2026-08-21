@@ -7,6 +7,7 @@ HEADER = ROOT / "main/apps/app_codex_status/codex_task_focus_view.h"
 SOURCE = ROOT / "main/apps/app_codex_status/codex_task_focus_view.cpp"
 MONTSERRAT = ROOT / "main/assets/fonts/MontserratSemiBold26.c"
 PUHUI = ROOT / "main/assets/fonts/font_puhui_14_1.c"
+DETAIL_FONT = ROOT / "main/assets/fonts/CodexDetail16.c"
 
 
 class CodexTaskFocusViewContractTests(unittest.TestCase):
@@ -105,6 +106,22 @@ class CodexTaskFocusViewContractTests(unittest.TestCase):
             static_font = ROOT / f"main/assets/fonts/CodexFocusStatic{size}.c"
             self.assertTrue(static_font.is_file())
             self.assertIn(f"Size: {size} px", static_font.read_text()[:200])
+
+    def test_detail_reply_uses_one_native_font_without_fallback_or_scaling(self):
+        source = SOURCE.read_text(encoding="utf-8")
+        detail_font = DETAIL_FONT.read_text(encoding="utf-8")
+        body_font = source.split(
+            "const lv_font_t* detail_body_font()", 1
+        )[1].split("void set_text_scale", 1)[0]
+
+        self.assertIn("LV_FONT_DECLARE(CodexDetail16)", source)
+        self.assertIn("return &CodexDetail16;", body_font)
+        self.assertNotIn("fallback", body_font)
+        self.assertNotIn("font_puhui_14_1", body_font)
+        self.assertIn("Size: 16 px", detail_font[:200])
+        self.assertIn("Bpp: 2", detail_font[:200])
+        self.assertIn(".fallback = NULL", detail_font)
+        self.assertNotIn("set_text_scale(paragraph", source)
 
 
 if __name__ == "__main__":
