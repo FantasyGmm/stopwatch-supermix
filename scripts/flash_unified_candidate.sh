@@ -7,7 +7,7 @@ PORT=""
 BUILD_DIR="$ROOT/build-unified"
 DRY_RUN=0
 PYTHON_BIN=""
-MAX_APP_BYTES=$((0x660000))
+MAX_APP_BYTES=$((0x700000))
 MAX_ASSETS_BYTES=$((0xA0000))
 
 usage() {

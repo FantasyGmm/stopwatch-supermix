@@ -46,9 +46,9 @@ class UnifiedRuntimeFirmwareContractTest(unittest.TestCase):
     def test_release_capacity_gates_match_single_system_budget(self):
         build_script = read("scripts/build_unified_candidate.sh")
         flash_script = read("scripts/flash_unified_candidate.sh")
-        self.assertIn('--max-app-bytes 0x660000', build_script)
+        self.assertIn('--max-app-bytes 0x700000', build_script)
         self.assertIn('--max-assets-bytes 0xA0000', build_script)
-        self.assertIn('MAX_APP_BYTES=$((0x660000))', flash_script)
+        self.assertIn('MAX_APP_BYTES=$((0x700000))', flash_script)
         self.assertIn('MAX_ASSETS_BYTES=$((0xA0000))', flash_script)
 
     def test_default_layout_is_promoted_while_manual_followup_remains_explicit(self):

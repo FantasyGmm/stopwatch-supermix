@@ -286,8 +286,10 @@ Build the isolated unified candidate and enforce its capacity gates:
 ```
 
 The release output is written to `build-unified/`. A normal root `idf.py build` now uses the same default single-application partition table, while the release script additionally enforces application/assets capacity gates and emits reproducible metrics.
-The active App regression gate remains `0x660000`. Any intentional future
-increase requires explicit review and must never exceed `0xC40000` (12.25 MiB),
+The active App regression gate is `0x700000`. It was reviewed on 2026-08-22
+after the measured image reached `0x694B70` through the accumulated secure
+pairing, task-detail, and pinned-microphone features. Any future increase still
+requires explicit review and must never exceed `0xC40000` (12.25 MiB),
 preserving at least 1.5 MiB inside the App partition.
 
 ## Flash

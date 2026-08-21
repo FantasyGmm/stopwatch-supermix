@@ -452,7 +452,7 @@ class UnifiedFlashToolsTest(unittest.TestCase):
 
     def test_candidate_rejects_app_over_capacity_before_printing_write(self):
         with (self.build / "StopWatch-UserDemo.bin").open("wb") as app_file:
-            app_file.truncate(0x660000 + 1)
+            app_file.truncate(0x700000 + 1)
 
         result = run_script(
             "flash_unified_candidate.sh",
@@ -465,6 +465,22 @@ class UnifiedFlashToolsTest(unittest.TestCase):
 
         self.assert_rejected_before_write(result)
         self.assertIn("Unified application exceeds capacity limit", result.stderr)
+
+    def test_candidate_accepts_reviewed_current_application_size(self):
+        with (self.build / "StopWatch-UserDemo.bin").open("wb") as app_file:
+            app_file.truncate(0x694B70)
+
+        result = run_script(
+            "flash_unified_candidate.sh",
+            "--dry-run",
+            "--port",
+            "/dev/test",
+            "--build-dir",
+            self.build,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("write_flash", result.stdout)
 
     def test_candidate_rejects_assets_over_capacity_before_printing_write(self):
         with (self.build / "generated_assets.bin").open("wb") as assets_file:

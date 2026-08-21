@@ -64,6 +64,16 @@ All product applications and most UI assets are linked into one binary, so futur
 
 The partition size is a hard ceiling, not a license for uncontrolled binary growth. The existing App regression gate should remain at `0x660000` until an intentional feature requires a measured increase. Any later increase must be reviewed explicitly and must never exceed a structural release ceiling of `0xC40000` (12.25 MiB), preserving at least 1.5 MiB inside the partition.
 
+### 2026-08-22 Regression-Gate Review
+
+The accumulated approved secure-pairing, task-detail, pinned-microphone, and
+Codex interaction work increased the measured release image to `0x694B70`
+(6,900,592 bytes). This is 215,920 bytes above the original regression gate,
+while the `0xDC0000` App partition still has 7,517,328 bytes (52.14%) free.
+The active regression gate is therefore intentionally raised to `0x700000`
+(7,340,032 bytes), leaving 439,440 bytes above the measured image. The
+`0xC40000` structural ceiling remains unchanged.
+
 ### Storage: 1 MiB
 
 Storage remains at 1 MiB because Codex voice audio is not persisted. PCM and encoded frames stay in PSRAM only for the active session. Storage continues to serve writable files, cache, and application data; small settings remain in NVS.
