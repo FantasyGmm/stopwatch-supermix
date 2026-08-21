@@ -1406,6 +1406,47 @@ void test_continuous_voice_is_idempotent_and_does_not_require_button_hold()
     assert(backend.release_calls == 1);
 }
 
+void test_external_microphone_stop_does_not_drain_stale_audio_backlog()
+{
+    FakeBackend backend;
+    FakeEntropy entropy;
+    FakeNotificationTransport transport;
+    voice_input::crypto::CcmContext crypto(kKey);
+    VoiceInputController controller(backend, crypto, entropy);
+    controller.set_notification_transport(&transport);
+    controller.set_ready(true, 256);
+
+    assert(controller.start_continuous(62100));
+    controller.run_transmit_worker_until_idle_for_test(62101);
+    controller.run_capture_worker_once_for_test(62102);
+    controller.run_transmit_worker_until_idle_for_test(62102);
+
+    for (uint32_t block = 0; block < 20; ++block) {
+        controller.run_capture_worker_once_for_test(62103 + block * 20);
+    }
+    assert(controller.queued_audio_ms_for_test() == 400);
+
+    assert(controller.stop_continuous(62504));
+    controller.run_capture_worker_once_for_test(62505);
+    controller.run_transmit_worker_until_idle_for_test(62505);
+
+    assert(transport.sent.size() == 3);
+    assert(transport.sent[0].kind == voice_input::NotificationKind::PttBegin);
+    assert(transport.sent[1].kind == voice_input::NotificationKind::Audio);
+    assert(transport.sent[2].kind == voice_input::NotificationKind::PttEnd);
+    const auto begin = decode(transport.sent[0], crypto, nullptr);
+    const auto end = decode(transport.sent[2], crypto, &begin.session_nonce);
+    assert(end.sequence == 2);
+    voice_input::EndSummary summary = {};
+    assert(voice_input::decode_end_summary(
+        end.payload.data(), end.payload_size, summary));
+    assert(summary.generated_packets == 1);
+    assert(summary.accepted_packets == 1);
+    assert(summary.captured_samples == 320);
+    assert(controller.queued_audio_ms_for_test() == 0);
+    assert(!controller.active());
+}
+
 void test_external_microphone_start_is_deferred_from_the_ui_caller()
 {
     FakeBackend backend;
@@ -1643,6 +1684,7 @@ int main()
     test_cancel_waits_for_inflight_producer_cleanup();
     test_sixty_seconds_of_voice_does_not_depend_on_ui_polling();
     test_continuous_voice_is_idempotent_and_does_not_require_button_hold();
+    test_external_microphone_stop_does_not_drain_stale_audio_backlog();
     test_external_microphone_start_is_deferred_from_the_ui_caller();
     test_shutdown_clears_a_pending_external_microphone_start();
     test_voice_capabilities_gate_ptt_and_external_microphone_independently();

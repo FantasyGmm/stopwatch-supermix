@@ -152,6 +152,24 @@ void VoiceInputSession::record_captured_samples(uint32_t samples)
     }
 }
 
+bool VoiceInputSession::discard_unaccepted_audio(uint32_t samples_per_packet)
+{
+    if (_state != VoiceInputState::Stopping || samples_per_packet == 0 ||
+        _summary.accepted_packets > _summary.generated_packets) {
+        return false;
+    }
+    const uint64_t accepted_samples =
+        static_cast<uint64_t>(_summary.accepted_packets) * samples_per_packet;
+    if (accepted_samples > std::numeric_limits<uint32_t>::max()) {
+        return false;
+    }
+    _summary.generated_packets = _summary.accepted_packets;
+    _summary.captured_samples = static_cast<uint32_t>(accepted_samples);
+    _next_sequence = _summary.accepted_packets + 1U;
+    _sequence_exhausted = false;
+    return true;
+}
+
 EndSummary VoiceInputSession::summary(uint32_t now_ms) const
 {
     EndSummary result = _summary;

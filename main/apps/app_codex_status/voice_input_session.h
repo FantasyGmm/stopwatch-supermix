@@ -34,6 +34,7 @@ public:
     void record_queue_overflow();
     void record_encode_failure();
     void record_captured_samples(uint32_t samples);
+    bool discard_unaccepted_audio(uint32_t samples_per_packet);
     EndSummary summary(uint32_t now_ms) const;
 
 #if defined(STOPWATCH_HOST_TEST)

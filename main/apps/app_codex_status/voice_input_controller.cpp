@@ -570,7 +570,7 @@ void VoiceInputController::handle_button(bool pressed, uint32_t now_ms)
         return;
     }
 
-    (void)stop_continuous(now_ms);
+    (void)stop_session(now_ms, false);
 }
 
 bool VoiceInputController::start_continuous(uint32_t now_ms)
@@ -593,6 +593,13 @@ bool VoiceInputController::start_continuous(uint32_t now_ms)
 }
 
 bool VoiceInputController::stop_continuous(uint32_t now_ms)
+{
+    return stop_session(now_ms, true);
+}
+
+bool VoiceInputController::stop_session(
+    uint32_t now_ms,
+    bool discard_audio_backlog)
 {
     if (_continuous_start_pending.load()) {
         _continuous_stop_requested = true;
@@ -618,6 +625,7 @@ bool VoiceInputController::stop_continuous(uint32_t now_ms)
         should_stop = _session.release(now_ms);
         if (should_stop) {
             _graceful_stop = true;
+            _discard_audio_backlog_on_stop = discard_audio_backlog;
         }
     }
     if (should_stop) {
@@ -664,6 +672,7 @@ void VoiceInputController::cancel_for_home(uint32_t now_ms)
         _outgoing.clear();
         _queued_audio_packets = 0;
         _graceful_stop = false;
+        _discard_audio_backlog_on_stop = false;
         _terminal_pending = false;
     }
     const bool transmitter_idle = wait_transmitter_idle_bounded();
@@ -701,7 +710,7 @@ void VoiceInputController::poll(uint32_t now_ms)
         producer_step(now_ms);
     }
 #endif
-    finalize_graceful_stop(now_ms);
+    finalize_graceful_stop(now_ms, false);
 }
 
 bool VoiceInputController::take_notification(voice_input::Notification& output)
@@ -925,7 +934,7 @@ bool VoiceInputController::transmitter_step(uint32_t now_ms)
         ~ActiveGuard() { active = false; }
     } active_guard{_transmitter_step_active};
 
-    finalize_graceful_stop(now_ms);
+    finalize_graceful_stop(now_ms, true);
     voice_input::Notification notification = {};
     VoiceNotificationTransport* transport = nullptr;
     {
@@ -1024,6 +1033,7 @@ bool VoiceInputController::prepare_session_start(
         _outgoing.clear();
         _queued_audio_packets = 0;
         _graceful_stop = false;
+        _discard_audio_backlog_on_stop = false;
         _terminal_pending = false;
         _begin_accepted = false;
         _has_accepted_notification = false;
@@ -1261,25 +1271,58 @@ bool VoiceInputController::prepare_terminal_at(
     return true;
 }
 
-void VoiceInputController::finalize_graceful_stop(uint32_t now_ms)
+void VoiceInputController::finalize_graceful_stop(
+    uint32_t now_ms,
+    bool transmitter_context)
 {
     bool terminal_failed = false;
     {
         std::lock_guard<std::mutex> lock(_mutex);
-        if (!_graceful_stop || _producer_running.load() || _terminal_pending ||
-            !_outgoing.empty()) {
+        if (!_graceful_stop || _producer_running.load() || _terminal_pending) {
             return;
         }
-        std::array<uint8_t, voice_input::kEndBodySize> payload = {};
-        const voice_input::EndSummary summary = _session.summary(now_ms);
-        const size_t size = voice_input::encode_end_summary(
-            summary, payload.data(), payload.size());
-        terminal_failed = size == 0 || !prepare_terminal(
-            voice_input::NotificationKind::PttEnd,
-            payload.data(),
-            size,
-            now_ms);
-        _graceful_stop = false;
+        if (_discard_audio_backlog_on_stop) {
+            if (!transmitter_context && _transmitter_step_active.load()) {
+                return;
+            }
+            _outgoing.erase(
+                std::remove_if(
+                    _outgoing.begin(),
+                    _outgoing.end(),
+                    [](const voice_input::Notification& notification) {
+                        return notification.kind ==
+                               voice_input::NotificationKind::Audio;
+                    }),
+                _outgoing.end());
+            _queued_audio_packets = 0;
+            if (!_session.discard_unaccepted_audio(
+                    VoiceCapturePipeline::kOutputSamplesPerBlock)) {
+                terminal_failed = true;
+            }
+        }
+        if (terminal_failed) {
+            _graceful_stop = false;
+            _discard_audio_backlog_on_stop = false;
+        } else if (!_outgoing.empty()) {
+            return;
+        } else {
+            std::array<uint8_t, voice_input::kEndBodySize> payload = {};
+            voice_input::EndSummary summary = _session.summary(now_ms);
+            if (_discard_audio_backlog_on_stop) {
+                summary.elapsed_ms = std::max<uint32_t>(
+                    1,
+                    summary.accepted_packets * kAudioBlockMs);
+            }
+            const size_t size = voice_input::encode_end_summary(
+                summary, payload.data(), payload.size());
+            terminal_failed = size == 0 || !prepare_terminal(
+                voice_input::NotificationKind::PttEnd,
+                payload.data(),
+                size,
+                now_ms);
+            _graceful_stop = false;
+            _discard_audio_backlog_on_stop = false;
+        }
     }
     if (terminal_failed) {
         fail(
@@ -1325,6 +1368,7 @@ void VoiceInputController::fail(uint16_t code, uint16_t detail, uint32_t now_ms)
     }
     _queued_audio_packets = 0;
     _graceful_stop = false;
+    _discard_audio_backlog_on_stop = false;
     _congestion_started_ms = 0;
     _congestion_active = false;
     _transport_diagnostics.failure_code = code;
@@ -1458,6 +1502,7 @@ void VoiceInputController::reset_session(
     }
     _queued_audio_packets = 0;
     _graceful_stop = false;
+    _discard_audio_backlog_on_stop = false;
     _terminal_pending = false;
     _begin_accepted = false;
     _has_accepted_notification = false;

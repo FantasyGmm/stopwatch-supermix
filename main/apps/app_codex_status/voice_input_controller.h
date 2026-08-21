@@ -231,6 +231,7 @@ private:
         uint32_t now_ms,
         voice_input::BeginBody::Mode mode);
     bool process_continuous_start_request(uint32_t now_ms);
+    bool stop_session(uint32_t now_ms, bool discard_audio_backlog);
     bool prepare_begin(uint32_t now_ms, voice_input::BeginBody::Mode mode);
     bool prepare_audio(
         const std::array<uint8_t, VoiceCapturePipeline::kAdpcmBytesPerBlock>& adpcm,
@@ -247,7 +248,7 @@ private:
         size_t payload_size,
         uint32_t sequence,
         uint32_t now_ms);
-    void finalize_graceful_stop(uint32_t now_ms);
+    void finalize_graceful_stop(uint32_t now_ms, bool transmitter_context);
     void abort_with_failure(uint16_t code, uint16_t detail, uint32_t now_ms);
     void fail(uint16_t code, uint16_t detail, uint32_t now_ms);
     void stop_capture_bounded();
@@ -310,6 +311,7 @@ private:
     std::atomic<bool> _ready{false};
     std::atomic<uint8_t> _capabilities{0};
     bool _graceful_stop = false;
+    bool _discard_audio_backlog_on_stop = false;
     bool _terminal_pending = false;
     bool _initialized = false;
     VoiceInputUiState _ui_state = VoiceInputUiState::Off;
