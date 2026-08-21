@@ -6,6 +6,22 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class CodexTaskNavigationFirmwareContractTests(unittest.TestCase):
+    def test_task_deck_opens_and_remains_visible_on_the_codex_page(self):
+        app = (
+            ROOT / "main/apps/app_codex_status/app_codex_status.cpp"
+        ).read_text()
+
+        visibility = app.split(
+            "void AppCodexStatus::sync_task_focus_visibility()", 1
+        )[1].split("void AppCodexStatus::render_task_focus()", 1)[0]
+        opener = app.split("void AppCodexStatus::open_task_deck()", 1)[1].split(
+            "void AppCodexStatus::cancel_task_focus_touch()", 1
+        )[0]
+
+        # Page order is pinned microphone (0), Codex (1), TRAE (2).
+        self.assertIn("_current_page == 1", visibility)
+        self.assertIn("if (_current_page != 1)", opener)
+
     def test_carousel_exposes_manual_step_with_rotation_deadline_reset(self):
         header = (
             ROOT / "main/apps/app_codex_status/codex_alert_carousel.h"

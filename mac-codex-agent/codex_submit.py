@@ -398,17 +398,17 @@ class MacOSCodexAccessibility:
         return PROSEMIRROR_CLASS in self._class_tokens(element)
 
     def _composer_body(self, focused: Any) -> Optional[Any]:
-        rich_text_input = self._read_attribute(
+        parent = self._read_attribute(
             focused, ApplicationServices.kAXParentAttribute
         )
-        if self._is_explicitly_hidden(rich_text_input):
+        if self._is_explicitly_hidden(parent):
             return None
-        if not self._has_class_marker(
-            rich_text_input, RICH_TEXT_INPUT_CLASS_MARKER
-        ):
+        if self._has_class_marker(parent, COMPOSER_BODY_CLASS_MARKER):
+            return parent
+        if not self._has_class_marker(parent, RICH_TEXT_INPUT_CLASS_MARKER):
             return None
         body = self._read_attribute(
-            rich_text_input, ApplicationServices.kAXParentAttribute
+            parent, ApplicationServices.kAXParentAttribute
         )
         if self._is_explicitly_hidden(body):
             return None
