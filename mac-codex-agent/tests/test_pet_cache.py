@@ -387,6 +387,81 @@ if PetPreviewCache(root).load(watch_id, package_hash) is not None:
         )
         self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep")
 
+    def test_remove_never_unlinks_a_post_capture_replacement_leaf(self):
+        parent = self.root / "leaf-parent"
+        parent.mkdir()
+        target = parent / "target"
+        target.write_bytes(b"original")
+        target_inode = target.stat().st_ino
+        replacement = parent / "replacement"
+        replacement.write_bytes(b"replacement-sentinel")
+        replacement_inode = replacement.stat().st_ino
+        saved_name = "saved-original"
+        real_rename = os.rename
+        real_unlink = os.unlink
+        substituted = False
+
+        def substitute(parent_fd, name):
+            nonlocal substituted
+            if substituted or parent_fd is None or not name.startswith(".remove-"):
+                return
+            try:
+                is_target = (
+                    os.stat(
+                        name, dir_fd=parent_fd, follow_symlinks=False
+                    ).st_ino
+                    == target_inode
+                )
+            except OSError:
+                return
+            if is_target:
+                real_rename(
+                    name,
+                    saved_name,
+                    src_dir_fd=parent_fd,
+                    dst_dir_fd=parent_fd,
+                )
+                real_rename(
+                    "replacement",
+                    name,
+                    src_dir_fd=parent_fd,
+                    dst_dir_fd=parent_fd,
+                )
+                substituted = True
+
+        def rename_with_substitution(source, destination, *args, **kwargs):
+            substitute(kwargs.get("src_dir_fd"), source)
+            return real_rename(source, destination, *args, **kwargs)
+
+        def unlink_with_substitution(name, *args, **kwargs):
+            substitute(kwargs.get("dir_fd"), name)
+            return real_unlink(name, *args, **kwargs)
+
+        parent_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            with mock.patch(
+                "pet_cache.os.rename", side_effect=rename_with_substitution
+            ), mock.patch(
+                "pet_cache.os.unlink", side_effect=unlink_with_substitution
+            ):
+                try:
+                    self.cache._remove_bounded_at(parent_fd, "target")
+                except PetCacheError:
+                    pass
+        finally:
+            os.close(parent_fd)
+
+        replacement_paths = [
+            path
+            for path in parent.iterdir()
+            if path.lstat().st_ino == replacement_inode
+        ]
+        self.assertTrue(substituted, "post-capture substitution hook did not fire")
+        self.assertEqual(len(replacement_paths), 1)
+        self.assertEqual(
+            replacement_paths[0].read_bytes(), b"replacement-sentinel"
+        )
+
     def test_repeated_removal_leaves_a_strictly_bounded_quarantine_pool(self):
         failures = 0
         for _ in range(256):

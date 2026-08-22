@@ -374,6 +374,9 @@ class PetPreviewCache:
             if counters[1] > MAX_REMOVAL_BYTES:
                 raise PetCacheError("cache deletion exceeds its byte bound")
         if not stat.S_ISDIR(info.st_mode):
+            name, _ = self._capture_for_removal(
+                parent_fd, name, expected=info
+            )
             os.unlink(name, dir_fd=parent_fd)
             return
 
@@ -391,12 +394,28 @@ class PetPreviewCache:
         finally:
             os.close(child_fd)
 
-    @staticmethod
-    def _capture_for_removal(parent_fd: int, name: str):
+    @classmethod
+    def _capture_for_removal(
+        cls,
+        parent_fd: int,
+        name: str,
+        expected: Optional[os.stat_result] = None,
+    ) -> tuple[str, os.stat_result]:
         before = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
-        for slot in range(MAX_REMOVAL_QUARANTINES):
-            captured_name = ".remove-{:02x}.tmp".format(slot)
-            if PetPreviewCache._entry_exists(parent_fd, captured_name):
+        if expected is not None and (
+            before.st_dev != expected.st_dev
+            or before.st_ino != expected.st_ino
+        ):
+            raise PetCacheError("cache entry changed during deletion")
+        with os.scandir(parent_fd) as entries:
+            quarantine_count = sum(
+                entry.name.startswith(".remove-") for entry in entries
+            )
+        if quarantine_count >= MAX_REMOVAL_QUARANTINES:
+            raise PetCacheError("cache removal name allocation failed")
+        for _ in range(16):
+            captured_name = ".remove-{}.tmp".format(secrets.token_hex(16))
+            if cls._entry_exists(parent_fd, captured_name):
                 continue
             os.rename(
                 name,
