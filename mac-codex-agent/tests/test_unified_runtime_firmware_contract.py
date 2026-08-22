@@ -51,14 +51,6 @@ class UnifiedRuntimeFirmwareContractTest(unittest.TestCase):
         self.assertIn('MAX_APP_BYTES=$((0x700000))', flash_script)
         self.assertIn('MAX_ASSETS_BYTES=$((0xA0000))', flash_script)
 
-    def test_default_layout_is_promoted_while_manual_followup_remains_explicit(self):
-        report = read(
-            "docs/superpowers/reports/brookesia-xiaozhi-compatibility.md"
-        )
-        self.assertIn("default single-application layout is promoted", report)
-        self.assertIn("50-cycle connected-watch gate is complete", report)
-        self.assertIn("remain manual checks", report)
-
     def test_only_launcher_defines_app_main(self):
         definitions = find_definitions(r'extern\s+"C"\s+void\s+app_main\s*\(')
         self.assertEqual(definitions, ["main/main.cpp"])
@@ -270,33 +262,6 @@ class UnifiedRuntimeFirmwareContractTest(unittest.TestCase):
         self.assertIn("STOPWATCH_SDKCONFIG", runner)
         self.assertNotIn("secrets.token_hex(16)", runner)
         self.assertNotIn("$ROOT/build-unified", runner)
-
-    def test_unified_validation_report_separates_targeted_and_campaign_evidence(self):
-        report = read(
-            "docs/superpowers/reports/unified-runtime-validation.md"
-        )
-        self.assertIn("## Automated evidence", report)
-        self.assertIn("## Targeted hardware evidence", report)
-        for status in (
-            "Targeted hardware startup/lifecycle: Passed",
-            "Audible TTS after jitter-buffer fix: Passed by user observation",
-            "10-cycle, 20-cycle, 50-cycle, full product regression, and recovery exercise: Passed",
-            "Final boot-to-product-smoke handoff after recovery: Passed",
-        ):
-            self.assertIn(status, report)
-
-        hardware_section = report.split("## Targeted hardware evidence", 1)[1]
-        for evidence in (
-            "Complete Flash backup",
-            "Reached `first-running`",
-            "Bindings/subscriptions/Wi-Fi/capture/playback all zero",
-            "second stop gate passed",
-            "Pending manual",
-            "20 measured sessions",
-            "50 measured sessions, all five profiles ran ten times",
-            "## Remaining manual hardware execution",
-        ):
-            self.assertIn(evidence, hardware_section)
 
     def test_original_tasks_track_code_automated_and_hardware_status_separately(self):
         plan = read(

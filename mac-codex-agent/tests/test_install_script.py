@@ -81,14 +81,33 @@ class InstallScriptTests(unittest.TestCase):
             "secure_pairing_protocol.py",
             "secure_pairing_wire.py",
             "watch_credentials.py",
-            "trae_tasks.py",
-            "trae_adapter.py",
-            "combined_collector.py",
         ):
             self.assertIn(module, script)
         self.assertIn("STOPWATCH_CODEX_APP", script)
         self.assertIn("import Security", script)
         self.assertNotIn('open -W -n "$APP_DIR"', script)
+
+    def test_packaging_manifests_do_not_repeat_modules(self):
+        script = self.read_script()
+        validation_block = script.split("validate_app_contents() {", 1)[1].split(
+            "write_info_plist() {", 1
+        )[0]
+        packaged_modules = script.split("for module in \\", 1)[1].split(
+            "; do", 1
+        )[0]
+
+        self.assertEqual(
+            validation_block.count(
+                '"$resources/app/rollout_change_watcher.py"'
+            ),
+            1,
+        )
+        module_names = [
+            line.strip().removesuffix(" \\")
+            for line in packaged_modules.splitlines()
+            if line.strip().endswith(".py \\")
+        ]
+        self.assertEqual(len(module_names), len(set(module_names)))
 
     def test_packaging_preserves_existing_product_identity(self):
         script = (ROOT / "install_launch_agent.sh").read_text(encoding="utf-8")

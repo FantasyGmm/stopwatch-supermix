@@ -8,7 +8,7 @@ This project is based on the M5Stack StopWatch user demo and extends it with:
 - a Codex status monitor app added as the first launcher app;
 - an in-process Assistant app backed by Xiaozhi/Brookesia services, without rebooting;
 - full-screen utility apps for clock, badge, IMU, FFT, and setup;
-- backup-first build, flash, lifecycle, product-smoke, and recovery tooling.
+- capacity-gated build, flash, lifecycle, product-smoke, and recovery tooling.
 
 ## Hardware Target
 
@@ -187,14 +187,13 @@ Runtime responsibilities are intentionally separated:
 The default `partitions.csv` contains one 13.75 MiB factory application at
 `0x20000`, 1 MiB writable FAT storage at `0xDE0000`, and 768 KiB of generated
 Assistant assets at `0xEE0000`. The release remains USB-only and has no OTA
-application slot or automatic rollback. Before the first write of this layout,
-retain a checksum-verified complete 16 MiB Flash backup.
+application slot or automatic rollback.
 
-The first migration initializes the relocated Storage partition as a clean FAT
-filesystem. Existing Storage files are not copied automatically. NVS keeps its
-starting offset, but settings preservation must be verified after migration.
-Rollback explicitly means restoring the checksum-verified complete 16 MiB Flash
-backup over USB; there is no automatic rollback slot.
+The original migration to this layout initialized the relocated Storage
+partition as a clean FAT filesystem; existing Storage files were not copied
+automatically. NVS kept its starting offset. Explicit recovery from a retained
+historical full-Flash image is still possible over USB, but ordinary builds and
+flashes do not create or require a firmware backup.
 
 ## Navigation
 

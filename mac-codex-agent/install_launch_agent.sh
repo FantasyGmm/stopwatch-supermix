@@ -305,7 +305,6 @@ validate_app_contents() {
         "$resources/app/rollout_change_watcher.py" \
         "$resources/app/ima_adpcm.py" \
         "$resources/app/agent_identity.py" \
-        "$resources/app/rollout_change_watcher.py" \
         "$resources/app/watch_credentials.py" \
         "$resources/app/pairing_client.py" \
         "$resources/app/secure_pairing_crypto.py" \
@@ -593,7 +592,6 @@ build_staged_app() {
         task_voice_submitter.py \
         task_routes.py \
         task_detail_crypto.py \
-        rollout_change_watcher.py \
         watch_credentials.py \
         ima_adpcm.py; do
         cp "$ROOT_DIR/$module" "$STAGING_CODE/$module"
