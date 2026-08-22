@@ -49,6 +49,9 @@ from Foundation import NSTimer
 # A Commit has already been sent when the uploader publishes ``applying``;
 # protocol rules forbid a later Cancel, so only the pre-Commit phases expose it.
 _ACTIVE_TRANSFER_PHASES = frozenset(("sending", "verifying"))
+_TERMINAL_TRANSFER_PHASES = frozenset(
+    ("installed", "error", "busy", "cancelled")
+)
 _TRANSFER_HEADLINES = {
     "sending": "Sending to watch",
     "verifying": "Verifying on watch",
@@ -58,6 +61,8 @@ _TRANSFER_HEADLINES = {
     "busy": "Another pet operation is in progress",
     "cancelled": "Transfer cancelled",
 }
+_USE_SELECTED_CONVERSION = object()
+_UNSET_PREVIEW = object()
 
 
 def _capability_value(watch_state) -> str:
@@ -79,61 +84,103 @@ class PetWindowModel:
     It deliberately retains no BLE worker, request task, or cache ownership.
     """
 
+    # ``conversion`` belongs to the local chooser.  It may change while an
+    # earlier package is still transferring, so it must never carry the live
+    # request's identity or presentation.
     conversion: Optional[ConvertedPet] = None
+    active_conversion: Optional[ConvertedPet] = None
+    cached_preview: object = None
     watch_state: object = None
     selected_path: Optional[pathlib.Path] = None
-    phase: str = "initial"
+    selection_phase: str = "initial"
+    selection_error_code: str = ""
+    selection_detail: str = "Choose one GIF to create the exact watch preview."
+    transfer_phase: Optional[str] = None
+    transfer_error_code: str = ""
+    transfer_detail: str = ""
     acknowledged_bytes: int = 0
     total_bytes: int = 0
-    error_code: str = ""
-    detail: str = "Choose one GIF to create the exact watch preview."
     active_request_id: Optional[str] = None
 
-    def with_watch_state(self, watch_state) -> "PetWindowModel":
-        return dataclasses.replace(self, watch_state=watch_state)
+    @property
+    def phase(self) -> str:
+        """Selection phase kept for the native conversion worker contract."""
+        return self.selection_phase
 
-    def with_snapshot(self, snapshot) -> "PetWindowModel":
-        return self.with_watch_state(snapshot)
+    @property
+    def error_code(self) -> str:
+        if self.transfer_phase is not None:
+            return self.transfer_error_code
+        return self.selection_error_code
+
+    @property
+    def detail(self) -> str:
+        if self.transfer_phase is not None:
+            return self.transfer_detail
+        if self._cached_preview_source() is not None:
+            return "Preview restored from the verified watch package cache."
+        return self.selection_detail
+
+    def with_watch_state(
+        self, watch_state, cached_preview=_UNSET_PREVIEW
+    ) -> "PetWindowModel":
+        return dataclasses.replace(
+            self,
+            watch_state=watch_state,
+            cached_preview=(
+                self.cached_preview
+                if cached_preview is _UNSET_PREVIEW
+                else cached_preview
+            ),
+        )
+
+    def with_snapshot(
+        self, snapshot, cached_preview=_UNSET_PREVIEW
+    ) -> "PetWindowModel":
+        return self.with_watch_state(snapshot, cached_preview)
+
+    def _selection_update(self, **changes) -> "PetWindowModel":
+        """Replace local chooser state without retiring a live upload."""
+        if self.active_request_id is None:
+            changes.update(
+                active_conversion=None,
+                transfer_phase=None,
+                transfer_error_code="",
+                transfer_detail="",
+                acknowledged_bytes=0,
+                total_bytes=0,
+            )
+        return dataclasses.replace(self, **changes)
 
     def with_selected_path(self, path: pathlib.Path) -> "PetWindowModel":
         selected = pathlib.Path(path)
         if selected.suffix.lower() != ".gif":
-            return dataclasses.replace(
-                self,
+            return self._selection_update(
                 conversion=None,
                 selected_path=None,
-                phase="error",
-                error_code="wrong_extension",
-                detail="Only one .gif animation can be sent to the watch.",
-                active_request_id=None,
+                selection_phase="error",
+                selection_error_code="wrong_extension",
+                selection_detail="Only one .gif animation can be sent to the watch.",
             )
         return self.with_processing(selected)
 
     def with_processing(self, path: pathlib.Path) -> "PetWindowModel":
-        return dataclasses.replace(
-            self,
+        return self._selection_update(
             conversion=None,
             selected_path=pathlib.Path(path),
-            phase="processing",
-            acknowledged_bytes=0,
-            total_bytes=0,
-            error_code="",
-            detail="Converting GIF into the watch package…",
-            active_request_id=None,
+            selection_phase="processing",
+            selection_error_code="",
+            selection_detail="Converting GIF into the watch package…",
         )
 
     def with_conversion(self, conversion: ConvertedPet) -> "PetWindowModel":
         if not isinstance(conversion, ConvertedPet):
             raise TypeError("conversion must be a ConvertedPet")
-        return dataclasses.replace(
-            self,
+        return self._selection_update(
             conversion=conversion,
-            phase="ready",
-            acknowledged_bytes=0,
-            total_bytes=0,
-            error_code="",
-            detail="Preview is reconstructed from the final watch package.",
-            active_request_id=None,
+            selection_phase="ready",
+            selection_error_code="",
+            selection_detail="Preview is reconstructed from the final watch package.",
         )
 
     def with_conversion_error(self, error) -> "PetWindowModel":
@@ -143,35 +190,50 @@ class PetWindowModel:
         else:
             detail = "Could not convert this GIF."
             code = "conversion_failed"
-        return dataclasses.replace(
-            self,
+        return self._selection_update(
             conversion=None,
-            phase="error",
-            acknowledged_bytes=0,
-            total_bytes=0,
-            error_code=code,
-            detail=detail,
-            active_request_id=None,
+            selection_phase="error",
+            selection_error_code=code,
+            selection_detail=detail,
         )
 
     def with_transfer_started(
-        self, request_id: str, total_bytes: int, phase: str = "sending"
+        self,
+        request_id: str,
+        total_bytes: int,
+        phase: str = "sending",
+        transfer_conversion=_USE_SELECTED_CONVERSION,
     ) -> "PetWindowModel":
         if not isinstance(request_id, str) or not request_id:
             raise ValueError("request id is required")
+        if self.active_request_id is not None:
+            raise RuntimeError("a pet transfer is already active")
+        if transfer_conversion is _USE_SELECTED_CONVERSION:
+            transfer_conversion = self.conversion
+        if transfer_conversion is not None and not isinstance(
+            transfer_conversion, ConvertedPet
+        ):
+            raise TypeError("transfer conversion must be a ConvertedPet")
         return dataclasses.replace(
             self,
-            phase=phase,
+            active_conversion=transfer_conversion,
+            transfer_phase=phase,
             acknowledged_bytes=0,
             total_bytes=max(0, int(total_bytes)),
-            error_code="",
-            detail="Waiting for the watch to acknowledge progress.",
+            transfer_error_code="",
+            transfer_detail="Waiting for the watch to acknowledge progress.",
             active_request_id=request_id,
         )
 
     def with_progress(self, progress) -> "PetWindowModel":
         request_id = getattr(progress, "request_id", "")
-        if self.active_request_id is not None and request_id != self.active_request_id:
+        # A callback is meaningful only while its request is still live.  In
+        # particular, no callback may take ownership after a selection change
+        # or after a terminal result retires the request id.
+        if (
+            self.active_request_id is None
+            or request_id != self.active_request_id
+        ):
             return self
         phase = str(getattr(progress, "phase", "error"))
         total = max(0, int(getattr(progress, "total_bytes", 0)))
@@ -179,15 +241,19 @@ class PetWindowModel:
         error_code = str(getattr(progress, "error_code", ""))
         if error_code == "busy":
             phase = "busy"
-        active_request_id = request_id or self.active_request_id
+        elif phase == "error" and error_code == "cancelled":
+            phase = "cancelled"
+        active_request_id = (
+            None if phase in _TERMINAL_TRANSFER_PHASES else self.active_request_id
+        )
         detail = self._progress_detail(phase, acknowledged, total, error_code)
         return dataclasses.replace(
             self,
-            phase=phase,
+            transfer_phase=phase,
             acknowledged_bytes=acknowledged,
             total_bytes=total,
-            error_code=error_code,
-            detail=detail,
+            transfer_error_code=error_code,
+            transfer_detail=detail,
             active_request_id=active_request_id,
         )
 
@@ -213,21 +279,85 @@ class PetWindowModel:
             return error_code.replace("_", " ") or "The watch did not accept the pet."
         return ""
 
+    def _authoritative_state_matches(self, package) -> bool:
+        state = self.watch_state
+        return (
+            package is not None
+            and _capability_value(state) == "ready"
+            and getattr(state, "usable", False) is True
+            and getattr(state, "source", "built-in") == "custom"
+            and getattr(state, "active_hash", None) == package.sha256
+        )
+
+    def _cached_preview_source(self):
+        preview = self.cached_preview
+        package = getattr(preview, "package", None)
+        frames = getattr(preview, "rgba_frames", None)
+        if (
+            self._authoritative_state_matches(package)
+            and isinstance(frames, tuple)
+            and frames
+        ):
+            return preview
+        return None
+
+    @property
+    def _preview_source(self):
+        if self.active_request_id is not None and self.active_conversion is not None:
+            return self.active_conversion
+        cached = self._cached_preview_source()
+        if cached is not None:
+            return cached
+        if self.transfer_phase == "installed":
+            if self._authoritative_state_matches(
+                getattr(self.active_conversion, "package", None)
+            ):
+                return self.active_conversion
+            return None
+        if getattr(self.watch_state, "source", "built-in") == "custom":
+            if self._authoritative_state_matches(
+                getattr(self.conversion, "package", None)
+            ):
+                return self.conversion
+            return None
+        return self.conversion
+
     @property
     def preview(self):
-        return self.conversion.preview_rgba if self.conversion is not None else None
+        source = self._preview_source
+        return getattr(source, "preview_rgba", getattr(source, "rgba_frames", None))
+
+    @property
+    def preview_durations_ms(self):
+        source = self._preview_source
+        package = getattr(source, "package", None)
+        if package is None:
+            return ()
+        return tuple(frame.duration_ms for frame in package.frames)
 
     @property
     def metadata_text(self) -> str:
-        if self.conversion is None:
+        source = self._preview_source
+        if source is None:
+            if getattr(self.watch_state, "source", "built-in") == "custom":
+                return "No verified watch preview available"
             return "No converted pet selected"
-        metadata = self.conversion.metadata
+        metadata = getattr(source, "metadata", None)
+        if metadata is not None:
+            return "{} frames · {:.2f} s · {} × {} · {}".format(
+                metadata.output_frames,
+                metadata.loop_duration_ms / 1000,
+                metadata.width,
+                metadata.height,
+                _format_bytes(metadata.package_bytes),
+            )
+        package = source.package
         return "{} frames · {:.2f} s · {} × {} · {}".format(
-            metadata.output_frames,
-            metadata.loop_duration_ms / 1000,
-            metadata.width,
-            metadata.height,
-            _format_bytes(metadata.package_bytes),
+            len(package.frames),
+            sum(frame.duration_ms for frame in package.frames) / 1000,
+            package.width,
+            package.height,
+            _format_bytes(len(package.encoded)),
         )
 
     @property
@@ -241,33 +371,49 @@ class PetWindowModel:
         state = self.watch_state
         return (
             self.conversion is not None
-            and self.phase == "ready"
+            and self.selection_phase == "ready"
+            and self.active_request_id is None
+            and self.transfer_phase != "busy"
             and _capability_value(state) == "ready"
             and getattr(state, "schema_min", 0) <= 1 <= getattr(state, "schema_max", 0)
         )
 
     @property
     def can_cancel(self) -> bool:
-        return self.active_request_id is not None and self.phase in _ACTIVE_TRANSFER_PHASES
+        return (
+            self.active_request_id is not None
+            and self.transfer_phase in _ACTIVE_TRANSFER_PHASES
+        )
 
     @property
     def can_restore(self) -> bool:
+        state = self.watch_state
         return (
-            self.phase == "initial" or self.phase == "ready"
-        ) and _capability_value(self.watch_state) == "ready"
+            self.active_request_id is None
+            and self.transfer_phase != "busy"
+            and _capability_value(state) == "ready"
+            and getattr(state, "usable", False) is True
+            and getattr(state, "source", "built-in") == "custom"
+        )
 
     @property
     def headline(self) -> str:
-        if self.phase == "processing":
+        if self.transfer_phase in _TRANSFER_HEADLINES:
+            return _TRANSFER_HEADLINES[self.transfer_phase]
+        if self.selection_phase == "processing":
             return "Processing GIF…"
-        if self.phase == "error" and self.error_code == "wrong_extension":
+        if (
+            self.selection_phase == "error"
+            and self.selection_error_code == "wrong_extension"
+        ):
             return "Choose a GIF file"
-        if self.phase == "error" and self.error_code.startswith("conversion"):
+        if (
+            self.selection_phase == "error"
+            and self.selection_error_code.startswith("conversion")
+        ):
             return "Could not process GIF"
-        if self.phase == "error" and self.conversion is None:
+        if self.selection_phase == "error" and self.conversion is None:
             return "Could not process GIF"
-        if self.phase in _TRANSFER_HEADLINES:
-            return _TRANSFER_HEADLINES[self.phase]
         if self.watch_state is None:
             return "Choose a GIF to preview"
         capability = _capability_value(self.watch_state)
@@ -450,7 +596,9 @@ class CodexPetWindowController(NSWindowController):
         if self is None:
             return None
         self.agent_controller = agent_controller
-        self._model = PetWindowModel().with_snapshot(agent_controller.pet_snapshot())
+        self._model = PetWindowModel().with_snapshot(
+            agent_controller.pet_snapshot(), agent_controller.pet_preview()
+        )
         self._preview_frames = None
         self._preview_frame_index = 0
         self._preview_timer = None
@@ -608,11 +756,16 @@ class CodexPetWindowController(NSWindowController):
         self._submit_restore()
 
     def applySnapshot_(self, snapshot):
-        self._call_after(self._apply_snapshot_on_main, snapshot)
+        self._call_after(self._apply_snapshot_on_main, snapshot, _UNSET_PREVIEW)
 
     @objc.python_method
-    def _apply_snapshot_on_main(self, snapshot):
-        self._model = self._model.with_snapshot(snapshot)
+    def applySnapshotAndPreview(self, snapshot, preview):
+        """Accept one authoritative snapshot/cache-preview pair on main."""
+        self._call_after(self._apply_snapshot_on_main, snapshot, preview)
+
+    @objc.python_method
+    def _apply_snapshot_on_main(self, snapshot, cached_preview):
+        self._model = self._model.with_snapshot(snapshot, cached_preview)
         self._render_model(self._model)
 
     @objc.python_method
@@ -694,7 +847,9 @@ class CodexPetWindowController(NSWindowController):
             self._render_model(self._model)
             return
         request_id = self.agent_controller.restore_default(self._receive_progress)
-        self._model = self._model.with_transfer_started(request_id, 0, "applying")
+        self._model = self._model.with_transfer_started(
+            request_id, 0, "applying", transfer_conversion=None
+        )
         self._render_model(self._model)
 
     @objc.python_method
@@ -714,7 +869,9 @@ class CodexPetWindowController(NSWindowController):
         self.connection_label.setStringValue_(model.connection_text)
         self.progress_indicator.setDoubleValue_(model.progress_fraction)
         self.progress_label.setStringValue_(
-            model.detail if model.phase in _TRANSFER_HEADLINES else "No transfer in progress"
+            model.detail
+            if model.transfer_phase in _TRANSFER_HEADLINES
+            else "No transfer in progress"
         )
         self.send_button.setEnabled_(model.can_send)
         self.restore_button.setEnabled_(model.can_restore)
@@ -746,7 +903,10 @@ class CodexPetWindowController(NSWindowController):
             or self.window().isMiniaturized()
         ):
             return
-        duration = self._model.conversion.package.frames[self._preview_frame_index].duration_ms / 1000.0
+        durations = self._model.preview_durations_ms
+        if self._preview_frame_index >= len(durations):
+            self._preview_frame_index = 0
+        duration = durations[self._preview_frame_index] / 1000.0
         self._preview_timer = NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
             duration, self, "advancePreview:", None, False
         )

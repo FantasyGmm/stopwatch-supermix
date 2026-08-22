@@ -1,3 +1,4 @@
+import dataclasses
 import pathlib
 import sys
 import unittest
@@ -9,6 +10,7 @@ AGENT_ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(AGENT_ROOT))
 
 from pet_converter import ConversionMetadata, ConvertedPet, PetConversionError
+from pet_cache import CachedPreview
 from pet_package import HEIGHT, WIDTH, PetFrame, encode_package, render_rgba_frames
 from pet_window import PetWindowModel
 
@@ -41,15 +43,15 @@ class PetProgress:
     error_code: str = ""
 
 
-def make_converted_pet():
+def make_converted_pet(color=0xF800, frame_value=0):
     package = encode_package(
         WIDTH,
         HEIGHT,
-        (0xF800,),
+        (color,),
         1,
         (
-            PetFrame(180, bytes([0]) * (WIDTH * HEIGHT)),
-            PetFrame(180, bytes([1]) * (WIDTH * HEIGHT)),
+            PetFrame(180, bytes([frame_value]) * (WIDTH * HEIGHT)),
+            PetFrame(180, bytes([frame_value ^ 1]) * (WIDTH * HEIGHT)),
         ),
     )
     return ConvertedPet(
@@ -60,6 +62,7 @@ def make_converted_pet():
 
 
 CONVERTED = make_converted_pet()
+ALTERNATE = make_converted_pet(0x001F, 1)
 OFFLINE = PetWatchState(
     None, PetCapability.OFFLINE, "built-in", 0, 0, 0, bytes(32), False
 )
@@ -166,7 +169,9 @@ class PetWindowModelTests(unittest.TestCase):
 
     def test_acknowledged_progress_is_determinate_and_exposes_cancel(self):
         selected = PetWindowModel().with_conversion(CONVERTED).with_watch_state(READY)
-        model = selected.with_progress(PetProgress("request-1", "sending", 96, 192))
+        model = selected.with_transfer_started("request-1", 192).with_progress(
+            PetProgress("request-1", "sending", 96, 192)
+        )
 
         self.assertEqual(model.headline, "Sending to watch")
         self.assertEqual(model.progress_fraction, 0.5)
@@ -177,20 +182,20 @@ class PetWindowModelTests(unittest.TestCase):
     def test_transfer_phases_render_without_inventing_success(self):
         selected = PetWindowModel().with_conversion(CONVERTED).with_watch_state(READY)
         expected = {
-            "verifying": ("Verifying on watch", True),
-            "applying": ("Applying on watch", False),
-            "installed": ("Installed on watch", False),
-            "error": ("Transfer failed", False),
-            "busy": ("Another pet operation is in progress", False),
+            "verifying": ("Verifying on watch", True, False),
+            "applying": ("Applying on watch", False, False),
+            "installed": ("Installed on watch", False, True),
+            "error": ("Transfer failed", False, True),
+            "busy": ("Another pet operation is in progress", False, False),
         }
-        for phase, (headline, can_cancel) in expected.items():
+        for phase, (headline, can_cancel, can_send) in expected.items():
             with self.subTest(phase=phase):
-                model = selected.with_progress(
+                model = selected.with_transfer_started("request-1", 192).with_progress(
                     PetProgress("request-1", phase, 192, 192, "busy" if phase == "busy" else "")
                 )
                 self.assertEqual(model.headline, headline)
                 self.assertEqual(model.can_cancel, can_cancel)
-                self.assertFalse(model.can_send if phase != "installed" else False)
+                self.assertEqual(model.can_send, can_send)
 
     def test_unsupported_watch_disables_send_and_restore(self):
         model = PetWindowModel().with_conversion(CONVERTED).with_watch_state(UNSUPPORTED)
@@ -199,15 +204,23 @@ class PetWindowModelTests(unittest.TestCase):
         self.assertFalse(model.can_send)
         self.assertFalse(model.can_restore)
 
-    def test_restore_is_available_only_for_authenticated_ready_watch(self):
+    def test_restore_requires_a_usable_custom_pet_on_an_authenticated_watch(self):
         self.assertFalse(PetWindowModel().with_watch_state(OFFLINE).can_restore)
-        self.assertTrue(PetWindowModel().with_watch_state(READY).can_restore)
+        self.assertFalse(PetWindowModel().with_watch_state(READY).can_restore)
+        custom = dataclasses.replace(
+            READY, source="custom", active_hash=CONVERTED.package.sha256
+        )
+        self.assertTrue(PetWindowModel().with_watch_state(custom).can_restore)
 
     def test_close_and_reopen_preserve_runtime_owned_transfer_snapshot(self):
         # Treating close as cancel would violate the background-transfer
         # contract; a reopened retained window must render the latest callback.
-        sending = PetWindowModel().with_conversion(CONVERTED).with_watch_state(READY).with_progress(
-            PetProgress("request-1", "sending", 48, 192)
+        sending = (
+            PetWindowModel()
+            .with_conversion(CONVERTED)
+            .with_watch_state(READY)
+            .with_transfer_started("request-1", 192)
+            .with_progress(PetProgress("request-1", "sending", 48, 192))
         )
 
         reopened = sending.with_progress(PetProgress("request-1", "applying", 192, 192))
@@ -227,7 +240,137 @@ class PetWindowModelTests(unittest.TestCase):
         late = installed.with_progress(PetProgress("request-2", "error", 0, 192, "offline"))
 
         self.assertEqual(late.headline, "Installed on watch")
-        self.assertEqual(late.active_request_id, "request-1")
+        self.assertIsNone(late.active_request_id)
+
+    def test_progress_without_a_live_request_is_ignored(self):
+        initial = PetWindowModel()
+
+        self.assertEqual(
+            initial.with_progress(PetProgress(None, "error", 0, 0, "offline")),
+            initial,
+        )
+
+    def test_selecting_b_during_a_keeps_a_as_the_only_live_transfer(self):
+        """A later local conversion cannot claim A's callback or Cancel slot."""
+        active_a = (
+            PetWindowModel()
+            .with_conversion(CONVERTED)
+            .with_watch_state(READY)
+            .with_transfer_started("request-a", len(CONVERTED.package.encoded))
+        )
+
+        selected_b = active_a.with_conversion(ALTERNATE)
+
+        self.assertEqual(selected_b.active_request_id, "request-a")
+        self.assertIs(selected_b.conversion, ALTERNATE)
+        self.assertEqual(selected_b.preview, CONVERTED.preview_rgba)
+        self.assertTrue(selected_b.can_cancel)
+        self.assertFalse(selected_b.can_send)
+
+        rejected_b = selected_b.with_progress(
+            PetProgress("request-b", "error", 0, 0, "cancelled")
+        )
+        self.assertEqual(rejected_b, selected_b)
+
+        installed = selected_b.with_progress(
+            PetProgress(
+                "request-a", "installed", len(CONVERTED.package.encoded), len(CONVERTED.package.encoded)
+            )
+        )
+        custom_a = dataclasses.replace(
+            READY, source="custom", active_hash=CONVERTED.package.sha256
+        )
+        installed = installed.with_watch_state(custom_a)
+
+        self.assertIsNone(installed.active_request_id)
+        self.assertEqual(installed.preview, CONVERTED.preview_rgba)
+        self.assertNotEqual(installed.preview, ALTERNATE.preview_rgba)
+        self.assertTrue(installed.can_send)
+
+        late_a = installed.with_progress(
+            PetProgress("request-a", "cancelled", 0, 0, "cancelled")
+        )
+        self.assertEqual(late_a, installed)
+
+    def test_restore_matrix_uses_authoritative_source_not_presentation_phase(self):
+        custom = dataclasses.replace(
+            READY, source="custom", active_hash=CONVERTED.package.sha256
+        )
+        installed = (
+            PetWindowModel()
+            .with_watch_state(custom)
+            .with_transfer_started("request-a", 0, "applying")
+            .with_progress(PetProgress("request-a", "installed", 0, 0))
+        )
+        cancelled = (
+            PetWindowModel()
+            .with_watch_state(custom)
+            .with_transfer_started("request-a", 0)
+            .with_progress(PetProgress("request-a", "error", 0, 0, "cancelled"))
+        )
+        failed = (
+            PetWindowModel()
+            .with_watch_state(custom)
+            .with_transfer_started("request-a", 0)
+            .with_progress(PetProgress("request-a", "error", 0, 0, "offline"))
+        )
+        busy = (
+            PetWindowModel()
+            .with_watch_state(custom)
+            .with_transfer_started("request-a", 0)
+            .with_progress(PetProgress("request-a", "error", 0, 0, "busy"))
+        )
+        active = PetWindowModel().with_watch_state(custom).with_transfer_started(
+            "request-a", 0
+        )
+
+        self.assertTrue(installed.can_restore)
+        self.assertTrue(cancelled.can_restore)
+        self.assertTrue(failed.can_restore)
+        self.assertFalse(busy.can_restore)
+        self.assertFalse(active.can_restore)
+        self.assertFalse(PetWindowModel().with_watch_state(OFFLINE).can_restore)
+        self.assertFalse(PetWindowModel().with_watch_state(UNSUPPORTED).can_restore)
+        self.assertFalse(PetWindowModel().with_watch_state(READY).can_restore)
+
+    def test_cancelled_error_uses_cancelled_copy(self):
+        model = (
+            PetWindowModel()
+            .with_conversion(CONVERTED)
+            .with_watch_state(READY)
+            .with_transfer_started("request-a", len(CONVERTED.package.encoded))
+            .with_progress(PetProgress("request-a", "error", 0, 0, "cancelled"))
+        )
+
+        self.assertEqual(model.headline, "Transfer cancelled")
+        self.assertEqual(
+            model.detail, "The current upload was cancelled before installation."
+        )
+
+    def test_authoritative_cached_preview_requires_the_current_watch_hash(self):
+        cached = CachedPreview(
+            CONVERTED.package,
+            CONVERTED.preview_rgba,
+            tuple(frame.duration_ms for frame in CONVERTED.package.frames),
+        )
+        matching = dataclasses.replace(
+            READY, source="custom", active_hash=CONVERTED.package.sha256
+        )
+        mismatched = dataclasses.replace(
+            READY, source="custom", active_hash=ALTERNATE.package.sha256
+        )
+
+        reopened = PetWindowModel().with_snapshot(matching, cached)
+        unknown = PetWindowModel().with_snapshot(mismatched, cached)
+
+        self.assertEqual(reopened.preview, CONVERTED.preview_rgba)
+        self.assertEqual(
+            reopened.detail,
+            "Preview restored from the verified watch package cache.",
+        )
+        self.assertEqual(reopened.metadata_text, "2 frames · 0.36 s · 144 × 156 · {} B".format(len(CONVERTED.package.encoded)))
+        self.assertIsNone(unknown.preview)
+        self.assertEqual(unknown.metadata_text, "No verified watch preview available")
 
 
 if __name__ == "__main__":

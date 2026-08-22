@@ -51,6 +51,7 @@ class FakeController:
         self.renamed_agents = []
         self.forgot_watch_count = 0
         self.pet_snapshot_value = object()
+        self.pet_preview_value = object()
 
     def start(self):
         self.started = True
@@ -144,6 +145,9 @@ class FakeController:
 
     def pet_snapshot(self):
         return self.pet_snapshot_value
+
+    def pet_preview(self):
+        return self.pet_preview_value
 
     def begin_voice_setup(self):
         return (
@@ -685,14 +689,16 @@ class MenuBarApplicationTests(unittest.TestCase):
             def initWithAgentController_(self, controller):
                 self.controller = controller
                 self.snapshots = []
+                self.snapshot_previews = []
                 self.show_count = 0
                 self.front_count = 0
                 self.stopped = False
                 PetWindow.constructed.append(self)
                 return self
 
-            def applySnapshot_(self, snapshot):
+            def applySnapshotAndPreview(self, snapshot, preview):
                 self.snapshots.append(snapshot)
+                self.snapshot_previews.append((snapshot, preview))
 
             def showWindow_(self, _sender):
                 self.show_count += 1
@@ -729,6 +735,10 @@ class MenuBarApplicationTests(unittest.TestCase):
         self.assertEqual(pet_window.show_count, 2)
         self.assertEqual(pet_window.front_count, 2)
         self.assertEqual(len(pet_window.snapshots), 2)
+        self.assertEqual(
+            pet_window.snapshot_previews,
+            [(controller.pet_snapshot_value, controller.pet_preview_value)] * 2,
+        )
 
     def test_menu_lifecycle_and_actions(self):
         NSApplication.sharedApplication()

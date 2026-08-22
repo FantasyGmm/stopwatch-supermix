@@ -40,7 +40,8 @@ from runtime import (
     _BleSessionContext,
     _create_voice_session,
 )
-from pet_package import HEIGHT, WIDTH, PetFrame, encode_package
+from pet_cache import CachedPreview
+from pet_package import HEIGHT, WIDTH, PetFrame, encode_package, render_rgba_frames
 from pet_upload import (
     PetCapability,
     PetOperation,
@@ -3622,6 +3623,104 @@ class AgentRuntimePetTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runtime.pet_snapshot().watch_id, self.credential.watch_id)
         self.assertEqual(runtime.pet_snapshot().active_hash, b"H" * 32)
 
+    async def test_recreated_runtime_reloads_matching_authoritative_preview(self):
+        preview = CachedPreview(
+            self.package,
+            render_rgba_frames(self.package),
+            tuple(frame.duration_ms for frame in self.package.frames),
+        )
+        load_calls = []
+
+        class Cache:
+            def load(self, watch_id, active_hash):
+                load_calls.append((watch_id, active_hash))
+                return preview
+
+        class Uploader:
+            async def query(self):
+                return PetWatchState(
+                    self_credential.watch_id,
+                    PetCapability.READY,
+                    "custom",
+                    1,
+                    1,
+                    4,
+                    self_package.sha256,
+                    True,
+                )
+
+            async def close(self):
+                pass
+
+        self_credential = self.credential
+        self_package = self.package
+        for _ in range(2):
+            runtime = AgentRuntime(
+                collector=FakeCollector(),
+                pet_uploader_factory=lambda *_args, **_kwargs: Uploader(),
+                pet_cache=Cache(),
+            )
+            context = _BleSessionContext(FakeTransport())
+            context.credential = self.credential
+            await runtime._prepare_pet(context)
+            self.assertIs(runtime.pet_preview(), preview)
+
+        self.assertEqual(
+            load_calls,
+            [(self.credential.watch_id, self.package.sha256)] * 2,
+        )
+
+    async def test_mismatched_or_corrupt_cached_preview_is_never_exposed(self):
+        mismatched_package = encode_package(
+            WIDTH,
+            HEIGHT,
+            (0x001F,),
+            1,
+            (PetFrame(120, bytes([0]) * (WIDTH * HEIGHT)),),
+        )
+        mismatched = CachedPreview(
+            mismatched_package,
+            render_rgba_frames(mismatched_package),
+            tuple(frame.duration_ms for frame in mismatched_package.frames),
+        )
+
+        class Cache:
+            def __init__(self, loaded):
+                self.loaded = loaded
+
+            def load(self, _watch_id, _active_hash):
+                return self.loaded
+
+        class Uploader:
+            async def query(self):
+                return PetWatchState(
+                    self_credential.watch_id,
+                    PetCapability.READY,
+                    "custom",
+                    1,
+                    1,
+                    4,
+                    self_package.sha256,
+                    True,
+                )
+
+            async def close(self):
+                pass
+
+        self_credential = self.credential
+        self_package = self.package
+        for cached in (mismatched, None):
+            with self.subTest(cached=cached is not None):
+                runtime = AgentRuntime(
+                    collector=FakeCollector(),
+                    pet_uploader_factory=lambda *_args, **_kwargs: Uploader(),
+                    pet_cache=Cache(cached),
+                )
+                context = _BleSessionContext(FakeTransport())
+                context.credential = self.credential
+                await runtime._prepare_pet(context)
+                self.assertIsNone(runtime.pet_preview())
+
     async def test_missing_optional_service_does_not_touch_input_or_voice(self):
         events = []
 
@@ -5133,6 +5232,7 @@ class FakeRuntime:
         self.voice_setup_token = object()
         self.agent_names = []
         self.pet_requests = []
+        self.pet_preview_value = None
         self.pet_state = PetWatchState(
             None,
             PetCapability.OFFLINE,
@@ -5168,6 +5268,9 @@ class FakeRuntime:
 
     def pet_snapshot(self):
         return self.pet_state
+
+    def pet_preview(self):
+        return self.pet_preview_value
 
 
 class AgentControllerTests(unittest.TestCase):

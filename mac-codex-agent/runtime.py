@@ -33,7 +33,7 @@ from codex_adapter import CodexStateCollector
 from codex_task_composer import CodexTaskComposerClient
 from combined_collector import CompositeStateCollector
 from pairing_client import PairingClient, WatchCredential
-from pet_cache import PetPreviewCache
+from pet_cache import CachedPreview, PetPreviewCache
 from pet_package import SCHEMA_VERSION, PetPackage
 from pet_upload import (
     PetCapability,
@@ -511,6 +511,7 @@ class AgentRuntime:
             bytes(32),
             False,
         )
+        self._pet_preview: Optional[CachedPreview] = None
         self._pet_uploader = None
         self._pet_generation = 0
         self._pet_request: Optional[PetRequest] = None
@@ -529,6 +530,15 @@ class AgentRuntime:
     def pet_snapshot(self) -> PetWatchState:
         with self._pet_lock:
             return self._pet_state
+
+    def pet_preview(self) -> Optional[CachedPreview]:
+        """Return only the preview verified for the current watch/hash state."""
+        with self._pet_lock:
+            preview = self._pet_preview
+            state = self._pet_state
+        if self._preview_matches_state(state, preview):
+            return preview
+        return None
 
     def set_agent_name(self, display_name: str) -> None:
         with self._state_lock:
@@ -817,9 +827,66 @@ class AgentRuntime:
         except Exception:
             LOGGER.warning("Pet request callback failed")
 
+    @staticmethod
+    def _state_can_have_preview(state) -> bool:
+        return (
+            isinstance(state, PetWatchState)
+            and state.capability is PetCapability.READY
+            and state.usable is True
+            and state.source == "custom"
+            and isinstance(state.watch_id, bytes)
+            and len(state.watch_id) == 16
+            and any(state.watch_id)
+            and isinstance(state.active_hash, bytes)
+            and len(state.active_hash) == 32
+            and any(state.active_hash)
+        )
+
+    @classmethod
+    def _preview_matches_state(cls, state, preview) -> bool:
+        package = getattr(preview, "package", None)
+        frames = getattr(preview, "rgba_frames", None)
+        return (
+            cls._state_can_have_preview(state)
+            and isinstance(preview, CachedPreview)
+            and isinstance(frames, tuple)
+            and bool(frames)
+            and isinstance(package, PetPackage)
+            and package.sha256 == state.active_hash
+        )
+
+    def _load_authoritative_pet_preview(
+        self, state: PetWatchState
+    ) -> Optional[CachedPreview]:
+        """Read cache only after the watch's identity/hash have been accepted."""
+        # Built-in, offline, and unknown-hash states must not consult a
+        # cache entry, even if an older preview remains retained in memory.
+        if not self._state_can_have_preview(state):
+            return None
+        loader = getattr(self._pet_cache, "load", None)
+        if not callable(loader):
+            return None
+        try:
+            preview = loader(state.watch_id, state.active_hash)
+        except Exception:
+            LOGGER.warning("Could not load verified pet preview")
+            return None
+        return preview if self._preview_matches_state(state, preview) else None
+
     def _set_pet_state(self, state: PetWatchState) -> None:
         with self._pet_lock:
             self._pet_state = state
+            self._pet_preview = None
+
+    def _set_pet_preview_if_current(
+        self, state: PetWatchState, preview: Optional[CachedPreview]
+    ) -> None:
+        with self._pet_lock:
+            if self._pet_state != state:
+                return
+            self._pet_preview = (
+                preview if self._preview_matches_state(state, preview) else None
+            )
 
     def _start_pet_request(
         self,
@@ -969,6 +1036,12 @@ class AgentRuntime:
                                 state.watch_id, package
                             )
                         )
+                        preview = await _run_in_daemon_thread(
+                            lambda: self._load_authoritative_pet_preview(
+                                state
+                            )
+                        )
+                        self._set_pet_preview_if_current(state, preview)
                     except Exception:
                         LOGGER.warning("Could not store verified pet preview")
             elif request.operation is PetOperation.RESTORE:
@@ -1068,6 +1141,7 @@ class AgentRuntime:
             ):
                 return False
             self._pet_state = state
+            self._pet_preview = None
             return True
 
     @staticmethod
@@ -1135,6 +1209,7 @@ class AgentRuntime:
             self._pet_generation += 1
             generation = self._pet_generation
             self._pet_uploader = None
+            self._pet_preview = None
             self._pet_state = PetWatchState(
                 credential.watch_id,
                 PetCapability.AUTHENTICATING,
@@ -1164,6 +1239,7 @@ class AgentRuntime:
         except PetUnsupportedError:
             with self._pet_lock:
                 if self._pet_generation == generation:
+                    self._pet_preview = None
                     self._pet_state = PetWatchState(
                         credential.watch_id,
                         PetCapability.UNSUPPORTED,
@@ -1180,6 +1256,7 @@ class AgentRuntime:
         except Exception as error:
             with self._pet_lock:
                 if self._pet_generation == generation:
+                    self._pet_preview = None
                     self._pet_state = PetWatchState(
                         credential.watch_id,
                         PetCapability.OFFLINE,
@@ -1193,6 +1270,10 @@ class AgentRuntime:
             LOGGER.warning("Optional pet channel is unavailable: %s", error)
             return
 
+        preview = await _run_in_daemon_thread(
+            lambda: self._load_authoritative_pet_preview(state)
+        )
+
         with self._pet_lock:
             if (
                 context.pet_uploader is uploader
@@ -1201,6 +1282,11 @@ class AgentRuntime:
             ):
                 self._pet_uploader = uploader
                 self._pet_state = state
+                self._pet_preview = (
+                    preview
+                    if self._preview_matches_state(state, preview)
+                    else None
+                )
 
     async def _retire_pet_uploader(
         self,
@@ -1243,6 +1329,7 @@ class AgentRuntime:
                 self._pet_cancel_task = None
                 self._pet_cancel_action_task = None
                 previous = self._pet_state
+                self._pet_preview = None
                 self._pet_state = PetWatchState(
                     previous.watch_id,
                     capability,
@@ -2476,6 +2563,9 @@ class AgentController:
 
     def pet_snapshot(self) -> PetWatchState:
         return self._runtime.pet_snapshot()
+
+    def pet_preview(self) -> Optional[CachedPreview]:
+        return self._runtime.pet_preview()
 
     def upload_pet(self, package: PetPackage, callback) -> str:
         request_id = secrets.token_hex(8)

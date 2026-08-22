@@ -421,8 +421,8 @@ class MenuBarApplication(NSObject):
             image.setTemplate_(True)
             self.status_item.button().setImage_(image)
         if self.codex_pet_window_controller is not None:
-            self.codex_pet_window_controller.applySnapshot_(
-                self.controller.pet_snapshot()
+            self.codex_pet_window_controller.applySnapshotAndPreview(
+                self.controller.pet_snapshot(), self.controller.pet_preview()
             )
 
     def toggleConnection_(self, sender):
@@ -548,7 +548,9 @@ class MenuBarApplication(NSObject):
                 )
             )
         window_controller = self.codex_pet_window_controller
-        window_controller.applySnapshot_(self.controller.pet_snapshot())
+        window_controller.applySnapshotAndPreview(
+            self.controller.pet_snapshot(), self.controller.pet_preview()
+        )
         window_controller.showWindow_(sender)
         window_controller.window().makeKeyAndOrderFront_(sender)
 
