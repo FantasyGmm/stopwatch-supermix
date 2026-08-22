@@ -121,7 +121,14 @@ class MultiAgentBleFirmwareContractTests(unittest.TestCase):
         self.assertIn("kPetControlQueueDepth = 8", source)
         self.assertIn("pet_control_access", source)
         self.assertIn("pet_status_access", source)
-        self.assertIn("AgentGattSurface::Production", source)
+        pet_control_access = source.split("int pet_control_access", 1)[1].split(
+            "int pet_status_access", 1
+        )[0]
+        pet_status_access = source.split("int pet_status_access", 1)[1].split(
+            "const ble_gatt_chr_def kStatusCharacteristics", 1
+        )[0]
+        self.assertIn("AgentGattSurface::Production", pet_control_access)
+        self.assertIn("AgentGattSurface::Production", pet_status_access)
         self.assertIn("kPetServices", source)
         enqueue = source.split(
             "bool CodexBleTransport::enqueue_pet_control_from_ble", 1

@@ -817,6 +817,92 @@ void test_control_queued_before_subscription_loss_cannot_start_after_resubscribe
     assert(!rig.transfer.transaction_active());
 }
 
+void test_subscription_changes_preserve_crypto_replay_history(
+    const std::vector<uint8_t>& package)
+{
+    Rig rig{};
+    const auto completed_control = transaction_control(
+        pet_protocol::Kind::Query, 1, 80, nonce(80));
+    const auto completed = handle(rig,
+        frame_for(completed_control, rig.crypto),
+        1800,
+        kConnectionGeneration,
+        kKeyEpoch);
+    assert(completed.accepted);
+
+    const auto active_control = begin_control(package, 81, nonce(81));
+    const auto active = handle(rig,
+        frame_for(active_control, rig.crypto),
+        1810,
+        kConnectionGeneration,
+        kKeyEpoch);
+    assert(active.accepted);
+
+    CodexPetControlFrame competing = frame_for(
+        transaction_control(
+            pet_protocol::Kind::Query, 1, 82, nonce(82)),
+        rig.crypto);
+    const auto busy = handle(rig,
+        competing,
+        1820,
+        kConnectionGeneration,
+        kKeyEpoch);
+    assert(busy.has_status);
+    assert(decode_status(busy, rig.crypto).reason ==
+           pet_protocol::ErrorReason::Busy);
+
+    rig.transfer.on_subscription_changed(2, false);
+    rig.transfer.on_subscription_changed(3, true);
+
+    const auto retired_active_replay = handle(rig,
+        frame_for(
+            active_control,
+            rig.crypto,
+            kConnectionGeneration,
+            kKeyEpoch,
+            true,
+            true,
+            3),
+        1825,
+        kConnectionGeneration,
+        kKeyEpoch,
+        3);
+    assert(!retired_active_replay.accepted);
+    assert(!retired_active_replay.has_status);
+
+    const auto completed_replay = handle(rig,
+        frame_for(
+            completed_control,
+            rig.crypto,
+            kConnectionGeneration,
+            kKeyEpoch,
+            true,
+            true,
+            3),
+        1830,
+        kConnectionGeneration,
+        kKeyEpoch,
+        3);
+    assert(!completed_replay.accepted);
+    assert(!completed_replay.has_status);
+
+    competing.subscription_generation = 3;
+    const auto busy_retry = handle(rig,
+        competing,
+        1840,
+        kConnectionGeneration,
+        kKeyEpoch,
+        3);
+    assert(!busy_retry.accepted);
+    assert(busy_retry.has_status);
+    assert(busy_retry.subscription_generation == 3);
+    assert(busy_retry.status_size == busy.status_size);
+    assert(std::equal(
+        busy.status.begin(),
+        busy.status.begin() + busy.status_size,
+        busy_retry.status.begin()));
+}
+
 }  // namespace
 
 int main()
@@ -833,6 +919,7 @@ int main()
     test_cleanup_warning_is_bounded_and_selection_remains_queryable(package);
     test_control_queued_before_subscription_loss_cannot_start_after_resubscribe(
         package);
+    test_subscription_changes_preserve_crypto_replay_history(package);
     test_busy_response_nonce_is_tombstoned_and_exact_retry_is_cached(package);
     test_restore_cleanup_warning_surfaces_error_and_query_retries_cleanup(
         package);

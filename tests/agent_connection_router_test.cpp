@@ -88,6 +88,34 @@ void test_pet_subscription_generation_exposes_fast_loss_and_resubscribe()
     assert(tracker.accepts(resubscribed.snapshot.generation));
 }
 
+void test_pet_subscription_generation_saturation_fails_closed_consistently()
+{
+    constexpr uint64_t kSaturatedGeneration = 0x7fffffffU;
+
+    const auto entered_saturation =
+        codex_pet::PetSubscriptionTracker::advance(
+            {kSaturatedGeneration - 1U, false}, true);
+    assert(entered_saturation.changed);
+    assert(!entered_saturation.lost);
+    assert(!entered_saturation.snapshot.subscribed);
+    assert(
+        entered_saturation.snapshot.generation == kSaturatedGeneration);
+
+    const auto saturated = codex_pet::PetSubscriptionTracker::advance(
+        entered_saturation.snapshot, true);
+    assert(!saturated.changed);
+    assert(!saturated.lost);
+    assert(!saturated.snapshot.subscribed);
+    assert(saturated.snapshot.generation == kSaturatedGeneration);
+
+    const auto lost_at_limit = codex_pet::PetSubscriptionTracker::advance(
+        {kSaturatedGeneration, true}, false);
+    assert(lost_at_limit.changed);
+    assert(lost_at_limit.lost);
+    assert(!lost_at_limit.snapshot.subscribed);
+    assert(lost_at_limit.snapshot.generation == kSaturatedGeneration);
+}
+
 void test_connection_termination_holds_router_guard_through_submission()
 {
     std::mutex router_guard;
@@ -139,6 +167,7 @@ int main()
     test_active_voice_link_is_one_coherent_snapshot();
     test_production_surface_checks_do_not_mutate_voice_subscription();
     test_pet_subscription_generation_exposes_fast_loss_and_resubscribe();
+    test_pet_subscription_generation_saturation_fails_closed_consistently();
     test_connection_termination_holds_router_guard_through_submission();
 
     AgentConnectionRouter router;

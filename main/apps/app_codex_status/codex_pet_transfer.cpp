@@ -71,8 +71,7 @@ bool CodexPetTransfer::sync_context(
     uint32_t key_epoch,
     uint64_t subscription_generation)
 {
-    if (active_generation == 0 || key_epoch == 0 ||
-        subscription_generation == 0 || !_subscription_active) {
+    if (active_generation == 0 || key_epoch == 0) {
         retire_transaction(true);
         clear_competing_responses();
         _context_ready = false;
@@ -80,19 +79,23 @@ bool CodexPetTransfer::sync_context(
         _key_epoch = 0;
         return false;
     }
-    if (_context_ready && _active_generation == active_generation &&
-        _key_epoch == key_epoch &&
-        _subscription_generation == subscription_generation) {
-        return true;
+    if (!_context_ready || _active_generation != active_generation ||
+        _key_epoch != key_epoch) {
+        retire_transaction(true);
+        clear_competing_responses();
+        _context_ready = true;
+        _active_generation = active_generation;
+        _key_epoch = key_epoch;
+        reset_replay_context();
     }
-    retire_transaction(true);
-    clear_competing_responses();
-    _context_ready = true;
-    _active_generation = active_generation;
-    _key_epoch = key_epoch;
-    _subscription_generation = subscription_generation;
-    reset_replay_context();
-    return true;
+    if (subscription_generation == 0 || !_subscription_active) {
+        retire_transaction(true);
+        return false;
+    }
+    if (_subscription_generation == 0) {
+        _subscription_generation = subscription_generation;
+    }
+    return _subscription_generation == subscription_generation;
 }
 
 void CodexPetTransfer::reset_replay_context()
@@ -165,7 +168,9 @@ PetTransferResult CodexPetTransfer::handle(
                 cached.request.begin(),
                 cached.request.begin() + cached.request_size,
                 frame.data.begin())) {
-            return cached.response;
+            PetTransferResult response = cached.response;
+            response.subscription_generation = _subscription_generation;
+            return response;
         }
         return {};
     }
@@ -375,8 +380,6 @@ void CodexPetTransfer::on_subscription_changed(
     if (_subscription_generation != subscription_generation ||
         _subscription_active != subscribed) {
         retire_transaction(true);
-        clear_competing_responses();
-        _context_ready = false;
     }
     _subscription_generation = subscription_generation;
     _subscription_active = subscribed;

@@ -42,28 +42,53 @@ struct PetSubscriptionTransition {
 
 class PetSubscriptionTracker {
 public:
+    static PetSubscriptionTransition advance(
+        PetSubscriptionSnapshot before,
+        bool subscribed)
+    {
+        if (before.generation > kMaxGeneration) {
+            before = {kMaxGeneration, false};
+        }
+        if (before.subscribed == subscribed) {
+            return {before, false, false};
+        }
+        if (before.generation == kMaxGeneration) {
+            if (!before.subscribed) {
+                return {before, false, false};
+            }
+            return {
+                {kMaxGeneration, false},
+                true,
+                true,
+            };
+        }
+        if (before.generation + 1U == kMaxGeneration) {
+            return {
+                {kMaxGeneration, false},
+                true,
+                before.subscribed,
+            };
+        }
+        return {
+            {before.generation + 1U, subscribed},
+            true,
+            before.subscribed && !subscribed,
+        };
+    }
+
     PetSubscriptionTransition update(bool subscribed)
     {
         uint32_t current = _state.load();
         while (true) {
             const PetSubscriptionSnapshot before = decode(current);
-            if (before.subscribed == subscribed) {
-                return {before, false, false};
+            const PetSubscriptionTransition transition =
+                advance(before, subscribed);
+            if (!transition.changed) {
+                return transition;
             }
-            const uint64_t next_generation =
-                before.generation == kMaxGeneration
-                ? kMaxGeneration
-                : before.generation + 1U;
-            const bool next_subscribed =
-                before.generation == kMaxGeneration ? false : subscribed;
-            const uint32_t next = encode(
-                {next_generation, next_subscribed});
+            const uint32_t next = encode(transition.snapshot);
             if (_state.compare_exchange_weak(current, next)) {
-                return {
-                    {next_generation, next_subscribed},
-                    true,
-                    before.subscribed && !next_subscribed,
-                };
+                return transition;
             }
         }
     }
