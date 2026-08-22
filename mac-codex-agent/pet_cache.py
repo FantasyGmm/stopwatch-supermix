@@ -392,9 +392,9 @@ class PetPreviewCache:
             )
             if current.st_dev != info.st_dev or current.st_ino != info.st_ino:
                 raise PetCacheError("cache directory changed during deletion")
+            os.rmdir(name, dir_fd=parent_fd)
         finally:
             os.close(child_fd)
-        os.rmdir(name, dir_fd=parent_fd)
 
     @staticmethod
     def _close_fds(*descriptors: Optional[int]) -> None:

@@ -3960,6 +3960,142 @@ class AgentRuntimePetTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0.01)
         self.assertIsNone(runtime._pet_request)
 
+    async def test_resistant_cancel_is_bounded_and_rekey_fails_closed(self):
+        events = []
+        started = asyncio.Event()
+        resisted_cancel = asyncio.Event()
+        release_cancel = asyncio.Event()
+        operation_done = asyncio.Event()
+        cancel_calls = []
+        updated = dataclasses.replace(
+            self.credential, master_key=b"N" * 16, key_epoch=10
+        )
+
+        class OldUploader:
+            async def query(self):
+                return PetWatchState(
+                    self_watch_id,
+                    PetCapability.READY,
+                    "built-in",
+                    1,
+                    1,
+                    0,
+                    bytes(32),
+                    True,
+                )
+
+            async def upload(self, package, progress, *, request_id=None):
+                started.set()
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    operation_done.set()
+
+            async def cancel(self, request_id):
+                cancel_calls.append(request_id)
+                while not release_cancel.is_set():
+                    try:
+                        await release_cancel.wait()
+                    except asyncio.CancelledError:
+                        resisted_cancel.set()
+                events.append("old.cancel.late")
+
+            async def close(self):
+                events.append("old.close")
+                await operation_done.wait()
+
+        class NewUploader:
+            async def query(self):
+                events.append("new.query")
+                return PetWatchState(
+                    self_watch_id,
+                    PetCapability.READY,
+                    "built-in",
+                    1,
+                    1,
+                    0,
+                    bytes(32),
+                    True,
+                )
+
+            async def close(self):
+                pass
+
+        self_watch_id = self.credential.watch_id
+        old = OldUploader()
+
+        def factory(_transport, key, _epoch, _nonce_factory, *, watch_id):
+            return old if key == self.credential.master_key else NewUploader()
+
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            pet_uploader_factory=factory,
+            pet_cache=self.cache,
+            disconnect_timeout=0.02,
+        )
+        context = _BleSessionContext(FakeTransport(events=events))
+        context.credential = self.credential
+        context.voice_key = self.credential.master_key
+        context.voice_key_epoch = self.credential.key_epoch
+        await runtime._prepare_pet(context)
+        runtime._loop = asyncio.get_running_loop()
+        runtime._prepare_voice = lambda _context: asyncio.sleep(0)
+        self.assertTrue(
+            runtime.submit_pet_request(
+                PetRequest(
+                    "resistant-cancel",
+                    PetOperation.UPLOAD,
+                    self.package,
+                    lambda _progress: None,
+                )
+            )
+        )
+        await asyncio.wait_for(started.wait(), 1)
+        cancel_progress = []
+        self.assertTrue(
+            runtime.submit_pet_request(
+                PetRequest(
+                    "resistant-cancel",
+                    PetOperation.CANCEL,
+                    None,
+                    cancel_progress.append,
+                )
+            )
+        )
+        await asyncio.wait_for(resisted_cancel.wait(), 1)
+        await asyncio.sleep(0.03)
+        returned_at_deadline = runtime._pet_cancel_task is None
+
+        for _ in range(16):
+            self.assertTrue(
+                runtime.submit_pet_request(
+                    PetRequest(
+                        "resistant-cancel",
+                        PetOperation.CANCEL,
+                        None,
+                        lambda _progress: None,
+                    )
+                )
+            )
+        replacement = await runtime._replace_voice_credential(context, updated)
+        credential_after_rekey = context.credential
+        release_cancel.set()
+        for _ in range(100):
+            if "old.cancel.late" in events:
+                break
+            await asyncio.sleep(0.01)
+        state_after_late_cancel = runtime.pet_snapshot()
+        await runtime._retire_pet_uploader(context)
+
+        self.assertTrue(returned_at_deadline)
+        self.assertEqual(cancel_calls, ["resistant-cancel"])
+        self.assertFalse(replacement)
+        self.assertEqual(credential_after_rekey, self.credential)
+        self.assertNotIn("new.query", events)
+        self.assertEqual(
+            state_after_late_cancel.capability, PetCapability.OFFLINE
+        )
+
     async def test_restore_removes_cache_only_after_authoritative_state(self):
         class Uploader:
             async def query(self):

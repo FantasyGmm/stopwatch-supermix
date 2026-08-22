@@ -155,6 +155,7 @@ class _PetRetirement:
     uploader: Optional[object]
     request_task: Optional[asyncio.Task]
     cancel_task: Optional[asyncio.Task]
+    cancel_action_task: Optional[asyncio.Task]
     close_task: Optional[asyncio.Task] = None
 
 
@@ -514,6 +515,7 @@ class AgentRuntime:
         self._pet_request: Optional[PetRequest] = None
         self._pet_task: Optional[asyncio.Task] = None
         self._pet_cancel_task = None
+        self._pet_cancel_action_task: Optional[asyncio.Task] = None
 
     def snapshot(self) -> AgentSnapshot:
         with self._state_lock:
@@ -567,7 +569,10 @@ class AgentRuntime:
                 active = self._pet_request
                 uploader = self._pet_uploader
                 generation = self._pet_generation
-                cancellation_owned = self._pet_cancel_task is not None
+                cancellation_owned = (
+                    self._pet_cancel_task is not None
+                    or self._pet_cancel_action_task is not None
+                )
             if (
                 loop is None
                 or active is None
@@ -590,7 +595,10 @@ class AgentRuntime:
                     or self._pet_generation != generation
                 ):
                     return False
-                if self._pet_cancel_task is not None:
+                if (
+                    self._pet_cancel_task is not None
+                    or self._pet_cancel_action_task is not None
+                ):
                     return True
                 self._pet_cancel_task = _PET_CANCEL_SCHEDULED
             try:
@@ -618,6 +626,7 @@ class AgentRuntime:
             if (
                 self._pet_request is not None
                 or self._pet_cancel_task is not None
+                or self._pet_cancel_action_task is not None
             ):
                 error_code = "busy"
             elif (
@@ -835,6 +844,7 @@ class AgentRuntime:
             active = self._pet_request
             if (
                 self._pet_cancel_task is not _PET_CANCEL_SCHEDULED
+                or self._pet_cancel_action_task is not None
                 or active is None
                 or active.request_id != request.request_id
                 or self._pet_uploader is not uploader
@@ -854,11 +864,34 @@ class AgentRuntime:
         uploader,
         generation: int,
     ) -> None:
+        action_task = asyncio.create_task(
+            uploader.cancel(request.request_id)
+        )
+        current_task = asyncio.current_task()
+        with self._pet_lock:
+            if (
+                self._pet_cancel_task is not current_task
+                or not self._pet_request_is_current_locked(
+                    request.request_id, uploader, generation
+                )
+            ):
+                action_task.cancel()
+                return
+            self._pet_cancel_action_task = action_task
+        action_task.add_done_callback(
+            lambda task: self._pet_cancel_action_done(task)
+        )
         try:
-            await asyncio.wait_for(
-                uploader.cancel(request.request_id),
-                timeout=self._disconnect_timeout,
+            done, _ = await asyncio.wait(
+                (action_task,), timeout=self._disconnect_timeout
             )
+            if not done:
+                action_task.cancel()
+                raise asyncio.TimeoutError
+            action_task.result()
+        except asyncio.CancelledError:
+            action_task.cancel()
+            raise
         except Exception as error:
             if self._pet_request_is_current(
                 request.request_id, uploader, generation
@@ -874,10 +907,18 @@ class AgentRuntime:
                     ),
                 )
         finally:
-            current_task = asyncio.current_task()
             with self._pet_lock:
                 if self._pet_cancel_task is current_task:
                     self._pet_cancel_task = None
+
+    def _pet_cancel_action_done(self, task: asyncio.Task) -> None:
+        try:
+            task.result()
+        except BaseException:
+            pass
+        with self._pet_lock:
+            if self._pet_cancel_action_task is task:
+                self._pet_cancel_action_task = None
 
     async def _execute_pet_request(
         self,
@@ -993,12 +1034,19 @@ class AgentRuntime:
         self, request_id: str, uploader, generation: int
     ) -> bool:
         with self._pet_lock:
-            return (
-                self._pet_request is not None
-                and self._pet_request.request_id == request_id
-                and self._pet_uploader is uploader
-                and self._pet_generation == generation
+            return self._pet_request_is_current_locked(
+                request_id, uploader, generation
             )
+
+    def _pet_request_is_current_locked(
+        self, request_id: str, uploader, generation: int
+    ) -> bool:
+        return (
+            self._pet_request is not None
+            and self._pet_request.request_id == request_id
+            and self._pet_uploader is uploader
+            and self._pet_generation == generation
+        )
 
     def _accept_pet_result(
         self,
@@ -1172,6 +1220,7 @@ class AgentRuntime:
         uploader = context.pet_uploader
         request_task = None
         cancel_task = None
+        cancel_action_task = None
         with self._pet_lock:
             if context.pet_generation == self._pet_generation:
                 self._pet_generation += 1
@@ -1183,8 +1232,10 @@ class AgentRuntime:
                     if isinstance(self._pet_cancel_task, asyncio.Task)
                     else None
                 )
+                cancel_action_task = self._pet_cancel_action_task
                 self._pet_task = None
                 self._pet_cancel_task = None
+                self._pet_cancel_action_task = None
                 previous = self._pet_state
                 self._pet_state = PetWatchState(
                     previous.watch_id,
@@ -1198,7 +1249,9 @@ class AgentRuntime:
                 )
         context.pet_uploader = None
         context.pet_generation = 0
-        retirement = _PetRetirement(uploader, request_task, cancel_task)
+        retirement = _PetRetirement(
+            uploader, request_task, cancel_task, cancel_action_task
+        )
         context.pet_retirement = retirement
         return retirement
 
@@ -1217,7 +1270,11 @@ class AgentRuntime:
 
         owned = tuple(
             task
-            for task in (retirement.cancel_task, retirement.request_task)
+            for task in (
+                retirement.cancel_task,
+                retirement.cancel_action_task,
+                retirement.request_task,
+            )
             if task is not None
         )
         for task in owned:
@@ -2051,6 +2108,7 @@ class AgentRuntime:
                 pet_retirement.uploader,
                 pet_retirement.request_task,
                 pet_retirement.cancel_task,
+                pet_retirement.cancel_action_task,
                 pet_retirement.close_task,
             )
         )

@@ -3,7 +3,6 @@ import pathlib
 import subprocess
 import sys
 import tempfile
-import threading
 import unittest
 from unittest import mock
 
@@ -197,32 +196,33 @@ if PetPreviewCache(root).load(watch_id, package_hash) is not None:
             sentinel.write_text("keep", encoding="utf-8")
             watch_path = self.root / self.watch_id.hex()
             saved = self.root / "saved-watch"
-            real_mkdtemp = tempfile.mkdtemp
+            real_rename = os.rename
             swapped = False
 
-            def swap_before_temporary(*args, **kwargs):
+            def swap_before_publish(source, destination, *args, **kwargs):
                 nonlocal swapped
-                if pathlib.Path(kwargs.get("dir")) == watch_path:
-                    watch_path.rename(saved)
+                if (
+                    not swapped
+                    and kwargs.get("src_dir_fd") is not None
+                    and kwargs.get("dst_dir_fd") is not None
+                    and destination == self.package.sha256.hex()
+                ):
+                    real_rename(watch_path, saved)
                     os.symlink(outside, watch_path)
                     swapped = True
-                return real_mkdtemp(*args, **kwargs)
+                return real_rename(source, destination, *args, **kwargs)
 
             try:
-                with mock.patch.object(
-                    tempfile,
-                    "mkdtemp",
-                    side_effect=swap_before_temporary,
+                with mock.patch(
+                    "pet_cache.os.rename", side_effect=swap_before_publish
                 ):
-                    try:
-                        self.cache.store(self.watch_id, self.package)
-                    except OSError:
-                        pass
+                    self.cache.store(self.watch_id, self.package)
             finally:
                 if swapped:
                     watch_path.unlink(missing_ok=True)
                     saved.rename(watch_path)
 
+            self.assertTrue(swapped, "descriptor-relative rename hook did not fire")
             self.assertEqual(
                 sorted(path.name for path in outside.iterdir()), ["sentinel"]
             )
@@ -235,47 +235,37 @@ if PetPreviewCache(root).load(watch_id, package_hash) is not None:
         saved = entry.parent / "saved-entry"
         with tempfile.TemporaryDirectory() as outside_name:
             outside = pathlib.Path(outside_name)
-            os.mkfifo(outside / "package.cxp")
-            (outside / "metadata.json").write_bytes(b"{}")
+            sentinel = outside / "sentinel"
+            sentinel.write_text("keep", encoding="utf-8")
             real_open = os.open
-            swapped = threading.Event()
-            done = threading.Event()
+            real_rename = os.rename
+            swapped = False
 
             def swap_before_leaf_open(path, flags, *args, **kwargs):
-                if os.fspath(path) == os.fspath(entry / "package.cxp"):
-                    entry.rename(saved)
+                nonlocal swapped
+                if (
+                    not swapped
+                    and path == "package.cxp"
+                    and kwargs.get("dir_fd") is not None
+                ):
+                    real_rename(entry, saved)
                     os.symlink(outside, entry)
-                    swapped.set()
+                    swapped = True
                 return real_open(path, flags, *args, **kwargs)
 
-            def load():
-                try:
-                    self.cache.load(self.watch_id, self.package.sha256)
-                finally:
-                    done.set()
-
-            thread = threading.Thread(target=load, daemon=True)
-            with mock.patch("pet_cache.os.open", side_effect=swap_before_leaf_open):
-                thread.start()
-                swapped.wait(0.5)
-                blocked = not done.wait(0.2)
-                if blocked:
-                    writer = real_open(
-                        outside / "package.cxp", os.O_WRONLY | os.O_NONBLOCK
-                    )
-                    try:
-                        os.write(writer, b"invalid")
-                    finally:
-                        os.close(writer)
-                thread.join(1)
+            with mock.patch(
+                "pet_cache.os.open", side_effect=swap_before_leaf_open
+            ):
+                preview = self.cache.load(
+                    self.watch_id, self.package.sha256
+                )
             if entry.is_symlink():
                 entry.unlink()
                 saved.rename(entry)
 
-            self.assertFalse(
-                swapped.is_set(), "load re-resolved a swapped hash directory"
-            )
-            self.assertFalse(blocked, "load followed a swapped ancestor FIFO")
+            self.assertTrue(swapped, "descriptor-relative open hook did not fire")
+            self.assertIsNotNone(preview)
+            self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep")
 
     def test_remove_never_re_resolves_swapped_watch_directory(self):
         self.cache.store(self.watch_id, self.package)
@@ -286,15 +276,18 @@ if PetPreviewCache(root).load(watch_id, package_hash) is not None:
             sentinel = outside / "sentinel"
             sentinel.write_text("keep", encoding="utf-8")
             real_scandir = os.scandir
+            real_rename = os.rename
+            watch_inode = watch_path.stat().st_ino
             swapped = False
 
             def swap_before_scan(path):
                 nonlocal swapped
                 if (
-                    not isinstance(path, int)
-                    and os.fspath(path) == os.fspath(watch_path)
+                    not swapped
+                    and isinstance(path, int)
+                    and os.fstat(path).st_ino == watch_inode
                 ):
-                    watch_path.rename(saved)
+                    real_rename(watch_path, saved)
                     os.symlink(outside, watch_path)
                     swapped = True
                 return real_scandir(path)
@@ -305,15 +298,64 @@ if PetPreviewCache(root).load(watch_id, package_hash) is not None:
                 ):
                     try:
                         self.cache.remove_watch(self.watch_id)
-                    except OSError:
+                    except (OSError, PetCacheError):
                         pass
             finally:
                 if swapped:
                     watch_path.unlink(missing_ok=True)
                     saved.rename(watch_path)
 
+            self.assertTrue(swapped, "descriptor-relative scandir hook did not fire")
             self.assertTrue(sentinel.exists(), "removal traversed outside cache")
             self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep")
+
+    def test_remove_does_not_rmdir_a_replacement_after_descriptor_check(self):
+        self.cache.store(self.watch_id, self.package)
+        watch_path = self.root / self.watch_id.hex()
+        saved = self.root / "saved-watch"
+        replacement = self.root / "replacement"
+        replacement.mkdir()
+        replacement_inode = replacement.stat().st_ino
+        watch_inode = watch_path.stat().st_ino
+        real_close = os.close
+        real_rename = os.rename
+        observed = False
+        substituted = False
+
+        def swap_when_watch_descriptor_closes(descriptor):
+            nonlocal observed, substituted
+            try:
+                is_watch = os.fstat(descriptor).st_ino == watch_inode
+            except OSError:
+                is_watch = False
+            if is_watch:
+                observed = True
+                if watch_path.exists():
+                    real_rename(watch_path, saved)
+                    real_rename(replacement, watch_path)
+                    substituted = True
+            return real_close(descriptor)
+
+        try:
+            with mock.patch(
+                "pet_cache.os.close",
+                side_effect=swap_when_watch_descriptor_closes,
+            ):
+                self.cache.remove_watch(self.watch_id)
+            replacement_survived = replacement.exists() or (
+                watch_path.exists()
+                and watch_path.stat().st_ino == replacement_inode
+            )
+        finally:
+            if substituted:
+                if watch_path.exists():
+                    watch_path.rmdir()
+                saved.rename(watch_path)
+
+        self.assertTrue(observed, "watched directory close hook did not fire")
+        self.assertTrue(
+            replacement_survived, "removal deleted a substituted directory"
+        )
 
 
 if __name__ == "__main__":
