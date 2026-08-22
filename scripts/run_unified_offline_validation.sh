@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CXX="${CXX:-c++}"
 PYTHON="${PYTHON:-$ROOT/mac-codex-agent/.venv/bin/python}"
-TOTAL_STAGES=63
+TOTAL_STAGES=64
 STAGE_INDEX=0
 CONTRACT_ONLY=0
 HOST_TESTS_ONLY=0
@@ -390,6 +390,14 @@ run_host_test voice_probe_crypto_test \
     -I"$MBEDTLS_SOURCE/include" \
     tests/voice_probe_crypto_test.cpp \
     main/apps/app_codex_status/voice_probe_crypto.cpp \
+    "$MBEDTLS_BUILD/library/libmbedcrypto.a"
+
+stage "Codex pet package host test"
+run_host_test codex_pet_package_test \
+    -std=c++17 -Wall -Wextra -Werror -DSTOPWATCH_HOST_TEST -I. \
+    -I"$MBEDTLS_SOURCE/include" \
+    tests/codex_pet_package_test.cpp \
+    main/apps/app_codex_status/codex_pet_package.cpp \
     "$MBEDTLS_BUILD/library/libmbedcrypto.a"
 
 stage "Secure Agent pairing protocol and crypto host tests"
