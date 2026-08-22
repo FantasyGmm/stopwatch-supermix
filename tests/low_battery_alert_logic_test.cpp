@@ -2,6 +2,7 @@
 #include <cstdint>
 
 #include "apps/common/low_battery/low_battery_alert_layout.h"
+#include "runtime/power/battery_percent_estimator.h"
 #include "runtime/power/low_battery_alert_logic.h"
 
 static_assert(low_battery_alert_layout::screenSize == 466);
@@ -30,6 +31,27 @@ LowBatteryAlertInput tick(uint32_t now_ms, bool display_visible = true,
 
 int main()
 {
+    assert(BatteryPercentFromMillivolts(4200) == 100);
+    assert(BatteryPercentFromMillivolts(4150) == 100);
+    assert(BatteryPercentFromMillivolts(3922) == 80);
+    assert(BatteryPercentFromMillivolts(3737) == 60);
+    assert(BatteryPercentFromMillivolts(3670) == 50);
+    assert(BatteryPercentFromMillivolts(3629) == 40);
+    assert(BatteryPercentFromMillivolts(3536) == 20);
+    assert(BatteryPercentFromMillivolts(3456) == 10);
+    assert(BatteryPercentFromMillivolts(3372) == 5);
+    assert(BatteryPercentFromMillivolts(3300) == 0);
+    assert(BatteryPercentFromMillivolts(3000) == 0);
+    assert(BatteryPercentFromMillivolts(3704) == 55);
+
+    BatteryPercentEstimator estimator;
+    assert(estimator.update(3670, false) == 50);
+    assert(estimator.update(3737, false) == 50);
+    assert(estimator.update(3536, false) == 20);
+    assert(estimator.update(3670, true) == 50);
+    estimator.reset();
+    assert(estimator.update(3922, false) == 80);
+
     LowBatteryAlertLogic logic;
     assert(!logic.update(sample(0, 0, false)).play_sound);
     assert(!logic.update(sample(1000, 29)).play_sound);

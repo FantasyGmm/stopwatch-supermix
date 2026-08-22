@@ -5,9 +5,9 @@
  */
 #include "hal.h"
 #include <hal/utils/settings/settings.h>
+#include <runtime/power/battery_percent_estimator.h>
 #include <mooncake_log.h>
 #include <M5PM1.h>
-#include <algorithm>
 #include <memory>
 #include <mutex>
 #include <cmath>
@@ -36,23 +36,6 @@ Hal::PowerLedMode sanitize_power_led_mode(int32_t raw_mode)
     }
 }
 
-uint8_t battery_millivolts_to_percent(uint16_t millivolts)
-{
-    constexpr uint16_t _battery_mv_empty = 3300;
-    constexpr uint16_t _battery_mv_full  = 4200;
-
-    if (millivolts <= _battery_mv_empty) {
-        return 0;
-    }
-    if (millivolts >= _battery_mv_full) {
-        return 100;
-    }
-
-    const auto scaled =
-        static_cast<uint32_t>(millivolts - _battery_mv_empty) * 100U / (_battery_mv_full - _battery_mv_empty);
-    return static_cast<uint8_t>(std::min<uint32_t>(scaled, 100U));
-}
-
 constexpr uint32_t _power_sample_period_ms = 250;
 constexpr uint8_t _battery_sample_iterations = 4;
 constexpr uint16_t _bat_filter_weight_old = 7;
@@ -61,8 +44,8 @@ constexpr uint16_t _bat_filter_weight_sum = _bat_filter_weight_old + _bat_filter
 
 uint8_t _bat_level             = 0;
 uint32_t _bat_sample_revision  = 0;
-uint16_t _bat_raw_mv           = 0;
 uint16_t _bat_filtered_mv      = 0;
+BatteryPercentEstimator _battery_percent_estimator;
 std::mutex _bat_level_mutex;
 ExternalPowerTracker _external_power_tracker;
 std::mutex _external_power_mutex;
@@ -75,10 +58,9 @@ auto with_pmic_io_lock(Operation&& operation)
     return operation();
 }
 
-void update_bat_level_from_mv(uint16_t millivolts)
+void update_bat_level_from_mv(uint16_t millivolts, bool allow_increase)
 {
     std::lock_guard<std::mutex> lock(_bat_level_mutex);
-    _bat_raw_mv = millivolts;
     if (_bat_filtered_mv == 0) {
         _bat_filtered_mv = millivolts;
     } else {
@@ -87,7 +69,7 @@ void update_bat_level_from_mv(uint16_t millivolts)
         _bat_filtered_mv = static_cast<uint16_t>((filtered + (_bat_filter_weight_sum / 2)) / _bat_filter_weight_sum);
     }
 
-    _bat_level = battery_millivolts_to_percent(_bat_filtered_mv);
+    _bat_level = _battery_percent_estimator.update(_bat_filtered_mv, allow_increase);
     ++_bat_sample_revision;
 }
 
@@ -102,9 +84,11 @@ void bat_reading_task(void* param)
             const auto vin_result = with_pmic_io_lock([&] {
                 return _pm1->readVin(&vin_mv);
             });
+            bool allow_battery_increase = true;
             {
                 std::lock_guard<std::mutex> lock(_external_power_mutex);
-                _external_power_tracker.observe(vin_result == M5PM1_OK, vin_mv > 4000);
+                const auto update = _external_power_tracker.observe(vin_result == M5PM1_OK, vin_mv > 4000);
+                allow_battery_increase = update.snapshot.state != ExternalPowerState::Battery;
             }
 
             ++battery_sample_iteration;
@@ -115,7 +99,7 @@ void bat_reading_task(void* param)
                     return _pm1->readVbat(&battery_mv);
                 });
                 if (battery_result == M5PM1_OK) {
-                    update_bat_level_from_mv(battery_mv);
+                    update_bat_level_from_mv(battery_mv, allow_battery_increase);
                 }
             }
         }
@@ -171,7 +155,12 @@ void Hal::pmic_init()
 
     uint16_t battery_mv = 0;
     if (_pm1->readVbat(&battery_mv) == M5PM1_OK) {
-        update_bat_level_from_mv(battery_mv);
+        {
+            std::lock_guard<std::mutex> lock(_bat_level_mutex);
+            _bat_filtered_mv = 0;
+            _battery_percent_estimator.reset();
+        }
+        update_bat_level_from_mv(battery_mv, true);
     }
 
     xTaskCreate(bat_reading_task, "bat_reading", 4 * 1024, NULL, 1, NULL);
@@ -197,7 +186,7 @@ uint8_t Hal::getBatteryLevel()
 BatterySampleSnapshot Hal::batterySampleSnapshot()
 {
     std::lock_guard<std::mutex> lock(_bat_level_mutex);
-    return {_bat_level, _bat_sample_revision, _bat_raw_mv, _bat_filtered_mv};
+    return {_bat_level, _bat_sample_revision};
 }
 
 uint32_t Hal::batterySampleRevision()

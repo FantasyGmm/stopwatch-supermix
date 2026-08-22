@@ -8,7 +8,6 @@
 #include <runtime/assistant/assistant_trace.h>
 #include <runtime/runtime_supervisor.h>
 #include <runtime/display/global_display_protection_service.h>
-#include <runtime/power/battery_calibration_service.h>
 #include <runtime/services/shared_wifi_service.h>
 
 #include <cinttypes>
@@ -186,23 +185,6 @@ void DebugCommandService::dispatchLine()
     }
     if (command.kind == DebugCommandKind::DisplayProtectionStatus) {
         log_display_protection_status();
-        return;
-    }
-    if (command.kind == DebugCommandKind::BatteryStart) {
-        ESP_LOGI(tag, "DEBUG BATTERY START %s",
-                 GetBatteryCalibrationService().start() ? "OK" : "ERROR");
-        return;
-    }
-    if (command.kind == DebugCommandKind::BatteryStatus) {
-        const auto& calibration = GetBatteryCalibrationService();
-        ESP_LOGI(tag, "DEBUG BATTERY STATUS active=%u samples=%lu OK",
-                 calibration.active() ? 1U : 0U,
-                 static_cast<unsigned long>(calibration.sampleCount()));
-        return;
-    }
-    if (command.kind == DebugCommandKind::BatteryExport) {
-        ESP_LOGI(tag, "DEBUG BATTERY EXPORT END %s",
-                 GetBatteryCalibrationService().exportToLog() ? "OK" : "ERROR");
         return;
     }
     if (command.kind == DebugCommandKind::VolumeSet) {

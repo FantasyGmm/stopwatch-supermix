@@ -57,15 +57,6 @@ class WatchDebugTests(unittest.TestCase):
             module.build_command("assistant-wifi-cycle"),
             b"debug assistant wifi-cycle\n",
         )
-        self.assertEqual(
-            module.build_command("battery-start"), b"debug battery start\n"
-        )
-        self.assertEqual(
-            module.build_command("battery-status"), b"debug battery status\n"
-        )
-        self.assertEqual(
-            module.build_command("battery-export"), b"debug battery export\n"
-        )
         self.assertEqual(module.build_command("volume", 0), b"debug volume 0\n")
         with self.assertRaises(module.DebugCommandError):
             module.build_command("volume", 101)
@@ -136,26 +127,8 @@ class WatchDebugTests(unittest.TestCase):
             module.classify_response("volume", 0, "DEBUG VOLUME 0 OK"),
             module.ResponseStatus.SUCCESS,
         )
-        self.assertEqual(
-            module.classify_response(
-                "battery-start", None, "DEBUG BATTERY START OK"
-            ),
-            module.ResponseStatus.SUCCESS,
-        )
-        self.assertEqual(
-            module.classify_response(
-                "battery-status",
-                None,
-                "DEBUG BATTERY STATUS active=1 samples=2 OK",
-            ),
-            module.ResponseStatus.SUCCESS,
-        )
-        self.assertEqual(
-            module.classify_response(
-                "battery-export", None, "DEBUG BATTERY EXPORT END OK"
-            ),
-            module.ResponseStatus.SUCCESS,
-        )
+        with self.assertRaises(module.DebugCommandError):
+            module.build_command("battery-start")
 
 
 if __name__ == "__main__":

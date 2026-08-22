@@ -851,6 +851,7 @@ class AgentRuntime:
             if self._status_ready is not None:
                 await self._status_ready.wait()
             task_details_enabled = context.voice_key is not None
+            status_write_timed_out = False
             while transport.connected:
                 if self._voice_refresh_requested.is_set():
                     self._voice_refresh_requested.clear()
@@ -877,7 +878,17 @@ class AgentRuntime:
                         context.voice_key_epoch,
                     )
                     task_details_enabled = context.voice_key is not None
-                await status_agent.tick(status=dict(self._latest_status))
+                try:
+                    await status_agent.tick(status=dict(self._latest_status))
+                except asyncio.TimeoutError:
+                    if status_write_timed_out or not transport.connected:
+                        raise
+                    status_write_timed_out = True
+                    LOGGER.warning(
+                        "Status update timed out; keeping BLE session alive"
+                    )
+                else:
+                    status_write_timed_out = False
                 failure = await self._wait_for_status_interval(
                     transport,
                     ignore_voice_failure=context.voice_failed,

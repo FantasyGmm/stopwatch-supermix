@@ -27,9 +27,11 @@ int main()
 
     assert(pulse_desired(CodexTaskState::Pending, false));
     assert(pulse_desired(CodexTaskState::Running, false));
+    assert(!pulse_desired(CodexTaskState::Pending, false, false));
     assert(!pulse_desired(CodexTaskState::Pending, true));
     assert(!pulse_desired(CodexTaskState::Completed, false));
     assert(ring_desired(CodexTaskState::Pending, false));
+    assert(!ring_desired(CodexTaskState::Pending, false, false));
     assert(!ring_desired(CodexTaskState::Running, false));
     assert(!ring_desired(CodexTaskState::Pending, true));
 

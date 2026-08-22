@@ -397,7 +397,11 @@ class DisplayProtectionFirmwareContractTests(unittest.TestCase):
             "const bool screen_off =\n"
             "        GetGlobalDisplayProtectionService().snapshot().state ==\n"
             "        DisplayProtectionState::ScreenOff;\n"
-            "    _pending_glow->set_state(_alert_carousel.display_state(), screen_off);",
+            "    const bool surface_visible =",
+            codex_source,
+        )
+        self.assertIn(
+            "_alert_carousel.display_state(), screen_off, surface_visible",
             codex_source,
         )
 

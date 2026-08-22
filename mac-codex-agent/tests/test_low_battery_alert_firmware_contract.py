@@ -205,7 +205,7 @@ class LowBatteryAlertFirmwareContractTests(unittest.TestCase):
             "isAudioPlaying()",
         ):
             self.assertIn(token, header)
-        self.assertIn("_bat_sample_revision++", pmic)
+        self.assertRegex(pmic, r"(?:\+\+_bat_sample_revision|_bat_sample_revision\+\+)")
         self.assertIn("BatterySampleSnapshot Hal::batterySampleSnapshot()", pmic)
         snapshot_getter = pmic[
             pmic.index("BatterySampleSnapshot Hal::batterySampleSnapshot()") :

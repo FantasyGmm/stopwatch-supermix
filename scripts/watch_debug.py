@@ -62,13 +62,6 @@ def build_command(action, name=None):
     }
     if action in assistant_commands:
         return assistant_commands[action]
-    battery_commands = {
-        "battery-start": b"debug battery start\n",
-        "battery-status": b"debug battery status\n",
-        "battery-export": b"debug battery export\n",
-    }
-    if action in battery_commands:
-        return battery_commands[action]
     raise DebugCommandError("unsupported debug command")
 
 
@@ -115,18 +108,6 @@ def classify_response(action, name, line):
         return (
             ResponseStatus.SUCCESS
             if f"{prefix}OK" in line
-            else ResponseStatus.REJECTED
-        )
-    battery_responses = {
-        "battery-start": "DEBUG BATTERY START ",
-        "battery-status": "DEBUG BATTERY STATUS ",
-        "battery-export": "DEBUG BATTERY EXPORT END ",
-    }
-    prefix = battery_responses.get(action)
-    if prefix is not None and prefix in line:
-        return (
-            ResponseStatus.SUCCESS
-            if "OK" in line[line.index(prefix) + len(prefix):]
             else ResponseStatus.REJECTED
         )
     return ResponseStatus.PENDING
@@ -221,11 +202,6 @@ def build_parser():
     assistant_command.add_parser("trace")
     assistant_command.add_parser("trace-clear")
     assistant_command.add_parser("wifi-cycle")
-    battery = scopes.add_parser("battery")
-    battery_command = battery.add_subparsers(dest="action", required=True)
-    battery_command.add_parser("start")
-    battery_command.add_parser("status")
-    battery_command.add_parser("export")
     volume = scopes.add_parser("volume")
     volume.add_argument("value", type=int, choices=range(0, 101))
     return parser
@@ -238,9 +214,6 @@ def main(argv=None):
         if args.scope == "volume":
             name = args.value
             action = "volume"
-        elif args.scope == "battery":
-            name = None
-            action = f"battery-{args.action}"
         else:
             name = getattr(args, "name", None)
             action = (

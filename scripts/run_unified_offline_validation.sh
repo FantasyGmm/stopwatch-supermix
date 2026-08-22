@@ -228,6 +228,7 @@ stage "Global low-battery alert host test"
 run_host_test low_battery_alert_logic_test \
     -std=c++17 -Wall -Wextra -Werror -Imain \
     tests/low_battery_alert_logic_test.cpp \
+    main/runtime/power/battery_percent_estimator.cpp \
     main/runtime/power/low_battery_alert_logic.cpp
 
 TRAE_CJSON_DIR="${IDF_PATH}/components/json/cJSON"

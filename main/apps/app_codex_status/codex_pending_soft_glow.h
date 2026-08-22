@@ -18,7 +18,10 @@ public:
         lv_obj_t* running_label,
         lv_obj_t* running_count
     );
-    void set_state(CodexTaskState state, bool screen_off);
+    void set_state(
+        CodexTaskState state,
+        bool screen_off,
+        bool surface_visible);
     void shutdown();
     bool active() const;
 

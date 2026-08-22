@@ -388,6 +388,47 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             current_thread,
         )
 
+    async def test_single_status_write_timeout_keeps_voice_session_alive(self):
+        key = bytes(range(16))
+
+        class TimeoutOnceTransport(FakeTransport):
+            def __init__(self):
+                super().__init__()
+                self.send_attempts = 0
+
+            async def send_json(self, payload, message_type):
+                self.send_attempts += 1
+                if self.send_attempts == 2:
+                    raise asyncio.TimeoutError()
+                await super().send_json(payload, message_type)
+                if self.send_attempts == 3:
+                    self._connected = False
+
+        class VoiceSession:
+            state = VoiceState.READY
+
+            async def prepare(self):
+                return self.state
+
+            async def disconnect(self):
+                pass
+
+        transport = TimeoutOnceTransport()
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            transport_factory=lambda: transport,
+            voice_key_loader=lambda: key,
+            voice_session_factory=lambda _key: VoiceSession(),
+            voice_nonce_factory=lambda: b"12345678",
+            status_interval=0.01,
+        )
+
+        result = await runtime._run_session()
+
+        self.assertEqual(result, "disconnected")
+        self.assertEqual(transport.send_attempts, 3)
+        self.assertIs(runtime.snapshot().voice_state, VoiceState.READY)
+
     async def test_production_voice_uses_the_active_codex_task_composer(self):
         runtime = AgentRuntime(
             collector=FakeCollector(),

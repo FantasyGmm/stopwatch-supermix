@@ -57,8 +57,6 @@ struct AlarmStorageSnapshot {
 struct BatterySampleSnapshot {
     uint8_t level = 0;
     uint32_t revision = 0;
-    uint16_t raw_mv = 0;
-    uint16_t filtered_mv = 0;
 };
 
 /**
