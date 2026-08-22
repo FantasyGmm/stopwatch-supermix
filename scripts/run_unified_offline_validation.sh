@@ -323,6 +323,9 @@ run_host_test display_brightness_arbiter_test \
     -std=c++17 -Wall -Wextra -Werror -Imain \
     tests/display_brightness_arbiter_test.cpp \
     main/runtime/display/display_protection_logic.cpp
+run_host_test screen_off_runtime_policy_test \
+    -std=c++17 -Wall -Wextra -Werror -Imain \
+    tests/screen_off_runtime_policy_test.cpp
 
 stage "External power tracker host test"
 run_host_test external_power_state_test \

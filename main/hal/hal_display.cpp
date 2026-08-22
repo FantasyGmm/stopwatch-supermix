@@ -5,6 +5,7 @@
  */
 #include "hal.h"
 #include "utils/settings/settings.h"
+#include <runtime/power/screen_off_runtime_policy.h>
 #include <mooncake_log.h>
 #include <M5GFX.h>
 #include <lgfx/v1/panel/Panel_AMOLED.hpp>
@@ -324,6 +325,7 @@ bool Hal::touchInputSuppressed() const
 
 static SemaphoreHandle_t xGuiSemaphore;
 static std::atomic<bool> _lvgl_update_enabled = false;
+static std::atomic<bool> _lvgl_screen_off_mode = false;
 
 #define LV_BUFFER_LINE 120
 
@@ -341,7 +343,9 @@ static void lvgl_rtos_task(void *pvParameter)
             lv_timer_handler();
             xSemaphoreGive(xGuiSemaphore);
         }
-        vTaskDelay(pdMS_TO_TICKS(10));
+        const uint32_t period_ms =
+            lvgl_runtime_period_ms(_lvgl_screen_off_mode.load());
+        vTaskDelay(pdMS_TO_TICKS(period_ms));
     }
 }
 
@@ -467,4 +471,9 @@ void Hal::startLvglUpdate()
 void Hal::stopLvglUpdate()
 {
     _lvgl_update_enabled = false;
+}
+
+void Hal::setLvglScreenOffMode(bool screen_off)
+{
+    _lvgl_screen_off_mode = screen_off;
 }

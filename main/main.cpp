@@ -13,6 +13,7 @@
 #include <runtime/service_runtime.h>
 #include <runtime/runtime_supervisor.h>
 #include <runtime/display/global_display_protection_service.h>
+#include <runtime/power/screen_off_runtime_policy.h>
 #include <sdkconfig.h>
 #if CONFIG_STOPWATCH_DEBUG_COMMANDS
 #include <debug/debug_command_service.h>
@@ -86,5 +87,11 @@ extern "C" void app_main(void)
         GetGlobalDisplayProtectionService().applyPendingHardwareUpdate();
         GetGlobalEdgeControlService().applyPendingHardwareUpdate();
         GetMooncake().update();
+        const uint32_t loop_delay_ms = screen_off_main_loop_delay_ms(
+            GetGlobalDisplayProtectionService().state() ==
+            DisplayProtectionState::ScreenOff);
+        if (loop_delay_ms != 0) {
+            GetHAL().delay(loop_delay_ms);
+        }
     }
 }

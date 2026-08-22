@@ -185,6 +185,7 @@ void GlobalDisplayProtectionService::shutdown()
     _last_touch_state = LV_INDEV_STATE_REL;
     _last_buttons = {};
     _initialized = false;
+    GetHAL().setLvglScreenOffMode(false);
 }
 
 void GlobalDisplayProtectionService::setKeepAwake(DisplayKeepAwakeReason reason,
@@ -323,6 +324,7 @@ void GlobalDisplayProtectionService::acceptDecision(
     }
     switch (decision.action) {
         case DisplayProtectionAction::Restore:
+            GetHAL().setLvglScreenOffMode(false);
             syncUserBrightness();
             if (restore_display) {
                 _pending_brightness =
@@ -331,9 +333,11 @@ void GlobalDisplayProtectionService::acceptDecision(
             }
             break;
         case DisplayProtectionAction::Dim:
+            GetHAL().setLvglScreenOffMode(false);
             _pending_brightness = _brightness_arbiter.effectiveBrightness();
             break;
         case DisplayProtectionAction::ScreenOff:
+            GetHAL().setLvglScreenOffMode(true);
             GetHAL().armTouchWakeInput();
             _touch_gate_release_pending = false;
             _pending_brightness = _brightness_arbiter.effectiveBrightness();

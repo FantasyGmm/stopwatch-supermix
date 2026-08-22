@@ -376,6 +376,7 @@ void AppCodexStatus::onOpen()
     _screen_off =
         GetGlobalDisplayProtectionService().snapshot().state ==
         DisplayProtectionState::ScreenOff;
+    _screen_off_runtime_cadence = {};
     _trae_stale = false;
     _suppress_task_navigation = false;
     {
@@ -471,6 +472,9 @@ void AppCodexStatus::onOpen()
     {
         LvglLockGuard lock;
         create_view();
+        if (_screen_off && _pet_timer != nullptr) {
+            lv_timer_pause(_pet_timer);
+        }
     }
 
     if (_transport_mode != "wifi") {
@@ -513,10 +517,20 @@ void AppCodexStatus::onRunning()
     const uint32_t now = GetHAL().millis();
     GetHAL().updateButtonStates();
     update_screen_off_control(now);
+    const DisplayProtectionState display_state =
+        GetGlobalDisplayProtectionService().snapshot().state;
     const bool woke_screen =
-        _screen_off &&
-        GetGlobalDisplayProtectionService().snapshot().state !=
-            DisplayProtectionState::ScreenOff;
+        _screen_off && display_state != DisplayProtectionState::ScreenOff;
+    const bool display_is_off =
+        display_state == DisplayProtectionState::ScreenOff;
+    if (_screen_off != display_is_off) {
+        LvglLockGuard lock;
+        sync_display_protection_presentation();
+    }
+    if (!_screen_off_runtime_cadence.background_work_due(
+            _screen_off, now)) {
+        return;
+    }
     const bool left_pressed = GetHAL().btnA.isPressed();
     const bool right_pressed = GetHAL().btnB.isPressed();
     input::KeyEvent key_event = input::KeyEvent::None;
@@ -563,9 +577,8 @@ void AppCodexStatus::onRunning()
         return;
     }
 
-    {
+    if (!_screen_off) {
         LvglLockGuard lock;
-        sync_display_protection_presentation();
         if (_agent_panel_dirty) {
             render_agent_panel();
             _agent_panel_dirty = false;
@@ -774,8 +787,10 @@ void AppCodexStatus::onRunning()
             _ble_was_connected = true;
             set_status("BLE WAIT", kTextDim);
             set_host_text(_ble_name.c_str());
-            LvglLockGuard lock;
-            render_trae_status();
+            if (!_screen_off) {
+                LvglLockGuard lock;
+                render_trae_status();
+            }
         } else if (!ble_connected && _ble_was_connected) {
             _production_voice_ready = false;
             _production_voice_capabilities = 0;
@@ -797,8 +812,10 @@ void AppCodexStatus::onRunning()
             _ble_wait_started_ms = now;
             set_status("BLE PAIR", kTextDim);
             set_host_text(_ble_name.c_str());
-            LvglLockGuard lock;
-            render_trae_status();
+            if (!_screen_off) {
+                LvglLockGuard lock;
+                render_trae_status();
+            }
         }
 
         if (ble_connected && _last_status_payload_ms != 0 &&
@@ -823,7 +840,7 @@ void AppCodexStatus::onRunning()
         }
     }
 
-    if (now - _last_battery_ms >= 1000) {
+    if (!_screen_off && now - _last_battery_ms >= 1000) {
         _last_battery_ms = now;
         LvglLockGuard lock;
         update_battery();
@@ -842,7 +859,7 @@ void AppCodexStatus::onRunning()
                 *_voice_input);
         }
     }
-    {
+    if (!_screen_off) {
         LvglLockGuard lock;
         render_pinned_microphone();
         if (_task_focus_view != nullptr) {
@@ -854,7 +871,9 @@ void AppCodexStatus::onRunning()
         }
     }
     sync_task_voice_readiness();
-    render_status();
+    if (!_screen_off) {
+        render_status();
+    }
 }
 
 void AppCodexStatus::onClose()
@@ -1606,7 +1625,9 @@ void AppCodexStatus::set_status(const char* status, uint32_t color)
         _base_status_color = color;
         _base_status_is_error = color == kCodexRed;
     }
-    render_status();
+    if (!_screen_off) {
+        render_status();
+    }
 }
 
 void AppCodexStatus::render_status()
@@ -4634,6 +4655,13 @@ void AppCodexStatus::sync_display_protection_presentation()
     cancel_task_focus_touch();
     _last_page_touch_state = LV_INDEV_STATE_REL;
     sync_pending_glow();
+    if (_pet_timer != nullptr) {
+        if (_screen_off) {
+            lv_timer_pause(_pet_timer);
+        } else {
+            lv_timer_resume(_pet_timer);
+        }
+    }
     if (_trae_status_page != nullptr) {
         _trae_status_page->set_active(_current_page == 2 && !_screen_off);
     }

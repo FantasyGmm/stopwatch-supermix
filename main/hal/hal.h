@@ -204,6 +204,7 @@ public:
     void lvglUnlock();
     void startLvglUpdate();
     void stopLvglUpdate();
+    void setLvglScreenOffMode(bool screen_off);
 
     /* ---------------------------------- Touch --------------------------------- */
     struct TouchPoint {

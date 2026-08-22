@@ -50,6 +50,7 @@ EXPECTED_HOST_TESTS = (
     "display_protection_logic_test",
     "display_protection_diagnostics_test",
     "display_brightness_arbiter_test",
+    "screen_off_runtime_policy_test",
     "external_power_state_test",
     "display_protection_settings_model_test",
     "button_input_gate_test",

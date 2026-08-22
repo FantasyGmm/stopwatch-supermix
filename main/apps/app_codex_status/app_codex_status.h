@@ -36,6 +36,7 @@
 #include "pinned_microphone_controller.h"
 #include "voice_input_controller.h"
 #include "runtime/services/shared_wifi_service.h"
+#include "runtime/power/screen_off_runtime_policy.h"
 
 class CodexBleTransport;
 class BleVoiceProbeController;
@@ -130,6 +131,7 @@ private:
     lv_timer_t* _pet_timer       = nullptr;
     esp_websocket_client_handle_t _ws_client = nullptr;
     CodexRuntimeSession _runtime_session;
+    ScreenOffRuntimeCadence _screen_off_runtime_cadence;
     CodexBleTransport* _ble_transport = nullptr;
     BleVoiceProbeController* _voice_probe = nullptr;
     VoiceInputController* _voice_input = nullptr;
