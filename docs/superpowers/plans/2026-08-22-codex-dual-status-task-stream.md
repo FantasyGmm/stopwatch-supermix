@@ -136,8 +136,11 @@
   Give the visible deck handle a centered 100 × 48 px invisible touch target.
   Only a downward gesture that starts in that target may move and dismiss the
   whole deck; task-content drags remain browse-only at every list boundary.
-  Require release on the physical bottom row (`y = 465`) before dismissing;
-  any earlier release animates back to the fully open position.
+  Auto-dismiss as soon as the deck reaches `y = 326`, approximately 70% of its
+  466 px travel. Crossing that threshold latches the close and animates the
+  remaining travel immediately; release cannot reopen it. Before the threshold,
+  release animates back to the fully open position. Handle dismissal works from
+  every focused task, not only the first item.
 
 - [ ] **Step 6: Run the task-focus layout and firmware contract tests**
 

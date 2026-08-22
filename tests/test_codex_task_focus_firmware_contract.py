@@ -52,16 +52,28 @@ class CodexTaskFocusFirmwareContractTests(unittest.TestCase):
         self.assertIn("CodexTaskFocusEvent::StateBoundaryCrossed", self.source)
         self.assertIn("GetHAL().vibrate", self.source)
         self.assertIn("_task_deck_started_on_handle", self.source)
-        self.assertIn("should_dismiss_task_deck", self.source)
+        self.assertIn("_task_deck_auto_dismiss_latched", self.header)
+        self.assertIn("should_auto_dismiss_task_deck", self.source)
         self.assertIn(
-            "kTaskDeckDismissReleaseY   = kTaskDeckHiddenY - 1",
+            "kTaskDeckAutoDismissY      = 326",
             self.source,
         )
-        dismiss = self.source.split("should_dismiss_task_deck(", 1)[1]
+        dismiss = self.source.split("should_auto_dismiss_task_deck(", 1)[1]
         dismiss = dismiss.split(");", 1)[0]
-        self.assertIn("point.y", dismiss)
-        self.assertIn("kTaskDeckDismissReleaseY", dismiss)
+        self.assertIn("drag_offset", dismiss)
+        self.assertIn("kTaskDeckAutoDismissY", dismiss)
+        self.assertNotIn("point.y", dismiss)
         self.assertNotIn("kTaskSwipeThreshold", dismiss)
+        pressed = self.source.split(
+            "if (state == LV_INDEV_STATE_PR)", 1
+        )[1].split(
+            "else if (_last_task_touch_state == LV_INDEV_STATE_PR)", 1
+        )[0]
+        self.assertIn("should_auto_dismiss_task_deck", pressed)
+        released = self.source.split(
+            "else if (_last_task_touch_state == LV_INDEV_STATE_PR)", 1
+        )[1].split("cancel_task_focus_touch();", 1)[0]
+        self.assertNotIn("should_auto_dismiss_task_deck", released)
         selection = self.source.split("_task_focus_deck.select_focused()", 1)[1]
         self.assertLess(selection.index("sync_task_voice_route"),
                         selection.index("render_task_focus_detail"))
@@ -83,7 +95,10 @@ class CodexTaskFocusFirmwareContractTests(unittest.TestCase):
         running = self.source.split(
             "const bool agent_panel_available =", 1
         )[1].split("bool alert_changed", 1)[0]
-        self.assertIn("if (agent_panel_available)", running)
+        self.assertIn(
+            "if (agent_panel_available && !consume_auto_dismiss_touch)",
+            running,
+        )
         self.assertIn("update_agent_panel_touch(now)", running)
 
     def test_voice_is_available_across_codex_pages_and_lifecycle_fails_closed(self):

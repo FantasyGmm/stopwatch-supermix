@@ -67,7 +67,7 @@ constexpr int kAgentPanelVisibleY        = 0;
 constexpr int kTaskSwipeThreshold        = 36;
 constexpr int kTaskTapTolerance          = 12;
 constexpr int kTaskDeckHiddenY           = 466;
-constexpr int kTaskDeckDismissReleaseY   = kTaskDeckHiddenY - 1;
+constexpr int kTaskDeckAutoDismissY      = 326;
 
 int64_t current_unix_milliseconds()
 {
@@ -573,12 +573,28 @@ void AppCodexStatus::onRunning()
         update_agent_panel_runtime(now);
         const CodexTaskFocusMode task_mode =
             snapshot_task_focus_state().mode;
+        bool consume_auto_dismiss_touch = false;
+        if (_task_deck_auto_dismiss_latched) {
+            lv_indev_t* indev = GetHAL().lvTouchpad;
+            if (indev == nullptr ||
+                lv_indev_get_state(indev) == LV_INDEV_STATE_REL) {
+                _task_deck_auto_dismiss_latched = false;
+            } else {
+                consume_auto_dismiss_touch = true;
+            }
+        }
         const bool agent_panel_available =
             sync_agent_panel_for_task_mode(task_mode);
-        if (agent_panel_available) {
+        if (agent_panel_available && !consume_auto_dismiss_touch) {
             update_agent_panel_touch(now);
         }
-        if (agent_panel_available && _agent_panel_model.owns_touch()) {
+        if (consume_auto_dismiss_touch) {
+            _agent_panel_model.cancel_touch();
+            cancel_task_focus_touch();
+            _page_swipe.cancel();
+            _trae_card_tap.cancel();
+            _last_page_touch_state = LV_INDEV_STATE_REL;
+        } else if (agent_panel_available && _agent_panel_model.owns_touch()) {
             cancel_task_focus_touch();
             _page_swipe.cancel();
             _trae_card_tap.cancel();
@@ -4136,6 +4152,7 @@ void AppCodexStatus::open_task_deck()
     }
     _page_swipe.cancel();
     _trae_card_tap.cancel();
+    _task_deck_auto_dismiss_latched = false;
     _last_page_touch_state = LV_INDEV_STATE_REL;
     {
         std::lock_guard<std::mutex> task_lock(_task_state_mutex);
@@ -4286,10 +4303,33 @@ void AppCodexStatus::update_task_focus_touch(uint32_t now_ms)
                         _task_deck_drag_active = true;
                         sync_pending_glow();
                     }
-                    set_task_focus_y(
+                    const int drag_offset =
                         codex_task_focus_gesture::
                             task_deck_handle_drag_offset(
-                                total_dy, kTaskDeckHiddenY));
+                                total_dy, kTaskDeckHiddenY);
+                    set_task_focus_y(drag_offset);
+                    if (codex_task_focus_gesture::
+                            should_auto_dismiss_task_deck(
+                                total_dx,
+                                total_dy,
+                                _task_touch_axis,
+                                true,
+                                drag_offset,
+                                kTaskDeckAutoDismissY)) {
+                        _task_deck_auto_dismiss_latched = true;
+                        {
+                            std::lock_guard<std::mutex> task_lock(
+                                _task_state_mutex);
+                            _task_focus_mode =
+                                CodexTaskFocusMode::Status;
+                        }
+                        sync_task_edge_exclusion(
+                            CodexTaskFocusMode::Status);
+                        sync_task_voice_readiness();
+                        settle_task_deck_entry(false, true);
+                        cancel_task_focus_touch();
+                        return;
+                    }
                 } else {
                     const TaskFocusStateSnapshot task =
                         snapshot_task_focus_state();
@@ -4325,27 +4365,7 @@ void AppCodexStatus::update_task_focus_touch(uint32_t now_ms)
             kTaskTapTolerance);
         if (task_mode == CodexTaskFocusMode::TaskDeck &&
             _task_deck_started_on_handle) {
-            const bool at_first =
-                snapshot_task_focus_state().deck.focused_index() == 0;
-            const bool dismiss =
-                codex_task_focus_gesture::should_dismiss_task_deck(
-                    total_dx,
-                    total_dy,
-                    _task_touch_axis,
-                    true,
-                    at_first,
-                    point.y,
-                    kTaskDeckDismissReleaseY);
-            if (dismiss) {
-                {
-                    std::lock_guard<std::mutex> task_lock(
-                        _task_state_mutex);
-                    _task_focus_mode = CodexTaskFocusMode::Status;
-                }
-                sync_task_edge_exclusion(CodexTaskFocusMode::Status);
-                sync_task_voice_readiness();
-                settle_task_deck_entry(false, true);
-            } else if (_task_deck_drag_active) {
+            if (_task_deck_drag_active) {
                 settle_task_deck_entry(true, true);
             }
             cancel_task_focus_touch();

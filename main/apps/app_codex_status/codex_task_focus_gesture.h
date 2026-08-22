@@ -90,21 +90,19 @@ inline int task_deck_handle_drag_offset(int total_dy, int limit)
 }
 
 
-inline bool should_dismiss_task_deck(
+inline bool should_auto_dismiss_task_deck(
     int total_dx,
     int total_dy,
     TaskFocusGestureAxis axis,
     bool started_on_handle,
-    bool at_first,
-    int release_y,
-    int completion_y
+    int drag_offset,
+    int dismiss_offset
 )
 {
     return started_on_handle &&
-        at_first &&
         axis == TaskFocusGestureAxis::Vertical &&
         total_dy > 0 &&
-        release_y >= completion_y &&
+        drag_offset >= dismiss_offset &&
         std::abs(total_dy) >= std::abs(total_dx);
 }
 

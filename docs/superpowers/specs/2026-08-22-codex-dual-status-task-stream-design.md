@@ -132,6 +132,20 @@ of radius 221 px centered at `(233, 233)`.
 | disconnected | cached rows at 60% opacity | handle stays full opacity | voice disabled |
 | mixed pending/running | ordered text stream | semantic dots | boundary haptic preserved |
 
+## Handle dismissal contract
+
+- Only a vertical drag that begins inside the handle's `100 × 48` touch target
+  may dismiss the task deck. Content drags remain browse-only.
+- The deck follows the finger until its vertical offset reaches `326 px`, about
+  70% of the `466 px` close travel.
+- Reaching the threshold immediately latches and animates the deck closed. The
+  implementation must not wait for release, and the same touch must be consumed
+  until release so it cannot open another surface underneath.
+- Releasing below `326 px` returns the deck to the open position. Once latched,
+  releasing or moving back upward cannot reopen it.
+- The handle owns this behavior at every focused task index; closing does not
+  require the first task to be focused.
+
 ## Fidelity gate
 
 Host tests must prove neighbor selection, boundary behavior, round-safe geometry,
@@ -153,8 +167,10 @@ handle, and detail view against the approved browser reference.
   font scaled to roughly 27 px; the approved implementation uses native raster
   sizes and introduces no duplicate full CJK font asset.
 - **Behavior preservation:** route selection, encrypted detail, PTT routing,
-  pending/running ordering, haptics, and page ownership are unchanged except
-  for the explicit same-route Completed voice-continuity case above.
+  pending/running ordering, haptics, and page ownership are unchanged. The
+  handle-only close now intentionally auto-latches at 70% travel, while task
+  content remains browse-only and the triggering touch is consumed through
+  release.
 - **Ambiguity check:** the approved choice is option A. The later physical
   comparison locked the option-A palette, compact neutral position nodes, and
   separator edge fades explicitly; no remaining visual decision changes

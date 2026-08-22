@@ -209,16 +209,16 @@ void assert_pull_handle_and_native_cjk_type_contract()
 
     const auto vertical = update_axis(
         TaskFocusGestureAxis::Undecided, 4, 48, 12);
-    assert(should_dismiss_task_deck(
-        4, 441, vertical, true, true, 465, 465));
-    assert(!should_dismiss_task_deck(
-        4, 440, vertical, true, true, 464, 465));
-    assert(!should_dismiss_task_deck(
-        4, 441, vertical, false, true, 465, 465));
-    assert(!should_dismiss_task_deck(
-        4, 441, vertical, true, false, 465, 465));
-    assert(!should_dismiss_task_deck(
-        4, -24, vertical, true, true, 465, 465));
+    assert(should_auto_dismiss_task_deck(
+        4, 326, vertical, true, 326, 326));
+    assert(!should_auto_dismiss_task_deck(
+        4, 325, vertical, true, 325, 326));
+    assert(!should_auto_dismiss_task_deck(
+        4, 326, vertical, false, 326, 326));
+    assert(!should_auto_dismiss_task_deck(
+        400, 326, vertical, true, 326, 326));
+    assert(!should_auto_dismiss_task_deck(
+        4, -24, vertical, true, 0, 326));
     assert(task_deck_handle_drag_offset(48, 466) == 48);
     assert(task_deck_handle_drag_offset(-48, 466) == 0);
     assert(task_deck_handle_drag_offset(500, 466) == 466);

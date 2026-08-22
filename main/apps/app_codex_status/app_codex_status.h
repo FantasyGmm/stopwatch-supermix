@@ -168,6 +168,7 @@ private:
     int _task_touch_last_y = 0;
     bool _task_touch_moved = false;
     bool _task_deck_drag_active = false;
+    bool _task_deck_auto_dismiss_latched = false;
     bool _task_deck_started_on_handle = false;
     bool _task_detail_started_at_top = false;
     codex_task_focus_gesture::TaskFocusGestureAxis _task_touch_axis =
