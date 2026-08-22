@@ -30,15 +30,21 @@ int main()
     static_assert(kFullCycleMs == 1600);
     static_assert(kPanelSize == 466);
     static_assert(kRings.size() == 3);
+    static_assert(kRingPhaseStep == 32);
 
     assert(opacity_for_phase(-1, 102, 255) == 102);
     assert(opacity_for_phase(0, 102, 255) == 102);
     assert(opacity_for_phase(128, 102, 255) > 102);
     assert(opacity_for_phase(255, 102, 255) == 255);
     assert(opacity_for_phase(300, 102, 255) == 255);
-    assert(static_ring_opacity(102, 255) == 178);
-    assert(static_ring_opacity(51, 153) == 102);
-    assert(static_ring_opacity(25, 76) == 50);
+    assert(ring_phase_bucket(0) == 0);
+    assert(ring_phase_bucket(31) == 0);
+    assert(ring_phase_bucket(32) == 1);
+    assert(ring_phase_bucket(255) == 7);
+    assert(ring_redraw_desired(-1, 0, true));
+    assert(!ring_redraw_desired(0, 31, true));
+    assert(ring_redraw_desired(0, 32, true));
+    assert(!ring_redraw_desired(0, 32, false));
 
     assert(kRings[0].minimum_opacity > kRings[1].minimum_opacity);
     assert(kRings[1].minimum_opacity > kRings[2].minimum_opacity);

@@ -160,6 +160,14 @@ void CodexPendingSoftGlow::apply_phase(int32_t phase)
     if (active_count != nullptr) {
         lv_obj_set_style_opa(active_count, active_opacity, 0);
     }
+    if (codex_pending_glow::ring_redraw_desired(
+            _last_ring_phase_bucket,
+            _phase,
+            _ring_visible)) {
+        _last_ring_phase_bucket =
+            codex_pending_glow::ring_phase_bucket(_phase);
+        invalidate_ring_segments();
+    }
 }
 
 void CodexPendingSoftGlow::restore_target_opacity()
@@ -186,12 +194,33 @@ void CodexPendingSoftGlow::refresh_ring_visibility()
         lv_obj_remove_flag(_overlay, LV_OBJ_FLAG_HIDDEN);
     } else {
         lv_obj_add_flag(_overlay, LV_OBJ_FLAG_HIDDEN);
+        _last_ring_phase_bucket = -1;
+    }
+}
+
+void CodexPendingSoftGlow::invalidate_ring_segments()
+{
+    if (_overlay == nullptr) {
+        return;
+    }
+
+    lv_area_t coords;
+    lv_obj_get_coords(_overlay, &coords);
+    for (const auto& segment : codex_pending_glow::kInvalidationAreas) {
+        lv_area_t area = {
+            static_cast<lv_coord_t>(coords.x1 + segment.x1),
+            static_cast<lv_coord_t>(coords.y1 + segment.y1),
+            static_cast<lv_coord_t>(coords.x1 + segment.x2),
+            static_cast<lv_coord_t>(coords.y1 + segment.y2),
+        };
+        lv_obj_invalidate_area(_overlay, &area);
     }
 }
 
 void CodexPendingSoftGlow::start()
 {
     _active = true;
+    _last_ring_phase_bucket = -1;
     refresh_ring_visibility();
     restore_target_opacity();
     apply_phase(0);
@@ -216,6 +245,7 @@ void CodexPendingSoftGlow::stop()
         lv_obj_add_flag(_overlay, LV_OBJ_FLAG_HIDDEN);
     }
     restore_target_opacity();
+    _last_ring_phase_bucket = -1;
     _active = false;
 }
 
@@ -250,7 +280,8 @@ void CodexPendingSoftGlow::draw_event_cb(lv_event_t* event)
     lv_layer_t* layer = lv_event_get_layer(event);
     for (const auto& ring : codex_pending_glow::kRings) {
         const lv_opa_t opacity = static_cast<lv_opa_t>(
-            codex_pending_glow::static_ring_opacity(
+            codex_pending_glow::opacity_for_phase(
+                self->_phase,
                 ring.minimum_opacity,
                 ring.maximum_opacity
             )

@@ -10,6 +10,7 @@ namespace codex_pending_glow {
 constexpr int kPanelSize = 466;
 constexpr int kHalfCycleMs = 800;
 constexpr int kFullCycleMs = kHalfCycleMs * 2;
+constexpr int kRingPhaseStep = 32;
 
 struct RingGeometry {
     int inset;
@@ -19,10 +20,32 @@ struct RingGeometry {
     uint8_t maximum_opacity;
 };
 
+struct EdgeArea {
+    int x1;
+    int y1;
+    int x2;
+    int y2;
+};
+
 inline constexpr std::array<RingGeometry, 3> kRings{{
     {1, 464, 2, 102, 255},
     {5, 456, 4, 51, 153},
     {11, 444, 6, 25, 76},
+}};
+
+inline constexpr std::array<EdgeArea, 12> kInvalidationAreas{{
+    {414, 230, 465, 351},
+    {336, 336, 437, 437},
+    {230, 414, 351, 465},
+    {114, 414, 235, 465},
+    {28, 336, 129, 437},
+    {0, 230, 51, 351},
+    {0, 114, 51, 235},
+    {28, 28, 129, 129},
+    {113, 0, 235, 51},
+    {230, 0, 351, 51},
+    {336, 28, 437, 129},
+    {414, 113, 465, 235},
 }};
 
 enum class Transition {
@@ -48,11 +71,17 @@ constexpr uint8_t opacity_for_phase(
     );
 }
 
-constexpr uint8_t static_ring_opacity(uint8_t minimum, uint8_t maximum)
+constexpr int ring_phase_bucket(int32_t phase)
 {
-    return static_cast<uint8_t>(
-        minimum + (static_cast<uint16_t>(maximum) - minimum) / 2
-    );
+    return bounded_phase(phase) / kRingPhaseStep;
+}
+
+constexpr bool ring_redraw_desired(
+    int previous_bucket,
+    int32_t phase,
+    bool ring_visible)
+{
+    return ring_visible && previous_bucket != ring_phase_bucket(phase);
 }
 
 constexpr bool pulse_desired(

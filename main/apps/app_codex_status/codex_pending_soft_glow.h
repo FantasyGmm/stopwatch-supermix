@@ -33,12 +33,14 @@ private:
     lv_obj_t* _running_count = nullptr;
     CodexTaskState _state = CodexTaskState::Completed;
     int32_t _phase = 0;
+    int _last_ring_phase_bucket = -1;
     bool _active = false;
     bool _ring_visible = false;
 
     void apply_phase(int32_t phase);
     void restore_target_opacity();
     void refresh_ring_visibility();
+    void invalidate_ring_segments();
     void start();
     void stop();
     static void animation_cb(void* target, int32_t phase);
