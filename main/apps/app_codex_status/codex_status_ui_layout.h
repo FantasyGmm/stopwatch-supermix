@@ -29,14 +29,14 @@ constexpr int kBrandX = 218;
 constexpr int kBrandY = 32;
 constexpr int kStatusY = 63;
 
-constexpr int kPetX = 73;
+constexpr int kPetX = 55;
 constexpr int kPetY = 88;
-constexpr int kPetWidth = 110;
-constexpr int kPetHeight = 120;
-constexpr int kPetScale = 293;
-constexpr Rect kBeaconSpine{194, 96, 2, 104};
+constexpr int kPetWidth = 144;
+constexpr int kPetHeight = 156;
+constexpr int kPetScale = 384;
+constexpr Rect kBeaconSpine{210, 96, 2, 120};
 
-constexpr int kTelemetryX = 214;
+constexpr int kTelemetryX = 231;
 constexpr int kTelemetryWidth = 200;
 constexpr int kModelCaptionY = 98;
 constexpr int kModelValueY = 120;
@@ -50,29 +50,29 @@ constexpr int kQuotaBarX = 101;
 constexpr int kQuotaBarWidth = 248;
 constexpr int kQuotaPercentX = 351;
 constexpr int kQuotaPercentWidth = 60;
-constexpr int kWeekY = 220;
+constexpr int kWeekY = 246;
 
 constexpr int kAlertDividerX = 82;
-constexpr int kAlertDividerY = 258;
+constexpr int kAlertDividerY = 282;
 constexpr int kAlertDividerWidth = 302;
 
 constexpr int kPendingLabelX = 54;
 constexpr int kRunningLabelX = 300;
 constexpr int kPendingCountX = 78;
 constexpr int kRunningCountX = 324;
-constexpr int kStateLabelY = 272;
+constexpr int kStateLabelY = 294;
 constexpr int kStateLabelWidth = 112;
-constexpr int kStateCountY = 298;
+constexpr int kStateCountY = 320;
 constexpr int kStateCountWidth = 64;
 
 constexpr int kTaskIndexX = 151;
-constexpr int kTaskIndexY = 284;
+constexpr int kTaskIndexY = 306;
 constexpr int kTaskIndexWidth = 164;
 constexpr int kAlertProjectX = 145;
-constexpr int kAlertProjectY = 307;
+constexpr int kAlertProjectY = 332;
 constexpr int kAlertProjectWidth = 176;
 constexpr int kAlertDetailX = 93;
-constexpr int kAlertDetailY = 359;
+constexpr int kAlertDetailY = 363;
 constexpr int kAlertDetailWidth = 280;
 constexpr int kAlertDetailHeight = 41;
 constexpr int kPageIndicatorY = 416;
