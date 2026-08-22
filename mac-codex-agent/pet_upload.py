@@ -56,6 +56,7 @@ class PetWatchState:
     generation: int
     active_hash: bytes
     usable: bool
+    operation_active: bool = False
 
 
 @dataclasses.dataclass(frozen=True)

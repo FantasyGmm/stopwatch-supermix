@@ -211,25 +211,28 @@ class TraeStatusFirmwareContractTests(unittest.TestCase):
             self.assertIn(f"&{name}", source)
 
         for token in (
+            "_pinned_microphone_touch_target",
+            "_pinned_microphone_connection_dot",
+            "_pinned_microphone_connection_label",
             "_pinned_microphone_capsule",
-            "_pinned_microphone_beacon",
             "_pinned_microphone_cup",
             "_pinned_microphone_stem",
             "_pinned_microphone_base",
             "lv_arc_create(_pinned_microphone_page)",
-            "lv_obj_set_size(_pinned_microphone_capsule, 28, 50)",
+            "lv_obj_set_size(_pinned_microphone_touch_target, 194, 194)",
+            "lv_obj_set_pos(_pinned_microphone_touch_target, 136, 126)",
+            "lv_obj_set_size(_pinned_microphone_capsule, 36, 66)",
             "lv_obj_set_size(_pinned_microphone_cup, 62, 62)",
-            "lv_obj_set_size(_pinned_microphone_beacon, 112, 112)",
-            "lv_obj_set_pos(_pinned_microphone_beacon, 177, 116)",
-            '"CODEX",\n        37,\n        &lv_font_montserrat_14',
-            '"固定麦克风",\n        69,\n        &PinnedMicTitle24',
-            "lv_obj_set_style_bg_opa(_pinned_microphone_beacon, LV_OPA_TRANSP, 0)",
-            "lv_color_hex(kPanelGraphite),\n        LV_PART_INDICATOR",
+            '"固定麦克风",\n        48,\n        &PinnedMicTitle24',
+            '"已连接到 Mac",\n        84,\n        &font_puhui_14_1',
+            '"轻触开启",\n        333,\n        &PinnedMicState22',
+            "lv_obj_set_style_bg_opa(\n        _pinned_microphone_touch_target, LV_OPA_TRANSP, 0)",
             "_page_dot_pinned_microphone = make_page_dot(_panel, 213)",
             "_page_dot_codex = make_page_dot(_panel, 229)",
             "_page_dot_trae = make_page_dot(_panel, 245)",
         ):
             self.assertIn(token, header + source)
+        self.assertNotIn("_pinned_microphone_beacon", header + source)
         self.assertNotIn("LV_SYMBOL_AUDIO", source)
 
     def test_status_messages_route_to_independent_models_and_freshness(self):

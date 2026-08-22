@@ -126,15 +126,30 @@ class PetWindowModel:
     def with_watch_state(
         self, watch_state, cached_preview=_UNSET_PREVIEW
     ) -> "PetWindowModel":
-        return dataclasses.replace(
-            self,
-            watch_state=watch_state,
-            cached_preview=(
+        changes = {
+            "watch_state": watch_state,
+            "cached_preview": (
                 self.cached_preview
                 if cached_preview is _UNSET_PREVIEW
                 else cached_preview
             ),
-        )
+        }
+        if (
+            self.active_request_id is None
+            and self.transfer_phase == "busy"
+            and _capability_value(watch_state) == "ready"
+            and getattr(watch_state, "operation_active", False) is False
+        ):
+            changes.update(
+                transfer_phase=None,
+                transfer_error_code="",
+                transfer_required_bytes=0,
+                transfer_available_bytes=0,
+                transfer_detail="",
+                acknowledged_bytes=0,
+                total_bytes=0,
+            )
+        return dataclasses.replace(self, **changes)
 
     def with_snapshot(
         self, snapshot, cached_preview=_UNSET_PREVIEW

@@ -1,8 +1,10 @@
+import fcntl
 import os
 import pathlib
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
@@ -13,14 +15,14 @@ from pet_cache import PetCacheError, PetPreviewCache
 from pet_package import HEIGHT, WIDTH, PetFrame, encode_package
 
 
-def make_package():
+def make_package(duration_ms=120):
     pixels = WIDTH * HEIGHT
     return encode_package(
         WIDTH,
         HEIGHT,
         (0x07E0,),
         1,
-        (PetFrame(120, bytes([0]) * pixels),),
+        (PetFrame(duration_ms, bytes([0]) * pixels),),
     )
 
 
@@ -54,6 +56,386 @@ class PetPreviewCacheTests(unittest.TestCase):
             sorted(path.name for path in package_path.parent.iterdir()),
             ["metadata.json", "package.cxp"],
         )
+
+    def test_repeated_distinct_uploads_keep_eight_verified_packages(self):
+        packages = [make_package(200 + index) for index in range(140)]
+        stored = []
+        rejected = []
+
+        for index, package in enumerate(packages):
+            try:
+                self.cache.store(self.watch_id, package)
+            except PetCacheError:
+                rejected.append(package)
+                continue
+            stored.append(package)
+            entry = self.root / self.watch_id.hex() / package.sha256.hex()
+            os.utime(entry, ns=(index + 1, index + 1))
+
+        watch_path = self.root / self.watch_id.hex()
+        verified_names = {
+            path.name
+            for path in watch_path.iterdir()
+            if len(path.name) == 64 and path.is_dir()
+        }
+        quarantine_names = {
+            path.name
+            for path in watch_path.iterdir()
+            if path.name.startswith(".remove-")
+        }
+
+        self.assertEqual(len(stored), 136)
+        self.assertEqual(len(rejected), 4)
+        self.assertEqual(
+            verified_names,
+            {package.sha256.hex() for package in stored[-8:]},
+        )
+        self.assertEqual(len(quarantine_names), 128)
+        self.assertLessEqual(
+            sum(
+                (
+                    watch_path
+                    / package.sha256.hex()
+                    / "package.cxp"
+                ).stat().st_size
+                for package in stored[-8:]
+            ),
+            2 * 1024 * 1024,
+        )
+        self.assertIsNotNone(
+            self.cache.load(self.watch_id, stored[-1].sha256)
+        )
+        self.assertIsNone(
+            self.cache.load(self.watch_id, rejected[0].sha256)
+        )
+
+    def test_ninth_store_retires_corrupt_package_directory_from_bound(self):
+        packages = [make_package(610 + index) for index in range(8)]
+        for index, package in enumerate(packages):
+            self.cache.store(self.watch_id, package)
+            entry = self.root / self.watch_id.hex() / package.sha256.hex()
+            os.utime(entry, ns=(index + 1, index + 1))
+
+        watch_path = self.root / self.watch_id.hex()
+        corrupt_path = watch_path / packages[0].sha256.hex()
+        (corrupt_path / "metadata.json").write_bytes(b"corrupt")
+        incoming = make_package(700)
+
+        self.cache.store(self.watch_id, incoming)
+
+        package_directories = [
+            path
+            for path in watch_path.iterdir()
+            if len(path.name) == 64 and path.is_dir()
+        ]
+        quarantines = [
+            path
+            for path in watch_path.iterdir()
+            if path.name.startswith(".remove-")
+        ]
+        self.assertEqual(len(package_directories), 8)
+        self.assertFalse(corrupt_path.exists())
+        self.assertIsNotNone(
+            self.cache.load(self.watch_id, incoming.sha256)
+        )
+        self.assertEqual(len(quarantines), 1)
+        self.assertEqual(
+            (quarantines[0] / "package.cxp").stat().st_size,
+            0,
+        )
+        self.assertLessEqual(
+            sum(
+                (path / "package.cxp").stat().st_size
+                for path in package_directories
+            ),
+            2 * 1024 * 1024,
+        )
+
+    def test_interrupted_publication_uses_final_quarantine_slot_before_store(self):
+        packages = [make_package(710 + index) for index in range(7)]
+        for index, package in enumerate(packages):
+            self.cache.store(self.watch_id, package)
+            entry = self.root / self.watch_id.hex() / package.sha256.hex()
+            os.utime(entry, ns=(index + 1, index + 1))
+
+        watch_path = self.root / self.watch_id.hex()
+        for slot in range(127):
+            (watch_path / ".remove-{:02x}.tmp".format(slot)).touch()
+        interrupted = make_package(800)
+        interrupted_name = ".{}-0000000000000000.tmp".format(
+            interrupted.sha256.hex()
+        )
+        interrupted_path = watch_path / interrupted_name
+        interrupted_path.mkdir()
+        (interrupted_path / "package.cxp").write_bytes(interrupted.encoded)
+        incoming = make_package(801)
+
+        self.cache.store(self.watch_id, incoming)
+
+        package_directories = [
+            path
+            for path in watch_path.iterdir()
+            if len(path.name) == 64 and path.is_dir()
+        ]
+        final_quarantine = watch_path / ".remove-7f.tmp"
+        self.assertEqual(len(package_directories), 8)
+        self.assertFalse(interrupted_path.exists())
+        self.assertTrue(final_quarantine.is_dir())
+        self.assertEqual(
+            (final_quarantine / "package.cxp").stat().st_size,
+            0,
+        )
+        self.assertIsNotNone(
+            self.cache.load(self.watch_id, incoming.sha256)
+        )
+
+    def test_store_bounds_enumeration_of_unrelated_watch_siblings(self):
+        watch_path = self.root / self.watch_id.hex()
+        watch_path.mkdir()
+        for index in range(1000):
+            (watch_path / "unrelated-{:04d}".format(index)).touch()
+        watch_inode = watch_path.stat().st_ino
+        real_scandir = os.scandir
+        yielded = 0
+
+        class CountingScandir:
+            def __init__(self, descriptor):
+                self._entries = real_scandir(descriptor)
+                self._count = (
+                    isinstance(descriptor, int)
+                    and os.fstat(descriptor).st_ino == watch_inode
+                )
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                self._entries.close()
+
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                nonlocal yielded
+                entry = next(self._entries)
+                if self._count:
+                    yielded += 1
+                return entry
+
+        with mock.patch(
+            "pet_cache.os.scandir", side_effect=CountingScandir
+        ):
+            with self.assertRaises(PetCacheError):
+                self.cache.store(self.watch_id, self.package)
+
+        self.assertLessEqual(yielded, 137)
+        self.assertFalse(
+            (watch_path / self.package.sha256.hex()).exists()
+        )
+
+    def test_two_cache_instances_serialize_history_reserve_and_publish(self):
+        for index in range(7):
+            package = make_package(300 + index)
+            self.cache.store(self.watch_id, package)
+            entry = self.root / self.watch_id.hex() / package.sha256.hex()
+            os.utime(entry, ns=(index + 1, index + 1))
+
+        packages = (make_package(400), make_package(401))
+        hashes = {package.sha256.hex() for package in packages}
+        caches = (PetPreviewCache(self.root), PetPreviewCache(self.root))
+        publication_barrier = threading.Barrier(2)
+        real_rename = os.rename
+        failures = []
+
+        def synchronize_publications(source, destination, *args, **kwargs):
+            if destination in hashes:
+                try:
+                    publication_barrier.wait(timeout=0.25)
+                except threading.BrokenBarrierError:
+                    pass
+            return real_rename(source, destination, *args, **kwargs)
+
+        def store(cache, package):
+            try:
+                cache.store(self.watch_id, package)
+            except Exception as error:
+                failures.append(error)
+
+        with mock.patch(
+            "pet_cache.os.rename", side_effect=synchronize_publications
+        ):
+            threads = [
+                threading.Thread(target=store, args=pair)
+                for pair in zip(caches, packages)
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=2)
+
+        self.assertTrue(all(not thread.is_alive() for thread in threads))
+        self.assertEqual(failures, [])
+        watch_path = self.root / self.watch_id.hex()
+        verified_names = {
+            path.name
+            for path in watch_path.iterdir()
+            if len(path.name) == 64 and path.is_dir()
+        }
+        self.assertEqual(len(verified_names), 8)
+        self.assertTrue(hashes.issubset(verified_names))
+
+    def test_remove_waits_for_store_transaction_before_quarantining_watch(self):
+        self.cache.store(self.watch_id, self.package)
+        incoming = make_package(450)
+        store_cache = PetPreviewCache(self.root)
+        remove_cache = PetPreviewCache(self.root)
+        store_at_publish = threading.Event()
+        release_store = threading.Event()
+        remove_finished = threading.Event()
+        failures = []
+        real_rename = os.rename
+
+        def pause_publication(source, destination, *args, **kwargs):
+            if destination == incoming.sha256.hex():
+                store_at_publish.set()
+                if not release_store.wait(timeout=2):
+                    raise RuntimeError("store release timed out")
+            return real_rename(source, destination, *args, **kwargs)
+
+        def store():
+            try:
+                store_cache.store(self.watch_id, incoming)
+            except Exception as error:
+                failures.append(error)
+
+        def remove():
+            try:
+                remove_cache.remove_watch(self.watch_id)
+            except Exception as error:
+                failures.append(error)
+            finally:
+                remove_finished.set()
+
+        with mock.patch(
+            "pet_cache.os.rename", side_effect=pause_publication
+        ):
+            store_thread = threading.Thread(target=store)
+            store_thread.start()
+            self.assertTrue(store_at_publish.wait(timeout=1))
+            remove_thread = threading.Thread(target=remove)
+            remove_thread.start()
+            removed_while_store_was_paused = remove_finished.wait(timeout=0.25)
+            release_store.set()
+            store_thread.join(timeout=2)
+            remove_thread.join(timeout=2)
+
+        self.assertFalse(removed_while_store_was_paused)
+        self.assertFalse(store_thread.is_alive())
+        self.assertFalse(remove_thread.is_alive())
+        self.assertEqual(failures, [])
+        self.assertFalse((self.root / self.watch_id.hex()).exists())
+
+    def test_unlock_failure_still_closes_transaction_descriptors(self):
+        root_fds = []
+        watch_fds = []
+        real_open_root = self.cache._open_root
+        real_open_watch = self.cache._open_or_create_directory_at
+        real_flock = fcntl.flock
+
+        def record_root(*args, **kwargs):
+            descriptor = real_open_root(*args, **kwargs)
+            root_fds.append(descriptor)
+            return descriptor
+
+        def record_watch(*args, **kwargs):
+            descriptor = real_open_watch(*args, **kwargs)
+            watch_fds.append(descriptor)
+            return descriptor
+
+        def fail_unlock(descriptor, operation):
+            if operation == fcntl.LOCK_UN:
+                raise OSError("injected unlock failure")
+            return real_flock(descriptor, operation)
+
+        try:
+            with mock.patch.object(
+                self.cache, "_open_root", side_effect=record_root
+            ), mock.patch.object(
+                self.cache,
+                "_open_or_create_directory_at",
+                side_effect=record_watch,
+            ), mock.patch(
+                "pet_cache.fcntl.flock", side_effect=fail_unlock
+            ):
+                with self.assertRaises(OSError):
+                    self.cache.store(self.watch_id, self.package)
+
+            self.assertEqual(len(root_fds), 1)
+            self.assertEqual(len(watch_fds), 1)
+            with self.assertRaises(OSError):
+                os.fstat(root_fds[0])
+            with self.assertRaises(OSError):
+                os.fstat(watch_fds[0])
+        finally:
+            for descriptor in root_fds + watch_fds:
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+
+    def test_eviction_rejects_replacement_of_verified_oldest_directory(self):
+        packages = [make_package(500 + index) for index in range(8)]
+        for index, package in enumerate(packages):
+            self.cache.store(self.watch_id, package)
+            entry = self.root / self.watch_id.hex() / package.sha256.hex()
+            os.utime(entry, ns=(index + 1, index + 1))
+
+        watch_path = self.root / self.watch_id.hex()
+        oldest_name = packages[0].sha256.hex()
+        saved_name = "saved-oldest"
+        replacement = watch_path / "replacement"
+        replacement.mkdir()
+        sentinel = replacement / "sentinel"
+        sentinel.write_bytes(b"replacement-sentinel")
+        real_remove = self.cache._remove_bounded_at
+        swapped = False
+
+        def swap_before_removal(parent_fd, name, *args, **kwargs):
+            nonlocal swapped
+            if not swapped and name == oldest_name:
+                os.rename(
+                    name,
+                    saved_name,
+                    src_dir_fd=parent_fd,
+                    dst_dir_fd=parent_fd,
+                )
+                os.rename(
+                    "replacement",
+                    name,
+                    src_dir_fd=parent_fd,
+                    dst_dir_fd=parent_fd,
+                )
+                swapped = True
+            return real_remove(parent_fd, name, *args, **kwargs)
+
+        incoming = make_package(600)
+        with mock.patch.object(
+            self.cache,
+            "_remove_bounded_at",
+            side_effect=swap_before_removal,
+        ):
+            with self.assertRaises(PetCacheError):
+                self.cache.store(self.watch_id, incoming)
+
+        self.assertTrue(swapped, "oldest-entry substitution hook did not fire")
+        self.assertEqual(
+            (watch_path / oldest_name / "sentinel").read_bytes(),
+            b"replacement-sentinel",
+        )
+        self.assertTrue(
+            (watch_path / saved_name / "package.cxp").stat().st_size > 0
+        )
+        self.assertFalse((watch_path / incoming.sha256.hex()).exists())
 
     def test_authoritative_watch_identity_and_hash_gate_reads(self):
         self.cache.store(self.watch_id, self.package)
@@ -107,6 +489,65 @@ class PetPreviewCacheTests(unittest.TestCase):
         self.cache.remove_watch(self.watch_id)
 
         self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep")
+
+    def test_remove_streams_only_through_remaining_node_budget_plus_one(self):
+        watch_path = self.root / self.watch_id.hex()
+        watch_path.mkdir()
+        for index in range(1000):
+            (watch_path / "unrelated-{:04d}".format(index)).touch()
+        watch_inode = watch_path.stat().st_ino
+        real_scandir = os.scandir
+        yielded = 0
+
+        class CountingScandir:
+            def __init__(self, descriptor):
+                self._entries = real_scandir(descriptor)
+                self._count = (
+                    isinstance(descriptor, int)
+                    and os.fstat(descriptor).st_ino == watch_inode
+                )
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                self._entries.close()
+
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                nonlocal yielded
+                entry = next(self._entries)
+                if self._count:
+                    yielded += 1
+                return entry
+
+        with mock.patch(
+            "pet_cache.os.scandir", side_effect=CountingScandir
+        ):
+            with self.assertRaises(PetCacheError):
+                self.cache.remove_watch(self.watch_id)
+
+        self.assertLessEqual(yielded, 128)
+
+    def test_remove_retires_remaining_budget_before_reporting_overflow(self):
+        watch_path = self.root / self.watch_id.hex()
+        watch_path.mkdir()
+        for index in range(128):
+            (watch_path / "leaf-{:03d}".format(index)).write_bytes(b"retire")
+
+        with self.assertRaises(PetCacheError):
+            self.cache.remove_watch(self.watch_id)
+
+        quarantine = next(
+            path
+            for path in self.root.iterdir()
+            if path.name.startswith(".remove-")
+        )
+        sizes = [path.stat().st_size for path in quarantine.iterdir()]
+        self.assertEqual(sizes.count(0), 127)
+        self.assertEqual(sizes.count(len(b"retire")), 1)
 
     def test_symlinked_cache_root_is_never_read_written_or_traversed(self):
         target = self.root / "target"
@@ -325,7 +766,7 @@ if PetPreviewCache(root).load(watch_id, package_hash) is not None:
         watch_inode = watch_path.stat().st_ino
         root_inode = self.root.stat().st_ino
         real_rename = os.rename
-        real_rmdir = os.rmdir
+        real_capture = PetPreviewCache._rename_no_replace_at
         sentinel = self.root / "sentinel"
         sentinel.write_text("keep", encoding="utf-8")
         substituted = False
@@ -349,19 +790,15 @@ if PetPreviewCache(root).load(watch_id, package_hash) is not None:
                 real_rename(replacement, watch_path)
                 substituted = True
 
-        def rename_with_substitution(source, destination, *args, **kwargs):
-            substitute(kwargs.get("src_dir_fd"), source)
-            return real_rename(source, destination, *args, **kwargs)
-
-        def rmdir_with_substitution(name, *args, **kwargs):
-            substitute(kwargs.get("dir_fd"), name)
-            return real_rmdir(name, *args, **kwargs)
+        def capture_with_substitution(parent_fd, source, destination):
+            substitute(parent_fd, source)
+            return real_capture(parent_fd, source, destination)
 
         try:
-            with mock.patch(
-                "pet_cache.os.rename", side_effect=rename_with_substitution
-            ), mock.patch(
-                "pet_cache.os.rmdir", side_effect=rmdir_with_substitution
+            with mock.patch.object(
+                PetPreviewCache,
+                "_rename_no_replace_at",
+                side_effect=capture_with_substitution,
             ):
                 try:
                     self.cache.remove_watch(self.watch_id)
@@ -387,7 +824,7 @@ if PetPreviewCache(root).load(watch_id, package_hash) is not None:
         )
         self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep")
 
-    def test_remove_never_unlinks_a_post_capture_replacement_leaf(self):
+    def test_remove_truncates_a_held_leaf_without_unlinking_replacement(self):
         parent = self.root / "leaf-parent"
         parent.mkdir()
         target = parent / "target"
@@ -399,67 +836,123 @@ if PetPreviewCache(root).load(watch_id, package_hash) is not None:
         saved_name = "saved-original"
         real_rename = os.rename
         real_unlink = os.unlink
+        real_ftruncate = os.ftruncate
         substituted = False
+        unlink_calls = []
 
-        def substitute(parent_fd, name):
+        def truncate_after_substitution(descriptor, length):
             nonlocal substituted
-            if substituted or parent_fd is None or not name.startswith(".remove-"):
-                return
-            try:
-                is_target = (
-                    os.stat(
-                        name, dir_fd=parent_fd, follow_symlinks=False
-                    ).st_ino
-                    == target_inode
+            if not substituted:
+                captured = next(
+                    path
+                    for path in parent.iterdir()
+                    if path.name.startswith(".remove-")
+                    and path.lstat().st_ino == target_inode
                 )
-            except OSError:
-                return
-            if is_target:
-                real_rename(
-                    name,
-                    saved_name,
-                    src_dir_fd=parent_fd,
-                    dst_dir_fd=parent_fd,
-                )
-                real_rename(
-                    "replacement",
-                    name,
-                    src_dir_fd=parent_fd,
-                    dst_dir_fd=parent_fd,
-                )
+                real_rename(captured, parent / saved_name)
+                real_rename(replacement, captured)
                 substituted = True
+            return real_ftruncate(descriptor, length)
 
-        def rename_with_substitution(source, destination, *args, **kwargs):
-            substitute(kwargs.get("src_dir_fd"), source)
-            return real_rename(source, destination, *args, **kwargs)
-
-        def unlink_with_substitution(name, *args, **kwargs):
-            substitute(kwargs.get("dir_fd"), name)
+        def record_unlink(name, *args, **kwargs):
+            unlink_calls.append(name)
             return real_unlink(name, *args, **kwargs)
 
         parent_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY)
         try:
             with mock.patch(
-                "pet_cache.os.rename", side_effect=rename_with_substitution
+                "pet_cache.os.ftruncate",
+                side_effect=truncate_after_substitution,
             ), mock.patch(
-                "pet_cache.os.unlink", side_effect=unlink_with_substitution
+                "pet_cache.os.unlink", side_effect=record_unlink
             ):
-                try:
-                    self.cache._remove_bounded_at(parent_fd, "target")
-                except PetCacheError:
-                    pass
+                self.cache._remove_bounded_at(parent_fd, "target")
         finally:
             os.close(parent_fd)
 
+        self.assertTrue(substituted, "post-capture substitution hook did not fire")
+        self.assertEqual(unlink_calls, [])
         replacement_paths = [
             path
             for path in parent.iterdir()
             if path.lstat().st_ino == replacement_inode
         ]
-        self.assertTrue(substituted, "post-capture substitution hook did not fire")
         self.assertEqual(len(replacement_paths), 1)
         self.assertEqual(
             replacement_paths[0].read_bytes(), b"replacement-sentinel"
+        )
+        self.assertEqual((parent / saved_name).read_bytes(), b"")
+
+    def test_removal_probes_exactly_128_fixed_quarantine_slots(self):
+        parent = self.root / "slot-parent"
+        parent.mkdir()
+        (parent / "target").write_bytes(b"keep")
+        expected_slots = [
+            ".remove-{:02x}.tmp".format(slot) for slot in range(128)
+        ]
+        for name in expected_slots:
+            (parent / name).touch()
+        real_stat = os.stat
+        probed = []
+
+        def count_slot_probe(name, *args, **kwargs):
+            if isinstance(name, str) and name.startswith(".remove-"):
+                probed.append(name)
+            return real_stat(name, *args, **kwargs)
+
+        parent_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            with mock.patch(
+                "pet_cache.os.stat", side_effect=count_slot_probe
+            ):
+                with self.assertRaises(PetCacheError):
+                    self.cache._remove_bounded_at(parent_fd, "target")
+        finally:
+            os.close(parent_fd)
+
+        self.assertEqual(probed, expected_slots)
+        self.assertEqual((parent / "target").read_bytes(), b"keep")
+
+    def test_quarantine_capture_never_clobbers_a_race_created_slot(self):
+        parent = self.root / "race-slot-parent"
+        parent.mkdir()
+        (parent / "target").write_bytes(b"retire")
+        real_exists = PetPreviewCache._entry_exists
+        raced_fd = None
+
+        def create_slot_after_missing_probe(parent_fd, name):
+            nonlocal raced_fd
+            exists = real_exists(parent_fd, name)
+            if name == ".remove-00.tmp" and not exists and raced_fd is None:
+                raced_fd = os.open(
+                    name,
+                    os.O_RDWR | os.O_CREAT | os.O_EXCL,
+                    0o600,
+                    dir_fd=parent_fd,
+                )
+                os.write(raced_fd, b"race-sentinel")
+                os.fsync(raced_fd)
+            return exists
+
+        parent_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            with mock.patch.object(
+                PetPreviewCache,
+                "_entry_exists",
+                side_effect=create_slot_after_missing_probe,
+            ):
+                self.cache._remove_bounded_at(parent_fd, "target")
+            self.assertIsNotNone(raced_fd)
+            self.assertEqual(os.fstat(raced_fd).st_nlink, 1)
+            os.lseek(raced_fd, 0, os.SEEK_SET)
+            self.assertEqual(os.read(raced_fd, 64), b"race-sentinel")
+        finally:
+            if raced_fd is not None:
+                os.close(raced_fd)
+            os.close(parent_fd)
+
+        self.assertEqual(
+            (parent / ".remove-00.tmp").read_bytes(), b"race-sentinel"
         )
 
     def test_repeated_removal_leaves_a_strictly_bounded_quarantine_pool(self):

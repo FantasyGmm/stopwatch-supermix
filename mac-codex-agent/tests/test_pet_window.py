@@ -32,6 +32,7 @@ class PetWatchState:
     generation: int
     active_hash: bytes
     usable: bool
+    operation_active: bool = False
 
 
 @dataclass(frozen=True)
@@ -198,6 +199,57 @@ class PetWindowModelTests(unittest.TestCase):
                 self.assertEqual(model.headline, headline)
                 self.assertEqual(model.can_cancel, can_cancel)
                 self.assertEqual(model.can_send, can_send)
+
+    def test_busy_send_waits_for_the_runtime_to_become_idle(self):
+        # READY only describes transport capability. The runtime's operation
+        # ownership decides whether a terminal busy result may be retired.
+        busy = (
+            PetWindowModel()
+            .with_conversion(CONVERTED)
+            .with_watch_state(READY)
+            .with_transfer_started("request-1", 192)
+            .with_progress(PetProgress("request-1", "error", 0, 192, "busy"))
+        )
+
+        still_busy = busy.with_watch_state(
+            dataclasses.replace(READY, operation_active=True)
+        )
+
+        self.assertEqual(still_busy.transfer_phase, "busy")
+        self.assertFalse(still_busy.can_send)
+
+        refreshed = still_busy.with_watch_state(READY)
+
+        self.assertIsNone(refreshed.transfer_phase)
+        self.assertTrue(refreshed.can_send)
+        self.assertEqual(refreshed.headline, "Ready to send to watch")
+
+    def test_busy_restore_waits_for_the_runtime_to_become_idle(self):
+        # Restore follows the same active-to-idle transition as Send.
+        custom = dataclasses.replace(
+            READY, source="custom", active_hash=CONVERTED.package.sha256
+        )
+        busy = (
+            PetWindowModel()
+            .with_watch_state(custom)
+            .with_transfer_started(
+                "request-1", 0, "applying", transfer_conversion=None
+            )
+            .with_progress(PetProgress("request-1", "error", 0, 0, "busy"))
+        )
+
+        still_busy = busy.with_watch_state(
+            dataclasses.replace(custom, operation_active=True)
+        )
+
+        self.assertEqual(still_busy.transfer_phase, "busy")
+        self.assertFalse(still_busy.can_restore)
+
+        refreshed = still_busy.with_watch_state(custom)
+
+        self.assertIsNone(refreshed.transfer_phase)
+        self.assertTrue(refreshed.can_restore)
+        self.assertEqual(refreshed.headline, "Custom pet installed on watch")
 
     def test_unsupported_watch_disables_send_and_restore(self):
         model = PetWindowModel().with_conversion(CONVERTED).with_watch_state(UNSUPPORTED)

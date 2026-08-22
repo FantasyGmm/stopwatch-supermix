@@ -101,6 +101,7 @@ _VOICE_SECRET_BASE64 = re.compile(
     r"(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{22}==(?=$|[^A-Za-z0-9+/=])"
 )
 _PET_CANCEL_SCHEDULED = object()
+_PET_CACHE_STALE = object()
 
 _VOICE_UNAVAILABLE_REASONS = {
     VoiceState.DRIVER_REQUIRED: DRIVER_REQUIRED,
@@ -522,6 +523,8 @@ class AgentRuntime:
             tuple[_BleSessionContext, _PetRetirement]
         ] = []
         self._pet_retirement_event: Optional[asyncio.Event] = None
+        self._pet_cache_locks_guard = threading.Lock()
+        self._pet_cache_locks = {}
 
     def snapshot(self) -> AgentSnapshot:
         with self._state_lock:
@@ -529,7 +532,14 @@ class AgentRuntime:
 
     def pet_snapshot(self) -> PetWatchState:
         with self._pet_lock:
-            return self._pet_state
+            return dataclasses.replace(
+                self._pet_state,
+                operation_active=(
+                    self._pet_request is not None
+                    or self._pet_cancel_task is not None
+                    or self._pet_cancel_action_task is not None
+                ),
+            )
 
     def pet_preview(self) -> Optional[CachedPreview]:
         """Return only the preview verified for the current watch/hash state."""
@@ -888,6 +898,26 @@ class AgentRuntime:
                 preview if self._preview_matches_state(state, preview) else None
             )
 
+    async def _run_pet_cache_operation(
+        self, watch_id: bytes, generation: int, operation
+    ):
+        with self._pet_cache_locks_guard:
+            cache_lock = self._pet_cache_locks.setdefault(
+                bytes(watch_id), threading.Lock()
+            )
+
+        def run_serialized():
+            with cache_lock:
+                with self._pet_lock:
+                    if self._pet_generation != generation:
+                        return _PET_CACHE_STALE
+                return operation()
+
+        return await _run_in_daemon_thread(
+            run_serialized,
+            cancellation_join_timeout=self._disconnect_timeout,
+        )
+
     def _start_pet_request(
         self,
         request: PetRequest,
@@ -1031,17 +1061,23 @@ class AgentRuntime:
                             request.callback, installed_progress
                         )
                     try:
-                        await _run_in_daemon_thread(
+                        stored = await self._run_pet_cache_operation(
+                            state.watch_id,
+                            generation,
                             lambda: self._pet_cache.store(
                                 state.watch_id, package
-                            )
+                            ),
                         )
-                        preview = await _run_in_daemon_thread(
-                            lambda: self._load_authoritative_pet_preview(
-                                state
+                        if stored is not _PET_CACHE_STALE:
+                            preview = await self._run_pet_cache_operation(
+                                state.watch_id,
+                                generation,
+                                lambda: self._load_authoritative_pet_preview(
+                                    state
+                                ),
                             )
-                        )
-                        self._set_pet_preview_if_current(state, preview)
+                            if preview is not _PET_CACHE_STALE:
+                                self._set_pet_preview_if_current(state, preview)
                     except Exception:
                         LOGGER.warning("Could not store verified pet preview")
             elif request.operation is PetOperation.RESTORE:
@@ -1061,10 +1097,12 @@ class AgentRuntime:
                             request.callback, installed_progress
                         )
                     try:
-                        await _run_in_daemon_thread(
+                        await self._run_pet_cache_operation(
+                            state.watch_id,
+                            generation,
                             lambda: self._pet_cache.remove_watch(
                                 state.watch_id
-                            )
+                            ),
                         )
                     except Exception:
                         LOGGER.warning("Could not remove pet preview cache")
@@ -1272,9 +1310,15 @@ class AgentRuntime:
             LOGGER.warning("Optional pet channel is unavailable: %s", error)
             return
 
-        preview = await _run_in_daemon_thread(
-            lambda: self._load_authoritative_pet_preview(state)
-        )
+        preview = None
+        if self._state_can_have_preview(state):
+            preview = await self._run_pet_cache_operation(
+                state.watch_id,
+                generation,
+                lambda: self._load_authoritative_pet_preview(state),
+            )
+            if preview is _PET_CACHE_STALE:
+                preview = None
 
         with self._pet_lock:
             if (
@@ -2432,7 +2476,9 @@ def _sanitize_voice_setup_detail(detail: str) -> str:
     return (concise or "Driver setup failed")[:120]
 
 
-async def _run_in_daemon_thread(operation):
+async def _run_in_daemon_thread(
+    operation, *, cancellation_join_timeout: float = 0.0
+):
     loop = asyncio.get_running_loop()
     result_future = loop.create_future()
     abandoned = threading.Event()
@@ -2465,11 +2511,25 @@ async def _run_in_daemon_thread(operation):
         daemon=True,
     ).start()
     try:
-        return await result_future
-    except asyncio.CancelledError:
-        abandoned.set()
-        result_future.cancel()
-        raise
+        return await asyncio.shield(result_future)
+    except asyncio.CancelledError as cancel_error:
+        try:
+            if cancellation_join_timeout > 0 and not result_future.done():
+                await asyncio.wait(
+                    (result_future,), timeout=cancellation_join_timeout
+                )
+        except asyncio.CancelledError:
+            pass
+        finally:
+            abandoned.set()
+            if result_future.done():
+                try:
+                    result_future.result()
+                except BaseException:
+                    pass
+            else:
+                result_future.cancel()
+        raise cancel_error
 
 
 async def _await_cancelled(task: asyncio.Task) -> None:

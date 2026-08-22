@@ -2394,7 +2394,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             7,
             0,
             100,
-            BEGIN_BODY.pack(IMA_ADPCM, PUSH_TO_TALK, 16000, 320, TEST_TASK_ROUTE),
+            BEGIN_BODY.pack(IMA_ADPCM, PUSH_TO_TALK, 16000, 320, 0),
             b"12345678",
         )
         factory = FakeTransportFactory(
@@ -2556,7 +2556,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             9,
             0,
             100,
-            BEGIN_BODY.pack(IMA_ADPCM, PUSH_TO_TALK, 16000, 320, TEST_TASK_ROUTE),
+            BEGIN_BODY.pack(IMA_ADPCM, PUSH_TO_TALK, 16000, 320, 0),
             b"abcdefgh",
         )
 
@@ -2905,7 +2905,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             11,
             0,
             100,
-            BEGIN_BODY.pack(IMA_ADPCM, PUSH_TO_TALK, 16000, 320, TEST_TASK_ROUTE),
+            BEGIN_BODY.pack(IMA_ADPCM, PUSH_TO_TALK, 16000, 320, 0),
             b"abcdefgh",
         )
         drain_started = asyncio.Event()
@@ -2996,7 +2996,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             13,
             0,
             100,
-            BEGIN_BODY.pack(IMA_ADPCM, PUSH_TO_TALK, 16000, 320, TEST_TASK_ROUTE),
+            BEGIN_BODY.pack(IMA_ADPCM, PUSH_TO_TALK, 16000, 320, 0),
             b"abcdefgh",
         )
         end = pack_notification(
@@ -3577,6 +3577,45 @@ class AgentRuntimePetTests(unittest.IsolatedAsyncioTestCase):
             b"F" * 16,
             b"\x02" + b"W" * 32,
         )
+
+    def test_pet_snapshot_marks_request_ownership_active(self):
+        runtime = AgentRuntime(collector=FakeCollector(), pet_cache=self.cache)
+        with runtime._pet_lock:
+            runtime._pet_state = PetWatchState(
+                self.credential.watch_id,
+                PetCapability.READY,
+                "built-in",
+                1,
+                1,
+                1,
+                bytes(32),
+                True,
+            )
+            runtime._pet_request = PetRequest(
+                "request-1",
+                PetOperation.UPLOAD,
+                self.package,
+                lambda _progress: None,
+            )
+
+        self.assertTrue(getattr(runtime.pet_snapshot(), "operation_active", False))
+
+    def test_pet_snapshot_marks_cancel_ownership_active(self):
+        runtime = AgentRuntime(collector=FakeCollector(), pet_cache=self.cache)
+        with runtime._pet_lock:
+            runtime._pet_state = PetWatchState(
+                self.credential.watch_id,
+                PetCapability.READY,
+                "built-in",
+                1,
+                1,
+                1,
+                bytes(32),
+                True,
+            )
+            runtime._pet_cancel_task = object()
+
+        self.assertTrue(getattr(runtime.pet_snapshot(), "operation_active", False))
 
     async def test_authenticated_query_publishes_authoritative_watch_state(self):
         created = []
@@ -4495,6 +4534,146 @@ class AgentRuntimePetTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.cache.removed, [self.credential.watch_id])
         self.assertEqual(runtime.pet_snapshot().source, "built-in")
         self.assertEqual(states[-1].phase, "installed")
+
+    async def test_retired_cache_store_cannot_overtake_later_restore(self):
+        store_started = threading.Event()
+        store_finished = threading.Event()
+        release_store = threading.Event()
+        cache_events = []
+
+        class Cache:
+            def store(self, watch_id, package):
+                store_started.set()
+                release_store.wait()
+                cache_events.append(("store", watch_id, package.sha256))
+                store_finished.set()
+
+            def remove_watch(self, watch_id):
+                cache_events.append(("remove", watch_id))
+
+        class OldUploader:
+            async def query(self):
+                return PetWatchState(
+                    watch_id,
+                    PetCapability.READY,
+                    "built-in",
+                    1,
+                    1,
+                    0,
+                    bytes(32),
+                    True,
+                )
+
+            async def upload(self, package, progress, *, request_id=None):
+                return PetWatchState(
+                    watch_id,
+                    PetCapability.READY,
+                    "custom",
+                    1,
+                    1,
+                    1,
+                    package.sha256,
+                    True,
+                )
+
+            async def close(self):
+                pass
+
+        class NewUploader:
+            async def query(self):
+                return PetWatchState(
+                    watch_id,
+                    PetCapability.READY,
+                    "built-in",
+                    1,
+                    1,
+                    1,
+                    bytes(32),
+                    True,
+                )
+
+            async def restore(self, progress, *, request_id=None):
+                return PetWatchState(
+                    watch_id,
+                    PetCapability.READY,
+                    "built-in",
+                    1,
+                    1,
+                    2,
+                    bytes(32),
+                    True,
+                )
+
+            async def close(self):
+                pass
+
+        watch_id = self.credential.watch_id
+        package_hash = self.package.sha256
+        uploaders = iter((OldUploader(), NewUploader()))
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            pet_uploader_factory=lambda *_args, **_kwargs: next(uploaders),
+            pet_cache=Cache(),
+            disconnect_timeout=0.02,
+        )
+        runtime._loop = asyncio.get_running_loop()
+        first = _BleSessionContext(FakeTransport())
+        first.credential = self.credential
+        second = _BleSessionContext(FakeTransport())
+        second.credential = self.credential
+
+        try:
+            await runtime._prepare_pet(first)
+            self.assertTrue(
+                runtime.submit_pet_request(
+                    PetRequest(
+                        "old-upload",
+                        PetOperation.UPLOAD,
+                        self.package,
+                        lambda _progress: None,
+                    )
+                )
+            )
+            self.assertTrue(
+                await asyncio.to_thread(store_started.wait, 1)
+            )
+            await asyncio.wait_for(
+                runtime._retire_pet_uploader(first), 1
+            )
+            await runtime._prepare_pet(second)
+            self.assertTrue(
+                runtime.submit_pet_request(
+                    PetRequest(
+                        "new-restore",
+                        PetOperation.RESTORE,
+                        None,
+                        lambda _progress: None,
+                    )
+                )
+            )
+            await asyncio.sleep(0.05)
+            release_store.set()
+            self.assertTrue(
+                await asyncio.to_thread(store_finished.wait, 1)
+            )
+            for _ in range(100):
+                if runtime._pet_request is None:
+                    break
+                await asyncio.sleep(0.01)
+            self.assertIsNone(runtime._pet_request)
+
+            self.assertEqual(
+                cache_events,
+                [
+                    ("store", watch_id, package_hash),
+                    ("remove", watch_id),
+                ],
+            )
+        finally:
+            release_store.set()
+            await asyncio.wait_for(
+                runtime._retire_pet_uploader(second), 1
+            )
 
     async def test_schema_mismatch_disables_upload_but_preserves_restore(self):
         upload_calls = []
@@ -5514,7 +5693,7 @@ class AgentControllerTests(unittest.TestCase):
             12,
             0,
             100,
-            BEGIN_BODY.pack(IMA_ADPCM, PUSH_TO_TALK, 16000, 320, TEST_TASK_ROUTE),
+            BEGIN_BODY.pack(IMA_ADPCM, PUSH_TO_TALK, 16000, 320, 0),
             b"abcdefgh",
         )
         recording_started = threading.Event()
@@ -5570,22 +5749,26 @@ class AgentControllerTests(unittest.TestCase):
             preferences=MemoryPreferences(True), runtime=runtime
         )
         controller.start()
-        self.assertTrue(recording_started.wait(1))
+        stopped = False
+        try:
+            self.assertTrue(recording_started.wait(1))
 
-        started = time.monotonic()
-        stopped = controller.stop(timeout=0.5)
-        elapsed = time.monotonic() - started
-        if not stopped and "release" in drain_holder:
-            drain_holder["loop"].call_soon_threadsafe(
-                drain_holder["release"].set
-            )
-            controller.stop(timeout=1)
+            started = time.monotonic()
+            stopped = controller.stop(timeout=0.5)
+            elapsed = time.monotonic() - started
 
-        self.assertTrue(stopped)
-        self.assertLess(elapsed, 0.25)
-        self.assertEqual(shortcut.calls, ["start", "stop"])
-        self.assertEqual(route.calls, ["start", "stop"])
-        self.assertEqual(factory.instances[0].disconnect_count, 1)
+            self.assertTrue(stopped)
+            self.assertLess(elapsed, 0.25)
+            self.assertEqual(shortcut.calls, ["start", "stop"])
+            self.assertEqual(route.calls, ["start", "stop"])
+            self.assertEqual(factory.instances[0].disconnect_count, 1)
+        finally:
+            if not stopped:
+                if "release" in drain_holder:
+                    drain_holder["loop"].call_soon_threadsafe(
+                        drain_holder["release"].set
+                    )
+                controller.stop(timeout=1)
 
     def test_connection_setting_is_persisted_before_command(self):
         preferences = MemoryPreferences()
