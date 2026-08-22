@@ -146,7 +146,7 @@ private:
     uint32_t _staging_generation = 0;
     PetMetadata _staging_metadata{};
     std::optional<uint8_t> _protected_slot{};
-    std::optional<uint8_t> _cleanup_slot{};
+    uint8_t _cleanup_mask = 0;
     uint64_t _required_bytes = 0;
     uint64_t _available_bytes = 0;
 };

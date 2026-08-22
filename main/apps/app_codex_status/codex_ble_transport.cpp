@@ -751,7 +751,7 @@ bool CodexBleTransport::start(const std::string& device_name)
     }
     _input_action_subscribed = false;
     _input_tx_value_handle = 0;
-    _pet_subscribed = false;
+    _pet_subscription.reset();
     _pet_service_available = false;
     _pet_status_value_handle = 0;
     _production_control_guard.reset();
@@ -943,7 +943,7 @@ void CodexBleTransport::stop()
     _reassembler.reset();
     _input_action_subscribed = false;
     _input_tx_value_handle = 0;
-    _pet_subscribed = false;
+    _pet_subscription.reset();
     _pet_service_available = false;
     _pet_status_value_handle = 0;
     _production_control_guard.reset();
@@ -1157,7 +1157,17 @@ bool CodexBleTransport::input_action_subscribed() const
 
 bool CodexBleTransport::pet_subscribed() const
 {
-    return _pet_service_available.load() && _pet_subscribed.load();
+    return pet_subscription().subscribed;
+}
+
+codex_pet::PetSubscriptionSnapshot
+CodexBleTransport::pet_subscription() const
+{
+    codex_pet::PetSubscriptionSnapshot snapshot =
+        _pet_subscription.snapshot();
+    snapshot.subscribed =
+        snapshot.subscribed && _pet_service_available.load();
+    return snapshot;
 }
 
 
@@ -1333,7 +1343,8 @@ CodexBleNotifyResult CodexBleTransport::notify_input_action(
 
 CodexBleNotifyResult CodexBleTransport::notify_pet_status(
     const uint8_t* data,
-    size_t length)
+    size_t length,
+    uint64_t subscription_generation)
 {
     if (data == nullptr || length == 0 ||
         length > pet_protocol::kMaxFrameBytes) {
@@ -1351,8 +1362,11 @@ CodexBleNotifyResult CodexBleTransport::notify_pet_status(
     const bool revoked =
         _active_production_revoked_token.load() ==
         active_connection_token(link);
+    const codex_pet::PetSubscriptionSnapshot subscription =
+        _pet_subscription.snapshot();
     if (revoked || !link.authorized || !_pet_service_available.load() ||
-        !_pet_subscribed.load() ||
+        !subscription.subscribed || subscription_generation == 0 ||
+        subscription.generation != subscription_generation ||
         link.handle == secure_pairing::kNoAgentConnection ||
         value_handle == 0 || length > limit) {
         return CodexBleNotifyResult::NotReady;
@@ -1481,7 +1495,7 @@ bool CodexBleTransport::promote_pending(uint16_t connection_handle)
     _input_control_guard.reset();
     _input_action_subscribed = false;
     _input_tx_value_handle = g_input_tx_value_handle;
-    _pet_subscribed = false;
+    _pet_subscription.reset();
     _pet_status_value_handle = g_pet_status_value_handle;
     if (_input_control_queue != nullptr) {
         xQueueReset(static_cast<QueueHandle_t>(_input_control_queue));
@@ -1690,12 +1704,13 @@ bool CodexBleTransport::enqueue_pet_control_from_ble(
     const uint8_t* data,
     size_t length)
 {
-    if (!_pet_service_available.load() || !_pet_subscribed.load() ||
-        _pet_control_queue == nullptr || data == nullptr || length == 0 ||
+    if (!_pet_service_available.load() || _pet_control_queue == nullptr ||
+        data == nullptr || length == 0 ||
         length > pet_protocol::kMaxFrameBytes) {
         return false;
     }
     secure_pairing::AgentActiveConnection active{};
+    codex_pet::PetSubscriptionSnapshot subscription{};
     {
         std::lock_guard<std::mutex> voice_link_lock(_voice_link_mutex);
         const uint64_t revoked_token =
@@ -1708,10 +1723,12 @@ bool CodexBleTransport::enqueue_pet_control_from_ble(
             return false;
         }
         active = _connection_router.active_connection();
+        subscription = _pet_subscription.snapshot();
     }
     const uint32_t key_epoch = _pet_key_epoch.load();
     if (active.handle != connection_handle || active.generation == 0 ||
-        key_epoch == 0) {
+        key_epoch == 0 || !subscription.subscribed ||
+        subscription.generation == 0) {
         return false;
     }
     CodexPetControlFrame frame{};
@@ -1719,6 +1736,7 @@ bool CodexBleTransport::enqueue_pet_control_from_ble(
     frame.length = static_cast<uint16_t>(length);
     frame.connection_generation = active.generation;
     frame.key_epoch = key_epoch;
+    frame.subscription_generation = subscription.generation;
     frame.authorized = true;
     frame.subscribed = true;
     std::copy_n(data, length, frame.data.begin());
@@ -1802,7 +1820,7 @@ void CodexBleTransport::handle_gap_disconnected(
         }
         _input_action_subscribed = false;
         _input_tx_value_handle = 0;
-        _pet_subscribed = false;
+        (void)_pet_subscription.update(false);
         _pet_status_value_handle = 0;
         _input_control_guard.reset();
     } else if ((
@@ -1853,15 +1871,26 @@ void CodexBleTransport::handle_pet_subscription(
     if (attr_handle != g_pet_status_value_handle) {
         return;
     }
-    if (enabled && authorize_gatt(
-            connection_handle,
-            secure_pairing::AgentGattSurface::Production)) {
-        _pet_subscribed = true;
+    std::lock_guard<std::mutex> voice_link_lock(_voice_link_mutex);
+    if (_connection_router.active_handle() != connection_handle) {
+        return;
+    }
+    const uint64_t revoked_token = _active_production_revoked_token.load();
+    const bool authorized = _connection_router.can_access(
+        connection_handle,
+        secure_pairing::AgentGattSurface::Production) &&
+        (revoked_token == 0 || revoked_token != active_connection_token(
+            _connection_router.active_connection()));
+    if (enabled && authorized) {
+        (void)_pet_subscription.update(true);
         _pet_status_value_handle = g_pet_status_value_handle;
-    } else if (!enabled) {
-        std::lock_guard<std::mutex> voice_link_lock(_voice_link_mutex);
-        if (_connection_router.active_handle() == connection_handle) {
-            _pet_subscribed = false;
+        return;
+    }
+    if (!enabled) {
+        const codex_pet::PetSubscriptionTransition transition =
+            _pet_subscription.update(false);
+        if (transition.lost && _pet_control_queue != nullptr) {
+            xQueueReset(static_cast<QueueHandle_t>(_pet_control_queue));
         }
     }
 }

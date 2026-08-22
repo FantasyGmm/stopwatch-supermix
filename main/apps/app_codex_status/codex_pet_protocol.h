@@ -125,6 +125,9 @@ public:
         const Control& control,
         const uint8_t* frame,
         size_t frame_size);
+    bool conflicts(
+        const voice_input::crypto::ExchangeNonce& exchange_nonce,
+        uint32_t transaction_id) const;
     void retire(bool completed);
     bool active() const;
 

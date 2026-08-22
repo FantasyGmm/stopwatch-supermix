@@ -54,6 +54,7 @@ public:
     bool voice_subscribed() const;
     bool input_action_subscribed() const;
     bool pet_subscribed() const;
+    codex_pet::PetSubscriptionSnapshot pet_subscription() const;
     uint16_t negotiated_mtu() const;
     size_t voice_notification_limit() const;
     CodexBleNotifyResult notify_voice(const uint8_t* data, size_t length);
@@ -64,7 +65,8 @@ public:
         size_t length);
     CodexBleNotifyResult notify_pet_status(
         const uint8_t* data,
-        size_t length);
+        size_t length,
+        uint64_t subscription_generation);
     CodexBleNotifyResult notify_pairing(
         uint16_t connection_handle,
         const uint8_t* data,
@@ -164,7 +166,7 @@ private:
     std::deque<CodexBleMessage> _messages;
     std::atomic<bool> _stopping{false};
     std::atomic<bool> _input_action_subscribed{false};
-    std::atomic<bool> _pet_subscribed{false};
+    codex_pet::PetSubscriptionTracker _pet_subscription;
     std::atomic<bool> _pet_service_available{false};
     bool _initialized = false;
     std::atomic<uint16_t> _input_tx_value_handle{0};

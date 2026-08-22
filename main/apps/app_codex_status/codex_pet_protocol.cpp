@@ -660,6 +660,24 @@ ReplayDecision ControlReplayGuard::accept(
     return ReplayDecision::Accepted;
 }
 
+bool ControlReplayGuard::conflicts(
+    const voice_input::crypto::ExchangeNonce& exchange_nonce,
+    uint32_t transaction_id) const
+{
+    if (_active &&
+        (_transaction_id == transaction_id ||
+         _exchange_nonce == exchange_nonce)) {
+        return true;
+    }
+    for (size_t index = 0; index < _tombstone_count; ++index) {
+        if (_tombstones[index].transaction_id == transaction_id ||
+            _tombstones[index].exchange_nonce == exchange_nonce) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void ControlReplayGuard::retire(bool completed)
 {
     if (completed && _active) {

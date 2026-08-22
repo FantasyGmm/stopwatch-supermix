@@ -1,4 +1,5 @@
 #include "main/apps/app_codex_status/agent_connection_router.h"
+#include "main/apps/app_codex_status/codex_pet_transfer.h"
 #include "main/apps/app_codex_status/connection_termination_guard.h"
 
 #include <cassert>
@@ -63,6 +64,30 @@ void test_production_surface_checks_do_not_mutate_voice_subscription()
     assert(after.authorized == before.authorized);
 }
 
+void test_pet_subscription_generation_exposes_fast_loss_and_resubscribe()
+{
+    codex_pet::PetSubscriptionTracker tracker;
+    const auto enabled = tracker.update(true);
+    assert(enabled.changed);
+    assert(!enabled.lost);
+    assert(enabled.snapshot.subscribed);
+    assert(enabled.snapshot.generation == 1);
+
+    const auto lost = tracker.update(false);
+    assert(lost.changed);
+    assert(lost.lost);
+    assert(!lost.snapshot.subscribed);
+    assert(lost.snapshot.generation == 2);
+
+    const auto resubscribed = tracker.update(true);
+    assert(resubscribed.changed);
+    assert(!resubscribed.lost);
+    assert(resubscribed.snapshot.subscribed);
+    assert(resubscribed.snapshot.generation == 3);
+    assert(!tracker.accepts(enabled.snapshot.generation));
+    assert(tracker.accepts(resubscribed.snapshot.generation));
+}
+
 void test_connection_termination_holds_router_guard_through_submission()
 {
     std::mutex router_guard;
@@ -113,6 +138,7 @@ int main()
 
     test_active_voice_link_is_one_coherent_snapshot();
     test_production_surface_checks_do_not_mutate_voice_subscription();
+    test_pet_subscription_generation_exposes_fast_loss_and_resubscribe();
     test_connection_termination_holds_router_guard_through_submission();
 
     AgentConnectionRouter router;

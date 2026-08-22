@@ -20,6 +20,7 @@ constexpr voice_input::crypto::Key kKey = {
 };
 constexpr uint32_t kConnectionGeneration = 7;
 constexpr uint32_t kKeyEpoch = 11;
+constexpr uint64_t kSubscriptionGeneration = 1;
 
 uint8_t hex_nibble(char value)
 {
@@ -228,18 +229,50 @@ CodexPetControlFrame frame_for(
     uint32_t connection_generation = kConnectionGeneration,
     uint32_t key_epoch = kKeyEpoch,
     bool authorized = true,
-    bool subscribed = true)
+    bool subscribed = true,
+    uint64_t subscription_generation = kSubscriptionGeneration)
 {
     CodexPetControlFrame frame{};
     frame.connection_handle = 19;
     frame.connection_generation = connection_generation;
     frame.key_epoch = key_epoch;
+    frame.subscription_generation = subscription_generation;
     frame.authorized = authorized;
     frame.subscribed = subscribed;
     frame.length = static_cast<uint16_t>(pet_protocol::encode_control(
         control, crypto, frame.data.data(), frame.data.size()));
     assert(frame.length != 0);
     return frame;
+}
+
+codex_pet::PetTransferResult handle(
+    Rig& rig,
+    const CodexPetControlFrame& frame,
+    uint32_t now_ms,
+    uint32_t connection_generation = kConnectionGeneration,
+    uint32_t key_epoch = kKeyEpoch,
+    uint64_t subscription_generation = kSubscriptionGeneration)
+{
+    return rig.transfer.handle(
+        frame,
+        now_ms,
+        connection_generation,
+        key_epoch,
+        subscription_generation);
+}
+
+codex_pet::PetTransferResult poll(
+    Rig& rig,
+    uint32_t now_ms,
+    uint32_t connection_generation = kConnectionGeneration,
+    uint32_t key_epoch = kKeyEpoch,
+    uint64_t subscription_generation = kSubscriptionGeneration)
+{
+    return rig.transfer.poll(
+        now_ms,
+        connection_generation,
+        key_epoch,
+        subscription_generation);
 }
 
 pet_protocol::Control begin_control(
@@ -296,7 +329,7 @@ codex_pet::PetTransferResult send_package(
     CodexPetControlFrame* commit_output = nullptr)
 {
     const auto exchange_nonce = nonce(nonce_seed);
-    auto result = rig.transfer.handle(
+    auto result = handle(rig,
         frame_for(
             begin_control(package, transaction_id, exchange_nonce),
             rig.crypto),
@@ -321,7 +354,7 @@ codex_pet::PetTransferResult send_package(
         chunk.data_size = chunk_size;
         std::copy_n(
             package.data() + offset, chunk_size, chunk.data.begin());
-        result = rig.transfer.handle(
+        result = handle(rig,
             frame_for(chunk, rig.crypto),
             now_ms + sequence,
             kConnectionGeneration,
@@ -341,7 +374,7 @@ codex_pet::PetTransferResult send_package(
     if (commit_output != nullptr) {
         *commit_output = commit_frame;
     }
-    result = rig.transfer.handle(
+    result = handle(rig,
         commit_frame,
         now_ms + sequence,
         kConnectionGeneration,
@@ -354,22 +387,22 @@ void test_authorization_subscription_and_stale_context_fail_closed(
 {
     Rig rig{};
     const auto begin = begin_control(package, 1, nonce(1));
-    assert(!rig.transfer.handle(
+    assert(!handle(rig,
         frame_for(begin, rig.crypto, kConnectionGeneration, kKeyEpoch, false),
         10,
         kConnectionGeneration,
         kKeyEpoch).accepted);
-    assert(!rig.transfer.handle(
+    assert(!handle(rig,
         frame_for(begin, rig.crypto, kConnectionGeneration, kKeyEpoch, true, false),
         11,
         kConnectionGeneration,
         kKeyEpoch).accepted);
-    assert(!rig.transfer.handle(
+    assert(!handle(rig,
         frame_for(begin, rig.crypto, kConnectionGeneration - 1, kKeyEpoch),
         12,
         kConnectionGeneration,
         kKeyEpoch).accepted);
-    assert(!rig.transfer.handle(
+    assert(!handle(rig,
         frame_for(begin, rig.crypto, kConnectionGeneration, kKeyEpoch - 1),
         13,
         kConnectionGeneration,
@@ -389,7 +422,7 @@ void test_duplicate_conflict_replay_and_disconnect_keep_old_selection(
     rig.transfer.record_status_delivery(installed, true);
 
     const auto exchange_nonce = nonce(20);
-    auto result = rig.transfer.handle(
+    auto result = handle(rig,
         frame_for(begin_control(package, 20, exchange_nonce), rig.crypto),
         200,
         kConnectionGeneration,
@@ -402,15 +435,15 @@ void test_duplicate_conflict_replay_and_disconnect_keep_old_selection(
     chunk.data_size = std::min(package.size(), pet_protocol::kMaxChunkBytes);
     std::copy_n(package.data(), chunk.data_size, chunk.data.begin());
     const auto encoded_chunk = frame_for(chunk, rig.crypto);
-    result = rig.transfer.handle(
+    result = handle(rig,
         encoded_chunk, 201, kConnectionGeneration, kKeyEpoch);
     assert(result.accepted && result.progress == chunk.data_size);
-    const auto duplicate = rig.transfer.handle(
+    const auto duplicate = handle(rig,
         encoded_chunk, 202, kConnectionGeneration, kKeyEpoch);
     assert(duplicate.accepted && duplicate.progress == chunk.data_size);
 
     chunk.data[0] ^= 1U;
-    const auto conflict = rig.transfer.handle(
+    const auto conflict = handle(rig,
         frame_for(chunk, rig.crypto),
         203,
         kConnectionGeneration,
@@ -421,14 +454,14 @@ void test_duplicate_conflict_replay_and_disconnect_keep_old_selection(
     assert(!rig.transfer.transaction_active());
     assert(rig.transfer.selection().hash == old_selection.hash);
 
-    const auto replayed_begin = rig.transfer.handle(
+    const auto replayed_begin = handle(rig,
         frame_for(begin_control(package, 20, exchange_nonce), rig.crypto),
         204,
         kConnectionGeneration,
         kKeyEpoch);
     assert(!replayed_begin.accepted);
 
-    result = rig.transfer.handle(
+    result = handle(rig,
         frame_for(begin_control(package, 21, nonce(21)), rig.crypto),
         210,
         kConnectionGeneration,
@@ -454,7 +487,7 @@ void test_commit_once_cancel_timeout_context_retirement_and_restore(
     assert(installed.hash == metadata(package).hash);
     rig.transfer.record_status_delivery(committed, true);
 
-    const auto late_commit = rig.transfer.handle(
+    const auto late_commit = handle(rig,
         committed_control,
         400,
         kConnectionGeneration,
@@ -462,13 +495,13 @@ void test_commit_once_cancel_timeout_context_retirement_and_restore(
     assert(!late_commit.accepted);
     assert(rig.transfer.selection().generation == 1);
 
-    auto result = rig.transfer.handle(
+    auto result = handle(rig,
         frame_for(begin_control(package, 31, nonce(31)), rig.crypto),
         410,
         kConnectionGeneration,
         kKeyEpoch);
     assert(result.accepted);
-    result = rig.transfer.handle(
+    result = handle(rig,
         frame_for(
             transaction_control(
                 pet_protocol::Kind::Cancel, 2, 31, nonce(31)),
@@ -481,13 +514,13 @@ void test_commit_once_cancel_timeout_context_retirement_and_restore(
            pet_protocol::Kind::Cancelled);
     assert(!rig.transfer.transaction_active());
 
-    result = rig.transfer.handle(
+    result = handle(rig,
         frame_for(begin_control(package, 32, nonce(32)), rig.crypto),
         500,
         kConnectionGeneration,
         kKeyEpoch);
     assert(result.accepted);
-    const auto timed_out = rig.transfer.poll(
+    const auto timed_out = poll(rig,
         500 + codex_pet::kPetTransferTimeoutMs,
         kConnectionGeneration,
         kKeyEpoch);
@@ -496,7 +529,7 @@ void test_commit_once_cancel_timeout_context_retirement_and_restore(
            pet_protocol::ErrorReason::Timeout);
     assert(!rig.transfer.transaction_active());
 
-    result = rig.transfer.handle(
+    result = handle(rig,
         frame_for(begin_control(package, 33, nonce(33)), rig.crypto),
         600,
         kConnectionGeneration,
@@ -506,13 +539,13 @@ void test_commit_once_cancel_timeout_context_retirement_and_restore(
     assert(!rig.transfer.transaction_active());
     assert(rig.transfer.selection().hash == installed.hash);
 
-    result = rig.transfer.handle(
+    result = handle(rig,
         frame_for(begin_control(package, 34, nonce(34)), rig.crypto),
         700,
         kConnectionGeneration,
         kKeyEpoch);
     assert(result.accepted);
-    const auto stale_switch = rig.transfer.handle(
+    const auto stale_switch = handle(rig,
         frame_for(
             begin_control(package, 35, nonce(35)),
             rig.crypto,
@@ -527,7 +560,7 @@ void test_commit_once_cancel_timeout_context_retirement_and_restore(
 
     const auto query = transaction_control(
         pet_protocol::Kind::Query, 1, 36, nonce(36));
-    result = rig.transfer.handle(
+    result = handle(rig,
         frame_for(
             query, rig.crypto, kConnectionGeneration + 1, kKeyEpoch),
         800,
@@ -541,7 +574,7 @@ void test_commit_once_cancel_timeout_context_retirement_and_restore(
 
     const auto restore = transaction_control(
         pet_protocol::Kind::Restore, 1, 37, nonce(37));
-    result = rig.transfer.handle(
+    result = handle(rig,
         frame_for(
             restore, rig.crypto, kConnectionGeneration + 1, kKeyEpoch),
         900,
@@ -571,7 +604,7 @@ void test_cleanup_warning_is_bounded_and_selection_remains_queryable(
     rig.transfer.record_status_delivery(second, true);
     assert(rig.transfer.selection().hash == installed.hash);
 
-    const auto blocked = rig.transfer.handle(
+    const auto blocked = handle(rig,
         frame_for(begin_control(package, 42, nonce(42)), rig.crypto),
         1200,
         kConnectionGeneration,
@@ -580,7 +613,7 @@ void test_cleanup_warning_is_bounded_and_selection_remains_queryable(
     assert(decode_status(blocked, rig.crypto).reason ==
            pet_protocol::ErrorReason::Busy);
 
-    const auto query = rig.transfer.handle(
+    const auto query = handle(rig,
         frame_for(
             transaction_control(
                 pet_protocol::Kind::Query, 1, 43, nonce(43)),
@@ -594,7 +627,7 @@ void test_cleanup_warning_is_bounded_and_selection_remains_queryable(
     rig.files.fail_cleanup = false;
     rig.transfer.record_status_delivery(query, true);
 
-    const auto recovered = rig.transfer.handle(
+    const auto recovered = handle(rig,
         frame_for(begin_control(package, 44, nonce(44)), rig.crypto),
         1220,
         kConnectionGeneration,
@@ -603,6 +636,185 @@ void test_cleanup_warning_is_bounded_and_selection_remains_queryable(
     rig.transfer.shutdown();
     assert(!rig.transfer.transaction_active());
     assert(rig.transfer.selection().hash == installed.hash);
+}
+
+void test_restore_cleanup_warning_surfaces_error_and_query_retries_cleanup(
+    const std::vector<uint8_t>& package)
+{
+    Rig rig{};
+    const auto first = send_package(rig, package, 50, 50, 1300);
+    assert(first.accepted);
+    rig.transfer.record_status_delivery(first, true);
+    const auto second = send_package(rig, package, 51, 51, 1400);
+    assert(second.accepted);
+    assert(rig.files.present[0] && rig.files.present[1]);
+
+    rig.files.fail_cleanup = true;
+    const auto restore = handle(rig,
+        frame_for(
+            transaction_control(
+                pet_protocol::Kind::Restore, 1, 52, nonce(52)),
+            rig.crypto),
+        1500,
+        kConnectionGeneration,
+        kKeyEpoch);
+    assert(!restore.accepted);
+    assert(restore.selection_changed);
+    assert(decode_status(restore, rig.crypto).reason ==
+           pet_protocol::ErrorReason::IoFailure);
+    assert(rig.transfer.selection().source == codex_pet::Source::BuiltIn);
+    assert(rig.files.present[0] && rig.files.present[1]);
+
+    const auto first_query = handle(rig,
+        frame_for(
+            transaction_control(
+                pet_protocol::Kind::Query, 1, 53, nonce(53)),
+            rig.crypto),
+        1510,
+        kConnectionGeneration,
+        kKeyEpoch);
+    assert(first_query.accepted);
+    rig.transfer.record_status_delivery(first_query, true);
+    assert(rig.files.present[0] && rig.files.present[1]);
+
+    rig.files.fail_cleanup = false;
+    const auto second_query = handle(rig,
+        frame_for(
+            transaction_control(
+                pet_protocol::Kind::Query, 1, 54, nonce(54)),
+            rig.crypto),
+        1520,
+        kConnectionGeneration,
+        kKeyEpoch);
+    assert(second_query.accepted);
+    rig.transfer.record_status_delivery(second_query, true);
+    assert(!rig.files.present[0] && !rig.files.present[1]);
+}
+
+void test_busy_response_nonce_is_tombstoned_and_exact_retry_is_cached(
+    const std::vector<uint8_t>& package)
+{
+    Rig rig{};
+    const auto completed = handle(rig,
+        frame_for(
+            transaction_control(
+                pet_protocol::Kind::Query, 1, 59, nonce(59)),
+            rig.crypto),
+        1590,
+        kConnectionGeneration,
+        kKeyEpoch);
+    assert(completed.accepted);
+    const auto active_nonce = nonce(60);
+    const auto active = handle(rig,
+        frame_for(begin_control(package, 60, active_nonce), rig.crypto),
+        1600,
+        kConnectionGeneration,
+        kKeyEpoch);
+    assert(active.accepted);
+
+    const auto competitor = frame_for(
+        transaction_control(
+            pet_protocol::Kind::Query, 1, 61, nonce(61)),
+        rig.crypto);
+    const auto busy = handle(rig,
+        competitor, 1610, kConnectionGeneration, kKeyEpoch);
+    assert(!busy.accepted);
+    assert(decode_status(busy, rig.crypto).reason ==
+           pet_protocol::ErrorReason::Busy);
+
+    const auto active_nonce_collision = handle(rig,
+        frame_for(
+            transaction_control(
+                pet_protocol::Kind::Query, 1, 63, active_nonce),
+            rig.crypto),
+        1610,
+        kConnectionGeneration,
+        kKeyEpoch);
+    assert(!active_nonce_collision.has_status);
+
+    const auto active_transaction_collision = handle(rig,
+        frame_for(
+            transaction_control(
+                pet_protocol::Kind::Query, 1, 60, nonce(64)),
+            rig.crypto),
+        1610,
+        kConnectionGeneration,
+        kKeyEpoch);
+    assert(!active_transaction_collision.has_status);
+
+    const auto tombstoned_nonce_collision = handle(rig,
+        frame_for(
+            transaction_control(
+                pet_protocol::Kind::Query, 1, 65, nonce(59)),
+            rig.crypto),
+        1610,
+        kConnectionGeneration,
+        kKeyEpoch);
+    assert(!tombstoned_nonce_collision.has_status);
+
+    const auto exact_retry = handle(rig,
+        competitor, 1611, kConnectionGeneration, kKeyEpoch);
+    assert(exact_retry.status_size == busy.status_size);
+    assert(std::equal(
+        busy.status.begin(),
+        busy.status.begin() + busy.status_size,
+        exact_retry.status.begin()));
+
+    const auto nonce_collision = handle(rig,
+        frame_for(
+            transaction_control(
+                pet_protocol::Kind::Query, 1, 62, nonce(61)),
+            rig.crypto),
+        1612,
+        kConnectionGeneration,
+        kKeyEpoch);
+    assert(!nonce_collision.has_status);
+
+    const auto transaction_collision = handle(rig,
+        frame_for(
+            transaction_control(
+                pet_protocol::Kind::Query, 1, 61, nonce(62)),
+            rig.crypto),
+        1613,
+        kConnectionGeneration,
+        kKeyEpoch);
+    assert(!transaction_collision.has_status);
+
+    const auto cancelled = handle(rig,
+        frame_for(
+            transaction_control(
+                pet_protocol::Kind::Cancel, 2, 60, active_nonce),
+            rig.crypto),
+        1620,
+        kConnectionGeneration,
+        kKeyEpoch);
+    assert(cancelled.accepted);
+    const auto late_exact_retry = handle(rig,
+        competitor, 1621, kConnectionGeneration, kKeyEpoch);
+    assert(late_exact_retry.status_size == busy.status_size);
+    assert(std::equal(
+        busy.status.begin(),
+        busy.status.begin() + busy.status_size,
+        late_exact_retry.status.begin()));
+}
+
+void test_control_queued_before_subscription_loss_cannot_start_after_resubscribe(
+    const std::vector<uint8_t>& package)
+{
+    Rig rig{};
+    const auto queued_before_loss = frame_for(
+        begin_control(package, 70, nonce(70)), rig.crypto);
+    rig.transfer.on_subscription_changed(2, false);
+    rig.transfer.on_subscription_changed(3, true);
+    const auto stale = handle(rig,
+        queued_before_loss,
+        1700,
+        kConnectionGeneration,
+        kKeyEpoch,
+        3);
+    assert(!stale.accepted);
+    assert(!stale.has_status);
+    assert(!rig.transfer.transaction_active());
 }
 
 }  // namespace
@@ -619,4 +831,9 @@ int main()
     test_duplicate_conflict_replay_and_disconnect_keep_old_selection(package);
     test_commit_once_cancel_timeout_context_retirement_and_restore(package);
     test_cleanup_warning_is_bounded_and_selection_remains_queryable(package);
+    test_control_queued_before_subscription_loss_cannot_start_after_resubscribe(
+        package);
+    test_busy_response_nonce_is_tombstoned_and_exact_retry_is_cached(package);
+    test_restore_cleanup_warning_surfaces_error_and_query_retries_cleanup(
+        package);
 }

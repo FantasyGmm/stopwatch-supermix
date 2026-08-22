@@ -68,23 +68,29 @@ CodexPetTransfer::CodexPetTransfer(
 
 bool CodexPetTransfer::sync_context(
     uint32_t active_generation,
-    uint32_t key_epoch)
+    uint32_t key_epoch,
+    uint64_t subscription_generation)
 {
-    if (active_generation == 0 || key_epoch == 0) {
+    if (active_generation == 0 || key_epoch == 0 ||
+        subscription_generation == 0 || !_subscription_active) {
         retire_transaction(true);
+        clear_competing_responses();
         _context_ready = false;
         _active_generation = 0;
         _key_epoch = 0;
         return false;
     }
     if (_context_ready && _active_generation == active_generation &&
-        _key_epoch == key_epoch) {
+        _key_epoch == key_epoch &&
+        _subscription_generation == subscription_generation) {
         return true;
     }
     retire_transaction(true);
+    clear_competing_responses();
     _context_ready = true;
     _active_generation = active_generation;
     _key_epoch = key_epoch;
+    _subscription_generation = subscription_generation;
     reset_replay_context();
     return true;
 }
@@ -96,6 +102,12 @@ void CodexPetTransfer::reset_replay_context()
         ++_replay_context_generation;
     }
     _replay.set_connection_generation(_replay_context_generation);
+}
+
+void CodexPetTransfer::clear_competing_responses()
+{
+    _competing_response_count = 0;
+    _competing_responses = {};
 }
 
 void CodexPetTransfer::retire_transaction(bool tombstone)
@@ -117,13 +129,17 @@ PetTransferResult CodexPetTransfer::handle(
     const CodexPetControlFrame& frame,
     uint32_t now_ms,
     uint32_t active_generation,
-    uint32_t key_epoch)
+    uint32_t key_epoch,
+    uint64_t subscription_generation)
 {
-    if (!sync_context(active_generation, key_epoch) ||
+    if (!sync_context(
+            active_generation, key_epoch, subscription_generation) ||
         !frame.authorized || !frame.subscribed ||
         frame.connection_handle == secure_pairing::kNoAgentConnection ||
         frame.connection_generation != active_generation ||
-        frame.key_epoch != key_epoch || frame.length == 0 ||
+        frame.key_epoch != key_epoch ||
+        frame.subscription_generation != subscription_generation ||
+        frame.length == 0 ||
         frame.length > frame.data.size()) {
         return {};
     }
@@ -134,14 +150,37 @@ PetTransferResult CodexPetTransfer::handle(
         return {};
     }
 
+    for (size_t index = 0; index < _competing_response_count; ++index) {
+        const CompetingResponse& cached = _competing_responses[index];
+        const bool nonce_matches =
+            cached.exchange_nonce == control.exchange_nonce;
+        const bool transaction_matches =
+            cached.transaction_id == control.transaction_id;
+        if (!nonce_matches && !transaction_matches) {
+            continue;
+        }
+        if (nonce_matches && transaction_matches &&
+            cached.request_size == frame.length &&
+            std::equal(
+                cached.request.begin(),
+                cached.request.begin() + cached.request_size,
+                frame.data.begin())) {
+            return cached.response;
+        }
+        return {};
+    }
+
     if (!_transaction_active) {
         return handle_new_operation(control, frame, now_ms);
     }
     if (control.transaction_id != _transaction_id ||
         control.exchange_nonce != _exchange_nonce) {
+        if (_replay.conflicts(
+                control.exchange_nonce, control.transaction_id)) {
+            return {};
+        }
         if (control.sequence == 1 && starts_operation(control.kind)) {
-            return make_ephemeral_error(
-                control, pet_protocol::ErrorReason::Busy);
+            return handle_competing_operation(control, frame);
         }
         return {};
     }
@@ -190,6 +229,15 @@ PetTransferResult CodexPetTransfer::handle_new_operation(
             return fail_transaction(map_store_error(restored));
         }
         _selection = _store.load_selection();
+        if (restored == StoreResult::CleanupWarning) {
+            pet_protocol::Status status{};
+            status.kind = pet_protocol::Kind::Error;
+            status.reason = pet_protocol::ErrorReason::IoFailure;
+            PetTransferResult result =
+                encode_status(status, false, true, false);
+            retire_transaction(true);
+            return result;
+        }
         PetTransferResult result = make_state(true);
         retire_transaction(true);
         return result;
@@ -277,9 +325,11 @@ PetTransferResult CodexPetTransfer::handle_active_operation(
 PetTransferResult CodexPetTransfer::poll(
     uint32_t now_ms,
     uint32_t active_generation,
-    uint32_t key_epoch)
+    uint32_t key_epoch,
+    uint64_t subscription_generation)
 {
-    if (!sync_context(active_generation, key_epoch) ||
+    if (!sync_context(
+            active_generation, key_epoch, subscription_generation) ||
         !_transaction_active ||
         static_cast<uint32_t>(now_ms - _last_activity_ms) <
             kPetTransferTimeoutMs) {
@@ -301,6 +351,7 @@ void CodexPetTransfer::on_disconnect(uint32_t connection_generation)
 {
     if (!_context_ready || connection_generation == _active_generation) {
         retire_transaction(true);
+        clear_competing_responses();
         _context_ready = false;
         _active_generation = 0;
         _key_epoch = 0;
@@ -310,23 +361,36 @@ void CodexPetTransfer::on_disconnect(uint32_t connection_generation)
 void CodexPetTransfer::on_credential_replaced(uint32_t key_epoch)
 {
     retire_transaction(true);
+    clear_competing_responses();
     _key_epoch = key_epoch;
     if (_context_ready) {
         reset_replay_context();
     }
 }
 
-void CodexPetTransfer::on_subscription_lost()
+void CodexPetTransfer::on_subscription_changed(
+    uint64_t subscription_generation,
+    bool subscribed)
 {
-    retire_transaction(true);
+    if (_subscription_generation != subscription_generation ||
+        _subscription_active != subscribed) {
+        retire_transaction(true);
+        clear_competing_responses();
+        _context_ready = false;
+    }
+    _subscription_generation = subscription_generation;
+    _subscription_active = subscribed;
 }
 
 void CodexPetTransfer::shutdown()
 {
     retire_transaction(true);
+    clear_competing_responses();
     _context_ready = false;
     _active_generation = 0;
     _key_epoch = 0;
+    _subscription_generation = 0;
+    _subscription_active = false;
 }
 
 bool CodexPetTransfer::transaction_active() const
@@ -396,20 +460,34 @@ PetTransferResult CodexPetTransfer::make_error(
     return encode_status(status, false);
 }
 
-PetTransferResult CodexPetTransfer::make_ephemeral_error(
+PetTransferResult CodexPetTransfer::handle_competing_operation(
     const pet_protocol::Control& control,
-    pet_protocol::ErrorReason reason)
+    const CodexPetControlFrame& frame)
 {
+    if (_competing_response_count >= _competing_responses.size()) {
+        return {};
+    }
     pet_protocol::Status status{};
     status.kind = pet_protocol::Kind::Error;
     status.sequence = 1;
     status.exchange_nonce = control.exchange_nonce;
     status.transaction_id = control.transaction_id;
-    status.reason = reason;
+    status.reason = pet_protocol::ErrorReason::Busy;
     PetTransferResult result{};
     result.status_size = pet_protocol::encode_status(
         status, _crypto, result.status.data(), result.status.size());
     result.has_status = result.status_size != 0;
+    result.subscription_generation = _subscription_generation;
+    if (!result.has_status) {
+        return {};
+    }
+    CompetingResponse& cached =
+        _competing_responses[_competing_response_count++];
+    cached.transaction_id = control.transaction_id;
+    cached.exchange_nonce = control.exchange_nonce;
+    cached.request_size = frame.length;
+    std::copy_n(frame.data.begin(), frame.length, cached.request.begin());
+    cached.response = result;
     return result;
 }
 
@@ -436,6 +514,7 @@ PetTransferResult CodexPetTransfer::encode_status(
     result.selection_changed = selection_changed;
     result.cleanup_after_delivery = cleanup_after_delivery;
     result.selection = _selection;
+    result.subscription_generation = _subscription_generation;
     return result;
 }
 

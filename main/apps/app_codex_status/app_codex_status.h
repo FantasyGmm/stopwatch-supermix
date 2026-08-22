@@ -221,7 +221,7 @@ private:
     uint16_t _production_voice_mtu = 23;
     uint32_t _production_voice_connection_epoch = 0;
     uint32_t _pet_connection_epoch = 0;
-    bool _pet_subscription_active = false;
+    uint64_t _pet_subscription_generation = 0;
     std::mutex _status_mutex;
     std::string _base_status = "START";
     uint32_t _base_status_color = 0;

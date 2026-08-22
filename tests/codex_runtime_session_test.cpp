@@ -1,4 +1,5 @@
 #include "main/apps/app_codex_status/codex_runtime_session.h"
+#include "main/apps/app_codex_status/codex_pet_transfer.h"
 
 #include <cassert>
 #include <vector>
@@ -59,9 +60,10 @@ void test_app_owned_pet_cleanup_precedes_independent_disconnect_cleanup()
     RecordingCleanup cleanup;
 
     lifecycle.begin();
-    cleanup.disconnect_pet();
     assert(
-        lifecycle.disconnect(cleanup) ==
+        codex_pet::PetCleanupSequence::run(
+            [&]() { cleanup.disconnect_pet(); },
+            [&]() { return lifecycle.disconnect(cleanup); }) ==
         CodexRuntimeCleanupAction::Disconnect);
     assert((cleanup.events == std::vector<CleanupEvent>{
         CleanupEvent::DisconnectPet,
@@ -77,9 +79,10 @@ void test_app_owned_pet_cleanup_precedes_independent_shutdown_cleanup()
     RecordingCleanup cleanup;
 
     lifecycle.begin();
-    cleanup.disconnect_pet();
     assert(
-        lifecycle.shutdown(cleanup) ==
+        codex_pet::PetCleanupSequence::run(
+            [&]() { cleanup.disconnect_pet(); },
+            [&]() { return lifecycle.shutdown(cleanup); }) ==
         CodexRuntimeCleanupAction::Shutdown);
     assert((cleanup.events == std::vector<CleanupEvent>{
         CleanupEvent::DisconnectPet,

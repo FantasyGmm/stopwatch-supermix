@@ -347,7 +347,7 @@ PetSelection CodexPetStore::load_selection_impl()
 {
     _selection = {};
     _protected_slot.reset();
-    _cleanup_slot.reset();
+    _cleanup_mask = 0;
     if (!_files.ensure_directory()) {
         _loaded = true;
         return _selection;
@@ -362,9 +362,8 @@ PetSelection CodexPetStore::load_selection_impl()
 
     if (record_valid && recorded.source == Source::BuiltIn) {
         _selection = recorded;
-        for (uint8_t slot = 0; slot < 2; ++slot) {
-            (void)_files.remove(slot);
-        }
+        _cleanup_mask = 0x03U;
+        (void)acknowledge();
         _loaded = true;
         return _selection;
     }
@@ -391,10 +390,12 @@ PetSelection CodexPetStore::load_selection_impl()
             const uint8_t inactive = static_cast<uint8_t>(selected.slot ^ 1U);
             const SlotInfo stale = validate_slot(inactive);
             if (stale.kind == SlotInfo::Kind::Valid) {
-                _cleanup_slot = inactive;
+                _cleanup_mask |= static_cast<uint8_t>(1U << inactive);
             } else if (stale.kind == SlotInfo::Kind::Invalid ||
                 stale.kind == SlotInfo::Kind::DigestMismatch) {
-                (void)_files.remove(inactive);
+                if (!_files.remove(inactive)) {
+                    _cleanup_mask |= static_cast<uint8_t>(1U << inactive);
+                }
             }
             _loaded = true;
             return _selection;
@@ -438,7 +439,7 @@ PetSelection CodexPetStore::load_selection_impl()
         }
         const uint8_t inactive = static_cast<uint8_t>(chosen.slot ^ 1U);
         if (slots[inactive].kind == SlotInfo::Kind::Valid) {
-            _cleanup_slot = inactive;
+            _cleanup_mask |= static_cast<uint8_t>(1U << inactive);
         }
     }
     _loaded = true;
@@ -474,7 +475,7 @@ StoreResult CodexPetStore::begin(
     if (!_loaded) {
         (void)load_selection_impl();
     }
-    if (_cleanup_slot.has_value()) {
+    if (_cleanup_mask != 0) {
         return StoreResult::Busy;
     }
     if (_selection.generation == std::numeric_limits<uint32_t>::max()) {
@@ -624,7 +625,7 @@ StoreResult CodexPetStore::commit()
     }
 
     if (_protected_slot.has_value() && *_protected_slot != next.slot) {
-        _cleanup_slot = _protected_slot;
+        _cleanup_mask |= static_cast<uint8_t>(1U << *_protected_slot);
     }
     _selection = next;
     _protected_slot = next.slot;
@@ -635,15 +636,15 @@ StoreResult CodexPetStore::commit()
 
 StoreResult CodexPetStore::acknowledge()
 {
-    if (!_cleanup_slot.has_value()) {
-        return StoreResult::Ok;
+    for (uint8_t slot = 0; slot < 2; ++slot) {
+        const uint8_t bit = static_cast<uint8_t>(1U << slot);
+        if ((_cleanup_mask & bit) != 0 && _files.remove(slot)) {
+            _cleanup_mask &= static_cast<uint8_t>(~bit);
+        }
     }
-    const uint8_t slot = *_cleanup_slot;
-    if (!_files.remove(slot)) {
-        return StoreResult::CleanupWarning;
-    }
-    _cleanup_slot.reset();
-    return StoreResult::Ok;
+    return _cleanup_mask == 0
+        ? StoreResult::Ok
+        : StoreResult::CleanupWarning;
 }
 
 void CodexPetStore::cancel()
@@ -671,12 +672,8 @@ StoreResult CodexPetStore::restore_default()
     }
     _selection = restored;
     _protected_slot.reset();
-    _cleanup_slot.reset();
-    bool cleaned = true;
-    for (uint8_t slot = 0; slot < 2; ++slot) {
-        cleaned = _files.remove(slot) && cleaned;
-    }
-    return cleaned ? StoreResult::Ok : StoreResult::CleanupWarning;
+    _cleanup_mask = 0x03U;
+    return acknowledge();
 }
 
 uint32_t CodexPetStore::generation() const
