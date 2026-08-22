@@ -152,6 +152,28 @@ bounded so asset transfer cannot starve input actions, status, voice, or the UI.
 The Agent window reports sent bytes only after acknowledged progress. It shows
 `Verifying` until the watch has validated and committed the complete package.
 
+Closing the window does not terminate an already acknowledged transfer in the
+background. An explicit `Cancel` action retires the current transaction on both
+sides before another upload can begin. Agent quit, reconnect, or credential
+replacement uses the same bounded cancellation path and may never report a
+stale late acknowledgement as success.
+
+## Rollout Compatibility
+
+Agent and firmware upgrades are independent. The Agent discovers the custom-pet
+service after authentication; if `...000b` is absent, the pet window reports
+`Firmware update required`, disables send/restore, and leaves status, voice,
+input-action, pairing, and reconnect behavior unchanged. A firmware containing
+the service continues to operate normally with an older Agent that never
+subscribes to or writes the characteristics. Failure to initialize, subscribe,
+or clean up the optional pet channel is isolated from all existing channels.
+
+The first successful status acknowledgement reports the selected source
+(`built-in` or `custom`), supported package schema range, active generation,
+active SHA-256, and whether the active custom package is usable. These fields
+are authoritative for capability gating, local-preview cache selection, and
+Restore Default state.
+
 ## Persistent Storage and Atomic Commit
 
 Custom pets live under `/spiflash/codex_pet`. Storage is shared with Badge and
