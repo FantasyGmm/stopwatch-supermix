@@ -335,8 +335,12 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         protocol_header = (
             ROOT / "main/apps/app_codex_status/voice_input_protocol.h"
         ).read_text()
+        agent_protocol = (
+            ROOT / "mac-codex-agent/voice_input_protocol.py"
+        ).read_text()
 
-        self.assertIn("kProtocolVersion = 5", protocol_header)
+        self.assertIn("kProtocolVersion = 6", protocol_header)
+        self.assertIn("PROTOCOL_VERSION = 6", agent_protocol)
         self.assertIn("uint32_t key_epoch", protocol_header)
         self.assertIn("uint32_t expected_key_epoch", protocol_header)
         self.assertIn("set_voice_credential", transport_header)

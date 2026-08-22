@@ -8,6 +8,81 @@
 
 #include <mutex>
 
+class CodexRuntimeSession::Cleanup {
+public:
+    Cleanup(
+        CodexRuntimeSession& session,
+        PinnedMicrophoneController& pinned_microphone,
+        std::mutex& controller_mutex,
+        uint32_t now_ms)
+        : _session(session),
+          _pinned_microphone(pinned_microphone),
+          _controller_mutex(controller_mutex),
+          _now_ms(now_ms)
+    {
+    }
+
+    void disconnect_input_actions()
+    {
+        if (_session._input_actions != nullptr) {
+            _session._input_actions->disconnect();
+        }
+    }
+
+    void disconnect_voice()
+    {
+        std::lock_guard<std::mutex> lock(_controller_mutex);
+        if (_session._voice_input != nullptr) {
+            _pinned_microphone.stop_for_safety(
+                *_session._voice_input, _now_ms);
+            _session._voice_input->handle_disconnect();
+        }
+    }
+
+    void disconnect_voice_probe()
+    {
+        if (_session._voice_probe != nullptr) {
+            _session._voice_probe->handle_disconnect();
+        }
+    }
+
+    void shutdown_voice()
+    {
+        std::lock_guard<std::mutex> lock(_controller_mutex);
+        if (_session._voice_input != nullptr) {
+            _pinned_microphone.stop_for_safety(
+                *_session._voice_input, _now_ms);
+            (void)_session._voice_input->set_task_route(0);
+            _session._voice_input->shutdown();
+        }
+    }
+
+    void shutdown_voice_probe()
+    {
+        if (_session._voice_probe != nullptr) {
+            _session._voice_probe->shutdown();
+        }
+    }
+
+    void stop_transport()
+    {
+        if (_session._transport != nullptr) {
+            _session._transport->stop();
+        }
+    }
+
+    void release_resources()
+    {
+        _session.release_resources();
+    }
+
+private:
+    CodexRuntimeSession& _session;
+    PinnedMicrophoneController& _pinned_microphone;
+    std::mutex& _controller_mutex;
+    uint32_t _now_ms;
+};
+
 CodexRuntimeSession::~CodexRuntimeSession()
 {
     if (_voice_input != nullptr) {
@@ -62,23 +137,8 @@ void CodexRuntimeSession::handle_disconnect(
     std::mutex& controller_mutex,
     uint32_t now_ms)
 {
-    if (_lifecycle.disconnect() !=
-        CodexRuntimeCleanupAction::Disconnect) {
-        return;
-    }
-    if (_input_actions != nullptr) {
-        _input_actions->disconnect();
-    }
-    {
-        std::lock_guard<std::mutex> lock(controller_mutex);
-        if (_voice_input != nullptr) {
-            pinned_microphone.stop_for_safety(*_voice_input, now_ms);
-            _voice_input->handle_disconnect();
-        }
-    }
-    if (_voice_probe != nullptr) {
-        _voice_probe->handle_disconnect();
-    }
+    Cleanup cleanup(*this, pinned_microphone, controller_mutex, now_ms);
+    (void)_lifecycle.disconnect(cleanup);
 }
 
 void CodexRuntimeSession::shutdown(
@@ -86,27 +146,8 @@ void CodexRuntimeSession::shutdown(
     std::mutex& controller_mutex,
     uint32_t now_ms)
 {
-    if (_lifecycle.shutdown() != CodexRuntimeCleanupAction::Shutdown) {
-        return;
-    }
-    if (_input_actions != nullptr) {
-        _input_actions->disconnect();
-    }
-    {
-        std::lock_guard<std::mutex> lock(controller_mutex);
-        if (_voice_input != nullptr) {
-            pinned_microphone.stop_for_safety(*_voice_input, now_ms);
-            (void)_voice_input->set_task_route(0);
-            _voice_input->shutdown();
-        }
-    }
-    if (_voice_probe != nullptr) {
-        _voice_probe->shutdown();
-    }
-    if (_transport != nullptr) {
-        _transport->stop();
-    }
-    release_resources();
+    Cleanup cleanup(*this, pinned_microphone, controller_mutex, now_ms);
+    (void)_lifecycle.shutdown(cleanup);
 }
 
 CodexBleTransport* CodexRuntimeSession::transport() const
