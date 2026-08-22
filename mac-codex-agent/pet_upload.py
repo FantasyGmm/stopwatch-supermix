@@ -208,6 +208,12 @@ class PetUploader:
         canonical = self._canonical_package(package)
         if self._watch_state is None:
             await self.query()
+        if not (
+            self._watch_state.schema_min
+            <= SCHEMA_VERSION
+            <= self._watch_state.schema_max
+        ):
+            raise PetUnsupportedError("Firmware update required")
         async with self._operation_lock:
             self._ensure_connected()
             await self._ensure_notifications()
@@ -374,6 +380,48 @@ class PetUploader:
         *,
         request_id: Optional[str] = None,
     ) -> PetWatchState:
+        resolved_request_id = request_id or secrets.token_hex(8)
+        try:
+            return await self._restore_once(
+                progress, request_id=resolved_request_id
+            )
+        except asyncio.CancelledError:
+            raise
+        except PetCancelledError:
+            raise
+        except Exception:
+            try:
+                state = await self.query()
+            except asyncio.CancelledError:
+                raise
+            except Exception as reconciliation_error:
+                previous = self._watch_state
+                self._watch_state = PetWatchState(
+                    self._watch_id,
+                    PetCapability.OFFLINE,
+                    previous.source if previous is not None else "built-in",
+                    previous.schema_min if previous is not None else 0,
+                    previous.schema_max if previous is not None else 0,
+                    previous.generation if previous is not None else 0,
+                    previous.active_hash if previous is not None else bytes(32),
+                    False,
+                )
+                raise PetUploadError(
+                    "restore result could not be reconciled"
+                ) from reconciliation_error
+            if state.source == "built-in" and not any(state.active_hash):
+                self._publish(
+                    progress,
+                    PetProgress(resolved_request_id, "installed", 0, 0),
+                )
+            return state
+
+    async def _restore_once(
+        self,
+        progress,
+        *,
+        request_id: Optional[str] = None,
+    ) -> PetWatchState:
         async with self._operation_lock:
             self._ensure_connected()
             await self._ensure_notifications()
@@ -437,8 +485,10 @@ class PetUploader:
                 status = decode_status(self._key, bytes(payload))
                 if (
                     status.transaction_id != operation.transaction_id
-                    or not operation.replay.accept(status)
+                    or status.exchange_nonce != operation.nonce
                 ):
+                    return
+                if not operation.replay.accept(status):
                     raise PetUploadError("stale or replayed pet status")
                 operation.statuses.put_nowait(status)
             except asyncio.QueueFull:

@@ -25,6 +25,7 @@ from pet_upload import (
     PetOperation,
     PetProgress,
     PetRequest,
+    PetUnsupportedError,
     PetUploadError,
     PetUploader,
     PetWatchState,
@@ -62,6 +63,10 @@ class FakePetTransport:
         drop_all_chunk_progress=False,
         conflicting_chunk_progress=False,
         drop_commit_status=False,
+        drop_restore_status=False,
+        drop_query_after_restore=False,
+        schema_min=1,
+        schema_max=1,
     ):
         self.negotiated_mtu = mtu
         self.connected = connected
@@ -70,14 +75,21 @@ class FakePetTransport:
         self.drop_all_chunk_progress = drop_all_chunk_progress
         self.conflicting_chunk_progress = conflicting_chunk_progress
         self.drop_commit_status = drop_commit_status
+        self.drop_restore_status = drop_restore_status
+        self.drop_query_after_restore = drop_query_after_restore
+        self.schema_min = schema_min
+        self.schema_max = schema_max
         self.calls = []
         self.writes = []
+        self.status_frames = []
+        self.delayed_status = None
         self.handler = None
         self.status_sequence = 0
         self.acknowledged = 0
         self.active_hash = bytes(32)
         self.generation = 0
         self._dropped = False
+        self._restore_seen = False
 
     async def enable_pet_notifications(self, handler):
         self.calls.append("subscribe")
@@ -95,18 +107,24 @@ class FakePetTransport:
         self.calls.append("write")
         self.writes.append(bytes(payload))
         control = decode_control(KEY, bytes(payload))
+        if self.delayed_status is not None:
+            delayed = self.delayed_status
+            self.delayed_status = None
+            await self.handler(delayed)
         if control.kind in (MessageKind.QUERY, MessageKind.BEGIN, MessageKind.RESTORE):
             self.status_sequence = 0
         self.status_sequence += 1
         if control.kind == MessageKind.QUERY:
+            if self._restore_seen and self.drop_query_after_restore:
+                return
             status = PetStatus(
                 MessageKind.STATE,
                 StateStatus(
                     control.transaction_id,
                     PetSource.CUSTOM if any(self.active_hash) else PetSource.BUILT_IN,
                     True,
-                    1,
-                    1,
+                    self.schema_min,
+                    self.schema_max,
                     self.generation,
                     self.active_hash,
                 ),
@@ -148,8 +166,11 @@ class FakePetTransport:
                 ),
             )
         elif control.kind == MessageKind.RESTORE:
+            self._restore_seen = True
             self.generation += 1
             self.active_hash = bytes(32)
+            if self.drop_restore_status:
+                return
             status = PetStatus(
                 MessageKind.STATE,
                 StateStatus(
@@ -175,6 +196,7 @@ class FakePetTransport:
             self.status_sequence,
             status,
         )
+        self.status_frames.append((status.kind, encoded))
         await self.handler(encoded)
 
 
@@ -411,6 +433,54 @@ class PetUploaderTests(unittest.IsolatedAsyncioTestCase):
             480,
         )
 
+    async def test_lost_restore_state_requeries_without_retry(self):
+        transport = FakePetTransport(drop_restore_status=True)
+        uploader = PetUploader(
+            transport,
+            KEY,
+            7,
+            self.nonce_factory,
+            watch_id=b"W" * 16,
+            acknowledgement_timeout=0.01,
+        )
+        await uploader.upload(PACKAGE, lambda _state: None)
+        states = []
+
+        reconciled = await uploader.restore(states.append, request_id="restore")
+
+        kinds = [decode_control(KEY, raw).kind for raw in transport.writes]
+        self.assertEqual(kinds.count(MessageKind.RESTORE), 1)
+        self.assertEqual(kinds.count(MessageKind.QUERY), 2)
+        self.assertEqual(reconciled.source, "built-in")
+        self.assertEqual(reconciled.active_hash, bytes(32))
+        self.assertEqual(states[-1].phase, "installed")
+
+    async def test_lost_restore_and_query_marks_prior_state_non_authoritative(self):
+        transport = FakePetTransport(
+            drop_restore_status=True,
+            drop_query_after_restore=True,
+        )
+        uploader = PetUploader(
+            transport,
+            KEY,
+            7,
+            self.nonce_factory,
+            watch_id=b"W" * 16,
+            acknowledgement_timeout=0.01,
+        )
+        await uploader.upload(PACKAGE, lambda _state: None)
+
+        with self.assertRaises(PetUploadError):
+            await uploader.restore(lambda _state: None)
+
+        kinds = [decode_control(KEY, raw).kind for raw in transport.writes]
+        self.assertEqual(kinds.count(MessageKind.RESTORE), 1)
+        self.assertEqual(kinds.count(MessageKind.QUERY), 2)
+        self.assertEqual(
+            uploader.watch_state.capability, PetCapability.OFFLINE
+        )
+        self.assertFalse(uploader.watch_state.usable)
+
     async def test_offline_and_unsupported_channels_fail_closed(self):
         for transport, message in (
             (FakePetTransport(connected=False), "offline"),
@@ -422,6 +492,69 @@ class PetUploaderTests(unittest.IsolatedAsyncioTestCase):
                 )
                 with self.assertRaisesRegex(PetUploadError, message):
                     await uploader.query()
+
+    async def test_schema_mismatch_rejects_upload_before_begin_but_allows_restore(self):
+        transport = FakePetTransport(schema_min=2, schema_max=2)
+        uploader = PetUploader(
+            transport,
+            KEY,
+            7,
+            self.nonce_factory,
+            watch_id=b"W" * 16,
+        )
+
+        state = await uploader.query()
+        with self.assertRaisesRegex(
+            PetUnsupportedError, "Firmware update required"
+        ):
+            await uploader.upload(PACKAGE, lambda _progress: None)
+
+        kinds = [decode_control(KEY, raw).kind for raw in transport.writes]
+        self.assertNotIn(MessageKind.BEGIN, kinds)
+        self.assertIs(uploader.watch_state, state)
+        restored = await uploader.restore(lambda _progress: None)
+        self.assertEqual(restored.source, "built-in")
+
+    async def test_delayed_prior_state_is_retired_during_fresh_query(self):
+        transaction_ids = iter((101, 101))
+        transport = FakePetTransport()
+        uploader = PetUploader(
+            transport,
+            KEY,
+            7,
+            self.nonce_factory,
+            watch_id=b"W" * 16,
+            transaction_id_factory=lambda: next(transaction_ids),
+        )
+
+        await uploader.query()
+        transport.delayed_status = transport.status_frames[-1][1]
+
+        state = await uploader.query()
+        self.assertEqual(state.source, "built-in")
+
+    async def test_delayed_prior_progress_is_retired_during_fresh_upload(self):
+        transaction_ids = iter((201, 202, 203))
+        transport = FakePetTransport(mtu=517)
+        uploader = PetUploader(
+            transport,
+            KEY,
+            7,
+            self.nonce_factory,
+            watch_id=b"W" * 16,
+            transaction_id_factory=lambda: next(transaction_ids),
+        )
+
+        await uploader.upload(PACKAGE, lambda _progress: None)
+        prior_progress = next(
+            frame
+            for kind, frame in transport.status_frames
+            if kind == MessageKind.PROGRESS
+        )
+        transport.delayed_status = prior_progress
+
+        state = await uploader.upload(PACKAGE, lambda _progress: None)
+        self.assertEqual(state.source, "custom")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 import os
 import pathlib
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -7,7 +8,7 @@ import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
-from pet_cache import PetPreviewCache
+from pet_cache import PetCacheError, PetPreviewCache
 from pet_package import HEIGHT, WIDTH, PetFrame, encode_package
 
 
@@ -105,6 +106,66 @@ class PetPreviewCacheTests(unittest.TestCase):
         self.cache.remove_watch(self.watch_id)
 
         self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep")
+
+    def test_symlinked_cache_root_is_never_read_written_or_traversed(self):
+        target = self.root / "target"
+        target.mkdir()
+        target_cache = PetPreviewCache(target)
+        target_cache.store(self.watch_id, self.package)
+        sentinel = target / self.watch_id.hex() / "sentinel"
+        sentinel.write_text("keep", encoding="utf-8")
+        linked_root = self.root / "Pets"
+        os.symlink(target, linked_root)
+        linked_cache = PetPreviewCache(linked_root)
+
+        self.assertIsNone(
+            linked_cache.load(self.watch_id, self.package.sha256)
+        )
+        with self.assertRaises(PetCacheError):
+            linked_cache.store(self.watch_id, self.package)
+        linked_cache.remove_watch(self.watch_id)
+
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep")
+
+    def test_fifo_cache_leaf_is_rejected_without_blocking(self):
+        package_path = (
+            self.root
+            / self.watch_id.hex()
+            / self.package.sha256.hex()
+            / "package.cxp"
+        )
+        package_path.parent.mkdir(parents=True)
+        os.mkfifo(package_path)
+        code = """
+import pathlib
+import sys
+from pet_cache import PetPreviewCache
+
+root = pathlib.Path(sys.argv[1])
+watch_id = bytes.fromhex(sys.argv[2])
+package_hash = bytes.fromhex(sys.argv[3])
+if PetPreviewCache(root).load(watch_id, package_hash) is not None:
+    raise SystemExit(1)
+"""
+        environment = os.environ.copy()
+        environment["PYTHONPATH"] = str(pathlib.Path(__file__).parents[1])
+        try:
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    code,
+                    str(self.root),
+                    self.watch_id.hex(),
+                    self.package.sha256.hex(),
+                ],
+                env=environment,
+                timeout=0.5,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            self.fail("cache read blocked while opening FIFO")
+        self.assertEqual(completed.returncode, 0)
 
 
 if __name__ == "__main__":

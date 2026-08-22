@@ -73,9 +73,11 @@ class PetPreviewCache:
 
     def remove_watch(self, watch_id: bytes) -> None:
         path = self._watch_path(self._watch_id(watch_id))
+        if not self._real_directory(self._root):
+            return
         if path.exists() or path.is_symlink():
             self._remove_bounded(path)
-            if self._root.exists() and self._root.is_dir():
+            if self._real_directory(self._root):
                 self._fsync_directory(self._root)
 
     def _publish_atomic(
@@ -89,13 +91,21 @@ class PetPreviewCache:
         expected = self._cache_path(watch_id, package.sha256)
         if destination != expected:
             raise PetCacheError("cache destination is not canonical")
-        self._root.mkdir(parents=True, exist_ok=True)
-        if self._root.is_symlink():
+        if self._root.exists() or self._root.is_symlink():
+            if not self._real_directory(self._root):
+                raise PetCacheError("cache root must be a real directory")
+        else:
+            self._root.mkdir(parents=True, exist_ok=False)
+        if not self._real_directory(self._root):
             raise PetCacheError("cache root must not be a symlink")
         watch_path = self._watch_path(watch_id)
-        if watch_path.is_symlink():
+        if watch_path.exists() or watch_path.is_symlink():
+            if not self._real_directory(watch_path):
+                raise PetCacheError("watch cache must be a real directory")
+        else:
+            watch_path.mkdir(exist_ok=False)
+        if not self._real_directory(watch_path):
             raise PetCacheError("watch cache must not be a symlink")
-        watch_path.mkdir(exist_ok=True)
 
         existing = self._load_verified(destination, package.sha256)
         if existing is not None:
@@ -139,9 +149,9 @@ class PetPreviewCache:
             active_hash = self._hash(active_hash)
             if (
                 path != self._cache_path(watch_id, active_hash)
-                or path.parent.is_symlink()
-                or path.is_symlink()
-                or not path.is_dir()
+                or not self._real_directory(self._root)
+                or not self._real_directory(path.parent)
+                or not self._real_directory(path)
             ):
                 return None
             package_path = path / PACKAGE_NAME
@@ -226,19 +236,54 @@ class PetPreviewCache:
 
     @staticmethod
     def _fsync_directory(path: pathlib.Path) -> None:
-        descriptor = os.open(str(path), os.O_RDONLY)
+        flags = os.O_RDONLY
+        flags |= getattr(os, "O_DIRECTORY", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(str(path), flags)
         try:
+            if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+                raise PetCacheError("cache directory is invalid")
             os.fsync(descriptor)
         finally:
             os.close(descriptor)
 
     @staticmethod
     def _read_bounded(path: pathlib.Path, maximum: int) -> bytes:
-        with path.open("rb") as stream:
-            payload = stream.read(maximum + 1)
+        before = path.lstat()
+        if not stat.S_ISREG(before.st_mode):
+            raise PetCacheError("cache leaf must be a regular file")
+        flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(str(path), flags)
+        try:
+            opened = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(opened.st_mode)
+                or opened.st_dev != before.st_dev
+                or opened.st_ino != before.st_ino
+            ):
+                raise PetCacheError("cache leaf changed during validation")
+            chunks = []
+            remaining = maximum + 1
+            while remaining:
+                chunk = os.read(descriptor, remaining)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            payload = b"".join(chunks)
+        finally:
+            os.close(descriptor)
         if len(payload) > maximum:
             raise PetCacheError("cache file exceeds its bound")
         return payload
+
+    @staticmethod
+    def _real_directory(path: pathlib.Path) -> bool:
+        try:
+            return stat.S_ISDIR(path.lstat().st_mode)
+        except OSError:
+            return False
 
     def _remove_bounded(self, path: pathlib.Path) -> None:
         root = pathlib.Path(path)

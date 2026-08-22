@@ -34,7 +34,7 @@ from codex_task_composer import CodexTaskComposerClient
 from combined_collector import CompositeStateCollector
 from pairing_client import PairingClient, WatchCredential
 from pet_cache import PetPreviewCache
-from pet_package import PetPackage
+from pet_package import SCHEMA_VERSION, PetPackage
 from pet_upload import (
     PetCapability,
     PetOperation,
@@ -100,6 +100,7 @@ _VOICE_SECRET_HEX = re.compile(
 _VOICE_SECRET_BASE64 = re.compile(
     r"(?<![A-Za-z0-9+/])[A-Za-z0-9+/]{22}==(?=$|[^A-Za-z0-9+/=])"
 )
+_PET_CANCEL_SCHEDULED = object()
 
 _VOICE_UNAVAILABLE_REASONS = {
     VoiceState.DRIVER_REQUIRED: DRIVER_REQUIRED,
@@ -145,7 +146,16 @@ class _BleSessionContext:
     accessibility_available: bool = True
     pet_uploader: Optional[object] = None
     pet_generation: int = 0
+    pet_retirement: Optional[object] = None
     shutdown_task: Optional[asyncio.Task] = None
+
+
+@dataclasses.dataclass
+class _PetRetirement:
+    uploader: Optional[object]
+    request_task: Optional[asyncio.Task]
+    cancel_task: Optional[asyncio.Task]
+    close_task: Optional[asyncio.Task] = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -503,6 +513,7 @@ class AgentRuntime:
         self._pet_generation = 0
         self._pet_request: Optional[PetRequest] = None
         self._pet_task: Optional[asyncio.Task] = None
+        self._pet_cancel_task = None
 
     def snapshot(self) -> AgentSnapshot:
         with self._state_lock:
@@ -556,6 +567,7 @@ class AgentRuntime:
                 active = self._pet_request
                 uploader = self._pet_uploader
                 generation = self._pet_generation
+                cancellation_owned = self._pet_cancel_task is not None
             if (
                 loop is None
                 or active is None
@@ -569,6 +581,18 @@ class AgentRuntime:
                     ),
                 )
                 return False
+            if cancellation_owned:
+                return True
+            with self._pet_lock:
+                if (
+                    self._pet_request is not active
+                    or self._pet_uploader is not uploader
+                    or self._pet_generation != generation
+                ):
+                    return False
+                if self._pet_cancel_task is not None:
+                    return True
+                self._pet_cancel_task = _PET_CANCEL_SCHEDULED
             try:
                 loop.call_soon_threadsafe(
                     self._start_pet_cancel,
@@ -577,6 +601,9 @@ class AgentRuntime:
                     generation,
                 )
             except RuntimeError:
+                with self._pet_lock:
+                    if self._pet_cancel_task is _PET_CANCEL_SCHEDULED:
+                        self._pet_cancel_task = None
                 self._publish_pet_progress(
                     request.callback,
                     PetProgress(
@@ -588,7 +615,10 @@ class AgentRuntime:
 
         with self._pet_lock:
             loop = self._loop
-            if self._pet_request is not None:
+            if (
+                self._pet_request is not None
+                or self._pet_cancel_task is not None
+            ):
                 error_code = "busy"
             elif (
                 loop is None
@@ -596,6 +626,15 @@ class AgentRuntime:
                 or self._pet_state.capability is not PetCapability.READY
             ):
                 error_code = "offline"
+            elif (
+                request.operation is PetOperation.UPLOAD
+                and not (
+                    self._pet_state.schema_min
+                    <= SCHEMA_VERSION
+                    <= self._pet_state.schema_max
+                )
+            ):
+                error_code = "unsupported"
             else:
                 error_code = ""
                 self._pet_request = request
@@ -795,15 +834,19 @@ class AgentRuntime:
         with self._pet_lock:
             active = self._pet_request
             if (
-                active is None
+                self._pet_cancel_task is not _PET_CANCEL_SCHEDULED
+                or active is None
                 or active.request_id != request.request_id
                 or self._pet_uploader is not uploader
                 or self._pet_generation != generation
             ):
+                if self._pet_cancel_task is _PET_CANCEL_SCHEDULED:
+                    self._pet_cancel_task = None
                 return
-        asyncio.create_task(
-            self._execute_pet_cancel(request, uploader, generation)
-        )
+            task = asyncio.create_task(
+                self._execute_pet_cancel(request, uploader, generation)
+            )
+            self._pet_cancel_task = task
 
     async def _execute_pet_cancel(
         self,
@@ -827,6 +870,11 @@ class AgentRuntime:
                         getattr(error, "error_code", "cancel_failed"),
                     ),
                 )
+        finally:
+            current_task = asyncio.current_task()
+            with self._pet_lock:
+                if self._pet_cancel_task is current_task:
+                    self._pet_cancel_task = None
 
     async def _execute_pet_request(
         self,
@@ -878,15 +926,14 @@ class AgentRuntime:
                 state = await uploader.restore(
                     publish, request_id=request.request_id
                 )
-                if (
-                    not self._valid_ready_pet_state(state)
-                    or state.source != "built-in"
-                    or any(state.active_hash)
-                ):
+                if not self._valid_ready_pet_state(state):
                     raise RuntimeError("watch returned conflicting restore state")
-                if self._accept_pet_result(
+                accepted = self._accept_pet_result(
                     request, uploader, generation, state
-                ):
+                )
+                if state.source != "built-in" or any(state.active_hash):
+                    raise RuntimeError("watch restore result was not applied")
+                if accepted:
                     if installed_progress is not None:
                         self._publish_pet_progress(
                             request.callback, installed_progress
@@ -902,6 +949,17 @@ class AgentRuntime:
         except asyncio.CancelledError:
             raise
         except Exception as error:
+            reconciled = getattr(uploader, "watch_state", None)
+            if (
+                self._valid_offline_pet_state(reconciled)
+                and self._pet_request_is_current(
+                    request.request_id, uploader, generation
+                )
+                and reconciled.watch_id == self._pet_state.watch_id
+            ):
+                self._accept_pet_result(
+                    request, uploader, generation, reconciled
+                )
             if self._pet_request_is_current(
                 request.request_id, uploader, generation
             ):
@@ -976,6 +1034,28 @@ class AgentRuntime:
             and not isinstance(state.generation, bool)
             and 0 <= state.generation <= 0xFFFFFFFF
             and isinstance(state.usable, bool)
+        )
+
+    @staticmethod
+    def _valid_offline_pet_state(state) -> bool:
+        return (
+            isinstance(state, PetWatchState)
+            and state.capability is PetCapability.OFFLINE
+            and isinstance(state.watch_id, bytes)
+            and len(state.watch_id) == 16
+            and any(state.watch_id)
+            and state.source in ("built-in", "custom")
+            and isinstance(state.active_hash, bytes)
+            and len(state.active_hash) == 32
+            and isinstance(state.schema_min, int)
+            and not isinstance(state.schema_min, bool)
+            and isinstance(state.schema_max, int)
+            and not isinstance(state.schema_max, bool)
+            and 0 <= state.schema_min <= state.schema_max <= 0xFFFF
+            and isinstance(state.generation, int)
+            and not isinstance(state.generation, bool)
+            and 0 <= state.generation <= 0xFFFFFFFF
+            and state.usable is False
         )
 
     async def _prepare_pet(self, context: _BleSessionContext) -> None:
@@ -1070,25 +1150,38 @@ class AgentRuntime:
         self,
         context: _BleSessionContext,
         capability: PetCapability = PetCapability.OFFLINE,
-    ) -> None:
-        uploader = self._detach_pet_uploader(context, capability)
-        if uploader is not None:
-            await self._bounded_cleanup(
-                uploader.close(), "Pet uploader cleanup"
-            )
+    ) -> bool:
+        deadline = (
+            asyncio.get_running_loop().time() + self._disconnect_timeout
+        )
+        retirement = self._detach_pet_uploader(context, capability)
+        return await self._quiesce_pet_retirement(
+            context, retirement, deadline, 1
+        )
 
     def _detach_pet_uploader(
         self,
         context: _BleSessionContext,
         capability: PetCapability = PetCapability.OFFLINE,
-    ):
+    ) -> _PetRetirement:
+        if context.pet_retirement is not None:
+            return context.pet_retirement
         uploader = context.pet_uploader
+        request_task = None
+        cancel_task = None
         with self._pet_lock:
             if context.pet_generation == self._pet_generation:
                 self._pet_generation += 1
                 self._pet_uploader = None
                 self._pet_request = None
+                request_task = self._pet_task
+                cancel_task = (
+                    self._pet_cancel_task
+                    if isinstance(self._pet_cancel_task, asyncio.Task)
+                    else None
+                )
                 self._pet_task = None
+                self._pet_cancel_task = None
                 previous = self._pet_state
                 self._pet_state = PetWatchState(
                     previous.watch_id,
@@ -1102,7 +1195,51 @@ class AgentRuntime:
                 )
         context.pet_uploader = None
         context.pet_generation = 0
-        return uploader
+        retirement = _PetRetirement(uploader, request_task, cancel_task)
+        context.pet_retirement = retirement
+        return retirement
+
+    async def _quiesce_pet_retirement(
+        self,
+        context: _BleSessionContext,
+        retirement: _PetRetirement,
+        deadline: float,
+        remaining_steps: int,
+    ) -> bool:
+        if retirement.uploader is not None and retirement.close_task is None:
+            retirement.close_task = asyncio.create_task(
+                retirement.uploader.close()
+            )
+            await asyncio.sleep(0)
+
+        owned = tuple(
+            task
+            for task in (retirement.cancel_task, retirement.request_task)
+            if task is not None
+        )
+        for task in owned:
+            if not task.done():
+                task.cancel()
+
+        cleaned = True
+        operations = list(owned)
+        if retirement.close_task is not None:
+            operations.append(retirement.close_task)
+        for index, task in enumerate(operations):
+            if task.done():
+                await _await_owned_task(task)
+                continue
+            succeeded = await self._cleanup_before_deadline(
+                lambda task=task: _await_owned_task(task),
+                "Pet task cleanup",
+                deadline,
+                remaining_steps + len(operations) - index,
+            )
+            cleaned = cleaned and succeeded and task.done()
+
+        if cleaned:
+            context.pet_retirement = None
+        return cleaned
 
     async def run(self) -> None:
         loop = asyncio.get_running_loop()
@@ -1443,9 +1580,18 @@ class AgentRuntime:
         context: _BleSessionContext,
         credential: WatchCredential,
     ) -> bool:
-        await self._retire_pet_uploader(
+        pet_retired = await self._retire_pet_uploader(
             context, PetCapability.AUTHENTICATING
         )
+        if not pet_retired:
+            self._set_pet_state(
+                dataclasses.replace(
+                    self.pet_snapshot(),
+                    capability=PetCapability.OFFLINE,
+                    usable=False,
+                )
+            )
+            return False
         context.input_active = False
         await self._bounded_cleanup(
             context.transport.disable_input_actions(),
@@ -1890,19 +2036,28 @@ class AgentRuntime:
                 context.voice_key_epoch,
             )
 
-        pet_uploader = self._detach_pet_uploader(context)
+        pet_retirement = self._detach_pet_uploader(context)
         retired_consumer = self._retire_voice_generation(context.transport)
         has_service = context.voice_service is not None
+        has_pet = any(
+            item is not None
+            for item in (
+                pet_retirement.uploader,
+                pet_retirement.request_task,
+                pet_retirement.cancel_task,
+                pet_retirement.close_task,
+            )
+        )
         future_steps = (
-            int(pet_uploader is not None)
+            int(has_pet)
             + int(has_service)
             + int(retired_consumer is not None)
             + 2
         )
-        if pet_uploader is not None:
-            await self._cleanup_before_deadline(
-                pet_uploader.close,
-                "Pet uploader cleanup",
+        if has_pet:
+            await self._quiesce_pet_retirement(
+                context,
+                pet_retirement,
                 deadline,
                 future_steps + 1,
             )
@@ -2091,6 +2246,16 @@ async def _await_voice_consumer(task: asyncio.Task) -> None:
         await task
     except asyncio.CancelledError:
         pass
+    except Exception:
+        pass
+
+
+async def _await_owned_task(task: asyncio.Task) -> None:
+    try:
+        await asyncio.shield(task)
+    except asyncio.CancelledError:
+        if not task.done():
+            raise
     except Exception:
         pass
 
