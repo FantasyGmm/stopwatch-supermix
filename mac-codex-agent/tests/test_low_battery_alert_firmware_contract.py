@@ -205,14 +205,17 @@ class LowBatteryAlertFirmwareContractTests(unittest.TestCase):
             "isAudioPlaying()",
         ):
             self.assertIn(token, header)
-        self.assertIn("_bat_sample_revision++", pmic)
+        self.assertRegex(pmic, r"(?:\+\+_bat_sample_revision|_bat_sample_revision\+\+)")
         self.assertIn("BatterySampleSnapshot Hal::batterySampleSnapshot()", pmic)
         snapshot_getter = pmic[
             pmic.index("BatterySampleSnapshot Hal::batterySampleSnapshot()") :
             pmic.index("uint32_t Hal::batterySampleRevision()")
         ]
         self.assertEqual(snapshot_getter.count("lock(_bat_level_mutex)"), 1)
-        self.assertIn("return {_bat_level, _bat_sample_revision};", snapshot_getter)
+        self.assertIn(
+            "return {_bat_level, _bat_sample_revision, _bat_raw_mv, _bat_filtered_mv};",
+            snapshot_getter,
+        )
         self.assertIn("uint32_t Hal::batterySampleRevision()", pmic)
         self.assertIn("bool Hal::isDisplayVisible()", display)
         self.assertIn("return _bl_brightness > 0", display)
