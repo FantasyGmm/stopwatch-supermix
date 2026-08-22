@@ -216,10 +216,15 @@ destructive and outside this feature.
 ## Runtime and Memory
 
 When Codex opens, the runtime validates the active package and loads its
-compressed payload into PSRAM. It owns one reusable `RGB565A8` frame buffer for
-the `144 x 156` canvas and decodes one bounded frame at a time. Package memory,
-frame memory, and LVGL object ownership belong to a dedicated pet runtime, not
-raw view pointers held by BLE callbacks.
+compressed payload into PSRAM. Normal playback owns one reusable `RGB565A8`
+frame buffer for the `144 x 156` canvas and decodes one bounded frame at a time.
+During a live custom-to-custom replacement only, it may allocate one second
+transient frame buffer and retain both bounded package views long enough to
+decode the first new frame and swap descriptors on the LVGL thread. It releases
+the old package and buffer immediately after that swap; allocation failure keeps
+the old animation instead of blanking it. Package memory, frame memory, and
+LVGL object ownership belong to a dedicated pet runtime, not raw view pointers
+held by BLE callbacks.
 
 BLE completion publishes only an immutable generation/hash notification. The
 UI thread decides when to prepare and swap the renderer. App close, Home,
