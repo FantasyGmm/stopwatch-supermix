@@ -24,6 +24,7 @@
 #include <wifi_manager.h>
 #include <esp_websocket_client.h>
 #include <esp_random.h>
+#include <esp_timer.h>
 #include <mbedtls/sha256.h>
 #include <mooncake_log.h>
 #include <algorithm>
@@ -374,6 +375,8 @@ void AppCodexStatus::onOpen()
         _production_voice_mtu = 23;
     }
     _production_voice_connection_epoch = 0;
+    _pet_connection_epoch = 0;
+    _pet_subscription_active = false;
     _voice_status.store(VoiceInputUiState::Off);
     _ws_connected    = false;
     _wifi_lease.reset();
@@ -438,6 +441,15 @@ void AppCodexStatus::onOpen()
     sync_agent_panel_registry();
     (void)sync_task_detail_credential();
 
+    _pet_files = std::make_unique<codex_pet::FatPetFileSystem>();
+    _pet_allocator =
+        std::make_unique<codex_pet::PsramPetBufferAllocator>();
+    _pet_selection_store =
+        std::make_unique<codex_pet::NvsPetSelectionStore>();
+    _pet_store = std::make_unique<codex_pet::CodexPetStore>(
+        *_pet_files, *_pet_allocator, *_pet_selection_store);
+    _pet_selection = _pet_store->load_selection();
+
     {
         LvglLockGuard lock;
         create_view();
@@ -450,10 +462,19 @@ void AppCodexStatus::onOpen()
         _voice_probe = _runtime_session.voice_probe();
         _voice_input = _runtime_session.voice_input();
         if (runtime_started) {
+            _pet_transfer = std::make_unique<codex_pet::CodexPetTransfer>(
+                *_pet_store, _ble_transport->pet_crypto());
             if (_agent_registry_ready) {
                 (void)_ble_transport->set_voice_credential(
                     _agent_registry.master_key(),
                     _agent_registry.key_epoch());
+                (void)_ble_transport->set_pet_credential(
+                    _agent_registry.master_key(),
+                    _agent_registry.key_epoch());
+                if (_pet_transfer) {
+                    _pet_transfer->on_credential_replaced(
+                        _agent_registry.key_epoch());
+                }
                 std::lock_guard<std::mutex> controller_lock(
                     _task_controller_mutex);
                 if (_voice_input) {
@@ -606,6 +627,11 @@ void AppCodexStatus::onRunning()
         const uint32_t connection_epoch =
             _ble_transport->connection_epoch();
         if (connection_epoch != _production_voice_connection_epoch) {
+            if (_pet_transfer) {
+                _pet_transfer->on_disconnect(_pet_connection_epoch);
+            }
+            _pet_connection_epoch = connection_epoch;
+            _pet_subscription_active = false;
             _production_voice_connection_epoch = connection_epoch;
             _production_voice_ready = false;
             if (_input_action_controller) {
@@ -633,6 +659,8 @@ void AppCodexStatus::onRunning()
             sync_agent_panel_registry();
             _agent_panel_dirty = true;
         }
+
+        process_pet_transfer(now, connection_epoch);
 
         CodexInputActionControl input_control = {};
         while (_ble_transport->take_input_action_control(input_control)) {
@@ -811,6 +839,56 @@ void AppCodexStatus::onRunning()
     render_status();
 }
 
+void AppCodexStatus::process_pet_transfer(
+    uint32_t now_ms,
+    uint32_t connection_epoch)
+{
+    if (!_ble_transport || !_pet_transfer) {
+        return;
+    }
+    const bool subscribed = _ble_transport->pet_subscribed();
+    if (_pet_subscription_active && !subscribed) {
+        _pet_transfer->on_subscription_lost();
+    }
+    _pet_subscription_active = subscribed;
+    if (!subscribed) {
+        return;
+    }
+
+    const auto deliver = [this](
+                             const codex_pet::PetTransferResult& result) {
+        if (result.selection_changed) {
+            _pet_selection = result.selection;
+        }
+        if (!result.has_status) {
+            return;
+        }
+        const CodexBleNotifyResult notify_result =
+            _ble_transport->notify_pet_status(
+                result.status.data(), result.status_size);
+        _pet_transfer->record_status_delivery(
+            result, notify_result == CodexBleNotifyResult::Accepted);
+    };
+
+    deliver(_pet_transfer->poll(
+        now_ms, connection_epoch, _ble_transport->pet_key_epoch()));
+
+    const int64_t started_us = esp_timer_get_time();
+    size_t handled = 0;
+    CodexPetControlFrame frame{};
+    while (handled < codex_pet::kPetControlsPerLoop &&
+           esp_timer_get_time() - started_us <
+               static_cast<int64_t>(codex_pet::kPetLoopBudgetUs) &&
+           _ble_transport->take_pet_control(frame)) {
+        ++handled;
+        deliver(_pet_transfer->handle(
+            frame,
+            now_ms,
+            connection_epoch,
+            _ble_transport->pet_key_epoch()));
+    }
+}
+
 void AppCodexStatus::onClose()
 {
     mclog::tagInfo(getAppInfo().name, "on close");
@@ -820,6 +898,12 @@ void AppCodexStatus::onClose()
     _voice_button_dispatcher.reset(false);
     stop_network_fallback();
     _voice_status.store(VoiceInputUiState::Off);
+    if (_pet_transfer) {
+        _pet_transfer->shutdown();
+    }
+    if (_ble_transport) {
+        _ble_transport->clear_pet_credential();
+    }
     _runtime_session.shutdown(
         _pinned_microphone_controller,
         _task_controller_mutex,
@@ -828,6 +912,14 @@ void AppCodexStatus::onClose()
     _voice_probe = nullptr;
     _input_action_controller = nullptr;
     _ble_transport = nullptr;
+    _pet_transfer.reset();
+    _pet_store.reset();
+    _pet_selection_store.reset();
+    _pet_allocator.reset();
+    _pet_files.reset();
+    _pet_selection = {};
+    _pet_connection_epoch = 0;
+    _pet_subscription_active = false;
     _agent_registry_store.reset();
     _agent_registry_backend.reset();
     _agent_registry_ready = false;
@@ -3187,6 +3279,13 @@ void AppCodexStatus::dispatch_agent_panel_decision(
                 (void)_ble_transport->set_voice_credential(
                     _agent_registry.master_key(),
                     _agent_registry.key_epoch());
+                (void)_ble_transport->set_pet_credential(
+                    _agent_registry.master_key(),
+                    _agent_registry.key_epoch());
+                if (_pet_transfer) {
+                    _pet_transfer->on_credential_replaced(
+                        _agent_registry.key_epoch());
+                }
                 if (_ble_transport->connected()) {
                     const bool removing_active =
                         _ble_transport->active_fingerprint() ==
@@ -3259,6 +3358,13 @@ void AppCodexStatus::dispatch_agent_panel_decision(
                 (void)_ble_transport->set_voice_credential(
                     _agent_registry.master_key(),
                     _agent_registry.key_epoch());
+                (void)_ble_transport->set_pet_credential(
+                    _agent_registry.master_key(),
+                    _agent_registry.key_epoch());
+                if (_pet_transfer) {
+                    _pet_transfer->on_credential_replaced(
+                        _agent_registry.key_epoch());
+                }
                 (void)_ble_transport->request_active_disconnect(true);
                 const uint16_t pending = _ble_transport->pending_handle();
                 if (pending != secure_pairing::kNoAgentConnection) {

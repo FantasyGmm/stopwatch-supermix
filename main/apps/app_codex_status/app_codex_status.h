@@ -21,6 +21,8 @@
 #include "codex_task_focus_gesture.h"
 #include "codex_task_focus_view.h"
 #include "codex_runtime_session.h"
+#include "codex_pet_store.h"
+#include "codex_pet_transfer.h"
 #include "agent_panel_model.h"
 #include "agent_panel_ui_layout.h"
 #include "agent_registry_store.h"
@@ -127,6 +129,12 @@ private:
     lv_timer_t* _pet_timer       = nullptr;
     esp_websocket_client_handle_t _ws_client = nullptr;
     CodexRuntimeSession _runtime_session;
+    std::unique_ptr<codex_pet::FatPetFileSystem> _pet_files;
+    std::unique_ptr<codex_pet::PsramPetBufferAllocator> _pet_allocator;
+    std::unique_ptr<codex_pet::NvsPetSelectionStore> _pet_selection_store;
+    std::unique_ptr<codex_pet::CodexPetStore> _pet_store;
+    std::unique_ptr<codex_pet::CodexPetTransfer> _pet_transfer;
+    codex_pet::PetSelection _pet_selection{};
     CodexBleTransport* _ble_transport = nullptr;
     BleVoiceProbeController* _voice_probe = nullptr;
     VoiceInputController* _voice_input = nullptr;
@@ -212,6 +220,8 @@ private:
     bool _task_voice_ready_applied = false;
     uint16_t _production_voice_mtu = 23;
     uint32_t _production_voice_connection_epoch = 0;
+    uint32_t _pet_connection_epoch = 0;
+    bool _pet_subscription_active = false;
     std::mutex _status_mutex;
     std::string _base_status = "START";
     uint32_t _base_status_color = 0;
@@ -276,6 +286,7 @@ private:
         uint32_t now_ms);
     void sync_agent_panel_registry();
     void process_secure_pairing(uint32_t now_ms);
+    void process_pet_transfer(uint32_t now_ms, uint32_t connection_epoch);
     bool send_pairing_empty(
         uint16_t connection_handle,
         secure_pairing::WireMessageType type,

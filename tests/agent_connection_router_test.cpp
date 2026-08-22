@@ -38,6 +38,31 @@ void test_active_voice_link_is_one_coherent_snapshot()
     assert(!disconnected.authorized);
 }
 
+void test_production_surface_checks_do_not_mutate_voice_subscription()
+{
+    using namespace secure_pairing;
+
+    AgentConnectionRouter router;
+    AgentFingerprint fingerprint = {};
+    fingerprint[0] = 0x51;
+    assert(router.connected(41) == AgentConnectionAdmission::Pending);
+    assert(router.authorize_pending(41, fingerprint));
+    assert(router.promote_pending(41));
+    assert(router.update_mtu(41, 256));
+    assert(router.update_voice_subscription(41, true));
+    assert(router.connected(42) == AgentConnectionAdmission::Pending);
+
+    const AgentVoiceLink before = router.active_voice_link();
+    assert(router.can_access(41, AgentGattSurface::Production));
+    assert(!router.can_access(42, AgentGattSurface::Production));
+    const AgentVoiceLink after = router.active_voice_link();
+    assert(after.handle == before.handle);
+    assert(after.generation == before.generation);
+    assert(after.mtu == before.mtu);
+    assert(after.subscribed == before.subscribed);
+    assert(after.authorized == before.authorized);
+}
+
 void test_connection_termination_holds_router_guard_through_submission()
 {
     std::mutex router_guard;
@@ -87,6 +112,7 @@ int main()
     using namespace secure_pairing;
 
     test_active_voice_link_is_one_coherent_snapshot();
+    test_production_surface_checks_do_not_mutate_voice_subscription();
     test_connection_termination_holds_router_guard_through_submission();
 
     AgentConnectionRouter router;

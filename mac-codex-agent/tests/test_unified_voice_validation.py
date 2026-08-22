@@ -64,6 +64,7 @@ EXPECTED_HOST_TESTS = (
     "codex_pet_package_test",
     "codex_pet_store_test",
     "codex_pet_protocol_test",
+    "codex_pet_transfer_test",
     "secure_pairing_crypto_test",
     "secure_pairing_protocol_test",
     "agent_registry_test",
@@ -220,7 +221,7 @@ output.chmod(0o700)
         declared_total = re.search(r"^TOTAL_STAGES=(\d+)$", runner, re.MULTILINE)
         self.assertIsNotNone(declared_total)
         self.assertEqual(total, int(declared_total.group(1)))
-        self.assertEqual(total, 66)
+        self.assertEqual(total, 67)
         self.assertEqual(len(stages), total)
         self.assertEqual([stage[0] for stage in stages], list(range(1, total + 1)))
         self.assertEqual({stage[1] for stage in stages}, {total})
@@ -259,6 +260,14 @@ output.chmod(0o700)
             },
             "codex_pet_protocol_test": {
                 "tests/codex_pet_protocol_test.cpp",
+                "main/apps/app_codex_status/codex_pet_protocol.cpp",
+                "main/apps/app_codex_status/voice_input_crypto.cpp",
+            },
+            "codex_pet_transfer_test": {
+                "tests/codex_pet_transfer_test.cpp",
+                "main/apps/app_codex_status/codex_pet_transfer.cpp",
+                "main/apps/app_codex_status/codex_pet_store.cpp",
+                "main/apps/app_codex_status/codex_pet_package.cpp",
                 "main/apps/app_codex_status/codex_pet_protocol.cpp",
                 "main/apps/app_codex_status/voice_input_crypto.cpp",
             },
