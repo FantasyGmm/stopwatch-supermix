@@ -444,25 +444,12 @@ void AppCodexStatus::onOpen()
     }
 
     if (_transport_mode != "wifi") {
-        _ble_transport = std::make_unique<CodexBleTransport>();
-        if (_ble_transport->start(_ble_name)) {
-            _input_action_controller =
-                std::make_unique<InputActionController>(
-                    _ble_transport->input_action_crypto());
-            _voice_probe = std::make_unique<BleVoiceProbeController>();
-            if (!_voice_probe->initialize()) {
-                _voice_probe.reset();
-            }
-            {
-                std::lock_guard<std::mutex> controller_lock(
-                    _task_controller_mutex);
-                _voice_input = std::make_unique<VoiceInputController>();
-                _voice_input->set_notification_transport(
-                    _ble_transport.get());
-                if (!_voice_input->initialize()) {
-                    _voice_input.reset();
-                }
-            }
+        const bool runtime_started = _runtime_session.start(_ble_name);
+        _ble_transport = _runtime_session.transport();
+        _input_action_controller = _runtime_session.input_actions();
+        _voice_probe = _runtime_session.voice_probe();
+        _voice_input = _runtime_session.voice_input();
+        if (runtime_started) {
             if (_agent_registry_ready) {
                 (void)_ble_transport->set_voice_credential(
                     _agent_registry.master_key(),
@@ -479,7 +466,6 @@ void AppCodexStatus::onOpen()
             set_status("BLE PAIR", kTextDim);
             set_host_text(_ble_name.c_str());
         } else {
-            _ble_transport.reset();
             set_status("BLE ERR", kCodexRed);
             if (_transport_mode == "auto") {
                 _wifi_fallback_started = true;
@@ -737,6 +723,7 @@ void AppCodexStatus::onRunning()
         }
 
         if (ble_connected && !_ble_was_connected) {
+            _runtime_session.begin_connection();
             stop_network_fallback();
             _ble_was_connected = true;
             set_status("BLE WAIT", kTextDim);
@@ -746,20 +733,11 @@ void AppCodexStatus::onRunning()
         } else if (!ble_connected && _ble_was_connected) {
             _production_voice_ready = false;
             _production_voice_capabilities = 0;
-            if (_input_action_controller) {
-                _input_action_controller->disconnect();
-            }
             _voice_button_dispatcher.reset(right_pressed);
-            if (_voice_input) {
-                _pinned_microphone_controller.stop_for_safety(*_voice_input, now);
-            }
-            {
-                std::lock_guard<std::mutex> controller_lock(
-                    _task_controller_mutex);
-                if (_voice_input) {
-                    _voice_input->handle_disconnect();
-                }
-            }
+            _runtime_session.handle_disconnect(
+                _pinned_microphone_controller,
+                _task_controller_mutex,
+                now);
             {
                 std::lock_guard<std::mutex> task_lock(_task_state_mutex);
                 _task_detail_store.reset_connection();
@@ -768,9 +746,6 @@ void AppCodexStatus::onRunning()
                 std::lock_guard<std::mutex> controller_lock(
                     _task_controller_mutex);
                 _task_voice_ready_applied = false;
-            }
-            if (_voice_probe) {
-                _voice_probe->handle_disconnect();
             }
             _ble_was_connected = false;
             _ble_wait_started_ms = now;
@@ -843,37 +818,16 @@ void AppCodexStatus::onClose()
 
     _key_manager.reset();
     _voice_button_dispatcher.reset(false);
-    if (_voice_input) {
-        _pinned_microphone_controller.stop_for_safety(
-            *_voice_input, GetHAL().millis());
-    }
-    if (_input_action_controller) {
-        _input_action_controller->disconnect();
-    }
-    {
-        std::lock_guard<std::mutex> controller_lock(_task_controller_mutex);
-        if (_voice_input) {
-            (void)_voice_input->set_task_route(0);
-        }
-    }
     stop_network_fallback();
-    {
-        std::lock_guard<std::mutex> controller_lock(_task_controller_mutex);
-        if (_voice_input) {
-            _voice_status.store(VoiceInputUiState::Off);
-            _voice_input->shutdown();
-            _voice_input.reset();
-        }
-    }
-    if (_voice_probe) {
-        _voice_probe->shutdown();
-        _voice_probe.reset();
-    }
-    if (_ble_transport) {
-        _ble_transport->stop();
-        _ble_transport.reset();
-    }
-    _input_action_controller.reset();
+    _voice_status.store(VoiceInputUiState::Off);
+    _runtime_session.shutdown(
+        _pinned_microphone_controller,
+        _task_controller_mutex,
+        GetHAL().millis());
+    _voice_input = nullptr;
+    _voice_probe = nullptr;
+    _input_action_controller = nullptr;
+    _ble_transport = nullptr;
     _agent_registry_store.reset();
     _agent_registry_backend.reset();
     _agent_registry_ready = false;
@@ -4037,7 +3991,7 @@ VoiceButtonSink* AppCodexStatus::task_focus_voice_sink()
     return _voice_input != nullptr &&
                (_voice_input->ui_state() == VoiceInputUiState::Active ||
                 _production_voice_link_usable)
-        ? _voice_input.get()
+        ? _voice_input
         : nullptr;
 }
 

@@ -77,6 +77,7 @@ EXPECTED_HOST_TESTS = (
     "input_action_controller_test",
     "voice_input_session_test",
     "voice_capture_pipeline_test",
+    "codex_runtime_session_test",
     "pinned_microphone_controller_test",
     "voice_input_controller_test",
     "codex_status_priority_test",
@@ -313,6 +314,9 @@ output.chmod(0o700)
                 "tests/voice_capture_pipeline_test.cpp",
                 "main/apps/app_codex_status/voice_capture_pipeline.cpp",
             },
+            "codex_runtime_session_test": {
+                "tests/codex_runtime_session_test.cpp",
+            },
             "pinned_microphone_controller_test": {
                 "tests/pinned_microphone_controller_test.cpp",
                 "main/apps/app_codex_status/pinned_microphone_controller.cpp",
@@ -418,7 +422,7 @@ output.chmod(0o700)
             "com.stopwatch.codex-agent.voice",
             "account `StopWatch-Codex`",
             "AES-128-CCM",
-            "version 3",
+            "version 6",
             "version 2",
             "audio.existential.BlackHole2ch",
             "/Library/Audio/Plug-Ins/HAL/BlackHole2ch.driver",

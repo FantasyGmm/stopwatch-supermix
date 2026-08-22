@@ -518,7 +518,10 @@ run_host_test voice_capture_pipeline_test \
     tests/voice_capture_pipeline_test.cpp \
     main/apps/app_codex_status/voice_capture_pipeline.cpp
 
-stage "Pinned microphone controller host test"
+stage "Codex runtime session and pinned microphone host tests"
+run_host_test codex_runtime_session_test \
+    -std=c++17 -Wall -Wextra -Werror -I. \
+    tests/codex_runtime_session_test.cpp
 run_host_test pinned_microphone_controller_test \
     -std=c++17 -Wall -Wextra -Werror -I. \
     tests/pinned_microphone_controller_test.cpp \

@@ -20,6 +20,7 @@
 #include "codex_task_focus_deck.h"
 #include "codex_task_focus_gesture.h"
 #include "codex_task_focus_view.h"
+#include "codex_runtime_session.h"
 #include "agent_panel_model.h"
 #include "agent_panel_ui_layout.h"
 #include "agent_registry_store.h"
@@ -125,9 +126,10 @@ private:
     lv_obj_t* _agent_cancel_button = nullptr;
     lv_timer_t* _pet_timer       = nullptr;
     esp_websocket_client_handle_t _ws_client = nullptr;
-    std::unique_ptr<CodexBleTransport> _ble_transport;
-    std::unique_ptr<BleVoiceProbeController> _voice_probe;
-    std::unique_ptr<VoiceInputController> _voice_input;
+    CodexRuntimeSession _runtime_session;
+    CodexBleTransport* _ble_transport = nullptr;
+    BleVoiceProbeController* _voice_probe = nullptr;
+    VoiceInputController* _voice_input = nullptr;
     WifiStaLease _wifi_lease;
     std::string _server_host;
     std::string _transport_mode;
@@ -203,7 +205,7 @@ private:
     bool _pairing_allow_switch = false;
     std::mutex _agent_decision_mutex;
     AgentPanelDecision _pending_agent_decision = {};
-    std::unique_ptr<InputActionController> _input_action_controller;
+    InputActionController* _input_action_controller = nullptr;
     bool _production_voice_ready = false;
     bool _production_voice_link_usable = false;
     uint8_t _production_voice_capabilities = 0;

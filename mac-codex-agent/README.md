@@ -185,8 +185,8 @@ firmware because older firmware cannot perform secure runtime enrollment.
 If every Agent credential is lost, use **Reset All Agents** on the watch and
 enroll each Mac again physically; a former credential is not a recovery bypass.
 
-The production boundary is application-layer AES-128-CCM protocol version 5.
-Version 5 deliberately rejects older peers. Each authenticated PTT begin frame
+The production boundary is application-layer AES-128-CCM protocol version 6.
+Version 6 deliberately rejects older peers. Each authenticated PTT begin frame
 uses route `0` for plain Typeless dictation, or a nonzero 64-bit Codex task
 route when voice should be transcribed and submitted to that task.
 The clear packet header is authenticated, audio is encrypted with an 8-byte

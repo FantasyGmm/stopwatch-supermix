@@ -6,7 +6,7 @@ the StopWatch-to-Mac BLE voice data path. It does not invoke Typeless, send the
 input feature itself.
 
 Production voice input is integrated into the existing Agent, uses the normal
-`StopWatch-Codex` identity, authenticated AES-128-CCM protocol version 3, and
+`StopWatch-Codex` identity, authenticated AES-128-CCM protocol version 6, and
 the shared external/Keychain device key documented in
 [`mac-codex-agent/README.md`](../mac-codex-agent/README.md). The standalone
 probe keeps version 1 for transport diagnosis only. Fully quit the Agent before
@@ -27,7 +27,7 @@ Modes 3 and 4 use a fixed diagnostic key solely to isolate crypto performance
 from pairing, enrollment, and key storage. It is not a production key and must
 never be used by the installed Agent or production voice path.
 
-Production rejects version 2 and uses application-layer AES-128-CCM version 3
+Production rejects version 2 and uses application-layer AES-128-CCM version 6
 for READY, UNAVAILABLE, PTT_BEGIN, AUDIO, PTT_END, and VOICE_ERROR. Probe
 results do not prove that production key provisioning, Typeless control,
 default-input restoration, or disconnect cleanup works.
@@ -37,7 +37,7 @@ to the custom service, but the encrypted characteristic handshake timed out
 with NimBLE status 13. Production therefore does not require interactive BLE
 system pairing. Status and voice characteristics remain available over the BLE
 link, while production voice control and audio are authenticated and encrypted
-end to end by application-layer AES-128-CCM version 3.
+end to end by application-layer AES-128-CCM version 6.
 
 ## Preconditions
 
