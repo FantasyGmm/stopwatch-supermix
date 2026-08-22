@@ -25,6 +25,7 @@ MAX_METADATA_BYTES = 4096
 MAX_REMOVAL_NODES = 128
 MAX_REMOVAL_BYTES = 64 * 1024 * 1024
 MAX_REMOVAL_DEPTH = 4
+MAX_REMOVAL_QUARANTINES = 128
 
 
 class PetCacheError(RuntimeError):
@@ -366,7 +367,7 @@ class PetPreviewCache:
     ) -> None:
         if counters[0] >= MAX_REMOVAL_NODES or depth > MAX_REMOVAL_DEPTH:
             raise PetCacheError("cache deletion exceeds its bound")
-        info = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        name, info = self._capture_for_removal(parent_fd, name)
         counters[0] += 1
         if stat.S_ISREG(info.st_mode):
             counters[1] += info.st_size
@@ -387,14 +388,34 @@ class PetPreviewCache:
                 self._remove_entry_at(
                     child_fd, child_name, depth + 1, counters
                 )
-            current = os.stat(
-                name, dir_fd=parent_fd, follow_symlinks=False
-            )
-            if current.st_dev != info.st_dev or current.st_ino != info.st_ino:
-                raise PetCacheError("cache directory changed during deletion")
-            os.rmdir(name, dir_fd=parent_fd)
         finally:
             os.close(child_fd)
+
+    @staticmethod
+    def _capture_for_removal(parent_fd: int, name: str):
+        before = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        for slot in range(MAX_REMOVAL_QUARANTINES):
+            captured_name = ".remove-{:02x}.tmp".format(slot)
+            if PetPreviewCache._entry_exists(parent_fd, captured_name):
+                continue
+            os.rename(
+                name,
+                captured_name,
+                src_dir_fd=parent_fd,
+                dst_dir_fd=parent_fd,
+            )
+            captured = os.stat(
+                captured_name,
+                dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+            if (
+                captured.st_dev != before.st_dev
+                or captured.st_ino != before.st_ino
+            ):
+                raise PetCacheError("cache entry changed during deletion")
+            return captured_name, captured
+        raise PetCacheError("cache removal name allocation failed")
 
     @staticmethod
     def _close_fds(*descriptors: Optional[int]) -> None:

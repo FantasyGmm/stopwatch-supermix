@@ -279,16 +279,22 @@ if PetPreviewCache(root).load(watch_id, package_hash) is not None:
             real_rename = os.rename
             watch_inode = watch_path.stat().st_ino
             swapped = False
+            swapped_path = None
 
             def swap_before_scan(path):
-                nonlocal swapped
+                nonlocal swapped, swapped_path
                 if (
                     not swapped
                     and isinstance(path, int)
                     and os.fstat(path).st_ino == watch_inode
                 ):
-                    real_rename(watch_path, saved)
-                    os.symlink(outside, watch_path)
+                    swapped_path = next(
+                        candidate
+                        for candidate in self.root.iterdir()
+                        if candidate.lstat().st_ino == watch_inode
+                    )
+                    real_rename(swapped_path, saved)
+                    os.symlink(outside, swapped_path)
                     swapped = True
                 return real_scandir(path)
 
@@ -302,14 +308,14 @@ if PetPreviewCache(root).load(watch_id, package_hash) is not None:
                         pass
             finally:
                 if swapped:
-                    watch_path.unlink(missing_ok=True)
+                    swapped_path.unlink(missing_ok=True)
                     saved.rename(watch_path)
 
             self.assertTrue(swapped, "descriptor-relative scandir hook did not fire")
             self.assertTrue(sentinel.exists(), "removal traversed outside cache")
             self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep")
 
-    def test_remove_does_not_rmdir_a_replacement_after_descriptor_check(self):
+    def test_remove_never_deletes_a_pre_capture_replacement(self):
         self.cache.store(self.watch_id, self.package)
         watch_path = self.root / self.watch_id.hex()
         saved = self.root / "saved-watch"
@@ -317,45 +323,86 @@ if PetPreviewCache(root).load(watch_id, package_hash) is not None:
         replacement.mkdir()
         replacement_inode = replacement.stat().st_ino
         watch_inode = watch_path.stat().st_ino
-        real_close = os.close
+        root_inode = self.root.stat().st_ino
         real_rename = os.rename
-        observed = False
+        real_rmdir = os.rmdir
+        sentinel = self.root / "sentinel"
+        sentinel.write_text("keep", encoding="utf-8")
         substituted = False
 
-        def swap_when_watch_descriptor_closes(descriptor):
-            nonlocal observed, substituted
+        def substitute(parent_fd, name):
+            nonlocal substituted
+            if substituted or parent_fd is None:
+                return
             try:
-                is_watch = os.fstat(descriptor).st_ino == watch_inode
+                parent_is_root = os.fstat(parent_fd).st_ino == root_inode
+                target_is_watch = (
+                    os.stat(
+                        name, dir_fd=parent_fd, follow_symlinks=False
+                    ).st_ino
+                    == watch_inode
+                )
             except OSError:
-                is_watch = False
-            if is_watch:
-                observed = True
-                if watch_path.exists():
-                    real_rename(watch_path, saved)
-                    real_rename(replacement, watch_path)
-                    substituted = True
-            return real_close(descriptor)
+                return
+            if parent_is_root and target_is_watch:
+                real_rename(watch_path, saved)
+                real_rename(replacement, watch_path)
+                substituted = True
+
+        def rename_with_substitution(source, destination, *args, **kwargs):
+            substitute(kwargs.get("src_dir_fd"), source)
+            return real_rename(source, destination, *args, **kwargs)
+
+        def rmdir_with_substitution(name, *args, **kwargs):
+            substitute(kwargs.get("dir_fd"), name)
+            return real_rmdir(name, *args, **kwargs)
 
         try:
             with mock.patch(
-                "pet_cache.os.close",
-                side_effect=swap_when_watch_descriptor_closes,
+                "pet_cache.os.rename", side_effect=rename_with_substitution
+            ), mock.patch(
+                "pet_cache.os.rmdir", side_effect=rmdir_with_substitution
             ):
-                self.cache.remove_watch(self.watch_id)
-            replacement_survived = replacement.exists() or (
-                watch_path.exists()
-                and watch_path.stat().st_ino == replacement_inode
+                try:
+                    self.cache.remove_watch(self.watch_id)
+                except PetCacheError:
+                    pass
+            replacement_survived = any(
+                path.lstat().st_ino == replacement_inode
+                for path in self.root.iterdir()
             )
         finally:
             if substituted:
-                if watch_path.exists():
-                    watch_path.rmdir()
+                for path in self.root.iterdir():
+                    if (
+                        path.is_dir()
+                        and path.stat().st_ino == replacement_inode
+                    ):
+                        path.rmdir()
                 saved.rename(watch_path)
 
-        self.assertTrue(observed, "watched directory close hook did not fire")
+        self.assertTrue(substituted, "pre-removal substitution hook did not fire")
         self.assertTrue(
             replacement_survived, "removal deleted a substituted directory"
         )
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep")
+
+    def test_repeated_removal_leaves_a_strictly_bounded_quarantine_pool(self):
+        failures = 0
+        for _ in range(256):
+            self.cache.store(self.watch_id, self.package)
+            try:
+                self.cache.remove_watch(self.watch_id)
+            except PetCacheError:
+                failures += 1
+
+        quarantines = [
+            path
+            for path in self.root.iterdir()
+            if path.name.startswith(".remove-")
+        ]
+        self.assertGreater(failures, 0)
+        self.assertLessEqual(len(quarantines), 128)
 
 
 if __name__ == "__main__":

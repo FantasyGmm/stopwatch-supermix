@@ -4096,6 +4096,188 @@ class AgentRuntimePetTests(unittest.IsolatedAsyncioTestCase):
             state_after_late_cancel.capability, PetCapability.OFFLINE
         )
 
+    async def test_reconnect_and_stop_retain_resistant_pet_retirement(self):
+        transports = []
+        uploaders = []
+        late_writes = []
+
+        class Transport(FakeTransport):
+            def __init__(self):
+                super().__init__()
+                self.pet_retired = False
+
+            def retire_pet_generation(self):
+                self.pet_retired = True
+
+            async def write_pet_control(self, payload):
+                if not self.connected or self.pet_retired:
+                    raise ConnectionError("retired transport")
+                late_writes.append((self, bytes(payload)))
+
+            async def disconnect(self):
+                self.disconnect_count += 1
+                self.disconnected_event.set()
+
+        class TransportFactory:
+            def __call__(self):
+                transport = Transport()
+                transports.append(transport)
+                return transport
+
+        class Authorizer:
+            async def authorize(self, _transport, _publish):
+                return self_credential
+
+        class Uploader:
+            def __init__(self, transport):
+                self.transport = transport
+                self.started = asyncio.Event()
+                self.resisted = asyncio.Event()
+                self.release = asyncio.Event()
+                self.request_done = asyncio.Event()
+                self.close_calls = 0
+
+            async def query(self):
+                return PetWatchState(
+                    self_credential.watch_id,
+                    PetCapability.READY,
+                    "built-in",
+                    1,
+                    1,
+                    0,
+                    bytes(32),
+                    True,
+                )
+
+            async def upload(self, package, progress, *, request_id=None):
+                self.started.set()
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    self.request_done.set()
+
+            async def cancel(self, request_id):
+                while not self.release.is_set():
+                    try:
+                        await self.release.wait()
+                    except asyncio.CancelledError:
+                        self.resisted.set()
+                try:
+                    await self.transport.write_pet_control(b"late")
+                except ConnectionError:
+                    pass
+
+            async def close(self):
+                self.close_calls += 1
+                if self.started.is_set():
+                    await self.request_done.wait()
+
+        def uploader_factory(transport, *_args, **_kwargs):
+            uploader = Uploader(transport)
+            uploaders.append(uploader)
+            return uploader
+
+        self_credential = self.credential
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            transport_factory=TransportFactory(),
+            secure_authorizer=Authorizer(),
+            pet_uploader_factory=uploader_factory,
+            pet_cache=self.cache,
+            retry_delays=(0.01,),
+            status_interval=0.01,
+            disconnect_timeout=0.02,
+        )
+        runtime._prepare_voice = lambda _context: asyncio.sleep(0)
+        task = asyncio.create_task(runtime.run())
+        try:
+            for _ in range(100):
+                if uploaders:
+                    break
+                await asyncio.sleep(0.01)
+            self.assertEqual(len(uploaders), 1)
+            first = uploaders[0]
+            self.assertTrue(
+                runtime.submit_pet_request(
+                    PetRequest(
+                        "session-resistant",
+                        PetOperation.UPLOAD,
+                        self.package,
+                        lambda _progress: None,
+                    )
+                )
+            )
+            await asyncio.wait_for(first.started.wait(), 1)
+            self.assertTrue(
+                runtime.submit_pet_request(
+                    PetRequest(
+                        "session-resistant",
+                        PetOperation.CANCEL,
+                        None,
+                        lambda _progress: None,
+                    )
+                )
+            )
+            await asyncio.wait_for(first.resisted.wait(), 1)
+
+            runtime.submit(AgentCommand.RECONNECT)
+            await asyncio.wait_for(transports[0].disconnected_event.wait(), 1)
+            await asyncio.sleep(0.06)
+
+            self.assertEqual(len(transports), 1)
+            self.assertEqual(len(uploaders), 1)
+
+            first.release.set()
+            for _ in range(100):
+                if len(uploaders) == 2:
+                    break
+                await asyncio.sleep(0.01)
+            self.assertEqual(len(uploaders), 2)
+            self.assertEqual(first.close_calls, 1)
+            self.assertEqual(late_writes, [])
+
+            second = uploaders[1]
+            self.assertTrue(
+                runtime.submit_pet_request(
+                    PetRequest(
+                        "stop-resistant",
+                        PetOperation.UPLOAD,
+                        self.package,
+                        lambda _progress: None,
+                    )
+                )
+            )
+            await asyncio.wait_for(second.started.wait(), 1)
+            self.assertTrue(
+                runtime.submit_pet_request(
+                    PetRequest(
+                        "stop-resistant",
+                        PetOperation.CANCEL,
+                        None,
+                        lambda _progress: None,
+                    )
+                )
+            )
+            await asyncio.wait_for(second.resisted.wait(), 1)
+
+            runtime.submit(AgentCommand.STOP)
+            await asyncio.wait_for(transports[1].disconnected_event.wait(), 1)
+            done, _ = await asyncio.wait((task,), timeout=0.06)
+
+            self.assertEqual(done, set())
+            self.assertEqual(len(transports), 2)
+            second.release.set()
+            await asyncio.wait_for(task, 1)
+            self.assertEqual(second.close_calls, 1)
+            self.assertEqual(runtime._pet_retirements, [])
+            self.assertEqual(late_writes, [])
+        finally:
+            for uploader in uploaders:
+                uploader.release.set()
+            if not task.done():
+                runtime.submit(AgentCommand.STOP)
+                await asyncio.wait_for(task, 1)
+
     async def test_restore_removes_cache_only_after_authoritative_state(self):
         class Uploader:
             async def query(self):

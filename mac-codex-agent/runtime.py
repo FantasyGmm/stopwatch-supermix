@@ -156,6 +156,7 @@ class _PetRetirement:
     request_task: Optional[asyncio.Task]
     cancel_task: Optional[asyncio.Task]
     cancel_action_task: Optional[asyncio.Task]
+    notification_task: Optional[asyncio.Future]
     close_task: Optional[asyncio.Task] = None
 
 
@@ -516,6 +517,10 @@ class AgentRuntime:
         self._pet_task: Optional[asyncio.Task] = None
         self._pet_cancel_task = None
         self._pet_cancel_action_task: Optional[asyncio.Task] = None
+        self._pet_retirements: List[
+            tuple[_BleSessionContext, _PetRetirement]
+        ] = []
+        self._pet_retirement_event: Optional[asyncio.Event] = None
 
     def snapshot(self) -> AgentSnapshot:
         with self._state_lock:
@@ -1221,6 +1226,7 @@ class AgentRuntime:
         request_task = None
         cancel_task = None
         cancel_action_task = None
+        notification_task = None
         with self._pet_lock:
             if context.pet_generation == self._pet_generation:
                 self._pet_generation += 1
@@ -1247,10 +1253,23 @@ class AgentRuntime:
                     previous.active_hash,
                     False,
                 )
+        retire_notifications = getattr(
+            context.transport, "retire_pet_generation", None
+        )
+        if uploader is not None and retire_notifications is not None:
+            try:
+                notification_task = retire_notifications()
+            except Exception as error:
+                notification_task = asyncio.get_running_loop().create_future()
+                notification_task.set_exception(error)
         context.pet_uploader = None
         context.pet_generation = 0
         retirement = _PetRetirement(
-            uploader, request_task, cancel_task, cancel_action_task
+            uploader,
+            request_task,
+            cancel_task,
+            cancel_action_task,
+            notification_task,
         )
         context.pet_retirement = retirement
         return retirement
@@ -1273,6 +1292,7 @@ class AgentRuntime:
             for task in (
                 retirement.cancel_task,
                 retirement.cancel_action_task,
+                retirement.notification_task,
                 retirement.request_task,
             )
             if task is not None
@@ -1303,6 +1323,64 @@ class AgentRuntime:
         if cleaned:
             context.pet_retirement = None
         return cleaned
+
+    def _retain_pet_retirement(
+        self,
+        context: _BleSessionContext,
+        retirement: _PetRetirement,
+    ) -> None:
+        if any(
+            owned is retirement for _context, owned in self._pet_retirements
+        ):
+            return
+        self._pet_retirements.append((context, retirement))
+        if self._pet_retirement_event is None:
+            self._pet_retirement_event = asyncio.Event()
+        for task in (
+            retirement.cancel_task,
+            retirement.cancel_action_task,
+            retirement.notification_task,
+            retirement.request_task,
+            retirement.close_task,
+        ):
+            if task is None:
+                continue
+            task.add_done_callback(self._pet_retirement_task_done)
+            if task.done():
+                self._pet_retirement_event.set()
+
+    def _pet_retirement_task_done(self, task: asyncio.Task) -> None:
+        if not task.cancelled():
+            try:
+                task.exception()
+            except Exception:
+                pass
+        if self._pet_retirement_event is not None:
+            self._pet_retirement_event.set()
+
+    async def _await_pet_retirement_fence(self) -> None:
+        while self._pet_retirements:
+            event = self._pet_retirement_event
+            if event is None:
+                event = asyncio.Event()
+                self._pet_retirement_event = event
+            event.clear()
+            for context, retirement in tuple(self._pet_retirements):
+                deadline = (
+                    asyncio.get_running_loop().time()
+                    + self._disconnect_timeout
+                )
+                cleaned = await self._quiesce_pet_retirement(
+                    context, retirement, deadline, 1
+                )
+                if cleaned:
+                    self._pet_retirements = [
+                        item
+                        for item in self._pet_retirements
+                        if item[1] is not retirement
+                    ]
+            if self._pet_retirements:
+                await event.wait()
 
     async def run(self) -> None:
         loop = asyncio.get_running_loop()
@@ -1402,6 +1480,9 @@ class AgentRuntime:
         finally:
             collector_task.cancel()
             await _await_cancelled(collector_task)
+            # AgentController.stop() provides the caller's bounded timeout.
+            # Keep this loop alive until every transport-owned task is drained.
+            await self._await_pet_retirement_fence()
             self._status_ready = None
             self._status_changed = None
             with self._command_lock:
@@ -1514,6 +1595,7 @@ class AgentRuntime:
             self._task_route_registry.update(())
 
     async def _run_session(self) -> str:
+        await self._await_pet_retirement_fence()
         context = _BleSessionContext(self._transport_factory())
         transport = context.transport
         self._transition(ConnectionState.SCANNING)
@@ -2109,6 +2191,7 @@ class AgentRuntime:
                 pet_retirement.request_task,
                 pet_retirement.cancel_task,
                 pet_retirement.cancel_action_task,
+                pet_retirement.notification_task,
                 pet_retirement.close_task,
             )
         )
@@ -2119,12 +2202,14 @@ class AgentRuntime:
             + 2
         )
         if has_pet:
-            await self._quiesce_pet_retirement(
+            pet_cleaned = await self._quiesce_pet_retirement(
                 context,
                 pet_retirement,
                 deadline,
                 future_steps + 1,
             )
+            if not pet_cleaned:
+                self._retain_pet_retirement(context, pet_retirement)
         await self._cleanup_before_deadline(
             context.transport.disable_input_actions,
             "Input action notification cleanup",
