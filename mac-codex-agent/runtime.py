@@ -855,7 +855,10 @@ class AgentRuntime:
         generation: int,
     ) -> None:
         try:
-            await uploader.cancel(request.request_id)
+            await asyncio.wait_for(
+                uploader.cancel(request.request_id),
+                timeout=self._disconnect_timeout,
+            )
         except Exception as error:
             if self._pet_request_is_current(
                 request.request_id, uploader, generation
@@ -1227,7 +1230,10 @@ class AgentRuntime:
             operations.append(retirement.close_task)
         for index, task in enumerate(operations):
             if task.done():
-                await _await_owned_task(task)
+                try:
+                    await _await_owned_task(task)
+                except Exception:
+                    cleaned = False
                 continue
             succeeded = await self._cleanup_before_deadline(
                 lambda task=task: _await_owned_task(task),
@@ -2256,8 +2262,6 @@ async def _await_owned_task(task: asyncio.Task) -> None:
     except asyncio.CancelledError:
         if not task.done():
             raise
-    except Exception:
-        pass
 
 
 def _state_for_error(error: Exception) -> ConnectionState:

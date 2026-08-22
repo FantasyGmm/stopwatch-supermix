@@ -6,8 +6,8 @@ import dataclasses
 import json
 import os
 import pathlib
+import secrets
 import stat
-import tempfile
 from typing import Optional
 
 from pet_package import (
@@ -51,10 +51,7 @@ class PetPreviewCache:
     def store(self, watch_id: bytes, package: PetPackage) -> None:
         watch_id = self._watch_id(watch_id)
         canonical = self._canonical(package)
-        self._publish_atomic(
-            self._cache_path(watch_id, canonical.sha256),
-            canonical.encoded,
-        )
+        self._publish_atomic(watch_id, canonical)
 
     def load(
         self, watch_id: bytes, active_hash: bytes
@@ -67,100 +64,111 @@ class PetPreviewCache:
         ):
             return None
         active_hash = self._hash(active_hash)
-        return self._load_verified(
-            self._cache_path(watch_id, active_hash), active_hash
-        )
+        root_fd = self._open_root(create=False)
+        if root_fd is None:
+            return None
+        watch_fd = None
+        entry_fd = None
+        try:
+            watch_fd = self._open_directory_at(root_fd, watch_id.hex())
+            entry_fd = self._open_directory_at(watch_fd, active_hash.hex())
+            return self._load_verified_fd(entry_fd, active_hash)
+        except (OSError, ValueError, TypeError, PetCacheError):
+            return None
+        finally:
+            self._close_fds(entry_fd, watch_fd, root_fd)
 
     def remove_watch(self, watch_id: bytes) -> None:
-        path = self._watch_path(self._watch_id(watch_id))
-        if not self._real_directory(self._root):
+        watch_name = self._watch_id(watch_id).hex()
+        root_fd = self._open_root(create=False)
+        if root_fd is None:
             return
-        if path.exists() or path.is_symlink():
-            self._remove_bounded(path)
-            if self._real_directory(self._root):
-                self._fsync_directory(self._root)
+        try:
+            if self._entry_exists(root_fd, watch_name):
+                self._remove_bounded_at(root_fd, watch_name)
+                os.fsync(root_fd)
+        finally:
+            os.close(root_fd)
 
     def _publish_atomic(
-        self, destination: pathlib.Path, encoded: bytes
+        self, watch_id: bytes, package: PetPackage
     ) -> None:
+        root_fd = None
+        watch_fd = None
+        entry_fd = None
+        temporary_fd = None
+        temporary_name = None
         try:
-            watch_id = self._watch_id(bytes.fromhex(destination.parent.name))
-            package = parse_package(encoded)
-        except Exception as error:
-            raise PetCacheError("cache publication is invalid") from error
-        expected = self._cache_path(watch_id, package.sha256)
-        if destination != expected:
-            raise PetCacheError("cache destination is not canonical")
-        if self._root.exists() or self._root.is_symlink():
-            if not self._real_directory(self._root):
-                raise PetCacheError("cache root must be a real directory")
-        else:
-            self._root.mkdir(parents=True, exist_ok=False)
-        if not self._real_directory(self._root):
-            raise PetCacheError("cache root must not be a symlink")
-        watch_path = self._watch_path(watch_id)
-        if watch_path.exists() or watch_path.is_symlink():
-            if not self._real_directory(watch_path):
-                raise PetCacheError("watch cache must be a real directory")
-        else:
-            watch_path.mkdir(exist_ok=False)
-        if not self._real_directory(watch_path):
-            raise PetCacheError("watch cache must not be a symlink")
-
-        existing = self._load_verified(destination, package.sha256)
-        if existing is not None:
-            return
-        if destination.exists() or destination.is_symlink():
-            self._remove_bounded(destination)
-
-        temporary = pathlib.Path(
-            tempfile.mkdtemp(
-                prefix=".{}-".format(package.sha256.hex()),
-                suffix=".tmp",
-                dir=str(watch_path),
+            root_fd = self._open_root(create=True)
+            watch_fd = self._open_or_create_directory_at(
+                root_fd, watch_id.hex()
             )
-        )
-        try:
-            self._write_fsynced(temporary / PACKAGE_NAME, package.encoded)
-            self._write_fsynced(
-                temporary / METADATA_NAME,
+            destination_name = package.sha256.hex()
+            try:
+                entry_fd = self._open_directory_at(
+                    watch_fd, destination_name
+                )
+            except OSError:
+                entry_fd = None
+            if entry_fd is not None:
+                existing = self._load_verified_fd(entry_fd, package.sha256)
+                os.close(entry_fd)
+                entry_fd = None
+                if existing is not None:
+                    return
+            if self._entry_exists(watch_fd, destination_name):
+                self._remove_bounded_at(watch_fd, destination_name)
+
+            temporary_name, temporary_fd = self._create_temporary_directory(
+                watch_fd, package.sha256
+            )
+            self._write_fsynced_at(
+                temporary_fd, PACKAGE_NAME, package.encoded
+            )
+            self._write_fsynced_at(
+                temporary_fd,
+                METADATA_NAME,
                 json.dumps(
                     self._metadata(package),
                     sort_keys=True,
                     separators=(",", ":"),
                 ).encode("utf-8"),
             )
-            self._fsync_directory(temporary)
-            os.rename(temporary, destination)
-            self._fsync_directory(watch_path)
-        except Exception:
-            if temporary.exists() or temporary.is_symlink():
+            os.fsync(temporary_fd)
+            os.close(temporary_fd)
+            temporary_fd = None
+            os.rename(
+                temporary_name,
+                destination_name,
+                src_dir_fd=watch_fd,
+                dst_dir_fd=watch_fd,
+            )
+            temporary_name = None
+            os.fsync(watch_fd)
+        except PetCacheError:
+            raise
+        except Exception as error:
+            raise PetCacheError("cache publication failed") from error
+        finally:
+            if temporary_fd is not None:
+                os.close(temporary_fd)
+            if temporary_name is not None and watch_fd is not None:
                 try:
-                    self._remove_bounded(temporary)
+                    self._remove_bounded_at(watch_fd, temporary_name)
                 except Exception:
                     pass
-            raise
+            self._close_fds(entry_fd, watch_fd, root_fd)
 
-    def _load_verified(
-        self, path: pathlib.Path, active_hash: bytes
+    def _load_verified_fd(
+        self, entry_fd: int, active_hash: bytes
     ) -> Optional[CachedPreview]:
         try:
-            watch_id = self._watch_id(bytes.fromhex(path.parent.name))
             active_hash = self._hash(active_hash)
-            if (
-                path != self._cache_path(watch_id, active_hash)
-                or not self._real_directory(self._root)
-                or not self._real_directory(path.parent)
-                or not self._real_directory(path)
-            ):
-                return None
-            package_path = path / PACKAGE_NAME
-            metadata_path = path / METADATA_NAME
-            if package_path.is_symlink() or metadata_path.is_symlink():
-                return None
-            encoded = self._read_bounded(package_path, MAX_PACKAGE_BYTES)
-            metadata_bytes = self._read_bounded(
-                metadata_path, MAX_METADATA_BYTES
+            encoded = self._read_bounded_at(
+                entry_fd, PACKAGE_NAME, MAX_PACKAGE_BYTES
+            )
+            metadata_bytes = self._read_bounded_at(
+                entry_fd, METADATA_NAME, MAX_METADATA_BYTES
             )
             package = parse_package(encoded)
             if package.sha256 != active_hash:
@@ -181,16 +189,6 @@ class PetPreviewCache:
             PetCacheError,
         ):
             return None
-
-    def _cache_path(
-        self, watch_id: bytes, package_hash: bytes
-    ) -> pathlib.Path:
-        return self._watch_path(self._watch_id(watch_id)) / self._hash(
-            package_hash
-        ).hex()
-
-    def _watch_path(self, watch_id: bytes) -> pathlib.Path:
-        return self._root / self._watch_id(watch_id).hex()
 
     @staticmethod
     def _watch_id(value: bytes) -> bytes:
@@ -227,34 +225,103 @@ class PetPreviewCache:
             "width": package.width,
         }
 
-    @staticmethod
-    def _write_fsynced(path: pathlib.Path, payload: bytes) -> None:
-        with path.open("xb") as stream:
-            stream.write(payload)
-            stream.flush()
-            os.fsync(stream.fileno())
+    def _open_root(self, *, create: bool) -> Optional[int]:
+        absolute = pathlib.Path(os.path.abspath(os.fspath(self._root)))
+        flags = self._directory_open_flags()
+        descriptor = os.open(os.path.sep, flags)
+        try:
+            for component in absolute.parts[1:]:
+                try:
+                    child = self._open_directory_at(descriptor, component)
+                except FileNotFoundError:
+                    if not create:
+                        os.close(descriptor)
+                        return None
+                    os.mkdir(component, mode=0o700, dir_fd=descriptor)
+                    child = self._open_directory_at(descriptor, component)
+                os.close(descriptor)
+                descriptor = child
+            return descriptor
+        except (OSError, PetCacheError) as error:
+            os.close(descriptor)
+            if not create:
+                return None
+            if isinstance(error, PetCacheError):
+                raise
+            raise PetCacheError(
+                "cache root chain must contain only real directories"
+            ) from error
+
+    @classmethod
+    def _open_directory_at(cls, parent_fd: int, name: str) -> int:
+        descriptor = os.open(
+            name, cls._directory_open_flags(), dir_fd=parent_fd
+        )
+        if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            os.close(descriptor)
+            raise PetCacheError("cache directory is invalid")
+        return descriptor
+
+    @classmethod
+    def _open_or_create_directory_at(cls, parent_fd: int, name: str) -> int:
+        try:
+            return cls._open_directory_at(parent_fd, name)
+        except FileNotFoundError:
+            os.mkdir(name, mode=0o700, dir_fd=parent_fd)
+            return cls._open_directory_at(parent_fd, name)
 
     @staticmethod
-    def _fsync_directory(path: pathlib.Path) -> None:
-        flags = os.O_RDONLY
-        flags |= getattr(os, "O_DIRECTORY", 0)
+    def _directory_open_flags() -> int:
+        return (
+            os.O_RDONLY
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+
+    @classmethod
+    def _create_temporary_directory(
+        cls, parent_fd: int, package_hash: bytes
+    ) -> tuple[str, int]:
+        prefix = ".{}-".format(package_hash.hex())
+        for _ in range(16):
+            name = "{}{}.tmp".format(prefix, secrets.token_hex(8))
+            try:
+                os.mkdir(name, mode=0o700, dir_fd=parent_fd)
+            except FileExistsError:
+                continue
+            return name, cls._open_directory_at(parent_fd, name)
+        raise PetCacheError("cache temporary name allocation failed")
+
+    @staticmethod
+    def _write_fsynced_at(
+        parent_fd: int, name: str, payload: bytes
+    ) -> None:
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
         flags |= getattr(os, "O_NOFOLLOW", 0)
-        descriptor = os.open(str(path), flags)
+        descriptor = os.open(name, flags, 0o600, dir_fd=parent_fd)
         try:
-            if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
-                raise PetCacheError("cache directory is invalid")
+            if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                raise PetCacheError("cache leaf must be a regular file")
+            view = memoryview(payload)
+            while view:
+                written = os.write(descriptor, view)
+                if written <= 0:
+                    raise PetCacheError("cache write did not advance")
+                view = view[written:]
             os.fsync(descriptor)
         finally:
             os.close(descriptor)
 
     @staticmethod
-    def _read_bounded(path: pathlib.Path, maximum: int) -> bytes:
-        before = path.lstat()
+    def _read_bounded_at(
+        parent_fd: int, name: str, maximum: int
+    ) -> bytes:
+        before = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
         if not stat.S_ISREG(before.st_mode):
             raise PetCacheError("cache leaf must be a regular file")
         flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
         flags |= getattr(os, "O_NOFOLLOW", 0)
-        descriptor = os.open(str(path), flags)
+        descriptor = os.open(name, flags, dir_fd=parent_fd)
         try:
             opened = os.fstat(descriptor)
             if (
@@ -279,33 +346,58 @@ class PetPreviewCache:
         return payload
 
     @staticmethod
-    def _real_directory(path: pathlib.Path) -> bool:
+    def _entry_exists(parent_fd: int, name: str) -> bool:
         try:
-            return stat.S_ISDIR(path.lstat().st_mode)
-        except OSError:
+            os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+            return True
+        except FileNotFoundError:
             return False
 
-    def _remove_bounded(self, path: pathlib.Path) -> None:
-        root = pathlib.Path(path)
-        pending = [(root, 0)]
-        nodes = []
-        total_bytes = 0
-        while pending:
-            current, depth = pending.pop()
-            if len(nodes) >= MAX_REMOVAL_NODES or depth > MAX_REMOVAL_DEPTH:
-                raise PetCacheError("cache deletion exceeds its bound")
-            info = current.lstat()
-            nodes.append((current, info.st_mode))
-            if stat.S_ISREG(info.st_mode):
-                total_bytes += info.st_size
-                if total_bytes > MAX_REMOVAL_BYTES:
-                    raise PetCacheError("cache deletion exceeds its byte bound")
-            elif stat.S_ISDIR(info.st_mode):
-                with os.scandir(current) as entries:
-                    children = [pathlib.Path(entry.path) for entry in entries]
-                pending.extend((child, depth + 1) for child in children)
-        for current, mode in reversed(nodes):
-            if stat.S_ISDIR(mode):
-                current.rmdir()
-            else:
-                current.unlink()
+    def _remove_bounded_at(self, parent_fd: int, name: str) -> None:
+        counters = [0, 0]
+        self._remove_entry_at(parent_fd, name, 0, counters)
+
+    def _remove_entry_at(
+        self,
+        parent_fd: int,
+        name: str,
+        depth: int,
+        counters: list[int],
+    ) -> None:
+        if counters[0] >= MAX_REMOVAL_NODES or depth > MAX_REMOVAL_DEPTH:
+            raise PetCacheError("cache deletion exceeds its bound")
+        info = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        counters[0] += 1
+        if stat.S_ISREG(info.st_mode):
+            counters[1] += info.st_size
+            if counters[1] > MAX_REMOVAL_BYTES:
+                raise PetCacheError("cache deletion exceeds its byte bound")
+        if not stat.S_ISDIR(info.st_mode):
+            os.unlink(name, dir_fd=parent_fd)
+            return
+
+        child_fd = self._open_directory_at(parent_fd, name)
+        try:
+            opened = os.fstat(child_fd)
+            if opened.st_dev != info.st_dev or opened.st_ino != info.st_ino:
+                raise PetCacheError("cache directory changed during deletion")
+            with os.scandir(child_fd) as entries:
+                children = [entry.name for entry in entries]
+            for child_name in children:
+                self._remove_entry_at(
+                    child_fd, child_name, depth + 1, counters
+                )
+            current = os.stat(
+                name, dir_fd=parent_fd, follow_symlinks=False
+            )
+            if current.st_dev != info.st_dev or current.st_ino != info.st_ino:
+                raise PetCacheError("cache directory changed during deletion")
+        finally:
+            os.close(child_fd)
+        os.rmdir(name, dir_fd=parent_fd)
+
+    @staticmethod
+    def _close_fds(*descriptors: Optional[int]) -> None:
+        for descriptor in descriptors:
+            if descriptor is not None:
+                os.close(descriptor)

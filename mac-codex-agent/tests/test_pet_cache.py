@@ -3,7 +3,9 @@ import pathlib
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
+from unittest import mock
 
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
@@ -26,7 +28,7 @@ def make_package():
 class PetPreviewCacheTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
-        self.root = pathlib.Path(self.temporary.name)
+        self.root = pathlib.Path(self.temporary.name).resolve()
         self.cache = PetPreviewCache(self.root)
         self.watch_id = bytes(range(16))
         self.package = make_package()
@@ -127,6 +129,27 @@ class PetPreviewCacheTests(unittest.TestCase):
 
         self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep")
 
+    def test_symlinked_cache_ancestor_is_rejected_without_traversal(self):
+        target_parent = self.root / "target-parent"
+        target_root = target_parent / "Pets"
+        target_root.mkdir(parents=True)
+        target_cache = PetPreviewCache(target_root)
+        target_cache.store(self.watch_id, self.package)
+        sentinel = target_root / self.watch_id.hex() / "sentinel"
+        sentinel.write_text("keep", encoding="utf-8")
+        linked_parent = self.root / "linked-parent"
+        os.symlink(target_parent, linked_parent)
+        linked_cache = PetPreviewCache(linked_parent / "Pets")
+
+        self.assertIsNone(
+            linked_cache.load(self.watch_id, self.package.sha256)
+        )
+        with self.assertRaises(PetCacheError):
+            linked_cache.store(self.watch_id, self.package)
+        linked_cache.remove_watch(self.watch_id)
+
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep")
+
     def test_fifo_cache_leaf_is_rejected_without_blocking(self):
         package_path = (
             self.root
@@ -166,6 +189,131 @@ if PetPreviewCache(root).load(watch_id, package_hash) is not None:
         except subprocess.TimeoutExpired:
             self.fail("cache read blocked while opening FIFO")
         self.assertEqual(completed.returncode, 0)
+
+    def test_store_never_re_resolves_swapped_watch_directory(self):
+        with tempfile.TemporaryDirectory() as outside_name:
+            outside = pathlib.Path(outside_name)
+            sentinel = outside / "sentinel"
+            sentinel.write_text("keep", encoding="utf-8")
+            watch_path = self.root / self.watch_id.hex()
+            saved = self.root / "saved-watch"
+            real_mkdtemp = tempfile.mkdtemp
+            swapped = False
+
+            def swap_before_temporary(*args, **kwargs):
+                nonlocal swapped
+                if pathlib.Path(kwargs.get("dir")) == watch_path:
+                    watch_path.rename(saved)
+                    os.symlink(outside, watch_path)
+                    swapped = True
+                return real_mkdtemp(*args, **kwargs)
+
+            try:
+                with mock.patch.object(
+                    tempfile,
+                    "mkdtemp",
+                    side_effect=swap_before_temporary,
+                ):
+                    try:
+                        self.cache.store(self.watch_id, self.package)
+                    except OSError:
+                        pass
+            finally:
+                if swapped:
+                    watch_path.unlink(missing_ok=True)
+                    saved.rename(watch_path)
+
+            self.assertEqual(
+                sorted(path.name for path in outside.iterdir()), ["sentinel"]
+            )
+
+    def test_load_never_re_resolves_swapped_hash_directory(self):
+        self.cache.store(self.watch_id, self.package)
+        entry = (
+            self.root / self.watch_id.hex() / self.package.sha256.hex()
+        )
+        saved = entry.parent / "saved-entry"
+        with tempfile.TemporaryDirectory() as outside_name:
+            outside = pathlib.Path(outside_name)
+            os.mkfifo(outside / "package.cxp")
+            (outside / "metadata.json").write_bytes(b"{}")
+            real_open = os.open
+            swapped = threading.Event()
+            done = threading.Event()
+
+            def swap_before_leaf_open(path, flags, *args, **kwargs):
+                if os.fspath(path) == os.fspath(entry / "package.cxp"):
+                    entry.rename(saved)
+                    os.symlink(outside, entry)
+                    swapped.set()
+                return real_open(path, flags, *args, **kwargs)
+
+            def load():
+                try:
+                    self.cache.load(self.watch_id, self.package.sha256)
+                finally:
+                    done.set()
+
+            thread = threading.Thread(target=load, daemon=True)
+            with mock.patch("pet_cache.os.open", side_effect=swap_before_leaf_open):
+                thread.start()
+                swapped.wait(0.5)
+                blocked = not done.wait(0.2)
+                if blocked:
+                    writer = real_open(
+                        outside / "package.cxp", os.O_WRONLY | os.O_NONBLOCK
+                    )
+                    try:
+                        os.write(writer, b"invalid")
+                    finally:
+                        os.close(writer)
+                thread.join(1)
+            if entry.is_symlink():
+                entry.unlink()
+                saved.rename(entry)
+
+            self.assertFalse(
+                swapped.is_set(), "load re-resolved a swapped hash directory"
+            )
+            self.assertFalse(blocked, "load followed a swapped ancestor FIFO")
+
+    def test_remove_never_re_resolves_swapped_watch_directory(self):
+        self.cache.store(self.watch_id, self.package)
+        watch_path = self.root / self.watch_id.hex()
+        saved = self.root / "saved-watch"
+        with tempfile.TemporaryDirectory() as outside_name:
+            outside = pathlib.Path(outside_name)
+            sentinel = outside / "sentinel"
+            sentinel.write_text("keep", encoding="utf-8")
+            real_scandir = os.scandir
+            swapped = False
+
+            def swap_before_scan(path):
+                nonlocal swapped
+                if (
+                    not isinstance(path, int)
+                    and os.fspath(path) == os.fspath(watch_path)
+                ):
+                    watch_path.rename(saved)
+                    os.symlink(outside, watch_path)
+                    swapped = True
+                return real_scandir(path)
+
+            try:
+                with mock.patch(
+                    "pet_cache.os.scandir", side_effect=swap_before_scan
+                ):
+                    try:
+                        self.cache.remove_watch(self.watch_id)
+                    except OSError:
+                        pass
+            finally:
+                if swapped:
+                    watch_path.unlink(missing_ok=True)
+                    saved.rename(watch_path)
+
+            self.assertTrue(sentinel.exists(), "removal traversed outside cache")
+            self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep")
 
 
 if __name__ == "__main__":
