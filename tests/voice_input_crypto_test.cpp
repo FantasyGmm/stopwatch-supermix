@@ -37,6 +37,8 @@ int main()
     static_assert(static_cast<uint8_t>(Domain::PttEnd) == 0x13);
     static_assert(static_cast<uint8_t>(Domain::VoiceError) == 0x14);
     static_assert(static_cast<uint8_t>(Domain::TaskDetail) == 0x24);
+    static_assert(static_cast<uint8_t>(Domain::PetControl) == 0x30);
+    static_assert(static_cast<uint8_t>(Domain::PetStatus) == 0x31);
 
     for (const Domain domain : {
              Domain::Ready,
@@ -46,6 +48,8 @@ int main()
              Domain::PttEnd,
              Domain::VoiceError,
              Domain::TaskDetail,
+             Domain::PetControl,
+             Domain::PetStatus,
          }) {
         Nonce nonce = {};
         assert(derive_nonce(domain, kTestNonce, 0x04030201U, nonce));
@@ -60,6 +64,8 @@ int main()
     Nonce rejected = {};
     assert(!derive_nonce(static_cast<Domain>(0x10), kTestNonce, 1, rejected));
     assert(!derive_nonce(Domain::Audio, ExchangeNonce{}, 1, rejected));
+    assert(!derive_nonce(Domain::PetControl, kTestNonce, 0, rejected));
+    assert(!derive_nonce(Domain::PetStatus, kTestNonce, 0, rejected));
 
     CcmContext context(kTestKey);
     assert(context.ready());

@@ -62,6 +62,7 @@ EXPECTED_HOST_TESTS = (
     "ble_voice_probe_protocol_test",
     "voice_probe_crypto_test",
     "codex_pet_package_test",
+    "codex_pet_protocol_test",
     "secure_pairing_crypto_test",
     "secure_pairing_protocol_test",
     "agent_registry_test",
@@ -218,7 +219,7 @@ output.chmod(0o700)
         declared_total = re.search(r"^TOTAL_STAGES=(\d+)$", runner, re.MULTILINE)
         self.assertIsNotNone(declared_total)
         self.assertEqual(total, int(declared_total.group(1)))
-        self.assertEqual(total, 64)
+        self.assertEqual(total, 65)
         self.assertEqual(len(stages), total)
         self.assertEqual([stage[0] for stage in stages], list(range(1, total + 1)))
         self.assertEqual({stage[1] for stage in stages}, {total})
@@ -249,6 +250,11 @@ output.chmod(0o700)
             "codex_pet_package_test": {
                 "tests/codex_pet_package_test.cpp",
                 "main/apps/app_codex_status/codex_pet_package.cpp",
+            },
+            "codex_pet_protocol_test": {
+                "tests/codex_pet_protocol_test.cpp",
+                "main/apps/app_codex_status/codex_pet_protocol.cpp",
+                "main/apps/app_codex_status/voice_input_crypto.cpp",
             },
             "secure_pairing_crypto_test": {
                 "tests/secure_pairing_crypto_test.cpp",
