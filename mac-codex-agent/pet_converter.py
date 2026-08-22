@@ -197,11 +197,34 @@ def _bounded_delay(duration: int) -> int:
     return max(MIN_DELAY_MS, min(MAX_DELAY_MS, duration))
 
 
+def _redistribute_delays(durations: Iterable[int]) -> tuple[int, ...]:
+    """Bound delays while keeping the loop as close as their bounds permit."""
+
+    source = tuple(max(0, duration) for duration in durations)
+    bounded = [_bounded_delay(duration) for duration in source]
+    target = min(max(sum(source), len(source) * MIN_DELAY_MS), len(source) * MAX_DELAY_MS)
+    residual = target - sum(bounded)
+    # Preserve already-valid frame delays where possible.  They are the best
+    # places to absorb time removed by a neighboring min/max clamp.
+    preferred = [index for index, duration in enumerate(source) if MIN_DELAY_MS <= duration <= MAX_DELAY_MS]
+    order = preferred + [index for index in range(len(source)) if index not in preferred]
+    for index in order:
+        if residual == 0:
+            break
+        if residual > 0:
+            adjustment = min(residual, MAX_DELAY_MS - bounded[index])
+        else:
+            adjustment = max(residual, MIN_DELAY_MS - bounded[index])
+        bounded[index] += adjustment
+        residual -= adjustment
+    return tuple(bounded)
+
+
 def _sample_timeline(timed: tuple[tuple[bytes, int], ...], maximum: int) -> tuple[tuple[bytes, int], ...]:
     if not timed:
         raise _error("invalid_gif", "GIF has no decoded frames")
     if len(timed) <= maximum:
-        return tuple((rgba, _bounded_delay(duration)) for rgba, duration in timed)
+        return tuple((rgba, duration) for (rgba, _), duration in zip(timed, _redistribute_delays(duration for _, duration in timed)))
 
     total = sum(max(0, duration) for _, duration in timed)
     total = max(total, len(timed))
@@ -223,7 +246,7 @@ def _sample_timeline(timed: tuple[tuple[bytes, int], ...], maximum: int) -> tupl
             output[-1] = (rgba, output[-1][1] + duration)
         else:
             output.append((rgba, duration))
-    return tuple((rgba, _bounded_delay(duration)) for rgba, duration in output)
+    return tuple((rgba, duration) for (rgba, _), duration in zip(output, _redistribute_delays(duration for _, duration in output)))
 
 
 def _fit_nearest(rgba: bytes, source_width: int, source_height: int) -> Image.Image:

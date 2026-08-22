@@ -77,6 +77,58 @@ class PetConverterTests(unittest.TestCase):
         path.write_bytes(bytes(raw))
         return path
 
+    @staticmethod
+    def gif_lzw(indices):
+        """Encode GIF index samples with a clear code before every sample."""
+        codes = []
+        for index in indices:
+            codes.extend((4, index))
+        codes.append(5)
+        packed = 0
+        bits = 0
+        output = bytearray()
+        for code in codes:
+            packed |= code << bits
+            bits += 3
+            while bits >= 8:
+                output.append(packed & 0xFF)
+                packed >>= 8
+                bits -= 8
+        if bits:
+            output.append(packed)
+        return bytes(output)
+
+    def make_partial_local_palette_gif(self):
+        """Build a real GIF89a with local palettes and disposal 0/1/2/3."""
+        raw = bytearray(b"GIF89a\x04\x00\x04\x00\x00\x00\x00")
+        colors = {
+            "red": (255, 0, 0),
+            "green": (0, 255, 0),
+            "blue": (0, 0, 255),
+            "yellow": (255, 255, 0),
+            "cyan": (0, 255, 255),
+        }
+        frames = (
+            # disposal, left, top, width, height, visible color
+            (0, 0, 0, 4, 4, "red"),
+            (1, 1, 1, 1, 1, "green"),
+            (2, 2, 1, 1, 1, "blue"),
+            (3, 3, 1, 1, 1, "yellow"),
+            (1, 0, 2, 1, 1, "cyan"),
+        )
+        for disposal, left, top, width, height, color_name in frames:
+            raw.extend((0x21, 0xF9, 0x04, disposal << 2, 10, 0, 0, 0))
+            raw.extend((0x2C, left, 0, top, 0, width, 0, height, 0, 0x81))
+            raw.extend((0, 0, 0, *colors[color_name], 0, 0, 0, 0, 0, 0))
+            encoded = self.gif_lzw((1,) * (width * height))
+            raw.extend((2, len(encoded)))
+            raw.extend(encoded)
+            raw.append(0)
+        raw.append(0x3B)
+        path = self.root / "partial-local-disposal.gif"
+        path.write_bytes(bytes(raw))
+        return path
+
     def assert_error(self, path, code, text):
         with self.assertRaisesRegex(PetConversionError, text) as raised:
             convert_gif(path)
@@ -94,7 +146,8 @@ class PetConverterTests(unittest.TestCase):
         converted = convert_gif(path)
         self.assertEqual((converted.metadata.width, converted.metadata.height), (144, 156))
         self.assertTrue(all(len(frame) == 144 * 156 * 4 for frame in converted.preview_rgba))
-        self.assertEqual([frame.duration_ms for frame in converted.package.frames], [60, 180, 1000])
+        self.assertEqual([frame.duration_ms for frame in converted.package.frames], [60, 360, 1000])
+        self.assertEqual(converted.metadata.loop_duration_ms, 1420)
         self.assertEqual(converted.preview_rgba, render_rgba_frames(converted.package))
 
     def test_preserves_transparent_pixels_and_disposal_modes(self):
@@ -107,6 +160,31 @@ class PetConverterTests(unittest.TestCase):
         transparent = bytes((0, 0, 0, 0))
         self.assertTrue(any(transparent in (frame[offset:offset + 4] for offset in range(0, len(frame), 4)) for frame in converted.preview_rgba))
         self.assertEqual(converted.preview_rgba, render_rgba_frames(converted.package))
+
+    def test_composites_partial_local_palette_frames_for_all_disposals(self):
+        converted = convert_gif(self.make_partial_local_palette_gif())
+        self.assertEqual(converted.metadata.source_frames, 5)
+        self.assertEqual(converted.metadata.output_frames, 5)
+
+        def pixel(frame_index, x, y):
+            frame = converted.preview_rgba[frame_index]
+            offset = ((6 + y * 36 + 18) * 144 + x * 36 + 18) * 4
+            return frame[offset:offset + 4]
+
+        red = bytes((255, 0, 0, 255))
+        green = bytes((0, 255, 0, 255))
+        blue = bytes((0, 0, 255, 255))
+        yellow = bytes((255, 255, 0, 255))
+        cyan = bytes((0, 255, 255, 255))
+        black = bytes((0, 0, 0, 255))
+        self.assertEqual(pixel(0, 0, 0), red)  # disposal 0 base
+        self.assertEqual(pixel(1, 1, 1), green)  # disposal 1 remains
+        self.assertEqual(pixel(2, 2, 1), blue)  # disposal 2 frame itself
+        self.assertEqual(pixel(3, 1, 1), green)
+        self.assertEqual(pixel(3, 2, 1), black)  # disposal 2 restored GIF background
+        self.assertEqual(pixel(3, 3, 1), yellow)  # disposal 3 frame itself
+        self.assertEqual(pixel(4, 3, 1), red)  # disposal 3 restored prior canvas
+        self.assertEqual(pixel(4, 0, 2), cyan)
 
     def test_accepts_exact_cumulative_pixel_boundary_and_rejects_next_frame(self):
         # 61 * 1024^2 is 63,963,136 and is valid; adding one exceeds 64,000,000.
