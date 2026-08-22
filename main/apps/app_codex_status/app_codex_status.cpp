@@ -4084,6 +4084,7 @@ void AppCodexStatus::sync_task_focus_visibility()
         !_agent_panel_model.snapshot().visible &&
         !_agent_panel_model.owns_touch();
     _task_focus_view->set_visible(visible);
+    sync_pending_glow();
 }
 
 void AppCodexStatus::render_task_focus()
@@ -4167,6 +4168,7 @@ void AppCodexStatus::settle_task_deck_entry(bool open, bool animate)
         if (!open) {
             _task_focus_view->set_visible(false);
         }
+        sync_pending_glow();
         return;
     }
 
@@ -4181,6 +4183,7 @@ void AppCodexStatus::settle_task_deck_entry(bool open, bool animate)
     lv_anim_set_completed_cb(
         &animation, task_deck_animation_completed_cb);
     lv_anim_start(&animation);
+    sync_pending_glow();
 }
 
 
@@ -4204,6 +4207,7 @@ void AppCodexStatus::task_deck_animation_completed_cb(lv_anim_t* animation)
     if (self->_task_focus_view->vertical_offset() >= kTaskDeckHiddenY) {
         self->_task_focus_view->set_visible(false);
     }
+    self->sync_pending_glow();
 }
 
 void AppCodexStatus::cancel_task_focus_touch()
@@ -4414,6 +4418,7 @@ void AppCodexStatus::update_page_swipe(uint32_t now_ms)
                 if (!_task_deck_drag_active) {
                     lv_anim_delete(this, task_deck_animation_cb);
                     _task_deck_drag_active = true;
+                    sync_pending_glow();
                     _task_deck_drag_start_y = kTaskDeckHiddenY;
                     const TaskFocusStateSnapshot task =
                         snapshot_task_focus_state();
@@ -4467,6 +4472,7 @@ void AppCodexStatus::set_page(int page, bool animate)
     cancel_task_focus_touch();
     _last_page_touch_state = LV_INDEV_STATE_REL;
     _current_page = page;
+    sync_pending_glow();
     _pinned_microphone_controller.page_changed(page);
     update_page_indicator();
     (void)sync_agent_panel_for_task_mode(CodexTaskFocusMode::Status);
@@ -4533,7 +4539,12 @@ void AppCodexStatus::sync_pending_glow()
     const bool screen_off =
         GetGlobalDisplayProtectionService().snapshot().state ==
         DisplayProtectionState::ScreenOff;
-    _pending_glow->set_state(_alert_carousel.display_state(), screen_off);
+    const bool surface_visible =
+        _current_page == 1 &&
+        !_task_deck_drag_active &&
+        snapshot_task_focus_state().mode == CodexTaskFocusMode::Status;
+    _pending_glow->set_state(
+        _alert_carousel.display_state(), screen_off, surface_visible);
 }
 
 void AppCodexStatus::sync_display_protection_presentation()

@@ -88,13 +88,18 @@ void CodexPendingSoftGlow::set_status_targets(
     restore_target_opacity();
 }
 
-void CodexPendingSoftGlow::set_state(CodexTaskState state, bool screen_off)
+void CodexPendingSoftGlow::set_state(
+    CodexTaskState state,
+    bool screen_off,
+    bool surface_visible)
 {
     const bool state_changed = state != _state;
     _state = state;
-    _ring_visible = codex_pending_glow::ring_desired(state, screen_off);
+    _ring_visible = codex_pending_glow::ring_desired(
+        state, screen_off, surface_visible);
     const bool requested_active =
-        codex_pending_glow::pulse_desired(state, screen_off);
+        codex_pending_glow::pulse_desired(
+            state, screen_off, surface_visible);
     switch (codex_pending_glow::transition_for(_active, requested_active)) {
         case codex_pending_glow::Transition::Start:
             start();

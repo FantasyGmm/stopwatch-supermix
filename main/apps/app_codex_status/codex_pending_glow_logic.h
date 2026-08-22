@@ -70,14 +70,20 @@ constexpr uint8_t opacity_for_phase(
     );
 }
 
-constexpr bool pulse_desired(CodexTaskState state, bool screen_off)
+constexpr bool pulse_desired(
+    CodexTaskState state,
+    bool screen_off,
+    bool surface_visible = true)
 {
-    return state != CodexTaskState::Completed && !screen_off;
+    return state != CodexTaskState::Completed && !screen_off && surface_visible;
 }
 
-constexpr bool ring_desired(CodexTaskState state, bool screen_off)
+constexpr bool ring_desired(
+    CodexTaskState state,
+    bool screen_off,
+    bool surface_visible = true)
 {
-    return state == CodexTaskState::Pending && !screen_off;
+    return state == CodexTaskState::Pending && !screen_off && surface_visible;
 }
 
 constexpr Transition transition_for(bool active, bool requested_active)

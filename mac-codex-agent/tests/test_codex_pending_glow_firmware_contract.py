@@ -61,7 +61,7 @@ class CodexPendingGlowFirmwareContractTests(unittest.TestCase):
         ).read_text()
 
         self.assertIn("void set_status_targets(", header)
-        self.assertIn("void set_state(CodexTaskState state, bool screen_off)", header)
+        self.assertIn("bool surface_visible", header)
         self.assertNotIn("void set_heading(", header)
 
         self.assertIn(
@@ -120,6 +120,8 @@ class CodexPendingGlowFirmwareContractTests(unittest.TestCase):
         )
         self.assertIn("_alert_carousel.display_state()", app)
         self.assertIn("_pending_glow->set_state(", app)
+        self.assertIn("!_task_deck_drag_active", app)
+        self.assertIn("CodexTaskFocusMode::Status", app)
         self.assertIn("_pending_glow->shutdown()", app)
         self.assertIn("constexpr uint32_t kInstrumentBlack = 0x000000", layout)
         self.assertIn("constexpr int kPetX = 73", layout)
