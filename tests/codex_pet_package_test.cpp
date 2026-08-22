@@ -142,6 +142,26 @@ void test_fixed_vector_and_decode(const std::vector<uint8_t>& bytes)
         codex_pet::DecodeError::FrameOutOfRange);
 }
 
+void test_fabricated_frame_count_is_rejected_without_writing(
+    const std::vector<uint8_t>& bytes)
+{
+    const auto parsed = parse(bytes);
+    assert(parsed.error == codex_pet::PackageError::None);
+    auto fabricated = parsed.package;
+    fabricated.frames.count = codex_pet::kMaxFrames + 1U;
+
+    std::array<uint8_t, codex_pet::kRgb565A8Bytes> output{};
+    output.fill(0xaaU);
+    assert(
+        codex_pet::decode_frame(
+            fabricated,
+            static_cast<uint16_t>(codex_pet::kMaxFrames),
+            {output.data(), output.size()}) ==
+        codex_pet::DecodeError::InvalidPackage);
+    assert(std::all_of(
+        output.begin(), output.end(), [](uint8_t value) { return value == 0xaaU; }));
+}
+
 void test_every_multibyte_header_field(const std::vector<uint8_t>& valid)
 {
     const std::array<std::pair<size_t, uint16_t>, 8> u16_mutations = {{
@@ -247,6 +267,7 @@ int main()
 {
     const auto bytes = read_hex("tests/fixtures/codex_pet/cxp1_minimal.hex");
     test_fixed_vector_and_decode(bytes);
+    test_fabricated_frame_count_is_rejected_without_writing(bytes);
     test_every_multibyte_header_field(bytes);
     test_every_multibyte_frame_field(bytes);
     test_untrusted_spans_and_products(bytes);

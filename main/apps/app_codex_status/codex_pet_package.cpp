@@ -373,6 +373,9 @@ DecodeResult decode_frame(
     if (output.data == nullptr || output.size != kRgb565A8Bytes) {
         return DecodeError::InvalidOutput;
     }
+    if (package.frames.count > kMaxFrames) {
+        return DecodeError::InvalidPackage;
+    }
     if (frame_index >= package.frames.size()) {
         return DecodeError::FrameOutOfRange;
     }
