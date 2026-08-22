@@ -24,6 +24,7 @@ ALTERNATE_MODIFIER_FLAGS = Quartz.kCGEventFlagMaskCommand
 SEND_LABELS = frozenset(("send", "发送"))
 QUEUE_LABELS = frozenset(("queue", "加入队列"))
 STEER_LABELS = frozenset(("steer", "调整方向"))
+STOP_LABELS = frozenset(("stop", "停止"))
 
 # Current English defaultMessage and Simplified Chinese locale pairs extracted
 # from the named composer placeholder IDs in the Codex desktop app's app.asar.
@@ -119,6 +120,7 @@ class SubmitSemantic(enum.Enum):
     SEND = "send"
     QUEUE = "queue"
     STEER = "steer"
+    RUNNING = "running"
     UNKNOWN = "unknown"
 
 
@@ -176,7 +178,7 @@ class CodexSubmitController:
             self._logger.info("Ignoring input action: no safe Codex composer")
             return False
 
-        reason = self._unsafe_reason(prepared.snapshot)
+        reason = self._unsafe_reason(prepared.snapshot, action)
         if reason is not None:
             self._logger.info("Ignoring input action: %s", reason)
             return False
@@ -188,7 +190,10 @@ class CodexSubmitController:
             if prepared.semantic in (SubmitSemantic.SEND, SubmitSemantic.STEER):
                 self._accessibility.normal_submit(prepared)
                 return True
-            if prepared.semantic is SubmitSemantic.QUEUE:
+            if prepared.semantic in (
+                SubmitSemantic.QUEUE,
+                SubmitSemantic.RUNNING,
+            ):
                 self._accessibility.alternate_submit(prepared)
                 return True
         except Exception:
@@ -198,20 +203,28 @@ class CodexSubmitController:
         return False
 
     @staticmethod
-    def _unsafe_reason(current: ComposerSnapshot) -> Optional[str]:
+    def _unsafe_reason(
+        current: ComposerSnapshot, action: InputAction
+    ) -> Optional[str]:
         if not isinstance(current, ComposerSnapshot):
             return "Accessibility snapshot is malformed"
         if not current.codex_foreground:
             return "Codex is not foreground"
         if not current.editable:
             return "focused Codex composer is not editable"
-        if not current.has_text:
+        if not current.has_text and not (
+            action is InputAction.FORCE_STEER
+            and current.semantic is SubmitSemantic.RUNNING
+        ):
             return "focused Codex composer is empty"
-        if current.semantic not in (
+        allowed_semantics = (
             SubmitSemantic.SEND,
             SubmitSemantic.QUEUE,
             SubmitSemantic.STEER,
-        ):
+        )
+        if action is InputAction.FORCE_STEER:
+            allowed_semantics += (SubmitSemantic.RUNNING,)
+        if current.semantic not in allowed_semantics:
             return "submit semantics are unknown"
         return None
 
@@ -346,7 +359,7 @@ class MacOSCodexAccessibility:
                 )
             button, button_token, semantic = button_match
             current = ComposerSnapshot(True, True, has_text, semantic)
-            if not has_text:
+            if not has_text and semantic is not SubmitSemantic.RUNNING:
                 return current, None
             return current, PreparedSubmit(
                 snapshot=current,
@@ -521,6 +534,8 @@ class MacOSCodexAccessibility:
                 matches.add(SubmitSemantic.QUEUE)
             elif normalized in STEER_LABELS:
                 matches.add(SubmitSemantic.STEER)
+            elif normalized in STOP_LABELS:
+                matches.add(SubmitSemantic.RUNNING)
         if len(matches) == 1:
             return next(iter(matches))
         return SubmitSemantic.UNKNOWN
@@ -559,8 +574,13 @@ class MacOSCodexAccessibility:
             raise RuntimeError("Codex submit AXPress failed")
 
     def alternate_submit(self, prepared: PreparedSubmit) -> None:
-        if prepared.semantic is not SubmitSemantic.QUEUE:
-            raise RuntimeError("alternate submit requires Queue semantics")
+        if prepared.semantic not in (
+            SubmitSemantic.QUEUE,
+            SubmitSemantic.RUNNING,
+        ):
+            raise RuntimeError(
+                "alternate submit requires Queue or running semantics"
+            )
         fresh = self._revalidate(prepared)
         self._post_modified_return_to_pid(fresh.pid)
 

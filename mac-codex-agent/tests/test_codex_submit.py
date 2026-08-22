@@ -84,11 +84,12 @@ class CodexSubmitControllerTests(unittest.TestCase):
                 self.assertEqual(accessibility.normal_calls, 1)
                 self.assertEqual(accessibility.alternate_calls, 0)
 
-    def test_force_steer_uses_normal_for_send_and_steer_but_alternate_for_queue(self):
+    def test_force_steer_uses_normal_for_send_and_steer_but_alternate_for_queue_and_running(self):
         for semantic, expected in (
             (SubmitSemantic.SEND, (1, 0)),
             (SubmitSemantic.STEER, (1, 0)),
             (SubmitSemantic.QUEUE, (0, 1)),
+            (SubmitSemantic.RUNNING, (0, 1)),
         ):
             with self.subTest(semantic=semantic):
                 handled, accessibility = self.dispatch(
@@ -389,13 +390,14 @@ class PreparedCodexSubmissionTests(unittest.TestCase):
         current = adapter.snapshot()
         self.assertTrue(current.editable)
         prepared = adapter.prepare()
-        if current.has_text:
+        if current.has_text or current.semantic is SubmitSemantic.RUNNING:
             self.assertIn(
                 current.semantic,
                 (
                     SubmitSemantic.SEND,
                     SubmitSemantic.QUEUE,
                     SubmitSemantic.STEER,
+                    SubmitSemantic.RUNNING,
                 ),
             )
             self.assertIsNotNone(prepared)
@@ -610,7 +612,7 @@ class PreparedCodexSubmissionTests(unittest.TestCase):
         self.assertFalse(current.has_text)
         self.assertIsNone(self.adapter(fixture).prepare())
 
-    def test_empty_running_composer_with_stop_button_fails_closed(self):
+    def test_empty_running_composer_with_stop_button_prepares_queued_steer(self):
         for label in ("Stop", "停止"):
             with self.subTest(label=label):
                 fixture = RealComposerFixture(label=label, value="")
@@ -621,8 +623,10 @@ class PreparedCodexSubmissionTests(unittest.TestCase):
                 self.assertTrue(current.codex_foreground)
                 self.assertTrue(current.editable)
                 self.assertFalse(current.has_text)
-                self.assertEqual(current.semantic, SubmitSemantic.UNKNOWN)
-                self.assertIsNone(adapter.prepare())
+                self.assertEqual(current.semantic, SubmitSemantic.RUNNING)
+                prepared = adapter.prepare()
+                self.assertIsNotNone(prepared)
+                self.assertEqual(prepared.semantic, SubmitSemantic.RUNNING)
 
     def test_button_must_be_unique_enabled_and_have_stable_token(self):
         fixture = RealComposerFixture()
@@ -808,6 +812,55 @@ class PreparedCodexSubmissionTests(unittest.TestCase):
             posted,
             [(42, created[0][0]), (42, created[1][0])],
         )
+
+    def test_force_steer_with_empty_running_stop_posts_modified_return(self):
+        for label in ("Stop", "停止"):
+            with self.subTest(label=label):
+                fixture = RealComposerFixture(
+                    description="随心输入",
+                    label=label,
+                    value="",
+                )
+                created = []
+                flags = []
+                posted = []
+                adapter = self.adapter(
+                    fixture,
+                    created_events=created,
+                    event_flags=flags,
+                    posted_events=posted,
+                )
+
+                handled = CodexSubmitController(adapter).handle(
+                    InputAction.FORCE_STEER
+                )
+
+                self.assertTrue(handled)
+                self.assertEqual(fixture.actions, [])
+                self.assertEqual(
+                    [(key_code, down) for _, key_code, down in created],
+                    [(RETURN_KEY_CODE, True), (RETURN_KEY_CODE, False)],
+                )
+                self.assertEqual(
+                    [value for _, value in flags],
+                    [1 << 20, 1 << 20],
+                )
+                self.assertEqual(
+                    posted,
+                    [(42, created[0][0]), (42, created[1][0])],
+                )
+
+    def test_submit_with_empty_running_stop_does_not_press_stop(self):
+        fixture = RealComposerFixture(label="停止", value="")
+        posted = []
+
+        handled = CodexSubmitController(
+            self.adapter(fixture, posted_events=posted)
+        ).handle(InputAction.SUBMIT)
+
+        self.assertFalse(handled)
+        self.assertEqual(fixture.actions, [])
+        self.assertEqual(posted, [])
 
     def test_missing_targeted_key_event_fails_before_posting(self):
         fixture = RealComposerFixture(label="Queue")
