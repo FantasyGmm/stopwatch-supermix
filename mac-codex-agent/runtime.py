@@ -33,6 +33,17 @@ from codex_adapter import CodexStateCollector
 from codex_task_composer import CodexTaskComposerClient
 from combined_collector import CompositeStateCollector
 from pairing_client import PairingClient, WatchCredential
+from pet_cache import PetPreviewCache
+from pet_package import PetPackage
+from pet_upload import (
+    PetCapability,
+    PetOperation,
+    PetProgress,
+    PetRequest,
+    PetUnsupportedError,
+    PetUploader,
+    PetWatchState,
+)
 from codex_submit import CodexSubmitController, MacOSCodexAccessibility
 from input_action_protocol import (
     ActionReplayGuard,
@@ -132,6 +143,8 @@ class _BleSessionContext:
     input_submit_controller: Optional[object] = None
     input_active: bool = False
     accessibility_available: bool = True
+    pet_uploader: Optional[object] = None
+    pet_generation: int = 0
     shutdown_task: Optional[asyncio.Task] = None
 
 
@@ -422,6 +435,9 @@ class AgentRuntime:
         app_server_client=None,
         transcript_source=None,
         task_submitter=None,
+        pet_uploader_factory=None,
+        pet_nonce_factory=None,
+        pet_cache=None,
     ):
         self._collector = collector
         self._transport_factory = transport_factory
@@ -451,6 +467,9 @@ class AgentRuntime:
         self._task_submitter = task_submitter or TaskVoiceSubmitter(
             self._task_route_registry, self._app_server_client
         )
+        self._pet_uploader_factory = pet_uploader_factory or PetUploader
+        self._pet_nonce_factory = pet_nonce_factory or _new_voice_nonce
+        self._pet_cache = pet_cache or PetPreviewCache()
         self._state_lock = threading.Lock()
         self._snapshot = AgentSnapshot(
             ConnectionState.SCANNING
@@ -469,10 +488,29 @@ class AgentRuntime:
         self._status_ready: Optional[asyncio.Event] = None
         self._status_changed: Optional[asyncio.Event] = None
         self._voice_refresh_requested = threading.Event()
+        self._pet_lock = threading.Lock()
+        self._pet_state = PetWatchState(
+            None,
+            PetCapability.OFFLINE,
+            "built-in",
+            0,
+            0,
+            0,
+            bytes(32),
+            False,
+        )
+        self._pet_uploader = None
+        self._pet_generation = 0
+        self._pet_request: Optional[PetRequest] = None
+        self._pet_task: Optional[asyncio.Task] = None
 
     def snapshot(self) -> AgentSnapshot:
         with self._state_lock:
             return self._snapshot
+
+    def pet_snapshot(self) -> PetWatchState:
+        with self._pet_lock:
+            return self._pet_state
 
     def set_agent_name(self, display_name: str) -> None:
         with self._state_lock:
@@ -493,6 +531,99 @@ class AgentRuntime:
                 loop.call_soon_threadsafe(commands.put_nowait, command)
             except RuntimeError:
                 self._pending_commands.append(command)
+
+    def submit_pet_request(self, request: PetRequest) -> bool:
+        error_code = self._validate_pet_request(request)
+        if error_code:
+            self._publish_pet_progress(
+                request.callback if isinstance(request, PetRequest) else None,
+                PetProgress(
+                    request.request_id
+                    if isinstance(request, PetRequest)
+                    and isinstance(request.request_id, str)
+                    else "",
+                    "error",
+                    0,
+                    0,
+                    error_code,
+                ),
+            )
+            return False
+
+        if request.operation is PetOperation.CANCEL:
+            with self._pet_lock:
+                loop = self._loop
+                active = self._pet_request
+                uploader = self._pet_uploader
+                generation = self._pet_generation
+            if (
+                loop is None
+                or active is None
+                or active.request_id != request.request_id
+                or uploader is None
+            ):
+                self._publish_pet_progress(
+                    request.callback,
+                    PetProgress(
+                        request.request_id, "error", 0, 0, "not_active"
+                    ),
+                )
+                return False
+            try:
+                loop.call_soon_threadsafe(
+                    self._start_pet_cancel,
+                    request,
+                    uploader,
+                    generation,
+                )
+            except RuntimeError:
+                self._publish_pet_progress(
+                    request.callback,
+                    PetProgress(
+                        request.request_id, "error", 0, 0, "offline"
+                    ),
+                )
+                return False
+            return True
+
+        with self._pet_lock:
+            loop = self._loop
+            if self._pet_request is not None:
+                error_code = "busy"
+            elif (
+                loop is None
+                or self._pet_uploader is None
+                or self._pet_state.capability is not PetCapability.READY
+            ):
+                error_code = "offline"
+            else:
+                error_code = ""
+                self._pet_request = request
+                uploader = self._pet_uploader
+                generation = self._pet_generation
+        if error_code:
+            self._publish_pet_progress(
+                request.callback,
+                PetProgress(request.request_id, "error", 0, 0, error_code),
+            )
+            return False
+        try:
+            loop.call_soon_threadsafe(
+                self._start_pet_request,
+                request,
+                uploader,
+                generation,
+            )
+        except RuntimeError:
+            with self._pet_lock:
+                if self._pet_request is request:
+                    self._pet_request = None
+            self._publish_pet_progress(
+                request.callback,
+                PetProgress(request.request_id, "error", 0, 0, "offline"),
+            )
+            return False
+        return True
 
     def refresh_voice_readiness(self) -> None:
         self._voice_refresh_requested.set()
@@ -606,6 +737,372 @@ class AgentRuntime:
                 agent_name=agent_name or previous.agent_name,
                 changed_at=time.time(),
             )
+
+    @staticmethod
+    def _validate_pet_request(request) -> str:
+        if not isinstance(request, PetRequest):
+            return "invalid_request"
+        if (
+            not isinstance(request.request_id, str)
+            or not request.request_id
+            or len(request.request_id) > 128
+            or not callable(request.callback)
+        ):
+            return "invalid_request"
+        if request.operation is PetOperation.UPLOAD:
+            return "" if isinstance(request.package, PetPackage) else "invalid_request"
+        if request.operation in (PetOperation.CANCEL, PetOperation.RESTORE):
+            return "" if request.package is None else "invalid_request"
+        return "invalid_request"
+
+    @staticmethod
+    def _publish_pet_progress(callback, progress: PetProgress) -> None:
+        if not callable(callback):
+            return
+        try:
+            callback(progress)
+        except Exception:
+            LOGGER.warning("Pet request callback failed")
+
+    def _set_pet_state(self, state: PetWatchState) -> None:
+        with self._pet_lock:
+            self._pet_state = state
+
+    def _start_pet_request(
+        self,
+        request: PetRequest,
+        uploader,
+        generation: int,
+    ) -> None:
+        with self._pet_lock:
+            if (
+                self._pet_request is not request
+                or self._pet_uploader is not uploader
+                or self._pet_generation != generation
+            ):
+                return
+            task = asyncio.create_task(
+                self._execute_pet_request(request, uploader, generation)
+            )
+            self._pet_task = task
+
+    def _start_pet_cancel(
+        self,
+        request: PetRequest,
+        uploader,
+        generation: int,
+    ) -> None:
+        with self._pet_lock:
+            active = self._pet_request
+            if (
+                active is None
+                or active.request_id != request.request_id
+                or self._pet_uploader is not uploader
+                or self._pet_generation != generation
+            ):
+                return
+        asyncio.create_task(
+            self._execute_pet_cancel(request, uploader, generation)
+        )
+
+    async def _execute_pet_cancel(
+        self,
+        request: PetRequest,
+        uploader,
+        generation: int,
+    ) -> None:
+        try:
+            await uploader.cancel(request.request_id)
+        except Exception as error:
+            if self._pet_request_is_current(
+                request.request_id, uploader, generation
+            ):
+                self._publish_pet_progress(
+                    request.callback,
+                    PetProgress(
+                        request.request_id,
+                        "error",
+                        0,
+                        0,
+                        getattr(error, "error_code", "cancel_failed"),
+                    ),
+                )
+
+    async def _execute_pet_request(
+        self,
+        request: PetRequest,
+        uploader,
+        generation: int,
+    ) -> None:
+        installed_progress = None
+
+        def publish(progress: PetProgress) -> None:
+            nonlocal installed_progress
+            if progress.phase == "installed":
+                installed_progress = progress
+                return
+            if self._pet_request_is_current(
+                request.request_id, uploader, generation
+            ):
+                self._publish_pet_progress(request.callback, progress)
+
+        try:
+            if request.operation is PetOperation.UPLOAD:
+                package = request.package
+                state = await uploader.upload(
+                    package,
+                    publish,
+                    request_id=request.request_id,
+                )
+                if (
+                    not self._valid_ready_pet_state(state)
+                    or state.active_hash != package.sha256
+                ):
+                    raise RuntimeError("watch returned conflicting pet state")
+                if self._accept_pet_result(
+                    request, uploader, generation, state
+                ):
+                    if installed_progress is not None:
+                        self._publish_pet_progress(
+                            request.callback, installed_progress
+                        )
+                    try:
+                        await _run_in_daemon_thread(
+                            lambda: self._pet_cache.store(
+                                state.watch_id, package
+                            )
+                        )
+                    except Exception:
+                        LOGGER.warning("Could not store verified pet preview")
+            elif request.operation is PetOperation.RESTORE:
+                state = await uploader.restore(
+                    publish, request_id=request.request_id
+                )
+                if (
+                    not self._valid_ready_pet_state(state)
+                    or state.source != "built-in"
+                    or any(state.active_hash)
+                ):
+                    raise RuntimeError("watch returned conflicting restore state")
+                if self._accept_pet_result(
+                    request, uploader, generation, state
+                ):
+                    if installed_progress is not None:
+                        self._publish_pet_progress(
+                            request.callback, installed_progress
+                        )
+                    try:
+                        await _run_in_daemon_thread(
+                            lambda: self._pet_cache.remove_watch(
+                                state.watch_id
+                            )
+                        )
+                    except Exception:
+                        LOGGER.warning("Could not remove pet preview cache")
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            if self._pet_request_is_current(
+                request.request_id, uploader, generation
+            ):
+                total = (
+                    len(request.package.encoded)
+                    if request.package is not None
+                    else 0
+                )
+                self._publish_pet_progress(
+                    request.callback,
+                    PetProgress(
+                        request.request_id,
+                        "error",
+                        0,
+                        total,
+                        getattr(error, "error_code", "transfer_failed"),
+                    ),
+                )
+        finally:
+            current_task = asyncio.current_task()
+            with self._pet_lock:
+                if self._pet_request is request:
+                    self._pet_request = None
+                if self._pet_task is current_task:
+                    self._pet_task = None
+
+    def _pet_request_is_current(
+        self, request_id: str, uploader, generation: int
+    ) -> bool:
+        with self._pet_lock:
+            return (
+                self._pet_request is not None
+                and self._pet_request.request_id == request_id
+                and self._pet_uploader is uploader
+                and self._pet_generation == generation
+            )
+
+    def _accept_pet_result(
+        self,
+        request: PetRequest,
+        uploader,
+        generation: int,
+        state: PetWatchState,
+    ) -> bool:
+        with self._pet_lock:
+            if (
+                self._pet_request is not request
+                or self._pet_uploader is not uploader
+                or self._pet_generation != generation
+            ):
+                return False
+            self._pet_state = state
+            return True
+
+    @staticmethod
+    def _valid_ready_pet_state(state) -> bool:
+        return (
+            isinstance(state, PetWatchState)
+            and state.capability is PetCapability.READY
+            and isinstance(state.watch_id, bytes)
+            and len(state.watch_id) == 16
+            and any(state.watch_id)
+            and state.source in ("built-in", "custom")
+            and isinstance(state.active_hash, bytes)
+            and len(state.active_hash) == 32
+            and isinstance(state.schema_min, int)
+            and not isinstance(state.schema_min, bool)
+            and isinstance(state.schema_max, int)
+            and not isinstance(state.schema_max, bool)
+            and 1 <= state.schema_min <= state.schema_max <= 0xFFFF
+            and isinstance(state.generation, int)
+            and not isinstance(state.generation, bool)
+            and 0 <= state.generation <= 0xFFFFFFFF
+            and isinstance(state.usable, bool)
+        )
+
+    async def _prepare_pet(self, context: _BleSessionContext) -> None:
+        credential = context.credential
+        if credential is None:
+            self._set_pet_state(
+                PetWatchState(
+                    None,
+                    PetCapability.OFFLINE,
+                    "built-in",
+                    0,
+                    0,
+                    0,
+                    bytes(32),
+                    False,
+                )
+            )
+            return
+
+        with self._pet_lock:
+            self._pet_generation += 1
+            generation = self._pet_generation
+            self._pet_uploader = None
+            self._pet_state = PetWatchState(
+                credential.watch_id,
+                PetCapability.AUTHENTICATING,
+                "built-in",
+                0,
+                0,
+                0,
+                bytes(32),
+                False,
+            )
+        try:
+            uploader = self._pet_uploader_factory(
+                context.transport,
+                credential.master_key,
+                credential.key_epoch,
+                self._pet_nonce_factory,
+                watch_id=credential.watch_id,
+            )
+            context.pet_uploader = uploader
+            context.pet_generation = generation
+            state = await uploader.query()
+            if (
+                not self._valid_ready_pet_state(state)
+                or state.watch_id != credential.watch_id
+            ):
+                raise RuntimeError("watch returned conflicting pet identity")
+        except PetUnsupportedError:
+            with self._pet_lock:
+                if self._pet_generation == generation:
+                    self._pet_state = PetWatchState(
+                        credential.watch_id,
+                        PetCapability.UNSUPPORTED,
+                        "built-in",
+                        0,
+                        0,
+                        0,
+                        bytes(32),
+                        False,
+                    )
+            return
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            with self._pet_lock:
+                if self._pet_generation == generation:
+                    self._pet_state = PetWatchState(
+                        credential.watch_id,
+                        PetCapability.OFFLINE,
+                        "built-in",
+                        0,
+                        0,
+                        0,
+                        bytes(32),
+                        False,
+                    )
+            LOGGER.warning("Optional pet channel is unavailable: %s", error)
+            return
+
+        with self._pet_lock:
+            if (
+                context.pet_uploader is uploader
+                and context.pet_generation == generation
+                and self._pet_generation == generation
+            ):
+                self._pet_uploader = uploader
+                self._pet_state = state
+
+    async def _retire_pet_uploader(
+        self,
+        context: _BleSessionContext,
+        capability: PetCapability = PetCapability.OFFLINE,
+    ) -> None:
+        uploader = self._detach_pet_uploader(context, capability)
+        if uploader is not None:
+            await self._bounded_cleanup(
+                uploader.close(), "Pet uploader cleanup"
+            )
+
+    def _detach_pet_uploader(
+        self,
+        context: _BleSessionContext,
+        capability: PetCapability = PetCapability.OFFLINE,
+    ):
+        uploader = context.pet_uploader
+        with self._pet_lock:
+            if context.pet_generation == self._pet_generation:
+                self._pet_generation += 1
+                self._pet_uploader = None
+                self._pet_request = None
+                self._pet_task = None
+                previous = self._pet_state
+                self._pet_state = PetWatchState(
+                    previous.watch_id,
+                    capability,
+                    previous.source,
+                    previous.schema_min,
+                    previous.schema_max,
+                    previous.generation,
+                    previous.active_hash,
+                    False,
+                )
+        context.pet_uploader = None
+        context.pet_generation = 0
+        return uploader
 
     async def run(self) -> None:
         loop = asyncio.get_running_loop()
@@ -839,6 +1336,7 @@ class AgentRuntime:
                 context.voice_key = credential.master_key
                 context.voice_key_epoch = credential.key_epoch
             self._transition(ConnectionState.CONNECTED)
+            await self._prepare_pet(context)
             status_agent = CodexStatusAgent(
                 self._collector,
                 transport,
@@ -945,6 +1443,9 @@ class AgentRuntime:
         context: _BleSessionContext,
         credential: WatchCredential,
     ) -> bool:
+        await self._retire_pet_uploader(
+            context, PetCapability.AUTHENTICATING
+        )
         context.input_active = False
         await self._bounded_cleanup(
             context.transport.disable_input_actions(),
@@ -978,6 +1479,7 @@ class AgentRuntime:
         context.voice_key = credential.master_key
         context.voice_key_epoch = credential.key_epoch
         context.voice_failed = False
+        await self._prepare_pet(context)
         await self._prepare_voice(context)
         return True
 
@@ -1388,11 +1890,22 @@ class AgentRuntime:
                 context.voice_key_epoch,
             )
 
+        pet_uploader = self._detach_pet_uploader(context)
         retired_consumer = self._retire_voice_generation(context.transport)
         has_service = context.voice_service is not None
         future_steps = (
-            int(has_service) + int(retired_consumer is not None) + 2
+            int(pet_uploader is not None)
+            + int(has_service)
+            + int(retired_consumer is not None)
+            + 2
         )
+        if pet_uploader is not None:
+            await self._cleanup_before_deadline(
+                pet_uploader.close,
+                "Pet uploader cleanup",
+                deadline,
+                future_steps + 1,
+            )
         await self._cleanup_before_deadline(
             context.transport.disable_input_actions,
             "Input action notification cleanup",
@@ -1648,6 +2161,43 @@ class AgentController:
 
     def snapshot(self) -> AgentSnapshot:
         return self._runtime.snapshot()
+
+    def pet_snapshot(self) -> PetWatchState:
+        return self._runtime.pet_snapshot()
+
+    def upload_pet(self, package: PetPackage, callback) -> str:
+        request_id = secrets.token_hex(8)
+        self._runtime.submit_pet_request(
+            PetRequest(
+                request_id,
+                PetOperation.UPLOAD,
+                package,
+                callback,
+            )
+        )
+        return request_id
+
+    def cancel_pet(self, request_id: str) -> bool:
+        return self._runtime.submit_pet_request(
+            PetRequest(
+                request_id,
+                PetOperation.CANCEL,
+                None,
+                lambda _progress: None,
+            )
+        )
+
+    def restore_default(self, callback) -> str:
+        request_id = secrets.token_hex(8)
+        self._runtime.submit_pet_request(
+            PetRequest(
+                request_id,
+                PetOperation.RESTORE,
+                None,
+                callback,
+            )
+        )
+        return request_id
 
     def set_connection_enabled(self, enabled: bool) -> None:
         self._preferences.set_connection_enabled(enabled)
