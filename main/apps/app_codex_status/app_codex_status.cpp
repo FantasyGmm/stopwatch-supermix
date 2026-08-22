@@ -921,13 +921,14 @@ void AppCodexStatus::apply_pet_image()
         return;
     }
     lv_image_set_src(_pet_image, image);
+    _pet_runtime->acknowledge_image_published();
     lv_image_set_scale(
         _pet_image,
         _pet_runtime->using_custom() ? LV_SCALE_NONE : kPetScale);
     lv_obj_set_pos(_pet_image, kPetX, kPetY);
     if (_pet_timer != nullptr) {
         lv_timer_set_period(
-            _pet_timer, _pet_runtime->next_frame_delay_ms());
+            _pet_timer, _pet_runtime->next_frame_delay_ms(GetHAL().millis()));
     }
 }
 
@@ -1143,12 +1144,13 @@ void AppCodexStatus::create_view()
 
     _pet_image = lv_image_create(_codex_page);
     lv_image_set_antialias(_pet_image, false);
+    lv_image_set_pivot(_pet_image, 0, 0);
     lv_obj_clear_flag(_pet_image, LV_OBJ_FLAG_CLICKABLE);
     sync_pet_runtime(GetHAL().millis());
 
     if (_pet_timer == nullptr) {
         const uint32_t period = _pet_runtime
-            ? _pet_runtime->next_frame_delay_ms()
+            ? _pet_runtime->next_frame_delay_ms(GetHAL().millis())
             : codex_pet_idle_durations_ms[0];
         _pet_timer = lv_timer_create(AppCodexStatus::pet_timer_cb, period, this);
     }
@@ -4777,11 +4779,13 @@ void AppCodexStatus::pet_timer_cb(lv_timer_t* timer)
         return;
     }
 
-    self->_pet_runtime->advance(GetHAL().millis());
+    const uint32_t now_ms = GetHAL().millis();
+    self->_pet_runtime->advance(now_ms);
     if (self->_pet_runtime->take_frame_changed()) {
         self->apply_pet_image();
     }
-    lv_timer_set_period(timer, self->_pet_runtime->next_frame_delay_ms());
+    lv_timer_set_period(
+        timer, self->_pet_runtime->next_frame_delay_ms(now_ms));
 }
 
 void AppCodexStatus::websocket_event_handler(void* handler_args, esp_event_base_t, int32_t event_id, void* event_data)

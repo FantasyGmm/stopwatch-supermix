@@ -157,16 +157,34 @@ class CodexStatusFLayoutContractTests(unittest.TestCase):
         self.assertIn("void advance(uint32_t now_ms)", runtime_header)
         self.assertIn("const lv_image_dsc_t* current_image() const", runtime_header)
         self.assertIn("bool take_frame_changed()", runtime_header)
+        self.assertIn("void acknowledge_image_published()", runtime_header)
         self.assertIn("bool using_custom() const", runtime_header)
         self.assertIn("void close()", runtime_header)
         self.assertIn("LV_COLOR_FORMAT_RGB565A8", runtime_source)
         self.assertIn("kRgb565A8Bytes", runtime_source)
         self.assertIn("kSlotEnvelopeBytes", runtime_source)
         self.assertIn("decode_frame", runtime_source)
+        self.assertIn("transitions < kMaxFrames", runtime_source)
         self.assertNotIn("CodexPetTransfer", runtime_header)
         self.assertIn("_pet_runtime->prepare_generation(_pet_selection)", app)
         self.assertIn("_pet_runtime->set_visible(", app)
         self.assertIn("_pet_runtime->close()", app)
+        self.assertIn("lv_image_set_pivot(_pet_image, 0, 0);", app)
+        self.assertIn("_pet_runtime->acknowledge_image_published();", app)
+        apply_body = app.split("void AppCodexStatus::apply_pet_image()", 1)[1].split(
+            "void AppCodexStatus::sync_pet_runtime", 1
+        )[0]
+        self.assertIn(
+            "_pet_runtime->using_custom() ? LV_SCALE_NONE : kPetScale",
+            apply_body,
+        )
+        self.assertIn("lv_obj_set_pos(_pet_image, kPetX, kPetY);", apply_body)
+        self.assertLess(
+            apply_body.index("lv_image_set_src(_pet_image, image);"),
+            apply_body.index("_pet_runtime->acknowledge_image_published();"),
+        )
+        self.assertEqual(96 * 384 // 256, 144)
+        self.assertEqual(104 * 384 // 256, 156)
 
 
 if __name__ == "__main__":

@@ -7,7 +7,6 @@
 
 #include <algorithm>
 #include <array>
-#include <limits>
 
 namespace codex_pet {
 namespace {
@@ -114,7 +113,12 @@ bool CodexPetRuntime::open(const PetSelection& selection)
 bool CodexPetRuntime::prepare_generation(const PetSelection& selection)
 {
     release_pending();
+    _pending_builtin = false;
     if (!matches_selection(selection)) {
+        if ((_using_custom && _visible) || has_retired_image()) {
+            _pending_builtin = true;
+            return true;
+        }
         activate_builtin();
         _diagnostic_reported = false;
         return true;
@@ -126,7 +130,7 @@ bool CodexPetRuntime::prepare_generation(const PetSelection& selection)
     }
 
     _diagnostic_reported = false;
-    if (_using_custom && _visible) {
+    if ((_using_custom && _visible) || has_retired_image()) {
         _pending = candidate;
         return true;
     }
@@ -156,28 +160,34 @@ void CodexPetRuntime::advance(uint32_t now_ms)
         _frame_deadline_ms = now_ms + displayed_frame_duration_ms();
         return;
     }
+    if (!deadline_reached(now_ms, _frame_deadline_ms) ||
+        has_retired_image()) {
+        return;
+    }
 
-    while (deadline_reached(now_ms, _frame_deadline_ms)) {
-        if (_pending.package_bytes != nullptr) {
-            swap_pending();
-        } else if (_using_custom) {
-            const uint16_t next = static_cast<uint16_t>(
-                (_frame_index + 1U) % _current.package.frames.size());
-            if (!decode_into_current(next)) {
-                fallback(PetRuntimeDiagnostic::DecodeFailure);
-                _frame_deadline_ms = now_ms + displayed_frame_duration_ms();
-                _frame_deadline_armed = true;
-                return;
-            }
-            _frame_index = next;
-            _frame_changed = true;
-        } else {
-            _frame_index = static_cast<uint16_t>(
-                (_frame_index + 1U) % kBuiltinFrameCount);
-            _current_image = builtin_image(_frame_index);
-            _frame_changed = true;
+    if (_pending_builtin) {
+        _pending_builtin = false;
+        activate_builtin();
+        _frame_deadline_ms += displayed_frame_duration_ms();
+        _frame_deadline_armed = true;
+    } else if (_pending.package_bytes != nullptr) {
+        swap_pending();
+        _frame_deadline_ms += displayed_frame_duration_ms();
+        _frame_deadline_armed = true;
+    }
+
+    coalesce_completed_cycles(now_ms);
+    size_t transitions = 0;
+    while (deadline_reached(now_ms, _frame_deadline_ms) &&
+           transitions < kMaxFrames) {
+        if (!advance_current_frame()) {
+            fallback(PetRuntimeDiagnostic::DecodeFailure);
+            _frame_deadline_ms = now_ms + displayed_frame_duration_ms();
+            _frame_deadline_armed = true;
+            return;
         }
         _frame_deadline_ms += displayed_frame_duration_ms();
+        ++transitions;
     }
 }
 
@@ -193,19 +203,30 @@ bool CodexPetRuntime::take_frame_changed()
     return changed;
 }
 
+void CodexPetRuntime::acknowledge_image_published()
+{
+    release_retired();
+}
+
 bool CodexPetRuntime::using_custom() const
 {
     return _using_custom;
 }
 
-uint32_t CodexPetRuntime::next_frame_delay_ms() const
+uint32_t CodexPetRuntime::next_frame_delay_ms(uint32_t now_ms) const
 {
+    if (_visible && _frame_deadline_armed &&
+        !deadline_reached(now_ms, _frame_deadline_ms)) {
+        return std::max<uint32_t>(_frame_deadline_ms - now_ms, 1U);
+    }
     return std::max<uint32_t>(displayed_frame_duration_ms(), 1U);
 }
 
 void CodexPetRuntime::close()
 {
     release_pending();
+    _pending_builtin = false;
+    release_retired();
     release_current_custom();
     _current_image = nullptr;
     _frame_index = 0;
@@ -215,6 +236,13 @@ void CodexPetRuntime::close()
     _using_custom = false;
     _frame_changed = false;
 }
+
+#if defined(STOPWATCH_HOST_TEST)
+uint32_t CodexPetRuntime::frame_deadline_ms_for_test() const
+{
+    return _frame_deadline_ms;
+}
+#endif
 
 bool CodexPetRuntime::load_candidate(
     const PetSelection& selection,
@@ -304,7 +332,7 @@ DecodeError CodexPetRuntime::decode(
 
 void CodexPetRuntime::activate_candidate(Candidate& candidate)
 {
-    release_current_custom();
+    retire_current_custom();
     _current = candidate;
     candidate = {};
     _current_image = &_current.image;
@@ -316,7 +344,11 @@ void CodexPetRuntime::activate_candidate(Candidate& candidate)
 
 void CodexPetRuntime::activate_builtin()
 {
-    release_current_custom();
+    if (has_retired_image()) {
+        release_current_custom();
+    } else {
+        retire_current_custom();
+    }
     _current_image = builtin_image(0);
     _frame_index = 0;
     _frame_deadline_armed = false;
@@ -330,6 +362,36 @@ void CodexPetRuntime::swap_pending()
     _pending = {};
     activate_candidate(next);
     _frame_deadline_armed = true;
+}
+
+bool CodexPetRuntime::advance_current_frame()
+{
+    if (_using_custom) {
+        const uint16_t next = static_cast<uint16_t>(
+            (_frame_index + 1U) % _current.package.frames.size());
+        if (!decode_into_current(next)) {
+            return false;
+        }
+        _frame_index = next;
+        _frame_changed = true;
+        return true;
+    }
+
+    _frame_index = static_cast<uint16_t>(
+        (_frame_index + 1U) % kBuiltinFrameCount);
+    _current_image = builtin_image(_frame_index);
+    _frame_changed = true;
+    return true;
+}
+
+void CodexPetRuntime::coalesce_completed_cycles(uint32_t now_ms)
+{
+    const uint32_t cycle_ms = animation_cycle_duration_ms();
+    if (cycle_ms == 0 || !deadline_reached(now_ms, _frame_deadline_ms)) {
+        return;
+    }
+    const uint32_t completed_cycles = (now_ms - _frame_deadline_ms) / cycle_ms;
+    _frame_deadline_ms += completed_cycles * cycle_ms;
 }
 
 void CodexPetRuntime::release_candidate(Candidate& candidate)
@@ -348,6 +410,20 @@ void CodexPetRuntime::release_current_custom()
     release_candidate(_current);
 }
 
+void CodexPetRuntime::retire_current_custom()
+{
+    if (_current.frame_bytes == nullptr) {
+        return;
+    }
+    _retired = _current;
+    _current = {};
+}
+
+void CodexPetRuntime::release_retired()
+{
+    release_candidate(_retired);
+}
+
 void CodexPetRuntime::release_pending()
 {
     release_candidate(_pending);
@@ -356,6 +432,7 @@ void CodexPetRuntime::release_pending()
 void CodexPetRuntime::fallback(PetRuntimeDiagnostic diagnostic)
 {
     release_pending();
+    _pending_builtin = false;
     activate_builtin();
     report_once(diagnostic);
 }
@@ -382,6 +459,28 @@ uint32_t CodexPetRuntime::displayed_frame_duration_ms() const
         return _current.package.frames[_frame_index].duration_ms;
     }
     return builtin_frame_duration(_frame_index);
+}
+
+uint32_t CodexPetRuntime::animation_cycle_duration_ms() const
+{
+    if (_using_custom) {
+        uint32_t cycle_ms = 0;
+        for (size_t index = 0; index < _current.package.frames.size(); ++index) {
+            cycle_ms += _current.package.frames[index].duration_ms;
+        }
+        return cycle_ms;
+    }
+
+    uint32_t cycle_ms = 0;
+    for (uint16_t index = 0; index < kBuiltinFrameCount; ++index) {
+        cycle_ms += builtin_frame_duration(index);
+    }
+    return cycle_ms;
+}
+
+bool CodexPetRuntime::has_retired_image() const
+{
+    return _retired.frame_bytes != nullptr;
 }
 
 bool CodexPetRuntime::deadline_reached(uint32_t now_ms, uint32_t deadline_ms)

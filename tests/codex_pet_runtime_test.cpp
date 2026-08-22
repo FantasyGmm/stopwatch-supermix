@@ -1,5 +1,7 @@
 #include "main/apps/app_codex_status/codex_pet_runtime.h"
 
+#include <mbedtls/sha256.h>
+
 #include <algorithm>
 #include <array>
 #include <cassert>
@@ -15,6 +17,9 @@
 namespace {
 
 constexpr size_t kDigestOffset = 40;
+constexpr size_t kDigestBytes = 32;
+constexpr size_t kFrameTableOffset = 72;
+constexpr size_t kFrameEntryBytes = 12;
 
 uint8_t hex_nibble(char value)
 {
@@ -47,6 +52,32 @@ std::vector<uint8_t> read_hex(const char* path)
             (hex_nibble(hex[index * 2U]) << 4U) |
             hex_nibble(hex[index * 2U + 1U]));
     }
+    return bytes;
+}
+
+void write_u16(std::vector<uint8_t>& bytes, size_t offset, uint16_t value)
+{
+    assert(offset <= bytes.size() && 2U <= bytes.size() - offset);
+    bytes[offset] = static_cast<uint8_t>(value & 0xffU);
+    bytes[offset + 1U] = static_cast<uint8_t>((value >> 8U) & 0xffU);
+}
+
+void redigest(std::vector<uint8_t>& bytes)
+{
+    assert(kDigestOffset + kDigestBytes <= bytes.size());
+    std::fill_n(bytes.begin() + kDigestOffset, kDigestBytes, uint8_t{0});
+    std::array<uint8_t, kDigestBytes> digest{};
+    assert(mbedtls_sha256(bytes.data(), bytes.size(), digest.data(), 0) == 0);
+    std::copy(digest.begin(), digest.end(), bytes.begin() + kDigestOffset);
+}
+
+std::vector<uint8_t> with_frame_duration(
+    std::vector<uint8_t> bytes,
+    uint16_t duration_ms)
+{
+    write_u16(bytes, kFrameTableOffset, duration_ms);
+    write_u16(bytes, kFrameTableOffset + kFrameEntryBytes, duration_ms);
+    redigest(bytes);
     return bytes;
 }
 
@@ -147,6 +178,20 @@ public:
     }
 
     bool fail_second_frame = false;
+};
+
+class CountingFrameDecoder final : public codex_pet::PetFrameDecoder {
+public:
+    codex_pet::DecodeError decode(
+        const codex_pet::PackageView& package,
+        uint16_t frame_index,
+        codex_pet::MutableByteView output) override
+    {
+        ++calls;
+        return codex_pet::decode_frame(package, frame_index, output);
+    }
+
+    size_t calls = 0;
 };
 
 codex_pet::PetSelection custom_selection(
@@ -286,7 +331,12 @@ void test_live_generation_decodes_before_swapping_and_keeps_old_frame_on_allocat
     runtime.advance(180);
     assert(runtime.take_frame_changed());
     assert(runtime.current_image()->data != first_frame);
+    assert(allocator.live_buffers == 4);
+    assert(allocator.release_calls == 0);
+    runtime.acknowledge_image_published();
     assert(allocator.live_buffers == 2);
+    assert(allocator.release_calls == 2);
+    runtime.acknowledge_image_published();
     assert(allocator.release_calls == 2);
 
     const uint8_t* retained_frame = runtime.current_image()->data;
@@ -295,6 +345,69 @@ void test_live_generation_decodes_before_swapping_and_keeps_old_frame_on_allocat
     assert(runtime.current_image()->data == retained_frame);
     assert(!runtime.take_frame_changed());
     assert(allocator.live_buffers == 2);
+}
+
+void test_default_restore_and_close_wait_for_lvgl_publication_acknowledgement(
+    const std::vector<uint8_t>& package)
+{
+    FakeFiles files;
+    FakeAllocator allocator;
+    install_slot(files, 0, package);
+    codex_pet::CodexPetRuntime runtime(files, allocator);
+
+    assert(runtime.open(custom_selection(0, 7, package)));
+    runtime.set_visible(true, 0);
+    assert(runtime.take_frame_changed());
+    assert(runtime.prepare_generation({}));
+    assert(!runtime.take_frame_changed());
+    runtime.advance(180);
+    assert(!runtime.using_custom());
+    assert(runtime.take_frame_changed());
+    assert(allocator.live_buffers == 2);
+    assert(allocator.release_calls == 0);
+    runtime.acknowledge_image_published();
+    assert(allocator.live_buffers == 0);
+    assert(allocator.release_calls == 2);
+    runtime.acknowledge_image_published();
+    assert(allocator.release_calls == 2);
+
+    assert(runtime.open(custom_selection(0, 8, package)));
+    runtime.set_visible(true, 0);
+    assert(runtime.take_frame_changed());
+    assert(runtime.prepare_generation({}));
+    runtime.advance(180);
+    assert(allocator.live_buffers == 2);
+    const size_t releases_before_close = allocator.release_calls;
+    runtime.close();
+    assert(allocator.live_buffers == 0);
+    assert(allocator.release_calls == releases_before_close + 2U);
+    runtime.close();
+    assert(allocator.release_calls == releases_before_close + 2U);
+}
+
+void test_replacing_a_staged_generation_never_accumulates_unpublished_buffers(
+    const std::vector<uint8_t>& package)
+{
+    FakeFiles files;
+    FakeAllocator allocator;
+    install_slot(files, 0, package);
+    install_slot(files, 1, package);
+    codex_pet::CodexPetRuntime runtime(files, allocator);
+
+    assert(runtime.open(custom_selection(0, 7, package)));
+    runtime.set_visible(true, 0);
+    assert(runtime.take_frame_changed());
+    assert(runtime.prepare_generation(custom_selection(1, 8, package)));
+    assert(allocator.live_buffers == 4);
+    assert(runtime.prepare_generation(custom_selection(0, 9, package)));
+    assert(allocator.live_buffers == 4);
+    assert(allocator.release_calls == 2);
+    runtime.advance(180);
+    assert(runtime.take_frame_changed());
+    assert(allocator.live_buffers == 4);
+    runtime.acknowledge_image_published();
+    assert(allocator.live_buffers == 2);
+    assert(allocator.release_calls == 4);
 }
 
 void test_malformed_or_decode_failed_custom_pet_falls_back_once_and_close_releases_once(
@@ -330,6 +443,9 @@ void test_malformed_or_decode_failed_custom_pet_falls_back_once_and_close_releas
     assert(!decoding_runtime.using_custom());
     assert(diagnostics.count == 2);
     assert(diagnostics.last == codex_pet::PetRuntimeDiagnostic::DecodeFailure);
+    assert(allocator.live_buffers == 2);
+    decoding_runtime.acknowledge_image_published();
+    assert(allocator.live_buffers == 0);
 
     codex_pet::CodexPetRuntime closing_runtime(files, allocator);
     assert(closing_runtime.open(custom_selection(0, 9, package)));
@@ -340,6 +456,52 @@ void test_malformed_or_decode_failed_custom_pet_falls_back_once_and_close_releas
     assert(allocator.release_calls == releases_before_close + 2U);
     closing_runtime.close();
     assert(allocator.release_calls == releases_before_close + 2U);
+}
+
+void test_decode_failure_after_a_staged_swap_keeps_the_original_lvgl_source_alive(
+    const std::vector<uint8_t>& package)
+{
+    FakeFiles files;
+    FakeAllocator allocator;
+    FailingSecondFrameDecoder decoder;
+    install_slot(files, 0, package);
+    install_slot(files, 1, package);
+    codex_pet::CodexPetRuntime runtime(files, allocator, &decoder);
+
+    assert(runtime.open(custom_selection(0, 7, package)));
+    runtime.set_visible(true, 0);
+    assert(runtime.take_frame_changed());
+    assert(runtime.prepare_generation(custom_selection(1, 8, package)));
+    decoder.fail_second_frame = true;
+    runtime.advance(360);
+    assert(!runtime.using_custom());
+    assert(runtime.take_frame_changed());
+    assert(allocator.live_buffers == 2);
+    runtime.acknowledge_image_published();
+    assert(allocator.live_buffers == 0);
+}
+
+void test_long_visible_stall_coalesces_frame_cycles_with_bounded_decode_work(
+    const std::vector<uint8_t>& package)
+{
+    const auto sixty_ms_package = with_frame_duration(package, 60);
+    FakeFiles files;
+    FakeAllocator allocator;
+    CountingFrameDecoder decoder;
+    install_slot(files, 0, sixty_ms_package);
+    codex_pet::CodexPetRuntime runtime(files, allocator, &decoder);
+
+    assert(runtime.open(custom_selection(0, 7, sixty_ms_package)));
+    runtime.set_visible(true, 0xfffffff0U);
+    assert(runtime.frame_deadline_ms_for_test() == 0x0000002cU);
+    const size_t decode_calls_before_stall = decoder.calls;
+    runtime.advance(0x0000755cU);
+    assert(runtime.take_frame_changed());
+    assert(runtime.current_image()->data[0] == 0U);
+    assert(runtime.frame_deadline_ms_for_test() == 0x00007598U);
+    assert(runtime.next_frame_delay_ms(0x0000755cU) == 60U);
+    assert(decoder.calls - decode_calls_before_stall <= codex_pet::kMaxFrames);
+    assert(decoder.calls - decode_calls_before_stall == 1U);
 }
 
 void test_psram_failure_never_replaces_builtin_fallback(
@@ -369,7 +531,11 @@ int main()
     test_custom_frames_use_exact_deadlines_and_rgb565a8_descriptor(package);
     test_timer_wrap_pause_screen_off_and_page_navigation_do_not_advance_hidden_time(package);
     test_live_generation_decodes_before_swapping_and_keeps_old_frame_on_allocation_failure(package);
+    test_default_restore_and_close_wait_for_lvgl_publication_acknowledgement(package);
+    test_replacing_a_staged_generation_never_accumulates_unpublished_buffers(package);
     test_malformed_or_decode_failed_custom_pet_falls_back_once_and_close_releases_once(package);
+    test_decode_failure_after_a_staged_swap_keeps_the_original_lvgl_source_alive(package);
     test_psram_failure_never_replaces_builtin_fallback(package);
+    test_long_visible_stall_coalesces_frame_cycles_with_bounded_decode_work(package);
     return 0;
 }

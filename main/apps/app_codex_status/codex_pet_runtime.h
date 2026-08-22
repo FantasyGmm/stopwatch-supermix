@@ -74,9 +74,14 @@ public:
     void advance(uint32_t now_ms);
     const lv_image_dsc_t* current_image() const;
     bool take_frame_changed();
+    void acknowledge_image_published();
     bool using_custom() const;
-    uint32_t next_frame_delay_ms() const;
+    uint32_t next_frame_delay_ms(uint32_t now_ms) const;
     void close();
+
+#if defined(STOPWATCH_HOST_TEST)
+    uint32_t frame_deadline_ms_for_test() const;
+#endif
 
 private:
     struct Candidate {
@@ -96,12 +101,18 @@ private:
     void activate_candidate(Candidate& candidate);
     void activate_builtin();
     void swap_pending();
+    bool advance_current_frame();
+    void coalesce_completed_cycles(uint32_t now_ms);
     void release_candidate(Candidate& candidate);
     void release_current_custom();
+    void retire_current_custom();
+    void release_retired();
     void release_pending();
     void fallback(PetRuntimeDiagnostic diagnostic);
     void report_once(PetRuntimeDiagnostic diagnostic);
     uint32_t displayed_frame_duration_ms() const;
+    uint32_t animation_cycle_duration_ms() const;
+    bool has_retired_image() const;
     static bool deadline_reached(uint32_t now_ms, uint32_t deadline_ms);
 
     PetFileSystem& _files;
@@ -109,6 +120,7 @@ private:
     PetFrameDecoder* _decoder = nullptr;
     PetRuntimeDiagnosticSink* _diagnostics = nullptr;
     Candidate _current{};
+    Candidate _retired{};
     Candidate _pending{};
     const lv_image_dsc_t* _current_image = nullptr;
     uint16_t _frame_index = 0;
@@ -116,6 +128,7 @@ private:
     bool _frame_deadline_armed = false;
     bool _visible = false;
     bool _using_custom = false;
+    bool _pending_builtin = false;
     bool _frame_changed = false;
     bool _diagnostic_reported = false;
 };
