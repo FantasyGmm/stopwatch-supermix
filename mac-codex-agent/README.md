@@ -89,6 +89,57 @@ Logs are written to:
 After Quit, nothing automatically restarts the agent. Open the application
 manually when synchronization is needed again.
 
+## Codex Pet
+
+Choose **Codex Pet...** (`Codex Pet…` in the menu) to open the independent pet
+window. Drop one `.gif` file or use **Choose GIF…**. Selection and preview work
+while the watch is offline; **Send to Watch** requires an authenticated active
+Production connection to a watch whose firmware exposes the optional pet
+service. An older watch reports `Firmware update required` and disables Send
+and Restore without disrupting status, voice, input actions, pairing, or
+reconnect.
+
+The Agent accepts GIF87a or GIF89a input up to 10 MiB, a `1024 × 1024` logical
+canvas, 240 source frames, and 64 million cumulative decoded pixels. It
+coalesces GIF disposal and transparency, removes consecutive duplicates, and
+samples to at most 24 frames. The watch result is a transparent `144 × 156`
+canvas with `60..1000 ms` frame delays and an exact CXP1 package no larger than
+256 KiB. Scaling is aspect-fit, centered, nearest-neighbor, and never cropped
+or stretched. Every accepted custom pet loops continuously; the source GIF's
+loop count is not used.
+
+The animated window preview is reconstructed from the exact CXP1 package that
+will be sent, rather than from the source GIF. Its frame count, loop duration,
+dimensions, transparency, palette, timing, and package-size labels therefore
+describe the watch payload. The Agent cache stores only the verified package
+keyed by the watch identity and authoritative package hash; it does not retain
+the source GIF.
+
+- **Send to Watch** reports Processing, Sending acknowledged bytes, Verifying,
+  Applying, and Installed. Closing the window does not stop a runtime-owned
+  transfer.
+- **Cancel** retires a pre-Commit transfer before another upload can start. A
+  Commit is terminal and is never retried after an ambiguous result.
+- **Restore Default** first switches the watch atomically to its firmware
+  robot. Custom slots are removed only after the watch acknowledges the
+  operation; a cleanup warning cannot reactivate the old custom pet.
+
+Upload never erases shared storage. Before Begin, the watch needs room for the
+staging package and its 56-byte slot envelope while retaining a 128 KiB
+shared-storage reserve. An insufficient-space result reports required and
+available bytes and leaves the active pet unchanged. Disconnect, timeout,
+reboot, credential/Agent epoch change, malformed package data, or interrupted
+upload likewise retains the previous complete pet.
+
+A valid custom pet persists across watch reboot and an ordinary firmware flash
+because that workflow does not write the `storage` partition. Invalid runtime
+data falls back to the built-in robot. An unsupported package schema also uses
+the built-in robot but preserves the stored package for compatible firmware;
+it is not silently deleted. **Restore Default** removes the custom slots after
+the built-in selection commits. A full storage erase removes the custom pet
+and all other content in that partition, so it is destructive and is never
+part of Send, Restore, build, or ordinary flashing.
+
 ## Watch Voice Input
 
 Watch voice input is part of the same menu-bar application. Building or

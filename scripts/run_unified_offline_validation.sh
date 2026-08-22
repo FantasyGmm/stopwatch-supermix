@@ -392,7 +392,7 @@ run_host_test voice_probe_crypto_test \
     main/apps/app_codex_status/voice_probe_crypto.cpp \
     "$MBEDTLS_BUILD/library/libmbedcrypto.a"
 
-stage "Codex pet package host test"
+stage "Codex pet CXP1 package parser/decoder host test"
 run_host_test codex_pet_package_test \
     -std=c++17 -Wall -Wextra -Werror -DSTOPWATCH_HOST_TEST -I. \
     -I"$MBEDTLS_SOURCE/include" \
@@ -400,7 +400,7 @@ run_host_test codex_pet_package_test \
     main/apps/app_codex_status/codex_pet_package.cpp \
     "$MBEDTLS_BUILD/library/libmbedcrypto.a"
 
-stage "Atomic Codex pet storage host test"
+stage "Codex pet two-slot persistence host test"
 run_host_test codex_pet_store_test \
     -std=c++17 -Wall -Wextra -Werror -DSTOPWATCH_HOST_TEST -I. \
     -I"$MBEDTLS_SOURCE/include" \
@@ -409,7 +409,7 @@ run_host_test codex_pet_store_test \
     main/apps/app_codex_status/codex_pet_package.cpp \
     "$MBEDTLS_BUILD/library/libmbedcrypto.a"
 
-stage "Authenticated Codex pet transfer protocol host test"
+stage "Codex pet authenticated control/status protocol host test"
 run_host_test codex_pet_protocol_test \
     -std=c++17 -Wall -Wextra -Werror -pthread -DSTOPWATCH_HOST_TEST -I. \
     -I"$MBEDTLS_SOURCE/include" \
@@ -418,7 +418,7 @@ run_host_test codex_pet_protocol_test \
     main/apps/app_codex_status/voice_input_crypto.cpp \
     "$MBEDTLS_BUILD/library/libmbedcrypto.a"
 
-stage "Authenticated Codex pet transfer controller host test"
+stage "Codex pet authenticated transfer controller host test"
 run_host_test codex_pet_transfer_test \
     -std=c++17 -Wall -Wextra -Werror -pthread -DSTOPWATCH_HOST_TEST -I. \
     -I"$MBEDTLS_SOURCE/include" \
@@ -430,7 +430,7 @@ run_host_test codex_pet_transfer_test \
     main/apps/app_codex_status/voice_input_crypto.cpp \
     "$MBEDTLS_BUILD/library/libmbedcrypto.a"
 
-stage "Codex pet runtime host test"
+stage "Codex pet PSRAM animation runtime host test"
 run_host_test codex_pet_runtime_test \
     -std=c++17 -Wall -Wextra -Werror -DSTOPWATCH_HOST_TEST -I. \
     -I"$MBEDTLS_SOURCE/include" \

@@ -93,6 +93,56 @@ EXPECTED_HOST_TESTS = (
     "voice_audio_ring_test",
 )
 
+EXPECTED_PET_STAGE_CONTRACTS = (
+    (
+        "Codex pet CXP1 package parser/decoder host test",
+        "codex_pet_package_test",
+        {
+            "tests/codex_pet_package_test.cpp",
+            "main/apps/app_codex_status/codex_pet_package.cpp",
+        },
+    ),
+    (
+        "Codex pet two-slot persistence host test",
+        "codex_pet_store_test",
+        {
+            "tests/codex_pet_store_test.cpp",
+            "main/apps/app_codex_status/codex_pet_store.cpp",
+            "main/apps/app_codex_status/codex_pet_package.cpp",
+        },
+    ),
+    (
+        "Codex pet authenticated control/status protocol host test",
+        "codex_pet_protocol_test",
+        {
+            "tests/codex_pet_protocol_test.cpp",
+            "main/apps/app_codex_status/codex_pet_protocol.cpp",
+            "main/apps/app_codex_status/voice_input_crypto.cpp",
+        },
+    ),
+    (
+        "Codex pet authenticated transfer controller host test",
+        "codex_pet_transfer_test",
+        {
+            "tests/codex_pet_transfer_test.cpp",
+            "main/apps/app_codex_status/codex_pet_transfer.cpp",
+            "main/apps/app_codex_status/codex_pet_store.cpp",
+            "main/apps/app_codex_status/codex_pet_package.cpp",
+            "main/apps/app_codex_status/codex_pet_protocol.cpp",
+            "main/apps/app_codex_status/voice_input_crypto.cpp",
+        },
+    ),
+    (
+        "Codex pet PSRAM animation runtime host test",
+        "codex_pet_runtime_test",
+        {
+            "tests/codex_pet_runtime_test.cpp",
+            "main/apps/app_codex_status/codex_pet_runtime.cpp",
+            "main/apps/app_codex_status/codex_pet_package.cpp",
+        },
+    ),
+)
+
 
 class UnifiedVoiceValidationTests(unittest.TestCase):
     def run_contract(self):
@@ -397,6 +447,33 @@ output.chmod(0o700)
             self.assertEqual({argument for argument in arguments if argument.endswith(".cpp")}, sources)
             self.assertEqual(run_names.count(name), 1)
 
+    def test_pet_host_stages_have_exact_names_order_and_source_lists(self):
+        lines = self.run_contract()
+        stage_names = []
+        compile_rows = {}
+        for line in lines:
+            match = re.fullmatch(r"\[\d+/\d+\] (.+)", line)
+            if match and "Codex pet" in match.group(1):
+                stage_names.append(match.group(1))
+            fields = line.split("\t")
+            if fields[0] == "COMPILE":
+                compile_rows[fields[1]] = fields[2:]
+
+        self.assertEqual(
+            stage_names,
+            [stage for stage, _, _ in EXPECTED_PET_STAGE_CONTRACTS],
+        )
+        for _, executable, expected_sources in EXPECTED_PET_STAGE_CONTRACTS:
+            self.assertIn(executable, compile_rows)
+            self.assertEqual(
+                {
+                    argument
+                    for argument in compile_rows[executable]
+                    if argument.endswith(".cpp")
+                },
+                expected_sources,
+            )
+
     def test_normal_host_path_records_actual_compile_and_run_success(self):
         self.assert_behavioral_host_execution()
 
@@ -511,6 +588,37 @@ output.chmod(0o700)
             "Focused input protocol and desktop submission: 37 tests passed",
             normalized_validation,
         )
+
+        for pet_fact in (
+            "Codex Pet...",
+            "exact CXP1 package",
+            "10 MiB",
+            "64 million",
+            "144 × 156",
+            "256 KiB",
+            "Firmware update required",
+            "Send to Watch",
+            "Cancel",
+            "Restore Default",
+            "authenticated active Production connection",
+            "128 KiB",
+            "ordinary firmware flash",
+            "full storage erase removes the custom pet",
+        ):
+            self.assertIn(pet_fact, normalized_readme)
+
+        for evidence_layer in (
+            "Repository source",
+            "Packaged Agent bundle",
+            "Installed Agent bundle",
+            "Running Agent process",
+            "Firmware build",
+            "Flash write",
+            "Fresh boot",
+            "Authenticated BLE transport",
+            "Physical AMOLED",
+        ):
+            self.assertIn(evidence_layer, normalized_validation)
 
 
 if __name__ == "__main__":

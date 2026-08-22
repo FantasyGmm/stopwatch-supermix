@@ -60,7 +60,90 @@ IDF_PATH="$IDF_PATH" ./scripts/run_unified_offline_validation.sh \
 git diff --check
 ```
 
-### Current automated evidence (2026-08-14)
+For the custom-pet package, installed-runtime smoke, and exact host-stage
+contracts, also run:
+
+```bash
+python3 -m unittest \
+  mac-codex-agent/tests/test_install_script.py \
+  mac-codex-agent/tests/test_unified_voice_validation.py -v
+./scripts/run_unified_offline_validation.sh --contract
+```
+
+The installer smoke runs from the staged app's own executable with an empty
+environment, `PYTHONNOUSERSITE=1`, and only bundle-local `PYTHONHOME` and
+`PYTHONPATH`. It imports Pillow and all six pet modules, generates a temporary
+two-frame GIF, converts it, and parses the resulting package. The source GIF
+and temporary output are not published into the bundle.
+
+## Custom-pet evidence boundaries
+
+Record these gates separately. Passing an earlier row does not prove any later
+row.
+
+| Evidence layer | What proves it |
+| --- | --- |
+| Repository source | Focused Python/package/protocol tests plus exact runner contracts pass in the checked-out tree. |
+| Packaged Agent bundle | A newly staged, self-contained app passes its bundle-local imports, generated two-frame GIF conversion, key-material scan, universal2 scan, and code-signature verification before publication. |
+| Installed Agent bundle | The published app is revalidated and its six installed pet modules are compared with the intended source; repository or staging success alone is insufficient. |
+| Running Agent process | The normally launched installed app emits a fresh `Agent started` after any expected Keychain approval; a process ID alone is insufficient. |
+| Firmware build | A clean ESP-IDF 5.5.4 build and capacity gate pass; host C++ tests do not prove this. |
+| Flash write | The exact bootloader, partition table, application, and assets offsets/hashes verify on the detected `/dev/cu.usbmodem*`; ordinary flashing must not write `storage` or create a firmware backup. |
+| Fresh boot | Serial output from the newly written application proves storage mount, pet selection validation, and pet-service startup; flash-tool success alone is insufficient. |
+| Authenticated BLE transport | The installed Agent discovers the optional service, reaches authenticated Ready, sends acknowledged bytes, and receives the authoritative committed generation/hash. |
+| Physical AMOLED | Named photos or direct inspection compare built-in, custom, unavailable/error, navigation, and resume states region by region on the running round display. |
+
+Task 10 intentionally validates only repository/packaging contracts and must
+not install the Agent or flash the watch. Installation, normal-process restart,
+authenticated upload, reboot, ordinary-flash persistence, interruption,
+storage-reserve failure, Restore Default, and the physical AMOLED packet are
+Task 11 release gates.
+
+### Task 10 packaging evidence (2026-08-23)
+
+- Focused installer and unified-contract suite: 30 tests passed in 37.303 s.
+- Offline contract: all 68 stages were present and correctly numbered, with 74
+  exact host compile/run pairs. Pet stages 39–43 identify the CXP1 parser,
+  two-slot persistence, authenticated control/status protocol, authenticated
+  transfer controller, and PSRAM animation runtime with their exact source
+  lists.
+- A temporary app published only beneath the Task 10 worktree passed staged and
+  published validation: internal-symlink and key-material scans, universal2
+  Mach-O checks, ad-hoc signing, and bundle-local runtime smoke. The isolated
+  executable reported Pillow 11.3.0; imported `pet_package.py`,
+  `pet_converter.py`, `pet_protocol.py`, `pet_upload.py`, `pet_cache.py`, and
+  `pet_window.py`; converted a generated two-frame/200 ms GIF into a `144 ×
+  156`, 796-byte CXP1 package; and reparsed both frames without repository
+  paths.
+- No installed Agent was replaced or launched. No firmware build, flash, boot,
+  live BLE transfer, persistence test, or physical-display comparison was
+  performed in Task 10.
+
+## Custom-pet hardware acceptance
+
+1. Open **Codex Pet...**, select the supplied six-frame GIF, and confirm the
+   exact-package preview reports six frames, `1.08 s`, `144 × 156`, and no more
+   than 256 KiB.
+2. Confirm offline selection still previews, while an unsupported watch says
+   `Firmware update required` and leaves Send/Restore disabled without
+   interrupting the other BLE channels.
+3. On an authenticated active Production connection, observe **Send to Watch**
+   progress through Sending, Verifying, Applying, and Installed. Confirm only
+   acknowledged bytes advance and the watch swaps at a frame boundary without
+   a blank image.
+4. Use **Cancel** during a replacement and confirm the old complete pet remains
+   active. Trigger the 128 KiB shared-storage reserve gate and confirm the
+   precise required/available error also preserves the old pet.
+5. Reboot the watch and perform one ordinary firmware flash that excludes
+   `storage`; confirm the authoritative hash and animation persist after each.
+6. Use **Restore Default** and confirm the built-in robot is selected before
+   slot cleanup. Confirm separately that a deliberately authorized full
+   storage erase removes the custom pet; never use an erase as normal recovery.
+7. Complete the named physical packet for the `144 × 156` pet box, aspect-fit
+   transparency, pixel sharpness, cadence, circular clipping, telemetry and
+   task text, page dots, battery, and unchanged buttons/swipes.
+
+### Historical automated evidence (2026-08-14)
 
 - Full Mac Agent discovery: 904 tests passed; one read-only live Accessibility
   probe was skipped because its foreground-app precondition was not present.
