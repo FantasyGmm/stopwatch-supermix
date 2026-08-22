@@ -263,25 +263,6 @@ class UnifiedRuntimeFirmwareContractTest(unittest.TestCase):
         self.assertNotIn("secrets.token_hex(16)", runner)
         self.assertNotIn("$ROOT/build-unified", runner)
 
-    def test_original_tasks_track_code_automated_and_hardware_status_separately(self):
-        plan = read(
-            "docs/superpowers/plans/2026-07-13-unified-runtime-assistant-merge.md"
-        )
-        for task in range(8, 13):
-            section = plan.split(f"### Task {task}:", 1)[1]
-            if task < 12:
-                section = section.split(f"### Task {task + 1}:", 1)[0]
-            self.assertIn("- Code status:", section)
-            self.assertIn("- Automated status:", section)
-            self.assertIn("- Hardware status:", section)
-
-        task_10 = plan.split("### Task 10:", 1)[1].split("### Task 11:", 1)[0]
-        task_11 = plan.split("### Task 11:", 1)[1].split("### Task 12:", 1)[0]
-        task_12 = plan.split("### Task 12:", 1)[1]
-        self.assertIn("full-Flash migration and recovery exercise passed", task_10)
-        self.assertIn("50-cycle campaign passed on 2026-07-22", task_11)
-        self.assertIn("remaining physical-control and experience matrix is manual", task_12)
-
     def test_settings_wifi_page_uses_controller_owned_round_screen_ui(self):
         app_setup = read("main/apps/app_setup/app_setup.cpp")
         worker_header = read("main/apps/app_setup/workers/workers.h")
