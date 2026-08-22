@@ -36,6 +36,7 @@ from Foundation import NSBundle, NSTimer, NSURL
 from PyObjCTools import AppHelper
 
 from app_state import UserDefaultsPreferences, present
+from pet_window import CodexPetWindowController
 from runtime import AgentController
 from voice_driver import (
     BLACKHOLE_PACKAGE_NAME,
@@ -149,6 +150,8 @@ class MenuBarApplication(NSObject):
         self.call_after = AppHelper.callAfter
         self._voice_install_thread = None
         self._voice_setup_token = None
+        self.codex_pet_window_controller = None
+        self.pet_window_controller_factory = CodexPetWindowController
         self._lifecycle_lock = threading.Lock()
         self._stopping = False
         self._installing_voice = False
@@ -247,6 +250,7 @@ class MenuBarApplication(NSObject):
         self.accessibility_item = self._action_item(
             "Open Accessibility Settings...", "openAccessibilitySettings:"
         )
+        self.codex_pet_item = self._action_item("Codex Pet…", "openCodexPet:")
         self.menu.addItem_(NSMenuItem.separatorItem())
         self.connection_item = self._action_item(
             "Enable Watch Connection", "toggleConnection:"
@@ -416,6 +420,10 @@ class MenuBarApplication(NSObject):
         if image is not None:
             image.setTemplate_(True)
             self.status_item.button().setImage_(image)
+        if self.codex_pet_window_controller is not None:
+            self.codex_pet_window_controller.applySnapshot_(
+                self.controller.pet_snapshot()
+            )
 
     def toggleConnection_(self, sender):
         enabled = sender.state() != NSControlStateValueOn
@@ -530,6 +538,20 @@ class MenuBarApplication(NSObject):
         )
         self.workspace.openURL_(url)
 
+    def openCodexPet_(self, sender):
+        if self._stopping:
+            return
+        if self.codex_pet_window_controller is None:
+            self.codex_pet_window_controller = (
+                self.pet_window_controller_factory.alloc().initWithAgentController_(
+                    self.controller
+                )
+            )
+        window_controller = self.codex_pet_window_controller
+        window_controller.applySnapshot_(self.controller.pet_snapshot())
+        window_controller.showWindow_(sender)
+        window_controller.window().makeKeyAndOrderFront_(sender)
+
     def openLog_(self, _sender):
         LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
         LOG_PATH.touch(exist_ok=True)
@@ -557,6 +579,9 @@ class MenuBarApplication(NSObject):
         self.forget_watch_item.setEnabled_(False)
         self.setup_voice_item.setEnabled_(False)
         self.accessibility_item.setEnabled_(False)
+        self.codex_pet_item.setEnabled_(False)
+        if self.codex_pet_window_controller is not None:
+            self.codex_pet_window_controller.stopPreviewTimer()
         worker = self._voice_install_thread
         deadline = time.monotonic() + INSTALL_SHUTDOWN_TIMEOUT
         close_installer = getattr(self.voice_installer, "close", None)
