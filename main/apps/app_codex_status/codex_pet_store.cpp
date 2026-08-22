@@ -214,6 +214,9 @@ struct CodexPetStore::SlotInfo {
     uint32_t generation = 0;
     uint32_t length = 0;
     uint16_t schema = 0;
+    uint16_t width = 0;
+    uint16_t height = 0;
+    uint16_t frame_count = 0;
     std::array<uint8_t, 32> hash{};
 };
 
@@ -314,6 +317,9 @@ CodexPetStore::SlotInfo CodexPetStore::validate_slot(uint8_t slot) const
         result.kind = SlotInfo::Kind::DigestMismatch;
         return result;
     }
+    result.width = read_u16(package + kCxpWidthOffset);
+    result.height = read_u16(package + kCxpHeightOffset);
+    result.frame_count = read_u16(package + kCxpFrameCountOffset);
     if (result.schema != kSupportedSchema) {
         _allocator.release(package);
         result.kind = SlotInfo::Kind::Unsupported;
@@ -323,9 +329,8 @@ CodexPetStore::SlotInfo CodexPetStore::validate_slot(uint8_t slot) const
     const ParseResult parsed = parse_package({package, result.length});
     const bool package_valid =
         parsed.error == PackageError::None &&
-        read_u16(package + kCxpWidthOffset) == kWidth &&
-        read_u16(package + kCxpHeightOffset) == kHeight &&
-        read_u16(package + kCxpFrameCountOffset) == parsed.package.frames.size();
+        result.width == kWidth && result.height == kHeight &&
+        result.frame_count == parsed.package.frames.size();
     _allocator.release(package);
     result.kind =
         package_valid ? SlotInfo::Kind::Valid : SlotInfo::Kind::Invalid;
@@ -385,8 +390,9 @@ PetSelection CodexPetStore::load_selection_impl()
             }
             const uint8_t inactive = static_cast<uint8_t>(selected.slot ^ 1U);
             const SlotInfo stale = validate_slot(inactive);
-            if (stale.kind == SlotInfo::Kind::Valid ||
-                stale.kind == SlotInfo::Kind::Invalid ||
+            if (stale.kind == SlotInfo::Kind::Valid) {
+                _cleanup_slot = inactive;
+            } else if (stale.kind == SlotInfo::Kind::Invalid ||
                 stale.kind == SlotInfo::Kind::DigestMismatch) {
                 (void)_files.remove(inactive);
             }
@@ -401,32 +407,38 @@ PetSelection CodexPetStore::load_selection_impl()
     };
     std::optional<uint8_t> newest{};
     for (uint8_t slot = 0; slot < 2; ++slot) {
-        if (slots[slot].kind == SlotInfo::Kind::Valid &&
+        if ((slots[slot].kind == SlotInfo::Kind::Valid ||
+             slots[slot].kind == SlotInfo::Kind::Unsupported) &&
             (!newest.has_value() ||
              slots[slot].generation > slots[*newest].generation)) {
             newest = slot;
         } else if (slots[slot].kind == SlotInfo::Kind::Invalid ||
                    slots[slot].kind == SlotInfo::Kind::DigestMismatch) {
             (void)_files.remove(slot);
-        } else if (slots[slot].kind == SlotInfo::Kind::Unsupported &&
-                   !_protected_slot.has_value()) {
-            _protected_slot = slot;
         }
     }
 
     if (newest.has_value()) {
         const SlotInfo& chosen = slots[*newest];
-        _selection.source = Source::Custom;
-        _selection.generation = chosen.generation;
-        _selection.schema = chosen.schema;
-        _selection.hash = chosen.hash;
-        _selection.slot = chosen.slot;
-        _selection.usable = true;
+        PetSelection recovered{};
+        recovered.source = Source::Custom;
+        recovered.generation = chosen.generation;
+        recovered.schema = chosen.schema;
+        recovered.hash = chosen.hash;
+        recovered.slot = chosen.slot;
+        recovered.usable = true;
         _protected_slot = chosen.slot;
-        const bool repaired = persist_selection(_selection);
+        (void)persist_selection(recovered);
+        if (chosen.kind == SlotInfo::Kind::Valid) {
+            _selection = recovered;
+        } else {
+            _selection = {};
+            _selection.generation = chosen.generation;
+            _selection.usable = false;
+        }
         const uint8_t inactive = static_cast<uint8_t>(chosen.slot ^ 1U);
-        if (repaired && slots[inactive].kind == SlotInfo::Kind::Valid) {
-            (void)_files.remove(inactive);
+        if (slots[inactive].kind == SlotInfo::Kind::Valid) {
+            _cleanup_slot = inactive;
         }
     }
     _loaded = true;
@@ -461,6 +473,9 @@ StoreResult CodexPetStore::begin(
     }
     if (!_loaded) {
         (void)load_selection_impl();
+    }
+    if (_cleanup_slot.has_value()) {
+        return StoreResult::Busy;
     }
     if (_selection.generation == std::numeric_limits<uint32_t>::max()) {
         return StoreResult::GenerationExhausted;
@@ -590,6 +605,9 @@ StoreResult CodexPetStore::commit()
     if (validated.generation != _staging_generation ||
         validated.length != _staging_length ||
         validated.schema != _staging_metadata.schema ||
+        validated.width != _staging_metadata.width ||
+        validated.height != _staging_metadata.height ||
+        validated.frame_count != _staging_metadata.frame_count ||
         validated.hash != _staging_metadata.hash) {
         return retire_staging(StoreResult::DigestMismatch, true);
     }
