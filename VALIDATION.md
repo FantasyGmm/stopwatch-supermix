@@ -133,11 +133,15 @@ Task 11 release gates.
    a blank image.
 4. Use **Cancel** during a replacement and confirm the old complete pet remains
    active. Trigger the 128 KiB shared-storage reserve gate and confirm the
-   precise required/available error also preserves the old pet.
+   window says `Watch storage requires X bytes; Y bytes are available.` using
+   the exact authenticated status values and also preserves the old pet.
 5. Reboot the watch and perform one ordinary firmware flash that excludes
    `storage`; confirm the authoritative hash and animation persist after each.
-6. Use **Restore Default** and confirm the built-in robot is selected before
-   slot cleanup. Confirm separately that a deliberately authorized full
+6. Use **Restore Default** and confirm the durable built-in State notification
+   is accepted before either custom slot is removed. Repeat with notification
+   unavailable, disconnect, and injected cleanup failure: old slots remain,
+   authenticated Query or boot retries bounded cleanup, and no old custom pet
+   becomes active. Confirm separately that a deliberately authorized full
    storage erase removes the custom pet; never use an erase as normal recovery.
 7. Complete the named physical packet for the `144 × 156` pet box, aspect-fit
    transparency, pixel sharpness, cadence, circular clipping, telemetry and

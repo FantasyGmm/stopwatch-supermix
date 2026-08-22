@@ -154,6 +154,12 @@ class MultiAgentBleFirmwareContractTests(unittest.TestCase):
         ].split("void AppCodexStatus::onClose", 1)[0]
         self.assertIn("handled < codex_pet::kPetControlsPerLoop", pet_loop)
         self.assertIn("codex_pet::kPetLoopBudgetUs", pet_loop)
+        notify = pet_loop.index("notify_pet_status(")
+        delivery = pet_loop.index("record_status_delivery(")
+        self.assertLess(notify, delivery)
+        self.assertIn(
+            "notify_result == CodexBleNotifyResult::Accepted", pet_loop
+        )
 
     def test_nimble_is_bounded_to_exactly_two_connections(self):
         defaults = (ROOT / "sdkconfig.defaults").read_text()

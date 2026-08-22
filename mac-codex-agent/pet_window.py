@@ -97,6 +97,8 @@ class PetWindowModel:
     selection_detail: str = "Choose one GIF to create the exact watch preview."
     transfer_phase: Optional[str] = None
     transfer_error_code: str = ""
+    transfer_required_bytes: int = 0
+    transfer_available_bytes: int = 0
     transfer_detail: str = ""
     acknowledged_bytes: int = 0
     total_bytes: int = 0
@@ -146,6 +148,8 @@ class PetWindowModel:
                 active_conversion=None,
                 transfer_phase=None,
                 transfer_error_code="",
+                transfer_required_bytes=0,
+                transfer_available_bytes=0,
                 transfer_detail="",
                 acknowledged_bytes=0,
                 total_bytes=0,
@@ -221,6 +225,8 @@ class PetWindowModel:
             acknowledged_bytes=0,
             total_bytes=max(0, int(total_bytes)),
             transfer_error_code="",
+            transfer_required_bytes=0,
+            transfer_available_bytes=0,
             transfer_detail="Waiting for the watch to acknowledge progress.",
             active_request_id=request_id,
         )
@@ -239,6 +245,8 @@ class PetWindowModel:
         total = max(0, int(getattr(progress, "total_bytes", 0)))
         acknowledged = max(0, min(total, int(getattr(progress, "acknowledged_bytes", 0))))
         error_code = str(getattr(progress, "error_code", ""))
+        required_bytes = max(0, int(getattr(progress, "required_bytes", 0)))
+        available_bytes = max(0, int(getattr(progress, "available_bytes", 0)))
         if error_code == "busy":
             phase = "busy"
         elif phase == "error" and error_code == "cancelled":
@@ -246,20 +254,34 @@ class PetWindowModel:
         active_request_id = (
             None if phase in _TERMINAL_TRANSFER_PHASES else self.active_request_id
         )
-        detail = self._progress_detail(phase, acknowledged, total, error_code)
+        detail = self._progress_detail(
+            phase,
+            acknowledged,
+            total,
+            error_code,
+            required_bytes,
+            available_bytes,
+        )
         return dataclasses.replace(
             self,
             transfer_phase=phase,
             acknowledged_bytes=acknowledged,
             total_bytes=total,
             transfer_error_code=error_code,
+            transfer_required_bytes=required_bytes,
+            transfer_available_bytes=available_bytes,
             transfer_detail=detail,
             active_request_id=active_request_id,
         )
 
     @staticmethod
     def _progress_detail(
-        phase: str, acknowledged: int, total: int, error_code: str
+        phase: str,
+        acknowledged: int,
+        total: int,
+        error_code: str,
+        required_bytes: int,
+        available_bytes: int,
     ) -> str:
         if phase == "sending":
             return "{} of {} bytes acknowledged".format(
@@ -276,6 +298,10 @@ class PetWindowModel:
         if phase == "cancelled":
             return "The current upload was cancelled before installation."
         if phase == "error":
+            if error_code == "insufficient_storage":
+                return (
+                    "Watch storage requires {} bytes; {} bytes are available."
+                ).format(required_bytes, available_bytes)
             return error_code.replace("_", " ") or "The watch did not accept the pet."
         return ""
 

@@ -146,7 +146,10 @@ struct PetTransferResult {
     bool selection_changed = false;
     bool cleanup_after_delivery = false;
     uint32_t progress = 0;
+    uint32_t connection_generation = 0;
+    uint32_t key_epoch = 0;
     uint64_t subscription_generation = 0;
+    uint64_t delivery_id = 0;
     PetSelection selection{};
     size_t status_size = 0;
     std::array<uint8_t, pet_protocol::kMaxFrameBytes> status{};
@@ -245,6 +248,9 @@ private:
     uint32_t _last_activity_ms = 0;
     uint32_t _package_length = 0;
     uint32_t _acknowledged_bytes = 0;
+    uint64_t _next_delivery_id = 0;
+    uint64_t _last_recorded_cleanup_delivery_id = 0;
+    bool _cleanup_warning_pending = false;
     size_t _competing_response_count = 0;
     std::array<
         CompetingResponse,

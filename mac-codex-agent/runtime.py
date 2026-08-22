@@ -1098,6 +1098,8 @@ class AgentRuntime:
                         0,
                         total,
                         getattr(error, "error_code", "transfer_failed"),
+                        getattr(error, "required_bytes", 0),
+                        getattr(error, "available_bytes", 0),
                     ),
                 )
         finally:

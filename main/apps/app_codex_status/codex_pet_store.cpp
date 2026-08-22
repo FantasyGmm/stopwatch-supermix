@@ -673,12 +673,17 @@ StoreResult CodexPetStore::restore_default()
     _selection = restored;
     _protected_slot.reset();
     _cleanup_mask = 0x03U;
-    return acknowledge();
+    return StoreResult::Ok;
 }
 
 uint32_t CodexPetStore::generation() const
 {
     return _selection.generation;
+}
+
+bool CodexPetStore::cleanup_pending() const
+{
+    return _cleanup_mask != 0;
 }
 
 uint64_t CodexPetStore::required_bytes() const

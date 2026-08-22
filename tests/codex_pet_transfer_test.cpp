@@ -621,9 +621,10 @@ void test_cleanup_warning_is_bounded_and_selection_remains_queryable(
         1210,
         kConnectionGeneration,
         kKeyEpoch);
-    assert(query.accepted);
-    assert(decode_status(query, rig.crypto).generation ==
-           installed.generation);
+    assert(!query.accepted);
+    assert(decode_status(query, rig.crypto).reason ==
+           pet_protocol::ErrorReason::IoFailure);
+    assert(rig.transfer.selection().generation == installed.generation);
     rig.files.fail_cleanup = false;
     rig.transfer.record_status_delivery(query, true);
 
@@ -649,7 +650,6 @@ void test_restore_cleanup_warning_surfaces_error_and_query_retries_cleanup(
     assert(second.accepted);
     assert(rig.files.present[0] && rig.files.present[1]);
 
-    rig.files.fail_cleanup = true;
     const auto restore = handle(rig,
         frame_for(
             transaction_control(
@@ -658,11 +658,16 @@ void test_restore_cleanup_warning_surfaces_error_and_query_retries_cleanup(
         1500,
         kConnectionGeneration,
         kKeyEpoch);
-    assert(!restore.accepted);
+    assert(restore.accepted);
     assert(restore.selection_changed);
-    assert(decode_status(restore, rig.crypto).reason ==
-           pet_protocol::ErrorReason::IoFailure);
+    assert(decode_status(restore, rig.crypto).kind ==
+           pet_protocol::Kind::State);
     assert(rig.transfer.selection().source == codex_pet::Source::BuiltIn);
+    assert(rig.files.present[0] && rig.files.present[1]);
+
+    // Notification failure/disconnect cannot cross the cleanup boundary.
+    rig.transfer.record_status_delivery(restore, false);
+    rig.transfer.record_status_delivery(restore, true);
     assert(rig.files.present[0] && rig.files.present[1]);
 
     const auto first_query = handle(rig,
@@ -674,11 +679,11 @@ void test_restore_cleanup_warning_surfaces_error_and_query_retries_cleanup(
         kConnectionGeneration,
         kKeyEpoch);
     assert(first_query.accepted);
+    rig.files.fail_cleanup = true;
     rig.transfer.record_status_delivery(first_query, true);
     assert(rig.files.present[0] && rig.files.present[1]);
 
-    rig.files.fail_cleanup = false;
-    const auto second_query = handle(rig,
+    const auto warning_query = handle(rig,
         frame_for(
             transaction_control(
                 pet_protocol::Kind::Query, 1, 54, nonce(54)),
@@ -686,8 +691,93 @@ void test_restore_cleanup_warning_surfaces_error_and_query_retries_cleanup(
         1520,
         kConnectionGeneration,
         kKeyEpoch);
-    assert(second_query.accepted);
+    assert(!warning_query.accepted);
+    assert(decode_status(warning_query, rig.crypto).reason ==
+           pet_protocol::ErrorReason::IoFailure);
+    rig.transfer.record_status_delivery(warning_query, false);
+    assert(rig.files.present[0] && rig.files.present[1]);
+
+    rig.files.fail_cleanup = false;
+    const auto second_query = handle(rig,
+        frame_for(
+            transaction_control(
+                pet_protocol::Kind::Query, 1, 55, nonce(55)),
+            rig.crypto),
+        1520,
+        kConnectionGeneration,
+        kKeyEpoch);
+    assert(!second_query.accepted);
+    assert(decode_status(second_query, rig.crypto).reason ==
+           pet_protocol::ErrorReason::IoFailure);
     rig.transfer.record_status_delivery(second_query, true);
+    assert(!rig.files.present[0] && !rig.files.present[1]);
+
+    // Each delivered response may acknowledge cleanup at most once.
+    rig.files.fail_cleanup = true;
+    rig.transfer.record_status_delivery(second_query, true);
+    assert(!rig.files.present[0] && !rig.files.present[1]);
+
+    const auto recovered = handle(rig,
+        frame_for(
+            transaction_control(
+                pet_protocol::Kind::Query, 1, 56, nonce(56)),
+            rig.crypto),
+        1530,
+        kConnectionGeneration,
+        kKeyEpoch);
+    assert(recovered.accepted);
+    assert(decode_status(recovered, rig.crypto).kind ==
+           pet_protocol::Kind::State);
+}
+
+void test_restore_cleanup_receipt_is_fenced_by_disconnect_and_generation(
+    const std::vector<uint8_t>& package)
+{
+    Rig rig{};
+    const auto committed = send_package(rig, package, 57, 57, 1540);
+    rig.transfer.record_status_delivery(committed, true);
+    assert(rig.files.present[0] || rig.files.present[1]);
+
+    const auto restore = handle(rig,
+        frame_for(
+            transaction_control(
+                pet_protocol::Kind::Restore, 1, 58, nonce(58)),
+            rig.crypto),
+        1550,
+        kConnectionGeneration,
+        kKeyEpoch);
+    assert(restore.accepted && restore.cleanup_after_delivery);
+    rig.transfer.on_disconnect(kConnectionGeneration);
+    rig.transfer.record_status_delivery(restore, true);
+    assert(rig.files.present[0] || rig.files.present[1]);
+
+    constexpr uint32_t next_connection_generation =
+        kConnectionGeneration + 1U;
+    const auto query = handle(rig,
+        frame_for(
+            transaction_control(
+                pet_protocol::Kind::Query, 1, 59, nonce(59)),
+            rig.crypto,
+            next_connection_generation),
+        1560,
+        next_connection_generation,
+        kKeyEpoch);
+    assert(query.accepted && query.cleanup_after_delivery);
+    auto wrong_generation = query;
+    ++wrong_generation.key_epoch;
+    rig.transfer.record_status_delivery(wrong_generation, true);
+    assert(rig.files.present[0] || rig.files.present[1]);
+
+    const auto retry = handle(rig,
+        frame_for(
+            transaction_control(
+                pet_protocol::Kind::Query, 1, 60, nonce(60)),
+            rig.crypto,
+            next_connection_generation),
+        1570,
+        next_connection_generation,
+        kKeyEpoch);
+    rig.transfer.record_status_delivery(retry, true);
     assert(!rig.files.present[0] && !rig.files.present[1]);
 }
 
@@ -922,5 +1012,7 @@ int main()
     test_subscription_changes_preserve_crypto_replay_history(package);
     test_busy_response_nonce_is_tombstoned_and_exact_retry_is_cached(package);
     test_restore_cleanup_warning_surfaces_error_and_query_retries_cleanup(
+        package);
+    test_restore_cleanup_receipt_is_fenced_by_disconnect_and_generation(
         package);
 }

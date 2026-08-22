@@ -121,6 +121,7 @@ public:
     PetSelection load_selection();
 
     uint32_t generation() const;
+    bool cleanup_pending() const;
     uint64_t required_bytes() const;
     uint64_t available_bytes() const;
 

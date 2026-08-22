@@ -3880,6 +3880,61 @@ class AgentRuntimePetTests(unittest.IsolatedAsyncioTestCase):
             [(self.credential.watch_id, self.package)],
         )
 
+    async def test_storage_error_fields_survive_runtime_progress_boundary(self):
+        class Uploader:
+            async def query(self):
+                return PetWatchState(
+                    self_watch_id,
+                    PetCapability.READY,
+                    "built-in",
+                    1,
+                    1,
+                    0,
+                    bytes(32),
+                    True,
+                )
+
+            async def upload(self, package, progress, *, request_id=None):
+                error = PetUploadError("watch storage is insufficient")
+                error.error_code = "insufficient_storage"
+                error.required_bytes = 263144
+                error.available_bytes = 131071
+                raise error
+
+            async def close(self):
+                pass
+
+        self_watch_id = self.credential.watch_id
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            pet_uploader_factory=lambda *_args, **_kwargs: Uploader(),
+            pet_cache=self.cache,
+        )
+        context = _BleSessionContext(FakeTransport())
+        context.credential = self.credential
+        await runtime._prepare_pet(context)
+        runtime._loop = asyncio.get_running_loop()
+        states = []
+
+        self.assertTrue(
+            runtime.submit_pet_request(
+                PetRequest(
+                    "storage-error",
+                    PetOperation.UPLOAD,
+                    self.package,
+                    states.append,
+                )
+            )
+        )
+        for _ in range(100):
+            if runtime._pet_request is None:
+                break
+            await asyncio.sleep(0.01)
+
+        self.assertEqual(states[-1].error_code, "insufficient_storage")
+        self.assertEqual(states[-1].required_bytes, 263144)
+        self.assertEqual(states[-1].available_bytes, 131071)
+
     async def test_repeated_cancel_ingress_owns_one_bounded_cancel_task(self):
         started = asyncio.Event()
         finish = asyncio.Event()

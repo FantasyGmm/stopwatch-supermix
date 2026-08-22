@@ -65,6 +65,8 @@ class PetProgress:
     acknowledged_bytes: int
     total_bytes: int
     error_code: str = ""
+    required_bytes: int = 0
+    available_bytes: int = 0
 
 
 class PetOperation(enum.Enum):
@@ -85,6 +87,8 @@ class PetUploadError(RuntimeError):
     """A redacted pet-channel operation failure."""
 
     error_code = "transfer_failed"
+    required_bytes = 0
+    available_bytes = 0
 
 
 class PetUnsupportedError(PetUploadError):
@@ -584,6 +588,8 @@ class PetUploader:
                 )
             )
             failure.error_code = error.reason.name.lower()
+            failure.required_bytes = error.required_bytes
+            failure.available_bytes = error.available_bytes
             raise failure
         if item.kind == MessageKind.CANCELLED:
             raise PetCancelledError("pet upload was cancelled")

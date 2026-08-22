@@ -41,6 +41,8 @@ class PetProgress:
     acknowledged_bytes: int
     total_bytes: int
     error_code: str = ""
+    required_bytes: int = 0
+    available_bytes: int = 0
 
 
 def make_converted_pet(color=0xF800, frame_value=0):
@@ -203,6 +205,44 @@ class PetWindowModelTests(unittest.TestCase):
         self.assertEqual(model.headline, "Firmware update required")
         self.assertFalse(model.can_send)
         self.assertFalse(model.can_restore)
+
+    def test_insufficient_storage_error_shows_exact_watch_bytes(self):
+        model = (
+            PetWindowModel()
+            .with_conversion(CONVERTED)
+            .with_watch_state(READY)
+            .with_transfer_started("request-1", 263144)
+            .with_progress(
+                PetProgress(
+                    "request-1",
+                    "error",
+                    0,
+                    263144,
+                    "insufficient_storage",
+                    263144,
+                    131071,
+                )
+            )
+        )
+
+        self.assertEqual(model.headline, "Transfer failed")
+        self.assertEqual(
+            model.detail,
+            "Watch storage requires 263144 bytes; 131071 bytes are available.",
+        )
+
+        stale = model.with_progress(
+            PetProgress(
+                "request-old",
+                "error",
+                0,
+                1,
+                "insufficient_storage",
+                1,
+                0,
+            )
+        )
+        self.assertEqual(stale.detail, model.detail)
 
     def test_restore_requires_a_usable_custom_pet_on_an_authenticated_watch(self):
         self.assertFalse(PetWindowModel().with_watch_state(OFFLINE).can_restore)

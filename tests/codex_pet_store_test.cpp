@@ -1090,9 +1090,10 @@ void test_restore_default_commit_and_cleanup_faults(
     codex_pet::CodexPetStore store(
         warning.fs, warning.allocator, warning.selections);
     assert(store.load_selection().source == codex_pet::Source::Custom);
+    assert(store.restore_default() == codex_pet::StoreResult::Ok);
+    assert(warning.fs.present[0]);
     warning.fs.failure = {"remove", 1};
-    assert(
-        store.restore_default() == codex_pet::StoreResult::CleanupWarning);
+    assert(store.acknowledge() == codex_pet::StoreResult::CleanupWarning);
     const auto selected = reboot(warning);
     assert(selected.source == codex_pet::Source::BuiltIn);
     assert(selected.generation == 2);

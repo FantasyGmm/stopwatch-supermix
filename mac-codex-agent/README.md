@@ -121,13 +121,19 @@ the source GIF.
 - **Cancel** retires a pre-Commit transfer before another upload can start. A
   Commit is terminal and is never retried after an ambiguous result.
 - **Restore Default** first switches the watch atomically to its firmware
-  robot. Custom slots are removed only after the watch acknowledges the
-  operation; a cleanup warning cannot reactivate the old custom pet.
+  robot and returns that durable built-in selection in an authenticated State
+  notification. Custom slots are removed only after NimBLE accepts that exact
+  response for the current connection, credential, subscription, and selection
+  generation. An unavailable/failed notification or disconnect retains the
+  slots for a later authenticated Query or bounded boot cleanup. A cleanup
+  warning is surfaced on a later Query and remains retryable; it cannot
+  reactivate the old custom pet.
 
 Upload never erases shared storage. Before Begin, the watch needs room for the
 staging package and its 56-byte slot envelope while retaining a 128 KiB
-shared-storage reserve. An insufficient-space result reports required and
-available bytes and leaves the active pet unchanged. Disconnect, timeout,
+shared-storage reserve. An insufficient-space result displays the exact watch
+values as `Watch storage requires X bytes; Y bytes are available.` and leaves
+the active pet unchanged. Disconnect, timeout,
 reboot, credential/Agent epoch change, malformed package data, or interrupted
 upload likewise retains the previous complete pet.
 
@@ -135,10 +141,11 @@ A valid custom pet persists across watch reboot and an ordinary firmware flash
 because that workflow does not write the `storage` partition. Invalid runtime
 data falls back to the built-in robot. An unsupported package schema also uses
 the built-in robot but preserves the stored package for compatible firmware;
-it is not silently deleted. **Restore Default** removes the custom slots after
-the built-in selection commits. A full storage erase removes the custom pet
-and all other content in that partition, so it is destructive and is never
-part of Send, Restore, build, or ordinary flashing.
+it is not silently deleted. **Restore Default** commits the built-in selection
+first and removes custom slots only after the matching State notification is
+accepted; a later Query or boot cleanup retries retained slots. A full storage
+erase removes the custom pet and all other content in that partition, so it is
+destructive and is never part of Send, Restore, build, or ordinary flashing.
 
 ## Watch Voice Input
 

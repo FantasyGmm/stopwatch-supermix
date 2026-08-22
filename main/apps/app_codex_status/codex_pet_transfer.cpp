@@ -223,26 +223,24 @@ PetTransferResult CodexPetTransfer::handle_new_operation(
     }
 
     if (control.kind == pet_protocol::Kind::Query) {
-        PetTransferResult result = make_state(false);
+        PetTransferResult result{};
+        if (_cleanup_warning_pending && _store.cleanup_pending()) {
+            pet_protocol::Status status{};
+            status.kind = pet_protocol::Kind::Error;
+            status.reason = pet_protocol::ErrorReason::IoFailure;
+            result = encode_status(status, false, false, true);
+        } else {
+            result = make_state(false);
+        }
         retire_transaction(true);
         return result;
     }
     if (control.kind == pet_protocol::Kind::Restore) {
         const StoreResult restored = _store.restore_default();
-        if (restored != StoreResult::Ok &&
-            restored != StoreResult::CleanupWarning) {
+        if (restored != StoreResult::Ok) {
             return fail_transaction(map_store_error(restored));
         }
         _selection = _store.load_selection();
-        if (restored == StoreResult::CleanupWarning) {
-            pet_protocol::Status status{};
-            status.kind = pet_protocol::Kind::Error;
-            status.reason = pet_protocol::ErrorReason::IoFailure;
-            PetTransferResult result =
-                encode_status(status, false, true, false);
-            retire_transaction(true);
-            return result;
-        }
         PetTransferResult result = make_state(true);
         retire_transaction(true);
         return result;
@@ -347,8 +345,24 @@ void CodexPetTransfer::record_status_delivery(
     const PetTransferResult& result,
     bool delivered)
 {
-    if (delivered && result.has_status && result.cleanup_after_delivery) {
-        (void)_store.acknowledge();
+    if (!result.has_status || !result.cleanup_after_delivery ||
+        result.delivery_id == 0 ||
+        result.delivery_id <= _last_recorded_cleanup_delivery_id) {
+        return;
+    }
+    _last_recorded_cleanup_delivery_id = result.delivery_id;
+    if (!delivered || !_context_ready ||
+        result.connection_generation != _active_generation ||
+        result.key_epoch != _key_epoch ||
+        result.subscription_generation != _subscription_generation ||
+        result.selection.generation != _selection.generation) {
+        return;
+    }
+    const StoreResult cleanup = _store.acknowledge();
+    if (cleanup == StoreResult::Ok) {
+        _cleanup_warning_pending = false;
+    } else if (cleanup == StoreResult::CleanupWarning) {
+        _cleanup_warning_pending = true;
     }
 }
 
@@ -420,7 +434,8 @@ PetTransferResult CodexPetTransfer::make_state(bool changed)
     status.active_sha256 = _selection.source == Source::Custom
         ? _selection.hash
         : std::array<uint8_t, 32>{};
-    return encode_status(status, true, changed, true);
+    return encode_status(
+        status, true, changed, _store.cleanup_pending());
 }
 
 PetTransferResult CodexPetTransfer::make_progress(bool accepted)
@@ -440,7 +455,8 @@ PetTransferResult CodexPetTransfer::make_committed()
     status.kind = pet_protocol::Kind::Committed;
     status.generation = _selection.generation;
     status.active_sha256 = _selection.hash;
-    return encode_status(status, true, true, true);
+    return encode_status(
+        status, true, true, _store.cleanup_pending());
 }
 
 PetTransferResult CodexPetTransfer::make_cancelled()
@@ -517,7 +533,14 @@ PetTransferResult CodexPetTransfer::encode_status(
     result.selection_changed = selection_changed;
     result.cleanup_after_delivery = cleanup_after_delivery;
     result.selection = _selection;
+    result.connection_generation = _active_generation;
+    result.key_epoch = _key_epoch;
     result.subscription_generation = _subscription_generation;
+    ++_next_delivery_id;
+    if (_next_delivery_id == 0) {
+        ++_next_delivery_id;
+    }
+    result.delivery_id = _next_delivery_id;
     return result;
 }
 

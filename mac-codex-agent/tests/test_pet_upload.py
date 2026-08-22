@@ -10,6 +10,8 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 from pet_package import HEIGHT, SCHEMA_VERSION, WIDTH, PetFrame, encode_package
 from pet_protocol import (
     CancelledStatus,
+    ErrorReason,
+    ErrorStatus,
     MessageKind,
     PetSource,
     PetStatus,
@@ -67,6 +69,7 @@ class FakePetTransport:
         drop_query_after_restore=False,
         schema_min=1,
         schema_max=1,
+        begin_error=None,
     ):
         self.negotiated_mtu = mtu
         self.connected = connected
@@ -79,6 +82,7 @@ class FakePetTransport:
         self.drop_query_after_restore = drop_query_after_restore
         self.schema_min = schema_min
         self.schema_max = schema_max
+        self.begin_error = begin_error
         self.calls = []
         self.writes = []
         self.status_frames = []
@@ -130,6 +134,23 @@ class FakePetTransport:
                 ),
             )
         elif control.kind == MessageKind.BEGIN:
+            if self.begin_error is not None:
+                reason, required, available = self.begin_error
+                status = PetStatus(
+                    MessageKind.ERROR,
+                    ErrorStatus(
+                        control.transaction_id, reason, required, available
+                    ),
+                )
+                encoded = encode_status(
+                    KEY,
+                    control.exchange_nonce,
+                    self.status_sequence,
+                    status,
+                )
+                self.status_frames.append((status.kind, encoded))
+                await self.handler(encoded)
+                return
             self.acknowledged = 0
             self.total = control.begin.package_length
             status = PetStatus(
@@ -514,6 +535,47 @@ class PetUploaderTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(uploader.watch_state, state)
         restored = await uploader.restore(lambda _progress: None)
         self.assertEqual(restored.source, "built-in")
+
+    async def test_insufficient_storage_preserves_required_and_available_bytes(self):
+        transport = FakePetTransport(
+            begin_error=(ErrorReason.INSUFFICIENT_STORAGE, 263144, 131071)
+        )
+        uploader = PetUploader(
+            transport, KEY, 7, self.nonce_factory, watch_id=b"W" * 16
+        )
+
+        with self.assertRaises(PetUploadError) as raised:
+            await uploader.upload(PACKAGE, lambda _progress: None)
+
+        self.assertEqual(raised.exception.error_code, "insufficient_storage")
+        self.assertEqual(raised.exception.required_bytes, 263144)
+        self.assertEqual(raised.exception.available_bytes, 131071)
+
+    async def test_stale_storage_error_cannot_poison_fresh_upload(self):
+        transaction_ids = iter((201, 202))
+        transport = FakePetTransport()
+        uploader = PetUploader(
+            transport,
+            KEY,
+            7,
+            self.nonce_factory,
+            watch_id=b"W" * 16,
+            transaction_id_factory=lambda: next(transaction_ids),
+        )
+        await uploader.query()
+        stale = PetStatus(
+            MessageKind.ERROR,
+            ErrorStatus(
+                202, ErrorReason.INSUFFICIENT_STORAGE, 999999, 1
+            ),
+        )
+        transport.delayed_status = encode_status(
+            KEY, bytes([1]) * 8, 1, stale
+        )
+
+        state = await uploader.upload(PACKAGE, lambda _progress: None)
+
+        self.assertEqual(state.source, "custom")
 
     async def test_delayed_prior_state_is_retired_during_fresh_query(self):
         transaction_ids = iter((101, 101))
