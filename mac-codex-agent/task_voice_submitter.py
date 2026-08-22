@@ -18,7 +18,11 @@ class TaskVoiceSubmitter:
         if isinstance(route, bool) or not isinstance(route, int) or not 1 <= route <= 0xFFFFFFFFFFFFFFFF:
             raise VoiceSubmitError("Task route is unavailable")
         target = self._registry.resolve(format(route, "016x"))
-        if target is None or target.state not in ("pending", "running"):
+        if target is None or target.state not in (
+            "pending",
+            "running",
+            "completed",
+        ):
             raise VoiceSubmitError("Task route is unavailable")
         if target.state == "running" and not target.expected_turn_id:
             raise VoiceSubmitError("Task route is unavailable")

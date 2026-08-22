@@ -5,9 +5,9 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 HEADER = ROOT / "main/apps/app_codex_status/codex_task_focus_view.h"
 SOURCE = ROOT / "main/apps/app_codex_status/codex_task_focus_view.cpp"
-MONTSERRAT = ROOT / "main/assets/fonts/MontserratSemiBold26.c"
 PUHUI = ROOT / "main/assets/fonts/font_puhui_14_1.c"
 DETAIL_FONT = ROOT / "main/assets/fonts/CodexDetail16.c"
+FOCUSED_TITLE_FONT = ROOT / "main/assets/fonts/CodexTaskTitle21.c"
 
 
 class CodexTaskFocusViewContractTests(unittest.TestCase):
@@ -40,13 +40,19 @@ class CodexTaskFocusViewContractTests(unittest.TestCase):
         self.assertNotIn('"‹ 返回任务"', source)
         self.assertIn("shutdown();", source)
         self.assertEqual(source.count("lv_obj_create(_track_layer)"), 1)
-        self.assertNotIn("LV_GRAD_DIR", source)
+        self.assertIn("make_fading_separator(", source)
+        self.assertIn("LV_GRAD_DIR_HOR", source)
+        self.assertIn("kStreamSeparatorFadeWidth", source)
+        self.assertIn("kStreamSeparatorCenterWidth", source)
         self.assertNotIn("shadow", source.lower())
         self.assertNotIn("glass", source.lower())
         self.assertNotIn("card", source.lower())
 
     def test_exact_copy_and_state_semantics_are_present(self):
         source = SOURCE.read_text(encoding="utf-8")
+        layout = (
+            ROOT / "main/apps/app_codex_status/codex_task_focus_layout.h"
+        ).read_text(encoding="utf-8")
 
         for copy in (
             '"等待你的指令"',
@@ -54,8 +60,6 @@ class CodexTaskFocusViewContractTests(unittest.TestCase):
             '"暂无进行中的任务"',
             '"暂无完整回复"',
             '"当前语音目标"',
-            '"点击后设为语音目标"',
-            '"点击查看原文"',
             '"上下滑动切换　↓"',
             '"Agent 最后一条完整回复"',
             '"Agent 实时进展"',
@@ -63,7 +67,7 @@ class CodexTaskFocusViewContractTests(unittest.TestCase):
             '"按住右键 · 引导当前任务"',
         ):
             self.assertIn(copy, source)
-        self.assertIn("TaskTrackShape::PendingDiamond", source)
+        self.assertNotIn("TaskTrackShape::PendingDiamond", source)
         self.assertIn("task->state == CodexTaskState::Running", source)
         self.assertIn("set_hidden(_detail_live_dot, !live)", source)
         self.assertIn("kDetailDragHandleX", source)
@@ -71,9 +75,10 @@ class CodexTaskFocusViewContractTests(unittest.TestCase):
         self.assertIn("kDetailDragHandleWidth", source)
         self.assertIn("kDetailDragHandleHeight", source)
         self.assertIn("kDetailHandleOpacity", source)
-        self.assertIn("TaskTrackShape::RunningCircle", source)
-        self.assertIn("TaskTrackShape::FocusedCapsule", source)
-        self.assertIn("? kBeaconViolet", source)
+        self.assertIn("TaskTrackShape::RunningCircle", layout)
+        self.assertIn("TaskTrackShape::FocusedCapsule", layout)
+        self.assertIn("kTaskTrackFocused", layout)
+        self.assertIn("kTaskTrackInactive", layout)
         self.assertIn("split_detail_reply(", source)
         self.assertIn("detail_display_text(reply)", source)
         self.assertIn("if (reset_scroll)", source)
@@ -81,13 +86,10 @@ class CodexTaskFocusViewContractTests(unittest.TestCase):
         self.assertIn("kDetailReplyLineHeight", source)
         self.assertIn("kDetailParagraphGap", source)
         self.assertIn("LV_LABEL_LONG_MODE_DOTS", source)
-        self.assertIn("kDeckTitleCjkMaxScalars", source)
-        self.assertIn("kDeckTitleLatinMaxScalars", source)
         self.assertIn("lv_obj_set_style_transform_scale_x", source)
-        self.assertIn("kCjkTitleScale", source)
+        self.assertIn("kStreamFocusedCjkScale", source)
         self.assertIn("detail_body_font()", source)
         self.assertNotIn("set_text_scale(paragraph", source)
-        self.assertIn("kLatinTitleScale", source)
         self.assertNotIn("snprintf", source)
         self.assertNotIn("printf", source)
 
@@ -104,14 +106,21 @@ class CodexTaskFocusViewContractTests(unittest.TestCase):
 
     def test_font_sources_and_physical_scales_are_explicit(self):
         source = SOURCE.read_text(encoding="utf-8")
-        self.assertIn("Size: 26 px", MONTSERRAT.read_text(encoding="utf-8")[:200])
         self.assertIn("Size: 14 px", PUHUI.read_text(encoding="utf-8")[:200])
+        self.assertIn(
+            "Size: 21 px",
+            FOCUSED_TITLE_FONT.read_text(encoding="utf-8")[:200],
+        )
         layout = (ROOT / "main/apps/app_codex_status/codex_task_focus_layout.h").read_text()
-        self.assertIn("kLatinTitleScale = 266", layout)
-        self.assertIn("kCjkTitleScale = 432", layout)
+        self.assertIn("kStreamFocusedCjkScale = 256", layout)
+        self.assertIn("kStreamNeighborCjkScale = 256", layout)
         self.assertIn("kDetailBodyFontPx = 16", layout)
         self.assertIn("kDetailReplyLineHeight = 25", layout)
-        self.assertIn("LV_FONT_DECLARE(lv_font_source_han_sans_sc_16_cjk)", source)
+        self.assertIn("LV_FONT_DECLARE(CodexTaskTitle21)", source)
+        self.assertIn(
+            "cjk ? &CodexTaskTitle21 : &MontserratSemiBold26",
+            source,
+        )
         for size in (9, 10, 11, 16):
             static_font = ROOT / f"main/assets/fonts/CodexFocusStatic{size}.c"
             self.assertTrue(static_font.is_file())

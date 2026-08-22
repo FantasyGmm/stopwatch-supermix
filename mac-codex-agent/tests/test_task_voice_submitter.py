@@ -64,6 +64,24 @@ class TaskVoiceSubmitterTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(client.calls, [("start", "r", "continue")])
 
+    async def test_completed_detail_can_start_the_next_turn(self):
+        registry = TaskRouteRegistry()
+        route = route_id_for_thread("completed-detail")
+        completed = TaskRouteTarget(
+            route, "completed-detail", "completed", None, 6
+        )
+        registry.update((completed,))
+        client = FakeClient()
+        submitter = TaskVoiceSubmitter(registry, client)
+
+        snapshot = submitter.snapshot(int(route, 16))
+        await submitter.submit(snapshot, "继续处理")
+
+        self.assertEqual(
+            client.calls,
+            [("start", "completed-detail", "继续处理")],
+        )
+
     async def test_changed_running_turn_still_fails_closed(self):
         registry = TaskRouteRegistry()
         route = route_id_for_thread("r")

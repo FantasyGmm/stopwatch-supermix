@@ -15,6 +15,19 @@ int main()
     assert(kPetScale == 293);
     assert(kPetX + kPetWidth == 183);
 
+    assert(kChannelDotSize == 6);
+    assert(kChannelStatusY == 63);
+    assert(kConnectionStatusDotX == 132);
+    assert(kConnectionStatusLabelX == 144);
+    assert(kConnectionStatusLabelWidth == 92);
+    assert(kVoiceStatusDotX == 247);
+    assert(kVoiceStatusLabelX == 259);
+    assert(kVoiceStatusLabelWidth == 92);
+    assert(kConnectionStatusLabelX + kConnectionStatusLabelWidth <
+           kVoiceStatusDotX);
+    assert(kVoiceStatusLabelX + kVoiceStatusLabelWidth <= 393);
+    assert(kChannelStatusY > kBrandY);
+
     assert(kBeaconSpine.x == 194);
     assert(kBeaconSpine.y == 96);
     assert(kBeaconSpine.w == 2);

@@ -67,6 +67,7 @@ constexpr int kAgentPanelVisibleY        = 0;
 constexpr int kTaskSwipeThreshold        = 36;
 constexpr int kTaskTapTolerance          = 12;
 constexpr int kTaskDeckHiddenY           = 466;
+constexpr int kTaskDeckDismissReleaseY   = kTaskDeckHiddenY - 1;
 
 int64_t current_unix_milliseconds()
 {
@@ -267,6 +268,35 @@ lv_obj_t* make_fixed_label(
     lv_obj_set_style_text_align(label, align, 0);
     lv_label_set_long_mode(label, LV_LABEL_LONG_MODE_CLIP);
     return label;
+}
+
+lv_obj_t* make_channel_dot(lv_obj_t* parent, int x)
+{
+    lv_obj_t* dot = make_frame_segment(
+        parent, x, kChannelStatusY + 4,
+        kChannelDotSize, kChannelDotSize, kEtchedGray);
+    lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
+    return dot;
+}
+
+void apply_channel_presentation(
+    lv_obj_t* dot,
+    lv_obj_t* label,
+    const CodexChannelPresentation& presentation)
+{
+    if (dot == nullptr || label == nullptr) {
+        return;
+    }
+    lv_label_set_text(label, presentation.text);
+    lv_obj_set_style_text_color(
+        label, lv_color_hex(presentation.text_color), 0);
+    lv_obj_set_style_bg_color(
+        dot, lv_color_hex(presentation.dot_color), 0);
+    lv_obj_set_style_bg_opa(
+        dot, presentation.filled ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(dot, presentation.filled ? 0 : 1, 0);
+    lv_obj_set_style_border_color(
+        dot, lv_color_hex(presentation.dot_color), 0);
 }
 
 const char* battery_symbol(int percent)
@@ -917,11 +947,20 @@ void AppCodexStatus::create_view()
 
     make_label(_codex_page, "Codex", kBrandX, kBrandY, &MontserratSemiBold26, kSignalWhite);
 
-    _status_label = make_center_label(_codex_page, "START", kStatusY, &lv_font_montserrat_14, kEtchedGray);
-    lv_obj_set_width(_status_label, 180);
-    lv_obj_set_style_text_align(_status_label, LV_TEXT_ALIGN_CENTER, 0);
-    lv_label_set_long_mode(_status_label, LV_LABEL_LONG_MODE_DOTS);
-    lv_obj_align(_status_label, LV_ALIGN_TOP_MID, 0, kStatusY);
+    _connection_status_dot = make_channel_dot(
+        _codex_page, kConnectionStatusDotX);
+    _connection_status_label = make_fixed_label(
+        _codex_page, "未连接",
+        kConnectionStatusLabelX, kChannelStatusY,
+        kConnectionStatusLabelWidth, &font_puhui_14_1,
+        kEtchedGray, LV_TEXT_ALIGN_LEFT);
+    _voice_status_dot = make_channel_dot(
+        _codex_page, kVoiceStatusDotX);
+    _voice_status_label = make_fixed_label(
+        _codex_page, "语音不可用",
+        kVoiceStatusLabelX, kChannelStatusY,
+        kVoiceStatusLabelWidth, &font_puhui_14_1,
+        kEtchedGray, LV_TEXT_ALIGN_LEFT);
 
     make_frame_segment(
         _codex_page,
@@ -1259,7 +1298,10 @@ void AppCodexStatus::destroy_view()
     _alert_project  = nullptr;
     _alert_detail   = nullptr;
     _battery_label  = nullptr;
-    _status_label   = nullptr;
+    _connection_status_dot = nullptr;
+    _connection_status_label = nullptr;
+    _voice_status_dot = nullptr;
+    _voice_status_label = nullptr;
     _host_label     = nullptr;
     _pet_image      = nullptr;
     _agent_panel_root = nullptr;
@@ -1554,30 +1596,37 @@ void AppCodexStatus::set_status(const char* status, uint32_t color)
 void AppCodexStatus::render_status()
 {
     std::string base_status;
-    uint32_t base_color = kTextDim;
     bool base_is_error = false;
     {
         std::lock_guard<std::mutex> lock(_status_mutex);
         base_status = _base_status;
-        base_color = _base_status_color;
         base_is_error = _base_status_is_error;
     }
     const VoiceInputUiState voice_state = _voice_status.load();
-    const CodexStatusPresentation presentation = resolve_codex_status(
+    const CodexStatusChannels channels = resolve_codex_status_channels(
         base_status.c_str(),
-        base_color,
         base_is_error,
+        voice_state == VoiceInputUiState::Ready,
+        voice_state == VoiceInputUiState::Starting,
         voice_state == VoiceInputUiState::Active,
         voice_state == VoiceInputUiState::Error,
-        kCodexBlue,
-        kCodexRed,
-        kTextDim);
+        CodexStatusPalette{
+            kQuotaMint,
+            kRunningCyan,
+            kBeaconViolet,
+            kCodexRed,
+            kTextDim,
+            kSignalWhite,
+        });
     LvglLockGuard lock;
-    if (_status_label != nullptr) {
-        lv_label_set_text(_status_label, presentation.text);
-        lv_obj_set_style_text_color(
-            _status_label, lv_color_hex(presentation.color), 0);
-    }
+    apply_channel_presentation(
+        _connection_status_dot,
+        _connection_status_label,
+        channels.connection);
+    apply_channel_presentation(
+        _voice_status_dot,
+        _voice_status_label,
+        channels.voice);
 }
 
 void AppCodexStatus::set_host_text(const char* prefix)
@@ -4165,11 +4214,15 @@ void AppCodexStatus::task_deck_animation_completed_cb(lv_anim_t* animation)
 
 void AppCodexStatus::cancel_task_focus_touch()
 {
+    if (_task_focus_view != nullptr) {
+        _task_focus_view->set_deck_scroll_offset(0);
+    }
     _last_task_touch_state = LV_INDEV_STATE_REL;
     _task_touch_start_x = 0;
     _task_touch_start_y = 0;
     _task_touch_last_y = 0;
     _task_touch_moved = false;
+    _task_deck_started_on_handle = false;
     _task_detail_started_at_top = false;
     _task_touch_axis =
         codex_task_focus_gesture::TaskFocusGestureAxis::Undecided;
@@ -4199,6 +4252,10 @@ void AppCodexStatus::update_task_focus_touch(uint32_t now_ms)
             _task_touch_moved = false;
             _task_touch_axis =
                 codex_task_focus_gesture::TaskFocusGestureAxis::Undecided;
+            _task_deck_started_on_handle =
+                task_mode == CodexTaskFocusMode::TaskDeck &&
+                codex_task_focus_gesture::is_deck_handle_start(
+                    point.x, point.y);
             _task_detail_started_at_top =
                 _task_focus_view != nullptr &&
                 _task_focus_view->detail_at_top();
@@ -4219,7 +4276,35 @@ void AppCodexStatus::update_task_focus_touch(uint32_t now_ms)
                     kTaskTapTolerance) {
                 _task_touch_moved = true;
             }
-            if (task_mode == CodexTaskFocusMode::TaskDetail &&
+            if (task_mode == CodexTaskFocusMode::TaskDeck &&
+                _task_focus_view != nullptr &&
+                _task_touch_axis ==
+                    codex_task_focus_gesture::TaskFocusGestureAxis::Vertical) {
+                if (_task_deck_started_on_handle) {
+                    if (!_task_deck_drag_active) {
+                        lv_anim_delete(this, task_deck_animation_cb);
+                        _task_deck_drag_active = true;
+                        sync_pending_glow();
+                    }
+                    set_task_focus_y(
+                        codex_task_focus_gesture::
+                            task_deck_handle_drag_offset(
+                                total_dy, kTaskDeckHiddenY));
+                } else {
+                    const TaskFocusStateSnapshot task =
+                        snapshot_task_focus_state();
+                    const bool has_previous =
+                        task.deck.focused_index() > 0;
+                    const bool has_next =
+                        task.deck.focused_index() + 1 < task.deck.count();
+                    _task_focus_view->set_deck_scroll_offset(
+                        codex_task_focus_gesture::task_stream_drag_offset(
+                            total_dy,
+                            has_previous,
+                            has_next,
+                            codex_task_focus_layout::kStreamDragLimit));
+                }
+            } else if (task_mode == CodexTaskFocusMode::TaskDetail &&
                 _task_focus_view != nullptr &&
                 _task_touch_axis ==
                     codex_task_focus_gesture::TaskFocusGestureAxis::Vertical) {
@@ -4239,33 +4324,41 @@ void AppCodexStatus::update_task_focus_touch(uint32_t now_ms)
             total_dy,
             kTaskTapTolerance);
         if (task_mode == CodexTaskFocusMode::TaskDeck &&
-            _task_touch_axis ==
-                codex_task_focus_gesture::TaskFocusGestureAxis::Vertical &&
-            std::abs(total_dy) >= kTaskSwipeThreshold) {
-            const int direction = total_dy < 0 ? 1 : -1;
-            CodexTaskFocusEvent event = CodexTaskFocusEvent::None;
-            bool at_first = false;
-            {
-                std::lock_guard<std::mutex> task_lock(_task_state_mutex);
-                event = _task_focus_deck.browse(direction);
-                at_first = _task_focus_deck.focused_index() == 0;
-            }
-            if (direction < 0 && event == CodexTaskFocusEvent::None &&
-                at_first) {
+            _task_deck_started_on_handle) {
+            const bool at_first =
+                snapshot_task_focus_state().deck.focused_index() == 0;
+            const bool dismiss =
+                codex_task_focus_gesture::should_dismiss_task_deck(
+                    total_dx,
+                    total_dy,
+                    _task_touch_axis,
+                    true,
+                    at_first,
+                    point.y,
+                    kTaskDeckDismissReleaseY);
+            if (dismiss) {
                 {
                     std::lock_guard<std::mutex> task_lock(
                         _task_state_mutex);
                     _task_focus_mode = CodexTaskFocusMode::Status;
                 }
                 sync_task_edge_exclusion(CodexTaskFocusMode::Status);
-                if (_task_focus_view != nullptr) {
-                    _task_deck_drag_active = true;
-                    set_task_focus_y(0);
-                    settle_task_deck_entry(false, true);
-                }
                 sync_task_voice_readiness();
-                cancel_task_focus_touch();
-                return;
+                settle_task_deck_entry(false, true);
+            } else if (_task_deck_drag_active) {
+                settle_task_deck_entry(true, true);
+            }
+            cancel_task_focus_touch();
+            return;
+        } else if (task_mode == CodexTaskFocusMode::TaskDeck &&
+            _task_touch_axis ==
+                codex_task_focus_gesture::TaskFocusGestureAxis::Vertical &&
+            std::abs(total_dy) >= kTaskSwipeThreshold) {
+            const int direction = total_dy < 0 ? 1 : -1;
+            CodexTaskFocusEvent event = CodexTaskFocusEvent::None;
+            {
+                std::lock_guard<std::mutex> task_lock(_task_state_mutex);
+                event = _task_focus_deck.browse(direction);
             }
             if (event == CodexTaskFocusEvent::StateBoundaryCrossed &&
                 GetHAL().getButtonConfig().vibrateEnabled) {

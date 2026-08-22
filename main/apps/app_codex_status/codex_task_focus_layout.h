@@ -10,6 +10,7 @@ namespace codex_task_focus_layout {
 
 constexpr int kViewportWidth = 466;
 constexpr int kViewportHeight = 466;
+constexpr int kRoundSafeRadius = 221;
 
 constexpr uint32_t kBackground = 0x000000;
 constexpr uint32_t kGraphite = 0x27303E;
@@ -28,44 +29,62 @@ constexpr uint32_t kDeckHint = 0x9BA6B1;
 constexpr uint32_t kDetailLabel = 0xB0BCC8;
 constexpr uint32_t kDetailState = 0xFF7F69;
 constexpr uint32_t kScrollbar = 0x4B5662;
+constexpr uint32_t kTaskRule = 0x27303A;
+constexpr uint32_t kTaskSignalWhite = 0xF3F6F8;
+constexpr uint32_t kTaskProject = 0x9DB2FF;
+constexpr uint32_t kTaskMeta = 0x8995A2;
+constexpr uint32_t kTaskCount = 0x8C98A5;
+constexpr uint32_t kTaskHint = 0x687482;
+constexpr uint32_t kTaskHandle = 0x778491;
+constexpr uint32_t kTaskPending = 0xFF6248;
+constexpr uint32_t kTaskRunning = 0x49C9ED;
+constexpr uint32_t kTaskTrackInactive = 0x394452;
+constexpr uint32_t kTaskTrackFocused = 0x829DFF;
 
 constexpr int kContentWidth = 326;
 constexpr int kContentCenterX = kViewportWidth / 2;
 constexpr int kContentX = kContentCenterX - kContentWidth / 2;
-constexpr int kProjectY = 134;
-constexpr int kProjectHeight = 22;
-constexpr int kProjectPillHorizontalPadding = 16;
-constexpr int kTaskTitleX = 98;
-constexpr int kTaskTitleY = 177;
-constexpr int kTaskTitleWidth = 270;
-constexpr int kTaskTitleLineHeight = 33;
-constexpr int kTaskTitleHeight = kTaskTitleLineHeight * 3;
-constexpr int kTaskTitleMaxLines = 3;
-constexpr size_t kDeckTitleCjkMaxScalars = 30;
-constexpr size_t kDeckTitleLatinMaxScalars = 48;
 constexpr size_t kDetailTitleMaxScalars = 30;
-constexpr int kLatinTitleScale = 266;  // 26 px source rendered at 27 px.
-constexpr int kCjkTitleScale = 432;   // 16 px source rendered at 27 px.
 constexpr int kDetailBodyFontPx = 16;
-constexpr int kStatusCenterY = 241;
-constexpr int kStatusHeight = 27;
-constexpr int kStatusPendingWidth = 90;
-constexpr int kStatusRunningWidth = 70;
-constexpr int kStatusRunningHeight = 29;
-constexpr int kStatusRadius = 14;
-constexpr int kDeckTargetY = 268;
-constexpr int kDeckTargetHeight = 13;
-constexpr int kDeckOpenY = 294;
-constexpr int kDeckOpenHeight = 23;
-constexpr int kDeckNextY = 411;
-constexpr int kDeckNextHeight = 23;
 constexpr int kConnectionHintY = 352;
 constexpr int kConnectionHintHeight = 22;
-constexpr int kFocusTargetX = 70;
-constexpr int kFocusTargetY = 120;
-constexpr int kFocusTargetWidth = 326;
-constexpr int kFocusTargetHeight = 230;
 constexpr int kMinimumHitSize = 44;
+
+constexpr int kDeckDragHandleX = 209;
+constexpr int kDeckDragHandleY = 12;
+constexpr int kDeckDragHandleWidth = 48;
+constexpr int kDeckDragHandleHeight = 4;
+constexpr uint8_t kDeckHandleOpacity = 184;
+constexpr int kDeckHeaderX = 140;
+constexpr int kDeckHeaderWidth = 186;
+constexpr bool kDeckHeaderCentered = true;
+constexpr int kDeckCountX = 314;
+constexpr int kDeckCountWidth = 40;
+constexpr int kStreamFocusedTitleFontPx = 21;
+constexpr int kStreamFocusedCjkScale = 256;
+constexpr int kStreamNeighborCjkScale = 256;
+constexpr int kFocusedProjectY = 3;
+constexpr int kStreamProjectHeight = 18;
+constexpr int kStreamFocusedTitleY = 23;
+constexpr int kStreamDragLimit = 96;
+constexpr int kStreamSeparatorTopY = 164;
+constexpr int kStreamSeparatorBottomY = 278;
+constexpr int kStreamSeparatorX = 37;
+constexpr int kStreamSeparatorWidth = 392;
+constexpr int kStreamSeparatorFadeWidth = 71;
+constexpr int kStreamSeparatorCenterWidth = 250;
+constexpr int kPreviousRowX = 79;
+constexpr int kPreviousRowY = 84;
+constexpr int kPreviousRowWidth = 308;
+constexpr int kPreviousRowHeight = 70;
+constexpr int kFocusedRowX = 47;
+constexpr int kFocusedRowY = 168;
+constexpr int kFocusedRowWidth = 373;
+constexpr int kFocusedRowHeight = 107;
+constexpr int kNextRowX = 70;
+constexpr int kNextRowY = 286;
+constexpr int kNextRowWidth = 326;
+constexpr int kNextRowHeight = 70;
 
 constexpr int kDetailHeaderX = 80;
 constexpr int kDetailHeaderWidth = 306;
@@ -104,15 +123,136 @@ constexpr int kDetailFooterHeight = 31;
 constexpr int kTrackCenterX = 420;
 constexpr int kTrackTopY = 147;
 constexpr int kTrackHeight = 195;
+constexpr int kTrackGroupCenterY = 215;
+constexpr int kTrackNodeGap = 6;
 constexpr int kTrackSafeMaxX = 424;
 constexpr size_t kMaxTrackNodes = 8;
-constexpr int kInactiveNodeSize = 6;
+constexpr int kInactiveNodeSize = 4;
 constexpr int kFocusedNodeWidth = 8;
 constexpr int kFocusedNodeHeight = 18;
 
 constexpr bool kUsesCards = false;
-constexpr bool kUsesGradients = false;
+constexpr bool kUsesGradients = true;
 constexpr bool kUsesShadows = false;
+
+
+enum class TaskStreamRole : uint8_t {
+    Previous,
+    Focused,
+    Next,
+};
+
+
+struct TaskStreamSlot {
+    bool visible = false;
+    size_t task_index = 0;
+    TaskStreamRole role = TaskStreamRole::Focused;
+    int x = 0;
+    int y = 0;
+    int width = 0;
+    int height = 0;
+    uint8_t opacity = 0;
+};
+
+
+struct TaskStreamSlots {
+    std::array<TaskStreamSlot, 3> items{};
+};
+
+
+struct TaskStreamTextLayout {
+    int title_y = 20;
+    int title_height = 23;
+    int metadata_y = 50;
+};
+
+
+inline TaskStreamTextLayout make_stream_text_layout(
+    bool focused,
+    int measured_title_height,
+    int font_line_height
+)
+{
+    if (!focused) {
+        return {};
+    }
+    constexpr int kSingleLineHeight = 25;
+    constexpr int kTwoLineHeight = 54;
+    const bool multiline = measured_title_height > font_line_height;
+    return {
+        kStreamFocusedTitleY,
+        multiline
+            ? std::max(kTwoLineHeight, measured_title_height)
+            : std::max(kSingleLineHeight, measured_title_height),
+        multiline ? 82 : 55,
+    };
+}
+
+
+inline TaskStreamSlots make_stream_slots(size_t count, size_t focused_index)
+{
+    TaskStreamSlots result;
+    result.items[0] = {
+        focused_index > 0 && focused_index < count,
+        focused_index > 0 ? focused_index - 1 : 0,
+        TaskStreamRole::Previous,
+        kPreviousRowX,
+        kPreviousRowY,
+        kPreviousRowWidth,
+        kPreviousRowHeight,
+        153,
+    };
+    result.items[1] = {
+        focused_index < count,
+        focused_index,
+        TaskStreamRole::Focused,
+        kFocusedRowX,
+        kFocusedRowY,
+        kFocusedRowWidth,
+        kFocusedRowHeight,
+        255,
+    };
+    result.items[2] = {
+        focused_index + 1 < count,
+        focused_index + 1,
+        TaskStreamRole::Next,
+        kNextRowX,
+        kNextRowY,
+        kNextRowWidth,
+        kNextRowHeight,
+        153,
+    };
+    return result;
+}
+
+
+inline bool rect_inside_round_safe_area(
+    int x,
+    int y,
+    int width,
+    int height,
+    int center_x,
+    int center_y,
+    int radius
+)
+{
+    const std::array<std::array<int, 2>, 4> corners = {{
+        {{x, y}},
+        {{x + width, y}},
+        {{x, y + height}},
+        {{x + width, y + height}},
+    }};
+    const int64_t radius_squared =
+        static_cast<int64_t>(radius) * radius;
+    for (const auto& corner : corners) {
+        const int64_t dx = corner[0] - center_x;
+        const int64_t dy = corner[1] - center_y;
+        if (dx * dx + dy * dy > radius_squared) {
+            return false;
+        }
+    }
+    return true;
+}
 
 
 enum class TaskTrackState : uint8_t {
@@ -122,7 +262,6 @@ enum class TaskTrackState : uint8_t {
 
 
 enum class TaskTrackShape : uint8_t {
-    PendingDiamond,
     RunningCircle,
     FocusedCapsule,
 };
@@ -156,35 +295,32 @@ inline TaskTrackNodes make_track_nodes(
     }
     result.count = count < kMaxTrackNodes ? count : kMaxTrackNodes;
     const bool has_focus = focused_index < result.count;
-    const int occupied_height = has_focus
+    const int node_height = has_focus
         ? kFocusedNodeHeight +
             kInactiveNodeSize * static_cast<int>(result.count - 1)
         : kInactiveNodeSize * static_cast<int>(result.count);
-    const double gap = static_cast<double>(kTrackHeight - occupied_height) /
-        static_cast<double>(result.count);
-    double top = kTrackTopY + gap / 2.0;
+    const int occupied_height = node_height +
+        kTrackNodeGap * static_cast<int>(result.count - 1);
+    double top = kTrackGroupCenterY -
+        static_cast<double>(occupied_height) / 2.0;
 
     for (size_t index = 0; index < result.count; ++index) {
         TaskTrackNode& node = result.items[index];
         node.center_x = kTrackCenterX;
-        node.color = states[index] == TaskTrackState::Pending
-            ? kPendingVermilion
-            : kRunningCyan;
+        node.color = kTaskTrackInactive;
         if (index == focused_index) {
             node.shape = TaskTrackShape::FocusedCapsule;
-            node.color = kBeaconViolet;
+            node.color = kTaskTrackFocused;
             node.width = kFocusedNodeWidth;
             node.height = kFocusedNodeHeight;
         } else {
-            node.shape = states[index] == TaskTrackState::Pending
-                ? TaskTrackShape::PendingDiamond
-                : TaskTrackShape::RunningCircle;
+            node.shape = TaskTrackShape::RunningCircle;
             node.width = kInactiveNodeSize;
             node.height = kInactiveNodeSize;
         }
         node.center_y = static_cast<int>(std::lround(
             top + static_cast<double>(node.height) / 2.0));
-        top += node.height + gap;
+        top += node.height + kTrackNodeGap;
     }
     return result;
 }

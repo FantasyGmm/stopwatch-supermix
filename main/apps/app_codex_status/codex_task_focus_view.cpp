@@ -13,8 +13,8 @@
 
 
 LV_FONT_DECLARE(font_puhui_14_1)
-LV_FONT_DECLARE(lv_font_source_han_sans_sc_16_cjk)
 LV_FONT_DECLARE(CodexDetail16)
+LV_FONT_DECLARE(CodexTaskTitle21)
 LV_FONT_DECLARE(CodexFocusStatic9)
 LV_FONT_DECLARE(CodexFocusStatic10)
 LV_FONT_DECLARE(CodexFocusStatic11)
@@ -81,6 +81,41 @@ lv_obj_t* make_geometry(lv_obj_t* parent)
 }
 
 
+lv_obj_t* make_fading_separator(lv_obj_t* parent, int y)
+{
+    lv_obj_t* separator = make_layer(parent);
+    lv_obj_set_pos(separator, kStreamSeparatorX, y);
+    lv_obj_set_size(separator, kStreamSeparatorWidth, 1);
+
+    lv_obj_t* left = make_geometry(separator);
+    lv_obj_set_pos(left, 0, 0);
+    lv_obj_set_size(left, kStreamSeparatorFadeWidth, 1);
+    lv_obj_set_style_bg_color(left, lv_color_hex(kTaskRule), 0);
+    lv_obj_set_style_bg_opa(left, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_bg_grad_color(left, lv_color_hex(kTaskRule), 0);
+    lv_obj_set_style_bg_grad_opa(left, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_grad_dir(left, LV_GRAD_DIR_HOR, 0);
+
+    lv_obj_t* center = make_geometry(separator);
+    lv_obj_set_pos(center, kStreamSeparatorFadeWidth, 0);
+    lv_obj_set_size(center, kStreamSeparatorCenterWidth, 1);
+    lv_obj_set_style_bg_color(center, lv_color_hex(kTaskRule), 0);
+
+    lv_obj_t* right = make_geometry(separator);
+    lv_obj_set_pos(
+        right,
+        kStreamSeparatorFadeWidth + kStreamSeparatorCenterWidth,
+        0);
+    lv_obj_set_size(right, kStreamSeparatorFadeWidth, 1);
+    lv_obj_set_style_bg_color(right, lv_color_hex(kTaskRule), 0);
+    lv_obj_set_style_bg_opa(right, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_grad_color(right, lv_color_hex(kTaskRule), 0);
+    lv_obj_set_style_bg_grad_opa(right, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_bg_grad_dir(right, LV_GRAD_DIR_HOR, 0);
+    return separator;
+}
+
+
 void set_hidden(lv_obj_t* object, bool hidden)
 {
     if (object == nullptr) {
@@ -115,20 +150,6 @@ const lv_font_t* project_font(const char* text)
 }
 
 
-const lv_font_t* title_font(const char* text)
-{
-    if (!has_non_ascii(text)) {
-        return &MontserratSemiBold26;
-    }
-    static lv_font_t cjk_title_font = [] {
-        lv_font_t font = lv_font_source_han_sans_sc_16_cjk;
-        font.fallback = &font_puhui_14_1;
-        return font;
-    }();
-    return &cjk_title_font;
-}
-
-
 const lv_font_t* detail_project_font(const char* text)
 {
     return has_non_ascii(text) ? &font_puhui_14_1 : &lv_font_montserrat_10;
@@ -137,7 +158,7 @@ const lv_font_t* detail_project_font(const char* text)
 
 const lv_font_t* detail_title_font(const char* text)
 {
-    return has_non_ascii(text) ? title_font(text) : &lv_font_montserrat_16;
+    return has_non_ascii(text) ? &CodexDetail16 : &lv_font_montserrat_16;
 }
 
 
@@ -171,60 +192,6 @@ void set_scaled_label_box(
         label,
         std::max(1, width * 256 / scale),
         std::max(1, height * 256 / scale));
-}
-
-
-size_t wrapped_line_count(
-    const char* text,
-    const lv_font_t* font,
-    int line_space,
-    int logical_width
-)
-{
-    lv_point_t size{};
-    lv_text_get_size(
-        &size, text == nullptr ? "" : text, font, 0, line_space,
-        logical_width, LV_TEXT_FLAG_NONE);
-    return std::max<size_t>(
-        1,
-        static_cast<size_t>(size.y + line_space) /
-            static_cast<size_t>(font->line_height + line_space));
-}
-
-
-size_t fit_deck_title(
-    const char* source,
-    bool cjk,
-    const lv_font_t* font,
-    int line_space,
-    int scale,
-    std::string& fitted
-)
-{
-    size_t maximum_scalars = cjk
-        ? kDeckTitleCjkMaxScalars
-        : kDeckTitleLatinMaxScalars;
-    const int logical_width = kTaskTitleWidth * 256 / scale;
-    while (maximum_scalars > 1) {
-        if (cjk) {
-            fitted = elide_utf8(source, maximum_scalars);
-        } else {
-            const std::string title = source == nullptr ? "" : source;
-            fitted = title.size() <= maximum_scalars
-                ? title
-                : title.substr(0, maximum_scalars > 3
-                    ? maximum_scalars - 3
-                    : 0) + "...";
-        }
-        const size_t lines = wrapped_line_count(
-            fitted.c_str(), font, line_space, logical_width);
-        if (lines <= kTaskTitleMaxLines) {
-            return lines;
-        }
-        --maximum_scalars;
-    }
-    fitted = cjk ? elide_utf8(source, 1) : ".";
-    return 1;
 }
 
 
@@ -293,40 +260,71 @@ void CodexTaskFocusView::init(lv_obj_t* parent)
     lv_obj_clear_flag(_root, LV_OBJ_FLAG_SCROLLABLE);
 
     _deck_layer = make_layer(_root);
-    _deck_project_pill = make_geometry(_deck_layer);
-    lv_obj_set_size(_deck_project_pill, 83, kProjectHeight);
+    _deck_drag_handle = make_geometry(_deck_layer);
     lv_obj_set_pos(
-        _deck_project_pill, kContentCenterX - 83 / 2, kProjectY);
-    lv_obj_set_style_radius(_deck_project_pill, LV_RADIUS_CIRCLE, 0);
+        _deck_drag_handle, kDeckDragHandleX, kDeckDragHandleY);
+    lv_obj_set_size(
+        _deck_drag_handle, kDeckDragHandleWidth, kDeckDragHandleHeight);
+    lv_obj_set_style_radius(_deck_drag_handle, 2, 0);
     lv_obj_set_style_bg_color(
-        _deck_project_pill, lv_color_hex(kProjectPill), 0);
-    _deck_project = make_label(
-        _deck_project_pill, "", 0, 0, 83,
-        kProjectHeight, &lv_font_montserrat_12, kProjectViolet,
-        LV_TEXT_ALIGN_CENTER, LV_LABEL_LONG_MODE_DOTS);
-    lv_obj_set_style_pad_top(_deck_project, 3, 0);
-    _deck_title = make_label(
-        _deck_layer, "", kTaskTitleX, kTaskTitleY, kTaskTitleWidth,
-        kTaskTitleHeight, &MontserratSemiBold26, kSignalWhite,
-        LV_TEXT_ALIGN_CENTER, LV_LABEL_LONG_MODE_WRAP);
-    lv_obj_set_style_text_line_space(_deck_title, 3, 0);
-    _deck_status = make_label(
-        _deck_layer, "", 0, 0, 1, 1, &CodexFocusStatic11,
-        kSignalWhite, LV_TEXT_ALIGN_CENTER, LV_LABEL_LONG_MODE_CLIP);
-    lv_obj_set_style_radius(_deck_status, kStatusRadius, 0);
-    lv_obj_set_style_pad_top(_deck_status, 8, 0);
-    _deck_target = make_label(
-        _deck_layer, "当前语音目标", kContentX, kDeckTargetY,
-        kContentWidth, kDeckTargetHeight, &CodexFocusStatic9,
-        kProjectViolet, LV_TEXT_ALIGN_CENTER, LV_LABEL_LONG_MODE_CLIP);
-    _deck_open = make_label(
-        _deck_layer, "点击查看原文", kContentX, kDeckOpenY,
-        kContentWidth, kDeckOpenHeight, &CodexFocusStatic16,
-        kSecondaryText, LV_TEXT_ALIGN_CENTER, LV_LABEL_LONG_MODE_CLIP);
-    _deck_next = make_label(
-        _deck_layer, "上下滑动切换　↓", 143, kDeckNextY,
-        180, kDeckNextHeight, &CodexFocusStatic16,
-        kDeckHint, LV_TEXT_ALIGN_CENTER, LV_LABEL_LONG_MODE_CLIP);
+        _deck_drag_handle, lv_color_hex(kTaskHandle), 0);
+    lv_obj_set_style_bg_opa(
+        _deck_drag_handle,
+        static_cast<lv_opa_t>(kDeckHandleOpacity),
+        0);
+    _deck_header = make_label(
+        _deck_layer, "任务", kDeckHeaderX, 49,
+        kDeckHeaderWidth, 24,
+        &CodexFocusStatic16, kTaskSignalWhite,
+        LV_TEXT_ALIGN_CENTER, LV_LABEL_LONG_MODE_CLIP);
+    _deck_count = make_label(
+        _deck_layer, "", kDeckCountX, 53,
+        kDeckCountWidth, 18,
+        &lv_font_montserrat_12, kTaskCount,
+        LV_TEXT_ALIGN_RIGHT, LV_LABEL_LONG_MODE_CLIP);
+    _deck_stream_layer = make_layer(_deck_layer);
+    const TaskStreamSlots stream_geometry = make_stream_slots(3, 1);
+    for (size_t index = 0; index < _deck_rows.size(); ++index) {
+        DeckRowWidgets& row = _deck_rows[index];
+        const TaskStreamSlot& slot = stream_geometry.items[index];
+        row.root = lv_obj_create(_deck_stream_layer);
+        lv_obj_set_pos(row.root, slot.x, slot.y);
+        lv_obj_set_size(row.root, slot.width, slot.height);
+        lv_obj_set_style_radius(row.root, 0, 0);
+        lv_obj_set_style_border_width(row.root, 0, 0);
+        lv_obj_set_style_pad_all(row.root, 0, 0);
+        lv_obj_set_style_bg_opa(row.root, LV_OPA_TRANSP, 0);
+        lv_obj_clear_flag(row.root, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_clear_flag(row.root, LV_OBJ_FLAG_SCROLLABLE);
+        row.focus_rule = make_geometry(row.root);
+        row.project = make_label(
+            row.root, "", 12, 0, slot.width - 24, 18,
+            &font_puhui_14_1, kTaskProject,
+            LV_TEXT_ALIGN_LEFT, LV_LABEL_LONG_MODE_DOTS);
+        row.title = make_label(
+            row.root, "", 12, 20, slot.width - 24, 43,
+            &CodexTaskTitle21, kTaskSignalWhite,
+            LV_TEXT_ALIGN_LEFT, LV_LABEL_LONG_MODE_WRAP);
+        row.status_dot = make_geometry(row.root);
+        lv_obj_set_size(row.status_dot, 6, 6);
+        lv_obj_set_style_radius(row.status_dot, LV_RADIUS_CIRCLE, 0);
+        row.status = make_label(
+            row.root, "", 24, 50, 116, 17,
+            &CodexFocusStatic11, kTaskMeta,
+            LV_TEXT_ALIGN_LEFT, LV_LABEL_LONG_MODE_CLIP);
+        row.time = make_label(
+            row.root, "", slot.width - 112, 50, 100, 17,
+            &font_puhui_14_1, kTaskMeta,
+            LV_TEXT_ALIGN_RIGHT, LV_LABEL_LONG_MODE_DOTS);
+    }
+    _deck_separator_top =
+        make_fading_separator(_deck_layer, kStreamSeparatorTopY);
+    _deck_separator_bottom =
+        make_fading_separator(_deck_layer, kStreamSeparatorBottomY);
+    _deck_hint = make_label(
+        _deck_layer, "上下滑动切换　↓", 143, 418,
+        180, 23, &CodexFocusStatic16,
+        kTaskHint, LV_TEXT_ALIGN_CENTER, LV_LABEL_LONG_MODE_CLIP);
     _deck_empty = make_label(
         _deck_layer, "暂无进行中的任务", kContentX, 203,
         kContentWidth, 44, &font_puhui_14_1, kEtchedGray,
@@ -336,6 +334,7 @@ void CodexTaskFocusView::init(lv_obj_t* parent)
         kConnectionHintY, kContentWidth, kConnectionHintHeight,
         &font_puhui_14_1, kEtchedGray, LV_TEXT_ALIGN_CENTER,
         LV_LABEL_LONG_MODE_CLIP);
+    lv_obj_move_foreground(_deck_drag_handle);
 
     _track_layer = make_layer(_deck_layer);
     for (size_t index = 0; index < _track_nodes.size(); ++index) {
@@ -453,13 +452,14 @@ void CodexTaskFocusView::shutdown()
     }
     _root = nullptr;
     _deck_layer = nullptr;
-    _deck_project_pill = nullptr;
-    _deck_project = nullptr;
-    _deck_title = nullptr;
-    _deck_status = nullptr;
-    _deck_target = nullptr;
-    _deck_open = nullptr;
-    _deck_next = nullptr;
+    _deck_drag_handle = nullptr;
+    _deck_header = nullptr;
+    _deck_count = nullptr;
+    _deck_stream_layer = nullptr;
+    _deck_rows = {};
+    _deck_separator_top = nullptr;
+    _deck_separator_bottom = nullptr;
+    _deck_hint = nullptr;
     _deck_empty = nullptr;
     _connection_hint = nullptr;
     _track_layer = nullptr;
@@ -486,8 +486,6 @@ void CodexTaskFocusView::shutdown()
     _visible = false;
     _connected = false;
     _recording = false;
-    _deck_status_y = 0;
-    _deck_title_text.clear();
     _detail_title_text.clear();
     _detail_scroll_identity.reset();
 }
@@ -509,74 +507,111 @@ void CodexTaskFocusView::show_deck(
 
     const CodexTaskAlert* task = deck.focused();
     const bool empty = task == nullptr;
-    set_hidden(_deck_project_pill, empty);
-    set_hidden(_deck_title, empty);
-    set_hidden(_deck_status, empty);
-    set_hidden(_deck_target, empty);
-    set_hidden(_deck_open, empty);
-    set_hidden(_deck_next, empty);
+    set_hidden(_deck_header, empty);
+    set_hidden(_deck_count, empty);
+    set_hidden(_deck_stream_layer, empty);
+    set_hidden(_deck_separator_top, empty);
+    set_hidden(_deck_separator_bottom, empty);
+    set_hidden(_deck_hint, empty);
     set_hidden(_deck_empty, !empty);
     if (!empty) {
-        lv_label_set_text(_deck_project, task->project.c_str());
-        lv_obj_set_style_text_font(
-            _deck_project, project_font(task->project.c_str()), 0);
-        set_text_scale(_deck_project, 256);
-        lv_obj_set_width(_deck_project, LV_SIZE_CONTENT);
-        lv_obj_set_height(_deck_project, kProjectHeight);
-        lv_obj_update_layout(_deck_project);
-        const int project_width = std::clamp(
-            static_cast<int>(lv_obj_get_width(_deck_project)) +
-                kProjectPillHorizontalPadding,
-            52, 220);
-        lv_obj_set_size(_deck_project_pill, project_width, kProjectHeight);
-        lv_obj_set_pos(_deck_project, 0, 0);
-        lv_obj_set_size(_deck_project, project_width, kProjectHeight);
-        const bool cjk_title = has_non_ascii(task->title.c_str());
-        const lv_font_t* deck_font = title_font(task->title.c_str());
-        lv_obj_set_style_text_font(_deck_title, deck_font, 0);
-        const int title_scale = cjk_title ? kCjkTitleScale : kLatinTitleScale;
-        const int title_line_space = cjk_title ? 0 : 2;
-        lv_obj_set_style_text_line_space(
-            _deck_title, title_line_space, 0);
-        const size_t lines = fit_deck_title(
-            task->title.c_str(), cjk_title, deck_font, title_line_space,
-            title_scale, _deck_title_text);
-        lv_label_set_text(_deck_title, _deck_title_text.c_str());
-        const int extra_height = static_cast<int>(lines - 1) *
-            kTaskTitleLineHeight;
-        const int upper_shift = extra_height / 2;
-        const int lower_shift = extra_height - upper_shift;
-        lv_obj_set_pos(
-            _deck_project_pill,
-            kContentCenterX - project_width / 2,
-            kProjectY - upper_shift);
-        set_scaled_label_box(
-            _deck_title, kTaskTitleX, kTaskTitleY - upper_shift,
-            kTaskTitleWidth,
-            static_cast<int>(lines) * kTaskTitleLineHeight,
-            title_scale);
-        _deck_status_y = kStatusCenterY - kStatusHeight / 2 - 1 +
-            lower_shift;
-        lv_obj_set_pos(
-            _deck_status,
-            kContentCenterX - kStatusPendingWidth / 2,
-            _deck_status_y);
-        lv_obj_set_size(
-            _deck_status, kStatusPendingWidth, kStatusHeight);
-        lv_obj_set_pos(
-            _deck_target, kContentX, kDeckTargetY + lower_shift);
-        lv_obj_set_size(
-            _deck_target, kContentWidth, kDeckTargetHeight);
-        lv_obj_set_pos(
-            _deck_open, kContentX, kDeckOpenY + lower_shift);
-        lv_obj_set_size(
-            _deck_open, kContentWidth, kDeckOpenHeight);
-        lv_label_set_text(
-            _deck_target,
-            deck.selected_route() == task->route
-                ? "当前语音目标"
-                : "点击后设为语音目标");
-        render_status(task, true);
+        const std::string count_text =
+            std::to_string(deck.focused_index() + 1) + " / " +
+            std::to_string(deck.count());
+        lv_label_set_text(_deck_count, count_text.c_str());
+        const TaskStreamSlots slots = make_stream_slots(
+            deck.count(), deck.focused_index());
+        for (size_t index = 0; index < _deck_rows.size(); ++index) {
+            DeckRowWidgets& row = _deck_rows[index];
+            const TaskStreamSlot& slot = slots.items[index];
+            set_hidden(row.root, !slot.visible);
+            if (!slot.visible) {
+                continue;
+            }
+            const CodexTaskAlert& row_task = deck.tasks()[slot.task_index];
+            const bool focused = slot.role == TaskStreamRole::Focused;
+            const bool cjk = has_non_ascii(row_task.title.c_str());
+            const lv_font_t* title_font = focused
+                ? (cjk ? &CodexTaskTitle21 : &MontserratSemiBold26)
+                : (cjk ? &font_puhui_14_1 : &lv_font_montserrat_16);
+            lv_obj_set_pos(row.root, slot.x, slot.y);
+            lv_obj_set_size(row.root, slot.width, slot.height);
+            lv_obj_set_style_opa(row.root, slot.opacity, 0);
+            set_hidden(row.focus_rule, !focused);
+            lv_obj_set_pos(row.focus_rule, 0, focused ? 2 : 0);
+            lv_obj_set_size(
+                row.focus_rule, 3, focused ? slot.height - 4 : 0);
+            lv_obj_set_style_radius(row.focus_rule, 2, 0);
+            lv_obj_set_style_bg_color(
+                row.focus_rule, lv_color_hex(kTaskTrackFocused), 0);
+            const int content_x = focused ? 18 : 12;
+            const int content_right = focused ? 28 : 12;
+            const int content_width =
+                slot.width - content_x - content_right;
+            lv_obj_set_pos(
+                row.project, content_x, focused ? kFocusedProjectY : 0);
+            lv_obj_set_size(
+                row.project, content_width, kStreamProjectHeight);
+            lv_label_set_text(row.project, row_task.project.c_str());
+            lv_obj_set_style_text_font(
+                row.project, project_font(row_task.project.c_str()), 0);
+            set_text_scale(row.project, 256);
+            const std::string title = elide_utf8(
+                row_task.title.c_str(), focused ? 34 : 22);
+            lv_label_set_text(row.title, title.c_str());
+            lv_label_set_long_mode(
+                row.title,
+                focused ? LV_LABEL_LONG_MODE_WRAP : LV_LABEL_LONG_MODE_DOTS);
+            lv_obj_set_style_text_font(row.title, title_font, 0);
+            lv_obj_set_style_text_line_space(row.title, focused ? 4 : 0, 0);
+            lv_point_t measured_title{};
+            lv_text_get_size(
+                &measured_title,
+                title.c_str(),
+                title_font,
+                0,
+                focused ? 4 : 0,
+                content_width,
+                LV_TEXT_FLAG_NONE);
+            const TaskStreamTextLayout text_layout =
+                make_stream_text_layout(
+                    focused,
+                    measured_title.y,
+                    title_font->line_height);
+            lv_obj_set_pos(
+                row.title, content_x, text_layout.title_y);
+            lv_obj_set_size(
+                row.title, content_width, text_layout.title_height);
+            set_text_scale(
+                row.title,
+                focused ? kStreamFocusedCjkScale
+                        : kStreamNeighborCjkScale);
+            const int metadata_y = text_layout.metadata_y;
+            lv_obj_set_pos(
+                row.status_dot, content_x, metadata_y + 5);
+            lv_obj_set_style_bg_color(
+                row.status_dot,
+                lv_color_hex(
+                    row_task.state == CodexTaskState::Pending
+                        ? kTaskPending
+                        : kTaskRunning),
+                0);
+            lv_obj_set_pos(row.status, content_x + 12, metadata_y);
+            lv_obj_set_size(row.status, 116, 17);
+            lv_label_set_text(row.status, status_text(row_task.state));
+            lv_obj_set_style_text_color(
+                row.status,
+                lv_color_hex(
+                    kTaskMeta),
+                0);
+            lv_obj_set_pos(
+                row.time,
+                slot.width - content_right - 100,
+                metadata_y);
+            lv_obj_set_size(row.time, 100, 17);
+            lv_label_set_text(row.time, row_task.time.c_str());
+        }
+        set_deck_scroll_offset(0);
     }
     render_track(deck);
     apply_connection(connected);
@@ -676,6 +711,15 @@ void CodexTaskFocusView::set_vertical_offset(int y)
 }
 
 
+void CodexTaskFocusView::set_deck_scroll_offset(int y)
+{
+    if (_deck_stream_layer != nullptr &&
+        _mode == CodexTaskFocusViewMode::Deck) {
+        lv_obj_set_y(_deck_stream_layer, y);
+    }
+}
+
+
 int CodexTaskFocusView::vertical_offset() const
 {
     return _root == nullptr ? 0 : lv_obj_get_y(_root);
@@ -728,8 +772,8 @@ void CodexTaskFocusView::set_visible(bool visible)
 bool CodexTaskFocusView::contains_focus_point(int x, int y) const
 {
     return _visible && _mode == CodexTaskFocusViewMode::Deck &&
-        x >= kFocusTargetX && x < kFocusTargetX + kFocusTargetWidth &&
-        y >= kFocusTargetY && y < kFocusTargetY + kFocusTargetHeight;
+        x >= kFocusedRowX && x < kFocusedRowX + kFocusedRowWidth &&
+        y >= kFocusedRowY && y < kFocusedRowY + kFocusedRowHeight;
 }
 
 
@@ -773,29 +817,18 @@ void CodexTaskFocusView::render_status(
     if (task == nullptr) {
         return;
     }
-    lv_obj_t* label = deck_mode ? _deck_status : _detail_status;
+    if (deck_mode) {
+        return;
+    }
+    lv_obj_t* label = _detail_status;
     lv_label_set_text(
         label,
-        deck_mode ? status_text(task->state) : detail_status_text(task->state));
+        detail_status_text(task->state));
     const bool pending = task->state == CodexTaskState::Pending;
     const uint32_t state_color = pending ? kDetailState : kRunningText;
     lv_obj_set_style_text_color(
-        label, lv_color_hex(deck_mode && pending ? 0xFFFFFF : state_color),
+        label, lv_color_hex(state_color),
         0);
-    if (!deck_mode) {
-        return;
-    }
-    const int width = pending ? kStatusPendingWidth : kStatusRunningWidth;
-    const int height = pending ? kStatusHeight : kStatusRunningHeight;
-    lv_obj_set_pos(
-        label,
-        kContentCenterX - width / 2,
-        _deck_status_y - (height - kStatusHeight) / 2);
-    lv_obj_set_size(label, width, height);
-    lv_obj_set_style_bg_color(label, lv_color_hex(kPendingPill), 0);
-    lv_obj_set_style_bg_opa(label, pending ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(label, pending ? 0 : 1, 0);
-    lv_obj_set_style_border_color(label, lv_color_hex(kRunningBorder), 0);
 }
 
 
@@ -849,22 +882,10 @@ void CodexTaskFocusView::render_track(const CodexTaskFocusDeck& deck)
             node.center_y - node.height / 2);
         lv_obj_set_style_bg_color(
             _track_nodes[index],
-            lv_color_hex(
-                node.shape == TaskTrackShape::FocusedCapsule
-                    ? kBeaconViolet
-                    : node.color),
+            lv_color_hex(node.color),
             0);
         lv_obj_set_style_radius(
-            _track_nodes[index],
-            node.shape == TaskTrackShape::RunningCircle ||
-                    node.shape == TaskTrackShape::FocusedCapsule
-                ? LV_RADIUS_CIRCLE
-                : 1,
-            0);
-        lv_obj_set_style_transform_rotation(
-            _track_nodes[index],
-            node.shape == TaskTrackShape::PendingDiamond ? 450 : 0,
-            0);
+            _track_nodes[index], LV_RADIUS_CIRCLE, 0);
     }
 }
 
@@ -879,13 +900,20 @@ void CodexTaskFocusView::apply_connection(bool connected)
         _connection_hint,
         connected || _mode != CodexTaskFocusViewMode::Deck);
     const lv_opa_t content_opacity = connected ? LV_OPA_COVER : LV_OPA_60;
-    lv_obj_set_style_opa(_deck_project_pill, content_opacity, 0);
-    lv_obj_set_style_opa(_deck_project, content_opacity, 0);
-    lv_obj_set_style_opa(_deck_title, content_opacity, 0);
-    lv_obj_set_style_opa(_deck_status, content_opacity, 0);
-    lv_obj_set_style_opa(_deck_target, content_opacity, 0);
-    lv_obj_set_style_opa(_deck_open, content_opacity, 0);
-    lv_obj_set_style_opa(_deck_next, content_opacity, 0);
+    lv_obj_set_style_opa(_deck_header, content_opacity, 0);
+    lv_obj_set_style_opa(_deck_count, content_opacity, 0);
+    for (size_t index = 0; index < _deck_rows.size(); ++index) {
+        const uint8_t role_opacity = index == 1 ? 255 : 153;
+        lv_obj_set_style_opa(
+            _deck_rows[index].root,
+            connected
+                ? role_opacity
+                : static_cast<uint8_t>(role_opacity * 3 / 5),
+            0);
+    }
+    lv_obj_set_style_opa(_deck_separator_top, content_opacity, 0);
+    lv_obj_set_style_opa(_deck_separator_bottom, content_opacity, 0);
+    lv_obj_set_style_opa(_deck_hint, content_opacity, 0);
     lv_obj_set_style_opa(_track_layer, content_opacity, 0);
     lv_obj_set_style_opa(_detail_project, content_opacity, 0);
     lv_obj_set_style_opa(_detail_title, content_opacity, 0);

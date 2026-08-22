@@ -5,6 +5,8 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 HEADER = ROOT / "main/apps/app_codex_status/app_codex_status.h"
 SOURCE = ROOT / "main/apps/app_codex_status/app_codex_status.cpp"
+VIEW_SOURCE = ROOT / "main/apps/app_codex_status/codex_task_focus_view.cpp"
+FOCUSED_TITLE_FONT = ROOT / "main/assets/fonts/CodexTaskTitle21.c"
 
 
 class CodexTaskFocusFirmwareContractTests(unittest.TestCase):
@@ -12,6 +14,7 @@ class CodexTaskFocusFirmwareContractTests(unittest.TestCase):
     def setUpClass(cls):
         cls.header = HEADER.read_text()
         cls.source = SOURCE.read_text()
+        cls.view_source = VIEW_SOURCE.read_text()
 
     def test_app_owns_focus_detail_and_crypto_state(self):
         for token in (
@@ -48,7 +51,17 @@ class CodexTaskFocusFirmwareContractTests(unittest.TestCase):
         self.assertIn("_task_focus_deck.browse(direction)", self.source)
         self.assertIn("CodexTaskFocusEvent::StateBoundaryCrossed", self.source)
         self.assertIn("GetHAL().vibrate", self.source)
-        self.assertIn("_task_focus_deck.focused_index() == 0", self.source)
+        self.assertIn("_task_deck_started_on_handle", self.source)
+        self.assertIn("should_dismiss_task_deck", self.source)
+        self.assertIn(
+            "kTaskDeckDismissReleaseY   = kTaskDeckHiddenY - 1",
+            self.source,
+        )
+        dismiss = self.source.split("should_dismiss_task_deck(", 1)[1]
+        dismiss = dismiss.split(");", 1)[0]
+        self.assertIn("point.y", dismiss)
+        self.assertIn("kTaskDeckDismissReleaseY", dismiss)
+        self.assertNotIn("kTaskSwipeThreshold", dismiss)
         selection = self.source.split("_task_focus_deck.select_focused()", 1)[1]
         self.assertLess(selection.index("sync_task_voice_route"),
                         selection.index("render_task_focus_detail"))
@@ -78,14 +91,34 @@ class CodexTaskFocusFirmwareContractTests(unittest.TestCase):
         sink = self.source.split("VoiceButtonSink* AppCodexStatus::task_focus_voice_sink", 1)[1]
         sink = sink.split("\n}", 1)[0]
         self.assertIn("_production_voice_link_usable", sink)
-        self.assertIn("_voice_input.get()", sink)
+        self.assertRegex(sink, r"\?\s*_voice_input\s*:")
         self.assertNotIn("CodexTaskFocusMode", sink)
         self.assertNotIn("selected_route", sink)
         self.assertIn("_task_detail_store.reset_connection()", self.source)
         self.assertIn("_task_detail_store.reset_for_credential", self.source)
         self.assertIn("_task_detail_store.reset()", self.source)
-        self.assertIn("_voice_input->set_task_route(0)", self.source)
         self.assertNotIn("task detail plaintext", self.source.lower())
+
+    def test_task_stream_uses_native_cjk_fonts_and_owns_pull_handle(self):
+        self.assertIn("_deck_drag_handle = make_geometry(_deck_layer)",
+                      self.view_source)
+        self.assertIn("lv_obj_move_foreground(_deck_drag_handle)",
+                      self.view_source)
+        self.assertTrue(FOCUSED_TITLE_FONT.is_file())
+        focused_font_source = FOCUSED_TITLE_FONT.read_text(encoding="utf-8")
+        self.assertIn("Size: 21 px", focused_font_source[:200])
+        self.assertIn("HiraginoSansGB-W6.otf", focused_font_source)
+        self.assertIn("--autohint-strong", focused_font_source)
+        self.assertNotIn("SourceHanSansSC-Normal.otf", focused_font_source)
+        self.assertIn("const lv_font_t CodexTaskTitle21", focused_font_source)
+        self.assertIn("cjk ? &CodexTaskTitle21 : &MontserratSemiBold26",
+                      self.view_source)
+        self.assertIn("cjk ? &font_puhui_14_1 : &lv_font_montserrat_16",
+                      self.view_source)
+        self.assertNotIn("lv_font_source_han_sans_sc_16_cjk",
+                         self.view_source)
+        self.assertIn("set_deck_scroll_offset", self.source)
+        self.assertIn("task_stream_drag_offset", self.source)
 
     def test_only_task_detail_assigns_task_voice_route(self):
         helper = self.source.split(

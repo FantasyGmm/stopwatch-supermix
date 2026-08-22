@@ -36,6 +36,7 @@ public:
     );
     void set_visible(bool visible);
     void set_vertical_offset(int y);
+    void set_deck_scroll_offset(int y);
     int vertical_offset() const;
     bool contains_focus_point(int x, int y) const;
     void detail_scroll_by(int delta_y);
@@ -46,6 +47,16 @@ public:
     size_t rendered_track_count() const;
 
 private:
+    struct DeckRowWidgets {
+        lv_obj_t* root = nullptr;
+        lv_obj_t* focus_rule = nullptr;
+        lv_obj_t* project = nullptr;
+        lv_obj_t* title = nullptr;
+        lv_obj_t* status_dot = nullptr;
+        lv_obj_t* status = nullptr;
+        lv_obj_t* time = nullptr;
+    };
+
     void render_status(const CodexTaskAlert* task, bool deck_mode);
     void render_footer();
     void render_track(const CodexTaskFocusDeck& deck);
@@ -53,13 +64,14 @@ private:
 
     lv_obj_t* _root = nullptr;
     lv_obj_t* _deck_layer = nullptr;
-    lv_obj_t* _deck_project_pill = nullptr;
-    lv_obj_t* _deck_project = nullptr;
-    lv_obj_t* _deck_title = nullptr;
-    lv_obj_t* _deck_status = nullptr;
-    lv_obj_t* _deck_target = nullptr;
-    lv_obj_t* _deck_open = nullptr;
-    lv_obj_t* _deck_next = nullptr;
+    lv_obj_t* _deck_drag_handle = nullptr;
+    lv_obj_t* _deck_header = nullptr;
+    lv_obj_t* _deck_count = nullptr;
+    lv_obj_t* _deck_stream_layer = nullptr;
+    std::array<DeckRowWidgets, 3> _deck_rows{};
+    lv_obj_t* _deck_separator_top = nullptr;
+    lv_obj_t* _deck_separator_bottom = nullptr;
+    lv_obj_t* _deck_hint = nullptr;
     lv_obj_t* _deck_empty = nullptr;
     lv_obj_t* _connection_hint = nullptr;
     lv_obj_t* _track_layer = nullptr;
@@ -83,8 +95,6 @@ private:
     bool _visible = true;
     bool _connected = false;
     bool _recording = false;
-    int _deck_status_y = 0;
-    std::string _deck_title_text;
     std::string _detail_title_text;
     std::array<std::string, 16> _detail_paragraph_text{};
     codex_task_focus_layout::TaskDetailScrollIdentity

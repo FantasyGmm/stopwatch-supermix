@@ -94,7 +94,10 @@ private:
     lv_obj_t* _alert_project     = nullptr;
     lv_obj_t* _alert_detail      = nullptr;
     lv_obj_t* _battery_label     = nullptr;
-    lv_obj_t* _status_label      = nullptr;
+    lv_obj_t* _connection_status_dot = nullptr;
+    lv_obj_t* _connection_status_label = nullptr;
+    lv_obj_t* _voice_status_dot = nullptr;
+    lv_obj_t* _voice_status_label = nullptr;
     lv_obj_t* _host_label        = nullptr;
     lv_obj_t* _pet_image         = nullptr;
     lv_obj_t* _agent_panel_root  = nullptr;
@@ -165,6 +168,7 @@ private:
     int _task_touch_last_y = 0;
     bool _task_touch_moved = false;
     bool _task_deck_drag_active = false;
+    bool _task_deck_started_on_handle = false;
     bool _task_detail_started_at_top = false;
     codex_task_focus_gesture::TaskFocusGestureAxis _task_touch_axis =
         codex_task_focus_gesture::TaskFocusGestureAxis::Undecided;

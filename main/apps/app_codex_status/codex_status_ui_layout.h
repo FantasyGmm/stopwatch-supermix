@@ -28,6 +28,14 @@ constexpr int kLogoScale = 170;
 constexpr int kBrandX = 218;
 constexpr int kBrandY = 32;
 constexpr int kStatusY = 63;
+constexpr int kChannelStatusY = 63;
+constexpr int kChannelDotSize = 6;
+constexpr int kConnectionStatusDotX = 132;
+constexpr int kConnectionStatusLabelX = 144;
+constexpr int kConnectionStatusLabelWidth = 92;
+constexpr int kVoiceStatusDotX = 247;
+constexpr int kVoiceStatusLabelX = 259;
+constexpr int kVoiceStatusLabelWidth = 92;
 
 constexpr int kPetX = 73;
 constexpr int kPetY = 88;

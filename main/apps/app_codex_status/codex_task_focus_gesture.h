@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdlib>
 
 
@@ -10,6 +11,21 @@ enum class TaskFocusGestureAxis {
     Horizontal,
     Vertical,
 };
+
+
+constexpr int kDeckHandleTouchLeft = 183;
+constexpr int kDeckHandleTouchTop = 0;
+constexpr int kDeckHandleTouchRight = 283;
+constexpr int kDeckHandleTouchBottom = 48;
+
+
+inline bool is_deck_handle_start(int x, int y)
+{
+    return x >= kDeckHandleTouchLeft &&
+        x <= kDeckHandleTouchRight &&
+        y >= kDeckHandleTouchTop &&
+        y <= kDeckHandleTouchBottom;
+}
 
 
 inline TaskFocusGestureAxis update_axis(
@@ -47,6 +63,48 @@ inline bool is_detail_return_gesture(
     }
     return axis == TaskFocusGestureAxis::Vertical &&
         started_at_top && total_dy >= threshold &&
+        std::abs(total_dy) >= std::abs(total_dx);
+}
+
+
+inline int task_stream_drag_offset(
+    int total_dy,
+    bool has_previous,
+    bool has_next,
+    int limit
+)
+{
+    int offset = std::clamp(total_dy, -limit, limit);
+    if (offset > 0 && !has_previous) {
+        offset /= 4;
+    } else if (offset < 0 && !has_next) {
+        offset /= 4;
+    }
+    return offset;
+}
+
+
+inline int task_deck_handle_drag_offset(int total_dy, int limit)
+{
+    return std::clamp(total_dy, 0, limit);
+}
+
+
+inline bool should_dismiss_task_deck(
+    int total_dx,
+    int total_dy,
+    TaskFocusGestureAxis axis,
+    bool started_on_handle,
+    bool at_first,
+    int release_y,
+    int completion_y
+)
+{
+    return started_on_handle &&
+        at_first &&
+        axis == TaskFocusGestureAxis::Vertical &&
+        total_dy > 0 &&
+        release_y >= completion_y &&
         std::abs(total_dy) >= std::abs(total_dx);
 }
 

@@ -34,37 +34,35 @@ void assert_fixed_original_e_contract()
     static_assert(kDetailLabel == 0xB0BCC8);
     static_assert(kDetailState == 0xFF7F69);
     static_assert(kScrollbar == 0x4B5662);
+    static_assert(kTaskRule == 0x27303A);
+    static_assert(kTaskSignalWhite == 0xF3F6F8);
+    static_assert(kTaskProject == 0x9DB2FF);
+    static_assert(kTaskMeta == 0x8995A2);
+    static_assert(kTaskCount == 0x8C98A5);
+    static_assert(kTaskHint == 0x687482);
+    static_assert(kTaskHandle == 0x778491);
+    static_assert(kTaskPending == 0xFF6248);
+    static_assert(kTaskRunning == 0x49C9ED);
+    static_assert(kTaskTrackInactive == 0x394452);
+    static_assert(kTaskTrackFocused == 0x829DFF);
 
     static_assert(kContentWidth == 326);
     static_assert(kContentCenterX == 233);
     static_assert(kContentX == 70);
-    static_assert(kProjectY == 134);
-    static_assert(kProjectHeight == 22);
-    static_assert(kProjectPillHorizontalPadding == 16);
-    static_assert(kTaskTitleX == 98);
-    static_assert(kTaskTitleY == 177);
-    static_assert(kTaskTitleWidth == 270);
-    static_assert(kTaskTitleLineHeight == 33);
-    static_assert(kTaskTitleHeight == 99);
-    static_assert(kTaskTitleMaxLines == 3);
-    static_assert(kLatinTitleScale == 266);
-    static_assert(kCjkTitleScale == 432);
     static_assert(kDetailBodyFontPx == 16);
-    static_assert(kStatusCenterY == 241);
-    static_assert(kStatusHeight == 27);
-    static_assert(kStatusPendingWidth == 90);
-    static_assert(kStatusRunningWidth == 70);
-    static_assert(kStatusRunningHeight == 29);
-    static_assert(kDeckTargetY == 268);
-    static_assert(kDeckOpenY == 294);
-    static_assert(kDeckNextY == 411);
-    static_assert(kFocusTargetX == 70);
-    static_assert(kFocusTargetY == 120);
-    static_assert(kFocusTargetWidth == 326);
-    static_assert(kFocusTargetHeight == 230);
+    static_assert(kFocusedRowX == 47);
+    static_assert(kFocusedRowY == 168);
+    static_assert(kFocusedRowWidth == 373);
+    static_assert(kFocusedRowHeight == 107);
+    static_assert(kFocusedProjectY == 3);
+    static_assert(kStreamProjectHeight == 18);
+    static_assert(kStreamFocusedTitleY == 23);
+    static_assert(
+        kStreamFocusedTitleY -
+            (kFocusedProjectY + kStreamProjectHeight) == 2);
     static_assert(kMinimumHitSize == 44);
-    static_assert(kFocusTargetWidth >= kMinimumHitSize);
-    static_assert(kFocusTargetHeight >= kMinimumHitSize);
+    static_assert(kFocusedRowWidth >= kMinimumHitSize);
+    static_assert(kFocusedRowHeight >= kMinimumHitSize);
 
     static_assert(kDetailProjectY == 28);
     static_assert(kDetailDragHandleX == 209);
@@ -90,11 +88,140 @@ void assert_fixed_original_e_contract()
     static_assert(kTrackCenterX == 420);
     static_assert(kTrackTopY == 147);
     static_assert(kTrackHeight == 195);
+    static_assert(kTrackGroupCenterY == 215);
+    static_assert(kTrackNodeGap == 6);
     static_assert(kTrackSafeMaxX == 424);
     static_assert(kMaxTrackNodes == 8);
+    static_assert(kInactiveNodeSize == 4);
+    static_assert(kStreamSeparatorFadeWidth == 71);
+    static_assert(kStreamSeparatorCenterWidth == 250);
+    static_assert(
+        kStreamSeparatorFadeWidth * 2 +
+            kStreamSeparatorCenterWidth == kStreamSeparatorWidth);
     static_assert(!kUsesCards);
-    static_assert(!kUsesGradients);
+    static_assert(kUsesGradients);
     static_assert(!kUsesShadows);
+}
+
+
+void assert_center_stream_neighbors_and_round_safe_geometry()
+{
+    const auto first = make_stream_slots(5, 0);
+    assert(!first.items[0].visible);
+    assert(first.items[1].visible);
+    assert(first.items[1].task_index == 0);
+    assert(first.items[1].role == TaskStreamRole::Focused);
+    assert(first.items[2].visible);
+    assert(first.items[2].task_index == 1);
+
+    const auto middle = make_stream_slots(5, 2);
+    assert(middle.items[0].visible);
+    assert(middle.items[0].task_index == 1);
+    assert(middle.items[0].role == TaskStreamRole::Previous);
+    assert(middle.items[1].task_index == 2);
+    assert(middle.items[1].x == 47);
+    assert(middle.items[1].y == 168);
+    assert(middle.items[1].width == 373);
+    assert(middle.items[1].height == 107);
+    assert(middle.items[2].task_index == 3);
+    assert(middle.items[0].opacity == 153);
+    assert(middle.items[1].opacity == 255);
+    assert(middle.items[2].opacity == 153);
+
+    const auto last = make_stream_slots(5, 4);
+    assert(last.items[0].visible);
+    assert(last.items[0].task_index == 3);
+    assert(last.items[1].task_index == 4);
+    assert(!last.items[2].visible);
+
+    for (const auto& slot : middle.items) {
+        assert(slot.visible);
+        assert(rect_inside_round_safe_area(
+            slot.x, slot.y, slot.width, slot.height,
+            kContentCenterX, kContentCenterX, kRoundSafeRadius));
+    }
+}
+
+
+void assert_stream_text_tracks_actual_title_lines()
+{
+    const auto one_line = make_stream_text_layout(true, 25, 25);
+    assert(one_line.title_y == 23);
+    assert(one_line.title_height == 25);
+    assert(one_line.metadata_y == 55);
+
+    const auto two_lines = make_stream_text_layout(true, 54, 25);
+    assert(two_lines.title_y == 23);
+    assert(two_lines.title_height == 54);
+    assert(two_lines.metadata_y == 82);
+
+    const auto model_weight_ascii = make_stream_text_layout(true, 27, 27);
+    assert(model_weight_ascii.title_y == 23);
+    assert(model_weight_ascii.title_height == 27);
+    assert(model_weight_ascii.metadata_y == 55);
+
+    const auto model_weight_ascii_wrapped =
+        make_stream_text_layout(true, 58, 27);
+    assert(model_weight_ascii_wrapped.title_y == 23);
+    assert(model_weight_ascii_wrapped.title_height == 58);
+    assert(model_weight_ascii_wrapped.metadata_y == 82);
+
+    const auto neighbor = make_stream_text_layout(false, 17, 17);
+    assert(neighbor.title_y == 20);
+    assert(neighbor.title_height == 23);
+    assert(neighbor.metadata_y == 50);
+}
+
+
+void assert_center_stream_drag_follows_and_resists_boundaries()
+{
+    using namespace codex_task_focus_gesture;
+
+    assert(task_stream_drag_offset(-40, true, true, 96) == -40);
+    assert(task_stream_drag_offset(40, true, true, 96) == 40);
+    assert(task_stream_drag_offset(-40, true, false, 96) == -10);
+    assert(task_stream_drag_offset(40, false, true, 96) == 10);
+    assert(task_stream_drag_offset(-150, true, true, 96) == -96);
+    assert(task_stream_drag_offset(150, true, true, 96) == 96);
+}
+
+
+void assert_pull_handle_and_native_cjk_type_contract()
+{
+    using namespace codex_task_focus_gesture;
+
+    static_assert(kDeckHeaderX + kDeckHeaderWidth / 2 == kContentCenterX);
+    static_assert(kDeckHeaderCentered);
+    static_assert(kStreamFocusedTitleFontPx == 21);
+    static_assert(kDeckDragHandleX == 209);
+    static_assert(kDeckDragHandleY == 12);
+    static_assert(kDeckDragHandleWidth == 48);
+    static_assert(kDeckDragHandleHeight == 4);
+    static_assert(kDeckHandleOpacity == 184);
+    static_assert(kStreamFocusedCjkScale == 256);
+    static_assert(kStreamNeighborCjkScale == 256);
+
+    assert(is_deck_handle_start(233, 24));
+    assert(is_deck_handle_start(183, 0));
+    assert(is_deck_handle_start(283, 48));
+    assert(!is_deck_handle_start(182, 24));
+    assert(!is_deck_handle_start(233, 49));
+
+    const auto vertical = update_axis(
+        TaskFocusGestureAxis::Undecided, 4, 48, 12);
+    assert(should_dismiss_task_deck(
+        4, 441, vertical, true, true, 465, 465));
+    assert(!should_dismiss_task_deck(
+        4, 440, vertical, true, true, 464, 465));
+    assert(!should_dismiss_task_deck(
+        4, 441, vertical, false, true, 465, 465));
+    assert(!should_dismiss_task_deck(
+        4, 441, vertical, true, false, 465, 465));
+    assert(!should_dismiss_task_deck(
+        4, -24, vertical, true, true, 465, 465));
+    assert(task_deck_handle_drag_offset(48, 466) == 48);
+    assert(task_deck_handle_drag_offset(-48, 466) == 0);
+    assert(task_deck_handle_drag_offset(500, 466) == 466);
 }
 
 
@@ -138,11 +265,11 @@ void assert_track_node_semantics_and_geometry()
 
     assert(nodes.count == 8);
     int previous_y = -1;
-    const double gap = static_cast<double>(
-        kTrackHeight - kFocusedNodeHeight -
-        kInactiveNodeSize * static_cast<int>(nodes.count - 1)) /
-        static_cast<double>(nodes.count);
-    double top = kTrackTopY + gap / 2.0;
+    const int occupied_height =
+        kFocusedNodeHeight +
+        kInactiveNodeSize * static_cast<int>(nodes.count - 1) +
+        kTrackNodeGap * static_cast<int>(nodes.count - 1);
+    double top = kTrackGroupCenterY - occupied_height / 2.0;
     for (size_t index = 0; index < nodes.count; ++index) {
         const auto& node = nodes.items[index];
         assert(node.center_x <= kTrackSafeMaxX);
@@ -154,20 +281,30 @@ void assert_track_node_semantics_and_geometry()
         const int expected_y = static_cast<int>(std::lround(
             top + static_cast<double>(node.height) / 2.0));
         assert(std::abs(node.center_y - expected_y) <= 1);
-        top += node.height + gap;
+        top += node.height + kTrackNodeGap;
         if (index == 3) {
             assert(node.shape == TaskTrackShape::FocusedCapsule);
-            assert(node.color == kBeaconViolet);
+            assert(node.color == kTaskTrackFocused);
             assert(node.width == 8);
             assert(node.height == 18);
-        } else if (index < 3) {
-            assert(node.shape == TaskTrackShape::PendingDiamond);
-            assert(node.color == kPendingVermilion);
         } else {
             assert(node.shape == TaskTrackShape::RunningCircle);
-            assert(node.color == kRunningCyan);
+            assert(node.color == kTaskTrackInactive);
         }
     }
+    assert(nodes.items.front().center_y == 173);
+    assert(nodes.items.back().center_y == 257);
+
+    const std::array<TaskTrackState, 3> compact_states = {
+        TaskTrackState::Running,
+        TaskTrackState::Running,
+        TaskTrackState::Running,
+    };
+    const auto compact = make_track_nodes(
+        compact_states.data(), compact_states.size(), 1);
+    assert(compact.items[0].center_y == 198);
+    assert(compact.items[1].center_y == 215);
+    assert(compact.items[2].center_y == 232);
 }
 
 
@@ -267,6 +404,10 @@ void assert_deterministic_preview_scenarios()
 int main()
 {
     assert_fixed_original_e_contract();
+    assert_center_stream_neighbors_and_round_safe_geometry();
+    assert_stream_text_tracks_actual_title_lines();
+    assert_center_stream_drag_follows_and_resists_boundaries();
+    assert_pull_handle_and_native_cjk_type_contract();
     assert_track_node_semantics_and_geometry();
     assert_track_handles_short_and_empty_lists();
     assert_detail_right_swipe_is_axis_locked();
