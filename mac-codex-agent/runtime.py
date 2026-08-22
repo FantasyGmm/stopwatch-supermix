@@ -826,6 +826,11 @@ class AgentRuntime:
             )
             if not connected:
                 return "not_found"
+            # The submitter and status publisher share this registry. Sessions
+            # run serially, so resetting here gives each connection a clean
+            # collision domain without rebuilding the submitter stack.
+            self._task_route_registry.reset()
+            self._update_task_routes(self._latest_status)
             if self._secure_authorizer is not None:
                 credential = await self._secure_authorizer.authorize(
                     transport, self._transition_pairing
@@ -839,6 +844,7 @@ class AgentRuntime:
                 transport,
                 detail_key=context.voice_key,
                 detail_key_epoch=context.voice_key_epoch,
+                task_route_registry=self._task_route_registry,
             )
             await status_agent.sync_time()
             await self._prepare_voice(context)

@@ -162,6 +162,7 @@ class CodexStatusAgent:
         detail_key=None,
         detail_key_epoch=None,
         detail_nonce_factory: Callable[[], bytes] = _new_task_detail_nonce,
+        task_route_registry=None,
     ):
         self.collector = collector
         self.transport = transport
@@ -179,9 +180,13 @@ class CodexStatusAgent:
         self._task_detail_nonce = None
         self._task_detail_nonce_factory = detail_nonce_factory
         self._task_detail_used_nonces = set()
-        # Collision tombstones intentionally live for this connected Agent
-        # instance. A reconnect creates a fresh authoritative registry.
-        self._task_route_registry = TaskRouteRegistry()
+        # Collision tombstones intentionally live for one connected session.
+        # The runtime injects and resets its shared registry on reconnect.
+        self._task_route_registry = (
+            task_route_registry
+            if task_route_registry is not None
+            else TaskRouteRegistry()
+        )
         self.update_detail_credential(detail_key, detail_key_epoch)
 
     def update_detail_credential(self, detail_key, detail_key_epoch) -> None:

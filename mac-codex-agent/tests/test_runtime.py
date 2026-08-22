@@ -335,6 +335,59 @@ async def wait_for_messages(transport, count):
 
 
 class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_route_registry_is_reset_and_shared_at_session_start(self):
+        captured = []
+
+        class StatusAgentSpy:
+            def __init__(self, collector, transport, **kwargs):
+                captured.append(kwargs["task_route_registry"])
+                self.transport = transport
+
+            async def sync_time(self):
+                pass
+
+            async def tick(self, status=None):
+                self.transport._connected = False
+
+            def update_detail_credential(self, key, epoch):
+                pass
+
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            transport_factory=FakeTransportFactory([{}]),
+        )
+        route = route_id_for_thread("thread-collision")
+        runtime._task_route_registry.update(
+            [], observed_routes=[route, route]
+        )
+        self.assertTrue(runtime._task_route_registry.is_tombstoned(route))
+        current_thread = "thread-current-session"
+        current_route = route_id_for_thread(current_thread)
+        runtime._latest_status = {
+            "codex_alert_revision": 12,
+            "codex_alerts": [
+                {
+                    "route": current_route,
+                    "thread_id": current_thread,
+                    "state": "pending",
+                }
+            ],
+        }
+
+        with patch("runtime.CodexStatusAgent", StatusAgentSpy):
+            self.assertEqual(await runtime._run_session(), "disconnected")
+
+        self.assertEqual(captured, [runtime._task_route_registry])
+        self.assertIs(
+            runtime._task_submitter._registry,
+            runtime._task_route_registry,
+        )
+        self.assertFalse(runtime._task_route_registry.is_tombstoned(route))
+        self.assertEqual(
+            runtime._task_submitter.snapshot(int(current_route, 16)).thread_id,
+            current_thread,
+        )
+
     async def test_production_voice_uses_the_active_codex_task_composer(self):
         runtime = AgentRuntime(
             collector=FakeCollector(),
@@ -456,7 +509,13 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, "disconnected")
         self.assertEqual(
             captured,
-            [{"detail_key": credential.master_key, "detail_key_epoch": 9}],
+            [
+                {
+                    "detail_key": credential.master_key,
+                    "detail_key_epoch": 9,
+                    "task_route_registry": runtime._task_route_registry,
+                }
+            ],
         )
 
     async def test_active_rekey_rotates_status_agent_detail_credential(self):

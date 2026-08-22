@@ -35,6 +35,7 @@ from secure_pairing_wire import (
 )
 from protocol import EVENT_MESSAGE, MAX_MESSAGE_SIZE, STATUS_MESSAGE, encode_message
 from task_detail_crypto import decrypt_task_detail
+from task_routes import TaskRouteRegistry, route_id_for_thread
 
 
 TEST_DETAIL_KEY = bytes.fromhex("000102030405060708090a0b0c0d0e0f")
@@ -119,6 +120,35 @@ def trae_status(model="Model A", detail="Building status"):
 
 
 class CodexStatusAgentTests(unittest.TestCase):
+    def test_status_agent_uses_the_injected_task_route_registry(self):
+        registry = TaskRouteRegistry()
+        transport = FakeTransport()
+        thread_id = "thread-shared-route"
+        route = route_id_for_thread(thread_id)
+        registry.update([], observed_routes=[route, route])
+        agent = CodexStatusAgent(
+            collector=FakeCollector(),
+            transport=transport,
+            task_route_registry=registry,
+        )
+
+        asyncio.run(
+            agent.tick(
+                {
+                    "codex_alerts": [
+                        {
+                            "route": route,
+                            "thread_id": thread_id,
+                            "state": "pending",
+                        }
+                    ]
+                }
+            )
+        )
+
+        self.assertTrue(registry.is_tombstoned(route))
+        self.assertEqual(transport.messages[0][1]["codex_alerts"], [])
+
     def test_production_task_detail_nonce_rejects_zero(self):
         expected = bytes.fromhex("2021222324252627")
         with patch(
