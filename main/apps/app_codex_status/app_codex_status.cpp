@@ -4084,7 +4084,6 @@ void AppCodexStatus::sync_task_focus_visibility()
         !_agent_panel_model.snapshot().visible &&
         !_agent_panel_model.owns_touch();
     _task_focus_view->set_visible(visible);
-    sync_pending_glow();
 }
 
 void AppCodexStatus::render_task_focus()
@@ -4364,11 +4363,12 @@ void AppCodexStatus::update_page_swipe(uint32_t now_ms)
         }
         _page_swipe.cancel();
         _trae_card_tap.cancel();
-        _last_page_touch_state = LV_INDEV_STATE_REL;
+        set_page_touch_state(LV_INDEV_STATE_REL);
         return;
     }
 
     const lv_indev_state_t state = lv_indev_get_state(indev);
+    const lv_indev_state_t previous_touch_state = _last_page_touch_state;
     lv_point_t point;
     lv_indev_get_point(indev, &point);
     auto& controls = GetGlobalEdgeControlService();
@@ -4382,7 +4382,7 @@ void AppCodexStatus::update_page_swipe(uint32_t now_ms)
         }
         _page_swipe.cancel();
         _trae_card_tap.cancel();
-        _last_page_touch_state = LV_INDEV_STATE_REL;
+        set_page_touch_state(LV_INDEV_STATE_REL);
         return;
     }
     if (_screen_off ||
@@ -4392,11 +4392,12 @@ void AppCodexStatus::update_page_swipe(uint32_t now_ms)
         }
         _page_swipe.cancel();
         _trae_card_tap.cancel();
-        _last_page_touch_state = LV_INDEV_STATE_REL;
+        set_page_touch_state(LV_INDEV_STATE_REL);
         return;
     }
     if (state == LV_INDEV_STATE_PR) {
-        if (_last_page_touch_state == LV_INDEV_STATE_REL) {
+        if (previous_touch_state == LV_INDEV_STATE_REL) {
+            set_page_touch_state(LV_INDEV_STATE_PR);
             _page_swipe.press(point.x, point.y, now_ms);
             const bool task_candidate =
                 _current_page == 2 &&
@@ -4434,7 +4435,7 @@ void AppCodexStatus::update_page_swipe(uint32_t now_ms)
                     kTaskDeckHiddenY));
             }
         }
-    } else if (_last_page_touch_state == LV_INDEV_STATE_PR) {
+    } else if (previous_touch_state == LV_INDEV_STATE_PR) {
         const StatusPageSwipeResult result =
             _page_swipe.release(now_ms, _current_page);
         if (result == StatusPageSwipeResult::Codex) {
@@ -4452,8 +4453,8 @@ void AppCodexStatus::update_page_swipe(uint32_t now_ms)
                    _trae_carousel.manual_next(now_ms)) {
             render_trae_status();
         }
+        set_page_touch_state(LV_INDEV_STATE_REL);
     }
-    _last_page_touch_state = state;
 }
 
 void AppCodexStatus::set_page(int page, bool animate)
@@ -4531,6 +4532,15 @@ void AppCodexStatus::page_animation_cb(void* target, int32_t x)
     }
 }
 
+void AppCodexStatus::set_page_touch_state(lv_indev_state_t state)
+{
+    if (_last_page_touch_state == state) {
+        return;
+    }
+    _last_page_touch_state = state;
+    sync_pending_glow();
+}
+
 void AppCodexStatus::sync_pending_glow()
 {
     if (_pending_glow == nullptr) {
@@ -4542,6 +4552,7 @@ void AppCodexStatus::sync_pending_glow()
     const bool surface_visible =
         _current_page == 1 &&
         !_task_deck_drag_active &&
+        _last_page_touch_state != LV_INDEV_STATE_PR &&
         snapshot_task_focus_state().mode == CodexTaskFocusMode::Status;
     _pending_glow->set_state(
         _alert_carousel.display_state(), screen_off, surface_visible);

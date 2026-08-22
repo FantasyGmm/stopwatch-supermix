@@ -121,6 +121,9 @@ class CodexPendingGlowFirmwareContractTests(unittest.TestCase):
         self.assertIn("_alert_carousel.display_state()", app)
         self.assertIn("_pending_glow->set_state(", app)
         self.assertIn("!_task_deck_drag_active", app)
+        self.assertIn(
+            "_last_page_touch_state != LV_INDEV_STATE_PR", app
+        )
         self.assertIn("CodexTaskFocusMode::Status", app)
         self.assertIn("_pending_glow->shutdown()", app)
         self.assertIn("constexpr uint32_t kInstrumentBlack = 0x000000", layout)
@@ -129,6 +132,25 @@ class CodexPendingGlowFirmwareContractTests(unittest.TestCase):
         self.assertIn("constexpr int kPetScale = 293", layout)
         self.assertIn("constexpr Rect kBeaconSpine{194, 96, 2, 104}", layout)
         self.assertNotIn("kHostY", layout)
+
+    def test_main_page_touch_pauses_glow_without_per_loop_resync(self):
+        app = (
+            ROOT / "main/apps/app_codex_status/app_codex_status.cpp"
+        ).read_text()
+        visibility = app.split(
+            "void AppCodexStatus::sync_task_focus_visibility()", 1
+        )[1].split("void AppCodexStatus::render_task_focus()", 1)[0]
+        swipe = app.split(
+            "void AppCodexStatus::update_page_swipe(uint32_t now_ms)", 1
+        )[1].split("void AppCodexStatus::set_page(int page", 1)[0]
+
+        self.assertNotIn("sync_pending_glow();", visibility)
+        self.assertIn(
+            "set_page_touch_state(LV_INDEV_STATE_PR);", swipe
+        )
+        self.assertIn(
+            "set_page_touch_state(LV_INDEV_STATE_REL);", swipe
+        )
 
 
 if __name__ == "__main__":

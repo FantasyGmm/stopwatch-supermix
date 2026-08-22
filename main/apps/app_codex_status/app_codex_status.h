@@ -243,6 +243,7 @@ private:
     void render_trae_status();
     void render_pinned_microphone();
     void sync_pending_glow();
+    void set_page_touch_state(lv_indev_state_t state);
     void update_page_swipe(uint32_t now_ms);
     void update_task_focus_touch(uint32_t now_ms);
     void cancel_task_focus_touch();
