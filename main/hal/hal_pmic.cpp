@@ -44,7 +44,6 @@ constexpr uint16_t _bat_filter_weight_sum = _bat_filter_weight_old + _bat_filter
 
 uint8_t _bat_level             = 0;
 uint32_t _bat_sample_revision  = 0;
-uint16_t _bat_raw_mv           = 0;
 uint16_t _bat_filtered_mv      = 0;
 BatteryPercentEstimator _battery_percent_estimator;
 std::mutex _bat_level_mutex;
@@ -62,7 +61,6 @@ auto with_pmic_io_lock(Operation&& operation)
 void update_bat_level_from_mv(uint16_t millivolts, bool allow_increase)
 {
     std::lock_guard<std::mutex> lock(_bat_level_mutex);
-    _bat_raw_mv = millivolts;
     if (_bat_filtered_mv == 0) {
         _bat_filtered_mv = millivolts;
     } else {
@@ -188,7 +186,7 @@ uint8_t Hal::getBatteryLevel()
 BatterySampleSnapshot Hal::batterySampleSnapshot()
 {
     std::lock_guard<std::mutex> lock(_bat_level_mutex);
-    return {_bat_level, _bat_sample_revision, _bat_raw_mv, _bat_filtered_mv};
+    return {_bat_level, _bat_sample_revision};
 }
 
 uint32_t Hal::batterySampleRevision()

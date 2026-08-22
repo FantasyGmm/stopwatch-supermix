@@ -12,9 +12,6 @@ constexpr std::string_view assistant_trace_command = "debug assistant trace";
 constexpr std::string_view assistant_trace_clear_command = "debug assistant trace clear";
 constexpr std::string_view assistant_wifi_cycle_command = "debug assistant wifi-cycle";
 constexpr std::string_view display_protection_command = "debug display protection";
-constexpr std::string_view battery_start_command = "debug battery start";
-constexpr std::string_view battery_status_command = "debug battery status";
-constexpr std::string_view battery_export_command = "debug battery export";
 constexpr std::string_view volume_prefix = "debug volume ";
 
 char normalized_character(char value)
@@ -67,18 +64,6 @@ DebugCommand ParseDebugCommand(std::string_view line)
     }
     if (line == display_protection_command) {
         command.kind = DebugCommandKind::DisplayProtectionStatus;
-        return command;
-    }
-    if (line == battery_start_command) {
-        command.kind = DebugCommandKind::BatteryStart;
-        return command;
-    }
-    if (line == battery_status_command) {
-        command.kind = DebugCommandKind::BatteryStatus;
-        return command;
-    }
-    if (line == battery_export_command) {
-        command.kind = DebugCommandKind::BatteryExport;
         return command;
     }
     if (line.size() > volume_prefix.size() &&

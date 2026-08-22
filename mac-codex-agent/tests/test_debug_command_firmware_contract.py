@@ -33,17 +33,24 @@ class DebugCommandFirmwareContractTests(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, service)
 
-    def test_release_excludes_battery_calibration_runtime(self):
-        cmake = (ROOT / "main" / "CMakeLists.txt").read_text(encoding="utf-8")
+    def test_battery_calibration_recorder_is_removed(self):
+        main = (ROOT / "main" / "main.cpp").read_text(encoding="utf-8")
+        parser = (
+            ROOT / "main" / "debug" / "debug_command_parser.cpp"
+        ).read_text(encoding="utf-8")
+        service = (
+            ROOT / "main" / "debug" / "debug_command_service.cpp"
+        ).read_text(encoding="utf-8")
 
-        self.assertIn("if(NOT CONFIG_STOPWATCH_DEBUG_COMMANDS)", cmake)
-        release_sources = cmake.split(
-            "if(NOT CONFIG_STOPWATCH_DEBUG_COMMANDS)", 1
-        )[1].split("endif()", 1)[0]
-        self.assertIn("list(REMOVE_ITEM MY_SRCS", release_sources)
-        self.assertIn(
-            "runtime/power/battery_calibration_service.cpp", release_sources
+        self.assertFalse(
+            (ROOT / "main" / "runtime" / "power" / "battery_calibration_service.cpp").exists()
         )
+        self.assertFalse(
+            (ROOT / "main" / "runtime" / "power" / "battery_calibration_schedule.cpp").exists()
+        )
+        self.assertNotIn("GetBatteryCalibrationService", main)
+        self.assertNotIn("debug battery", parser)
+        self.assertNotIn("DEBUG BATTERY", service)
 
     def test_launcher_owns_debug_open_lifecycle(self):
         launcher = (
