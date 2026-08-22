@@ -3,6 +3,7 @@ import json
 import pathlib
 import sys
 import threading
+import types
 import unittest
 from unittest.mock import patch
 
@@ -1782,6 +1783,69 @@ class CodexStatusAgentTests(unittest.TestCase):
 
 
 class BleStatusTransportVoiceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_connect_listens_until_the_watch_advertises(self):
+        observed = {}
+        device = types.SimpleNamespace(name="StopWatch-Codex")
+        advertisement = types.SimpleNamespace(
+            local_name="StopWatch-Codex",
+            service_uuids=[],
+        )
+
+        class Scanner:
+            @classmethod
+            async def find_device_by_filter(cls, matches, timeout=10.0):
+                observed["timeout"] = timeout
+                if not matches(device, advertisement):
+                    raise AssertionError("watch advertisement was not accepted")
+                return device
+
+        class Client:
+            def __init__(self, selected, disconnected_callback):
+                self.selected = selected
+                self.disconnected_callback = disconnected_callback
+                self.is_connected = False
+
+            async def connect(self):
+                self.is_connected = True
+
+            async def start_notify(self, _uuid, _callback):
+                pass
+
+        bleak = types.ModuleType("bleak")
+        bleak.BleakScanner = Scanner
+        bleak.BleakClient = Client
+        transport = BleStatusTransport()
+
+        with patch.dict(sys.modules, {"bleak": bleak}):
+            connected = await transport.connect()
+
+        self.assertTrue(connected)
+        self.assertIsNone(observed["timeout"])
+
+    async def test_authorized_authentication_uses_normal_gatt_timeout(self):
+        class Client:
+            is_connected = True
+
+            async def start_notify(self, _uuid, _callback):
+                pass
+
+            async def write_gatt_char(self, _uuid, _frame, response):
+                self.response = response
+
+        transport = BleStatusTransport()
+        transport._client = Client()
+        started = asyncio.get_running_loop().time()
+
+        with patch("agent.GATT_OPERATION_TIMEOUT_SECONDS", 0.01), patch(
+            "agent.PAIRING_CONFIRM_TIMEOUT_SECONDS", 0.2
+        ):
+            with self.assertRaises(asyncio.TimeoutError):
+                await asyncio.wait_for(
+                    transport.authenticate(7, b"signature"), timeout=0.1
+                )
+
+        self.assertLess(asyncio.get_running_loop().time() - started, 0.06)
+
     async def test_watch_discovery_uses_only_restricted_pairing_gatt(self):
         watch_id = bytes(range(16))
         watch_identity_public = b"\x02" + b"W" * 32

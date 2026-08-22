@@ -3450,7 +3450,33 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(task, 1)
 
     async def test_not_found_enters_waiting_before_retry(self):
-        factory = FakeTransportFactory([{"connect_result": False}])
+        factory = FakeTransportFactory(
+            [{"connect_result": False}, {"block_connect": True}]
+        )
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            transport_factory=factory,
+            status_interval=0.01,
+            retry_delays=(1.0,),
+        )
+
+        with patch.object(
+            runtime, "_transition", wraps=runtime._transition
+        ) as transition:
+            task = asyncio.create_task(runtime.run())
+            try:
+                await factory.wait_for_instances(2)
+                transition.assert_any_call(
+                    ConnectionState.WAITING, "StopWatch-Codex not found"
+                )
+            finally:
+                runtime.submit(AgentCommand.STOP)
+                await asyncio.wait_for(task, 1)
+
+    async def test_not_found_restarts_listening_without_a_backoff_gap(self):
+        factory = FakeTransportFactory(
+            [{"connect_result": False}, {"block_connect": True}]
+        )
         runtime = AgentRuntime(
             collector=FakeCollector(),
             transport_factory=factory,
@@ -3459,10 +3485,37 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         )
 
         task = asyncio.create_task(runtime.run())
-        await wait_for_state(runtime, ConnectionState.WAITING)
-        self.assertIn("not found", runtime.snapshot().detail.lower())
-        runtime.submit(AgentCommand.STOP)
-        await asyncio.wait_for(task, 1)
+        try:
+            await factory.wait_for_instances(1)
+            await factory.instances[0].connect_started.wait()
+            await asyncio.wait_for(factory.wait_for_instances(2), 0.1)
+        finally:
+            runtime.submit(AgentCommand.STOP)
+            await asyncio.wait_for(task, 1)
+
+    async def test_successful_connection_resets_the_retry_delay(self):
+        factory = FakeTransportFactory(
+            [
+                {"connect_error": RuntimeError("temporary scan failure")},
+                {"disconnect_after_messages": 2},
+                {"block_connect": True},
+            ]
+        )
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            transport_factory=factory,
+            status_interval=0.01,
+            retry_delays=(0.01, 0.5),
+        )
+
+        task = asyncio.create_task(runtime.run())
+        try:
+            await factory.wait_for_instances(2)
+            await factory.instances[1].connected_event.wait()
+            await asyncio.wait_for(factory.wait_for_instances(3), 0.1)
+        finally:
+            runtime.submit(AgentCommand.STOP)
+            await asyncio.wait_for(task, 1)
 
     async def test_stop_interrupts_an_active_scan(self):
         factory = FakeTransportFactory([{"block_connect": True}])

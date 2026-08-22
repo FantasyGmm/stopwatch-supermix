@@ -668,6 +668,9 @@ class AgentRuntime:
 
                 command_task.cancel()
                 await _await_cancelled(command_task)
+                session_was_connected = (
+                    self.snapshot().state is ConnectionState.CONNECTED
+                )
                 try:
                     result = session_task.result()
                     detail = (
@@ -676,6 +679,9 @@ class AgentRuntime:
                         else "StopWatch-Codex disconnected"
                     )
                     self._transition(ConnectionState.WAITING, detail)
+                    if result == "not_found":
+                        await asyncio.sleep(0)
+                        continue
                 except Exception as error:
                     state = _state_for_error(error)
                     self._transition(state, str(error))
@@ -687,6 +693,9 @@ class AgentRuntime:
                     ):
                         self._transition_pairing(PairingState.ERROR)
                     LOGGER.exception("BLE session failed")
+
+                if session_was_connected:
+                    retry_index = 0
 
                 delay = self._retry_delays[min(retry_index, len(self._retry_delays) - 1)]
                 try:

@@ -785,7 +785,7 @@ class BleStatusTransport:
             services = {item.lower() for item in advertisement.service_uuids or []}
             return self.device_name in names or SERVICE_UUID in services
 
-        device = await BleakScanner.find_device_by_filter(matches, timeout=8.0)
+        device = await BleakScanner.find_device_by_filter(matches, timeout=None)
         if device is None:
             return False
         if on_device_found:
@@ -926,7 +926,7 @@ class BleStatusTransport:
         kind, response_transaction, payload = await self._pairing_exchange(
             encode_authentication_proof(transaction_id, signature),
             (WireMessageType.AUTHENTICATION_OK, WireMessageType.CREDENTIAL),
-            timeout=PAIRING_CONFIRM_TIMEOUT_SECONDS,
+            timeout=GATT_OPERATION_TIMEOUT_SECONDS,
         )
         if kind is WireMessageType.AUTHENTICATION_OK:
             if payload:
