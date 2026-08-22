@@ -21,15 +21,14 @@ class CodexPendingGlowFirmwareContractTests(unittest.TestCase):
         self.assertIn("int32_t _phase", header)
         self.assertNotIn("std::array<lv_obj_t*, 3> _rings", header)
         self.assertIn("static void draw_event_cb", header)
-        self.assertIn("void invalidate_ring_segments()", header)
+        self.assertNotIn("invalidate_ring_segments", header)
         self.assertIn("LV_EVENT_DRAW_MAIN_BEGIN", source)
         self.assertIn(
             "for (const auto& ring : codex_pending_glow::kRings)", source
         )
         self.assertIn("lv_draw_rect(layer, &dsc, &area)", source)
         self.assertIn("_phase = codex_pending_glow::bounded_phase(phase)", source)
-        self.assertIn("codex_pending_glow::opacity_for_phase(", source)
-        self.assertIn("self->_phase", source)
+        self.assertIn("codex_pending_glow::static_ring_opacity(", source)
         self.assertIn("ring.minimum_opacity", source)
         self.assertIn("ring.maximum_opacity", source)
         self.assertIn("constexpr int kHalfCycleMs = 800", logic)
@@ -52,7 +51,7 @@ class CodexPendingGlowFirmwareContractTests(unittest.TestCase):
         self.assertIn(
             "lv_anim_set_path_cb(&animation, lv_anim_path_ease_in_out)", source
         )
-    def test_animation_invalidates_complete_ring_segments_and_restores_status_targets(self):
+    def test_animation_only_repaints_status_text_and_restores_targets(self):
         header = (
             ROOT / "main/apps/app_codex_status/codex_pending_soft_glow.h"
         ).read_text()
@@ -64,31 +63,15 @@ class CodexPendingGlowFirmwareContractTests(unittest.TestCase):
         self.assertIn("bool surface_visible", header)
         self.assertNotIn("void set_heading(", header)
 
-        self.assertIn(
-            "void CodexPendingSoftGlow::invalidate_ring_segments()", source
-        )
-        invalidate_body = source.split(
-            "void CodexPendingSoftGlow::invalidate_ring_segments()", 1
-        )[1]
-        invalidate_body = invalidate_body.split(
-            "void CodexPendingSoftGlow::start()", 1
-        )[0]
-        self.assertIn(
-            "codex_pending_glow::kInvalidationAreas", invalidate_body
-        )
-        self.assertIn(
-            "lv_obj_invalidate_area(_overlay, &area)", invalidate_body
-        )
-        self.assertNotIn("lv_obj_invalidate(_overlay)", invalidate_body)
-
         phase_body = source.split(
             "void CodexPendingSoftGlow::apply_phase", 1
         )[1]
         phase_body = phase_body.split(
-            "void CodexPendingSoftGlow::invalidate_ring_segments", 1
+            "void CodexPendingSoftGlow::restore_target_opacity", 1
         )[0]
         self.assertNotIn("lv_obj_set_style_border_opa", phase_body)
-        self.assertIn("invalidate_ring_segments()", phase_body)
+        self.assertNotIn("invalidate_ring_segments", phase_body)
+        self.assertNotIn("lv_obj_invalidate", phase_body)
         self.assertIn("lv_anim_delete(this, animation_cb)", source)
         self.assertIn(
             "lv_obj_add_flag(_overlay, LV_OBJ_FLAG_HIDDEN)", source
@@ -121,9 +104,6 @@ class CodexPendingGlowFirmwareContractTests(unittest.TestCase):
         self.assertIn("_alert_carousel.display_state()", app)
         self.assertIn("_pending_glow->set_state(", app)
         self.assertIn("!_task_deck_drag_active", app)
-        self.assertIn(
-            "_last_page_touch_state != LV_INDEV_STATE_PR", app
-        )
         self.assertIn("CodexTaskFocusMode::Status", app)
         self.assertIn("_pending_glow->shutdown()", app)
         self.assertIn("constexpr uint32_t kInstrumentBlack = 0x000000", layout)
@@ -133,9 +113,12 @@ class CodexPendingGlowFirmwareContractTests(unittest.TestCase):
         self.assertIn("constexpr Rect kBeaconSpine{194, 96, 2, 104}", layout)
         self.assertNotIn("kHostY", layout)
 
-    def test_main_page_touch_pauses_glow_without_per_loop_resync(self):
+    def test_main_page_touch_does_not_restart_glow(self):
         app = (
             ROOT / "main/apps/app_codex_status/app_codex_status.cpp"
+        ).read_text()
+        header = (
+            ROOT / "main/apps/app_codex_status/app_codex_status.h"
         ).read_text()
         visibility = app.split(
             "void AppCodexStatus::sync_task_focus_visibility()", 1
@@ -145,12 +128,8 @@ class CodexPendingGlowFirmwareContractTests(unittest.TestCase):
         )[1].split("void AppCodexStatus::set_page(int page", 1)[0]
 
         self.assertNotIn("sync_pending_glow();", visibility)
-        self.assertIn(
-            "set_page_touch_state(LV_INDEV_STATE_PR);", swipe
-        )
-        self.assertIn(
-            "set_page_touch_state(LV_INDEV_STATE_REL);", swipe
-        )
+        self.assertNotIn("set_page_touch_state", header)
+        self.assertNotIn("set_page_touch_state", swipe)
 
 
 if __name__ == "__main__":

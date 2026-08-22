@@ -39,7 +39,6 @@ private:
     void apply_phase(int32_t phase);
     void restore_target_opacity();
     void refresh_ring_visibility();
-    void invalidate_ring_segments();
     void start();
     void stop();
     static void animation_cb(void* target, int32_t phase);
