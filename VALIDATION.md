@@ -183,6 +183,60 @@ Task 11 release gates.
   selector on the AMOLED: the pull hint no longer covers the Codex mark and the
   Agent page background is pure black.
 
+### Custom-pet installed hardware evidence (2026-08-23)
+
+- Release branch firmware commit: `a6d5056`; installed Agent UI follow-up:
+  `fd91df9`. The installed `pet_cache.py`, `runtime.py`, and final
+  `pet_window.py` matched their repository SHA256 values after atomic
+  publication and normal-process restart. The Agent emitted a fresh
+  `Agent started`, reached authenticated Bluetooth `connected`, and reported
+  voice `ready`.
+- Deterministic gates before installation: all 68/68 real unified host stages
+  passed; the clean ESP-IDF 5.5.4 build completed with a 7,067,296-byte
+  application and 51% application-partition headroom. The combined pet/cache,
+  window, runtime, and updated firmware-contract suite passed 203/203 tests.
+  After the live Restore presentation issue was found, its regression failed
+  red, then the window/runtime suite passed 132/132. Full Python discovery ran
+  1,157 tests and exited normally; only two pre-existing task-detail fixture
+  errors remained (`route must be nonzero`) in source paths untouched by the
+  final pet fixes.
+- The capacity-gated flash used the sole detected
+  `/dev/cu.usbmodem21201` and wrote only bootloader `0x000000`, partition table
+  `0x008000`, application `0x020000`, and assets `0xee0000`. It created no
+  firmware backup, did not erase NVS, and did not write the `storage`
+  partition. esptool verified every write. Artifact SHA256 values were:
+  bootloader `99769e627f3330d13b2f6d0b09ba9f836b6b77171bc1af89b93ec51cc5ec295b`,
+  partition table `2962c064d5580bb5e0f1c48a562d5bedde7e9ddb6de36273fae755e23051d88e`,
+  application `647f8c41193d4e585d8e7d847d68f33273037ecbe8b57492365542e21c265f39`,
+  and assets `93b87d059d1c2a31f1dd65bbdfa4d5b7275774f6f12e82eb84a1737acad3723f`.
+- Two fresh serial boots loaded the application from `0x20000`, identified
+  version `a6d5056` and ESP-IDF 5.5.4, mounted the wear-levelled FAT storage,
+  and reached `[Launcher] on open` without a panic or watchdog marker.
+- Supplied GIF SHA256:
+  `a490d398197cf73a3cc3e50342cd76fc25cc249d8ebaef3db0897feba26d47a8`.
+  Exact CXP1 package SHA256:
+  `10367ab624ddb2f51aec9871e1bdb13a1a57ef1b087ac2526e6ea6dd6f1e7691`.
+  The real installed Agent preview reported 6 source/output frames, 1.08 s,
+  `144 × 156`, six 180 ms delays, and 58,919 bytes. Authenticated transfer
+  reached Sending and the watch acknowledged all bytes before the Agent
+  displayed `Installed on watch` and enabled Restore.
+- The user directly inspected the running AMOLED and reported the custom pet
+  display as `正常`. After a hard reboot, the Agent reconnected and again
+  received the authoritative custom state while reconstructing the same
+  verified cached preview, proving reboot persistence.
+- Live Restore Default changed the authoritative watch state to built-in,
+  disabled Restore, and removed the custom cached preview. This exposed a stale
+  `Installed on watch` presentation; `fd91df9` added a red/green regression and
+  retires that terminal copy only after an idle authoritative built-in state.
+  The reinstalled Agent then rendered `Choose a GIF to preview`. The supplied
+  GIF was sent again successfully, leaving the watch in the final custom-pet
+  state with Restore enabled.
+- Hardware storage-fill rejection and an intentionally interrupted replacement
+  were not performed in this acceptance session. Their bounded/fail-closed
+  behavior remains covered by the authenticated protocol, transfer, store, and
+  runtime host tests; no destructive storage manipulation was used merely to
+  manufacture live evidence.
+
 Normal project flashing does not create or require a firmware backup. The
 candidate flasher still requires the exact bootloader, partition table,
 application, and assets artifacts and enforces partition and capacity limits.
