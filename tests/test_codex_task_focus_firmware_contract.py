@@ -7,6 +7,7 @@ HEADER = ROOT / "main/apps/app_codex_status/app_codex_status.h"
 SOURCE = ROOT / "main/apps/app_codex_status/app_codex_status.cpp"
 VIEW_SOURCE = ROOT / "main/apps/app_codex_status/codex_task_focus_view.cpp"
 FOCUSED_TITLE_FONT = ROOT / "main/assets/fonts/CodexTaskTitle21.c"
+SDKCONFIG_DEFAULTS = ROOT / "sdkconfig.defaults"
 
 
 class CodexTaskFocusFirmwareContractTests(unittest.TestCase):
@@ -126,6 +127,11 @@ class CodexTaskFocusFirmwareContractTests(unittest.TestCase):
         self.assertIn("--autohint-strong", focused_font_source)
         self.assertNotIn("SourceHanSansSC-Normal.otf", focused_font_source)
         self.assertIn("const lv_font_t CodexTaskTitle21", focused_font_source)
+        self.assertIn(".bitmap_format = 1", focused_font_source)
+        self.assertIn(
+            "CONFIG_LV_USE_FONT_COMPRESSED=y",
+            SDKCONFIG_DEFAULTS.read_text(encoding="utf-8"),
+        )
         self.assertIn("cjk ? &CodexTaskTitle21 : &MontserratSemiBold26",
                       self.view_source)
         self.assertIn("cjk ? &font_puhui_14_1 : &lv_font_montserrat_16",
