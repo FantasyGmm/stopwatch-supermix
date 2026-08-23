@@ -136,9 +136,16 @@ class PetWindowModel:
         }
         if (
             self.active_request_id is None
-            and self.transfer_phase == "busy"
             and _capability_value(watch_state) == "ready"
             and getattr(watch_state, "operation_active", False) is False
+            and (
+                self.transfer_phase == "busy"
+                or (
+                    self.transfer_phase == "installed"
+                    and self.active_conversion is None
+                    and getattr(watch_state, "source", "built-in") == "built-in"
+                )
+            )
         ):
             changes.update(
                 transfer_phase=None,

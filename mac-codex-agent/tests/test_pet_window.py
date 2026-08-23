@@ -304,6 +304,28 @@ class PetWindowModelTests(unittest.TestCase):
         )
         self.assertTrue(PetWindowModel().with_watch_state(custom).can_restore)
 
+    def test_restore_completion_retires_installed_copy_after_built_in_snapshot(self):
+        # Restore reuses the transport's terminal ``installed`` phase, but the
+        # following authoritative built-in state must not leave upload-success
+        # copy on screen after the custom package and preview are gone.
+        custom = dataclasses.replace(
+            READY, source="custom", active_hash=CONVERTED.package.sha256
+        )
+        restoring = (
+            PetWindowModel()
+            .with_watch_state(custom)
+            .with_transfer_started(
+                "restore-1", 0, "applying", transfer_conversion=None
+            )
+            .with_progress(PetProgress("restore-1", "installed", 0, 0))
+        )
+
+        restored = restoring.with_watch_state(READY, cached_preview=None)
+
+        self.assertIsNone(restored.transfer_phase)
+        self.assertEqual(restored.headline, "Choose a GIF to preview")
+        self.assertEqual(restored.detail, "Choose one GIF to create the exact watch preview.")
+
     def test_close_and_reopen_preserve_runtime_owned_transfer_snapshot(self):
         # Treating close as cancel would violate the background-transfer
         # contract; a reopened retained window must render the latest callback.
