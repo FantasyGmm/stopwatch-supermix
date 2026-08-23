@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CXX="${CXX:-c++}"
 PYTHON="${PYTHON:-$ROOT/mac-codex-agent/.venv/bin/python}"
-TOTAL_STAGES=63
+TOTAL_STAGES=68
 STAGE_INDEX=0
 CONTRACT_ONLY=0
 HOST_TESTS_ONLY=0
@@ -393,6 +393,53 @@ run_host_test voice_probe_crypto_test \
     -I"$MBEDTLS_SOURCE/include" \
     tests/voice_probe_crypto_test.cpp \
     main/apps/app_codex_status/voice_probe_crypto.cpp \
+    "$MBEDTLS_BUILD/library/libmbedcrypto.a"
+
+stage "Codex pet CXP1 package parser/decoder host test"
+run_host_test codex_pet_package_test \
+    -std=c++17 -Wall -Wextra -Werror -DSTOPWATCH_HOST_TEST -I. \
+    -I"$MBEDTLS_SOURCE/include" \
+    tests/codex_pet_package_test.cpp \
+    main/apps/app_codex_status/codex_pet_package.cpp \
+    "$MBEDTLS_BUILD/library/libmbedcrypto.a"
+
+stage "Codex pet two-slot persistence host test"
+run_host_test codex_pet_store_test \
+    -std=c++17 -Wall -Wextra -Werror -DSTOPWATCH_HOST_TEST -I. \
+    -I"$MBEDTLS_SOURCE/include" \
+    tests/codex_pet_store_test.cpp \
+    main/apps/app_codex_status/codex_pet_store.cpp \
+    main/apps/app_codex_status/codex_pet_package.cpp \
+    "$MBEDTLS_BUILD/library/libmbedcrypto.a"
+
+stage "Codex pet authenticated control/status protocol host test"
+run_host_test codex_pet_protocol_test \
+    -std=c++17 -Wall -Wextra -Werror -pthread -DSTOPWATCH_HOST_TEST -I. \
+    -I"$MBEDTLS_SOURCE/include" \
+    tests/codex_pet_protocol_test.cpp \
+    main/apps/app_codex_status/codex_pet_protocol.cpp \
+    main/apps/app_codex_status/voice_input_crypto.cpp \
+    "$MBEDTLS_BUILD/library/libmbedcrypto.a"
+
+stage "Codex pet authenticated transfer controller host test"
+run_host_test codex_pet_transfer_test \
+    -std=c++17 -Wall -Wextra -Werror -pthread -DSTOPWATCH_HOST_TEST -I. \
+    -I"$MBEDTLS_SOURCE/include" \
+    tests/codex_pet_transfer_test.cpp \
+    main/apps/app_codex_status/codex_pet_transfer.cpp \
+    main/apps/app_codex_status/codex_pet_store.cpp \
+    main/apps/app_codex_status/codex_pet_package.cpp \
+    main/apps/app_codex_status/codex_pet_protocol.cpp \
+    main/apps/app_codex_status/voice_input_crypto.cpp \
+    "$MBEDTLS_BUILD/library/libmbedcrypto.a"
+
+stage "Codex pet PSRAM animation runtime host test"
+run_host_test codex_pet_runtime_test \
+    -std=c++17 -Wall -Wextra -Werror -DSTOPWATCH_HOST_TEST -I. \
+    -I"$MBEDTLS_SOURCE/include" \
+    tests/codex_pet_runtime_test.cpp \
+    main/apps/app_codex_status/codex_pet_runtime.cpp \
+    main/apps/app_codex_status/codex_pet_package.cpp \
     "$MBEDTLS_BUILD/library/libmbedcrypto.a"
 
 stage "Secure Agent pairing protocol and crypto host tests"

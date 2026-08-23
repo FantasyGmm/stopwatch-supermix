@@ -24,6 +24,7 @@
 #include <wifi_manager.h>
 #include <esp_websocket_client.h>
 #include <esp_random.h>
+#include <esp_timer.h>
 #include <mbedtls/sha256.h>
 #include <mooncake_log.h>
 #include <algorithm>
@@ -405,6 +406,8 @@ void AppCodexStatus::onOpen()
         _production_voice_mtu = 23;
     }
     _production_voice_connection_epoch = 0;
+    _pet_connection_epoch = 0;
+    _pet_subscription_generation = 0;
     _voice_status.store(VoiceInputUiState::Off);
     _ws_connected    = false;
     _wifi_lease.reset();
@@ -469,6 +472,20 @@ void AppCodexStatus::onOpen()
     sync_agent_panel_registry();
     (void)sync_task_detail_credential();
 
+    _pet_files = std::make_unique<codex_pet::FatPetFileSystem>();
+    _pet_allocator =
+        std::make_unique<codex_pet::PsramPetBufferAllocator>();
+    _pet_selection_store =
+        std::make_unique<codex_pet::NvsPetSelectionStore>();
+    _pet_store = std::make_unique<codex_pet::CodexPetStore>(
+        *_pet_files, *_pet_allocator, *_pet_selection_store);
+    _pet_selection = _pet_store->load_selection();
+    _pet_runtime = std::make_unique<codex_pet::CodexPetRuntime>(
+        *_pet_files, *_pet_allocator);
+    (void)_pet_runtime->open(_pet_selection);
+    _pet_rendered_selection = _pet_selection;
+    _pet_rendered_selection_valid = true;
+
     {
         LvglLockGuard lock;
         create_view();
@@ -484,10 +501,19 @@ void AppCodexStatus::onOpen()
         _voice_probe = _runtime_session.voice_probe();
         _voice_input = _runtime_session.voice_input();
         if (runtime_started) {
+            _pet_transfer = std::make_unique<codex_pet::CodexPetTransfer>(
+                *_pet_store, _ble_transport->pet_crypto());
             if (_agent_registry_ready) {
                 (void)_ble_transport->set_voice_credential(
                     _agent_registry.master_key(),
                     _agent_registry.key_epoch());
+                (void)_ble_transport->set_pet_credential(
+                    _agent_registry.master_key(),
+                    _agent_registry.key_epoch());
+                if (_pet_transfer) {
+                    _pet_transfer->on_credential_replaced(
+                        _agent_registry.key_epoch());
+                }
                 std::lock_guard<std::mutex> controller_lock(
                     _task_controller_mutex);
                 if (_voice_input) {
@@ -579,6 +605,7 @@ void AppCodexStatus::onRunning()
 
     if (!_screen_off) {
         LvglLockGuard lock;
+        sync_pet_runtime(now);
         if (_agent_panel_dirty) {
             render_agent_panel();
             _agent_panel_dirty = false;
@@ -665,33 +692,48 @@ void AppCodexStatus::onRunning()
         const uint32_t connection_epoch =
             _ble_transport->connection_epoch();
         if (connection_epoch != _production_voice_connection_epoch) {
-            _production_voice_connection_epoch = connection_epoch;
-            _production_voice_ready = false;
-            if (_input_action_controller) {
-                _input_action_controller->disconnect();
-            }
-            _voice_button_dispatcher.reset(right_pressed);
-            if (_voice_input) {
-                _pinned_microphone_controller.stop_for_safety(*_voice_input, now);
-            }
-            {
-                std::lock_guard<std::mutex> controller_lock(
-                    _task_controller_mutex);
-                _production_voice_link_usable = false;
-                _production_voice_capabilities = 0;
-                _production_voice_mtu = 23;
-                _task_voice_ready_applied = false;
-                if (_voice_input) {
-                    _voice_input->handle_connection_epoch(connection_epoch);
-                }
-            }
-            {
-                std::lock_guard<std::mutex> task_lock(_task_state_mutex);
-                _task_detail_store.reset_connection();
-            }
+            codex_pet::PetCleanupSequence::run(
+                [this]() {
+                    if (_pet_transfer) {
+                        _pet_transfer->on_disconnect(_pet_connection_epoch);
+                    }
+                },
+                [this, connection_epoch, right_pressed, now]() {
+                    _pet_connection_epoch = connection_epoch;
+                    _pet_subscription_generation = 0;
+                    _production_voice_connection_epoch = connection_epoch;
+                    _production_voice_ready = false;
+                    if (_input_action_controller) {
+                        _input_action_controller->disconnect();
+                    }
+                    _voice_button_dispatcher.reset(right_pressed);
+                    if (_voice_input) {
+                        _pinned_microphone_controller.stop_for_safety(
+                            *_voice_input, now);
+                    }
+                    {
+                        std::lock_guard<std::mutex> controller_lock(
+                            _task_controller_mutex);
+                        _production_voice_link_usable = false;
+                        _production_voice_capabilities = 0;
+                        _production_voice_mtu = 23;
+                        _task_voice_ready_applied = false;
+                        if (_voice_input) {
+                            _voice_input->handle_connection_epoch(
+                                connection_epoch);
+                        }
+                    }
+                    {
+                        std::lock_guard<std::mutex> task_lock(
+                            _task_state_mutex);
+                        _task_detail_store.reset_connection();
+                    }
+                });
             sync_agent_panel_registry();
             _agent_panel_dirty = true;
         }
+
+        process_pet_transfer(now, connection_epoch);
 
         CodexInputActionControl input_control = {};
         while (_ble_transport->take_input_action_control(input_control)) {
@@ -876,6 +918,112 @@ void AppCodexStatus::onRunning()
     }
 }
 
+void AppCodexStatus::process_pet_transfer(
+    uint32_t now_ms,
+    uint32_t connection_epoch)
+{
+    if (!_ble_transport || !_pet_transfer) {
+        return;
+    }
+    const codex_pet::PetSubscriptionSnapshot subscription =
+        _ble_transport->pet_subscription();
+    if (_pet_subscription_generation != subscription.generation) {
+        _pet_transfer->on_subscription_changed(
+            subscription.generation, subscription.subscribed);
+        _pet_subscription_generation = subscription.generation;
+    }
+    if (!subscription.subscribed) {
+        return;
+    }
+
+    const auto deliver = [this](
+                             const codex_pet::PetTransferResult& result) {
+        if (result.selection_changed) {
+            _pet_selection = result.selection;
+        }
+        if (!result.has_status) {
+            return;
+        }
+        const CodexBleNotifyResult notify_result =
+            _ble_transport->notify_pet_status(
+                result.status.data(),
+                result.status_size,
+                result.subscription_generation);
+        _pet_transfer->record_status_delivery(
+            result, notify_result == CodexBleNotifyResult::Accepted);
+    };
+
+    deliver(_pet_transfer->poll(
+        now_ms,
+        connection_epoch,
+        _ble_transport->pet_key_epoch(),
+        subscription.generation));
+
+    const int64_t started_us = esp_timer_get_time();
+    size_t handled = 0;
+    CodexPetControlFrame frame{};
+    while (handled < codex_pet::kPetControlsPerLoop &&
+           esp_timer_get_time() - started_us <
+               static_cast<int64_t>(codex_pet::kPetLoopBudgetUs) &&
+           _ble_transport->take_pet_control(frame)) {
+        ++handled;
+        deliver(_pet_transfer->handle(
+            frame,
+            now_ms,
+            connection_epoch,
+            _ble_transport->pet_key_epoch(),
+            subscription.generation));
+    }
+}
+
+void AppCodexStatus::apply_pet_image()
+{
+    if (_pet_image == nullptr || _pet_runtime == nullptr) {
+        return;
+    }
+    const lv_image_dsc_t* image = _pet_runtime->current_image();
+    if (image == nullptr) {
+        return;
+    }
+    lv_image_set_src(_pet_image, image);
+    _pet_runtime->acknowledge_image_published();
+    lv_image_set_scale(
+        _pet_image,
+        _pet_runtime->using_custom() ? LV_SCALE_NONE : kPetScale);
+    lv_obj_set_pos(_pet_image, kPetX, kPetY);
+    if (_pet_timer != nullptr) {
+        lv_timer_set_period(
+            _pet_timer, _pet_runtime->next_frame_delay_ms(GetHAL().millis()));
+    }
+}
+
+void AppCodexStatus::sync_pet_runtime(uint32_t now_ms)
+{
+    if (_pet_runtime == nullptr) {
+        return;
+    }
+    const bool selection_changed =
+        !_pet_rendered_selection_valid ||
+        _pet_rendered_selection.source != _pet_selection.source ||
+        _pet_rendered_selection.generation != _pet_selection.generation ||
+        _pet_rendered_selection.schema != _pet_selection.schema ||
+        _pet_rendered_selection.slot != _pet_selection.slot ||
+        _pet_rendered_selection.hash != _pet_selection.hash ||
+        _pet_rendered_selection.usable != _pet_selection.usable;
+    if (selection_changed) {
+        (void)_pet_runtime->prepare_generation(_pet_selection);
+        _pet_rendered_selection = _pet_selection;
+        _pet_rendered_selection_valid = true;
+    }
+    const bool visible =
+        _current_page == 1 && !_screen_off &&
+        snapshot_task_focus_state().mode == CodexTaskFocusMode::Status;
+    _pet_runtime->set_visible(visible, now_ms);
+    if (_pet_runtime->take_frame_changed()) {
+        apply_pet_image();
+    }
+}
+
 void AppCodexStatus::onClose()
 {
     mclog::tagInfo(getAppInfo().name, "on close");
@@ -885,14 +1033,31 @@ void AppCodexStatus::onClose()
     _voice_button_dispatcher.reset(false);
     stop_network_fallback();
     _voice_status.store(VoiceInputUiState::Off);
-    _runtime_session.shutdown(
-        _pinned_microphone_controller,
-        _task_controller_mutex,
-        GetHAL().millis());
+    codex_pet::PetCleanupSequence::run(
+        [this]() {
+            if (_pet_transfer) {
+                _pet_transfer->shutdown();
+            }
+            if (_ble_transport) {
+                _ble_transport->clear_pet_credential();
+            }
+        },
+        [this]() {
+            _runtime_session.shutdown(
+                _pinned_microphone_controller,
+                _task_controller_mutex,
+                GetHAL().millis());
+        });
     _voice_input = nullptr;
     _voice_probe = nullptr;
     _input_action_controller = nullptr;
     _ble_transport = nullptr;
+    _pet_transfer.reset();
+    _pet_selection = {};
+    _pet_rendered_selection = {};
+    _pet_rendered_selection_valid = false;
+    _pet_connection_epoch = 0;
+    _pet_subscription_generation = 0;
     _agent_registry_store.reset();
     _agent_registry_backend.reset();
     _agent_registry_ready = false;
@@ -918,6 +1083,11 @@ void AppCodexStatus::onClose()
     LvglLockGuard lock;
     GetGlobalEdgeControlService().setEnabled(true);
     destroy_view();
+    _pet_runtime.reset();
+    _pet_store.reset();
+    _pet_selection_store.reset();
+    _pet_allocator.reset();
+    _pet_files.reset();
     _alert_carousel.reset();
     _trae_carousel.reset();
     _trae_snapshot = {};
@@ -1047,14 +1217,16 @@ void AppCodexStatus::create_view()
     );
 
     _pet_image = lv_image_create(_codex_page);
-    lv_image_set_src(_pet_image, codex_pet_idle_frames[0]);
     lv_image_set_antialias(_pet_image, false);
-    lv_image_set_scale(_pet_image, kPetScale);
+    lv_image_set_pivot(_pet_image, 0, 0);
     lv_obj_clear_flag(_pet_image, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_pos(_pet_image, kPetX, kPetY);
+    sync_pet_runtime(GetHAL().millis());
 
     if (_pet_timer == nullptr) {
-        _pet_timer = lv_timer_create(AppCodexStatus::pet_timer_cb, codex_pet_idle_durations_ms[0], this);
+        const uint32_t period = _pet_runtime
+            ? _pet_runtime->next_frame_delay_ms(GetHAL().millis())
+            : codex_pet_idle_durations_ms[0];
+        _pet_timer = lv_timer_create(AppCodexStatus::pet_timer_cb, period, this);
     }
 
     QuotaWidgets week = make_quota_row(_codex_page, kWeekY, "7D");
@@ -1300,6 +1472,9 @@ void AppCodexStatus::destroy_view()
         lv_timer_delete(_pet_timer);
         _pet_timer = nullptr;
     }
+    if (_pet_runtime) {
+        _pet_runtime->close();
+    }
 
     if (_panel != nullptr) {
         lv_obj_delete(_panel);
@@ -1376,7 +1551,6 @@ void AppCodexStatus::destroy_view()
     _agent_pairing_expired = false;
     _agent_panel_manage_mode = false;
     _agent_panel_notice = {};
-    _pet_frame      = 0;
 }
 
 void AppCodexStatus::render_pinned_microphone()
@@ -3273,6 +3447,13 @@ void AppCodexStatus::dispatch_agent_panel_decision(
                 (void)_ble_transport->set_voice_credential(
                     _agent_registry.master_key(),
                     _agent_registry.key_epoch());
+                (void)_ble_transport->set_pet_credential(
+                    _agent_registry.master_key(),
+                    _agent_registry.key_epoch());
+                if (_pet_transfer) {
+                    _pet_transfer->on_credential_replaced(
+                        _agent_registry.key_epoch());
+                }
                 if (_ble_transport->connected()) {
                     const bool removing_active =
                         _ble_transport->active_fingerprint() ==
@@ -3345,6 +3526,13 @@ void AppCodexStatus::dispatch_agent_panel_decision(
                 (void)_ble_transport->set_voice_credential(
                     _agent_registry.master_key(),
                     _agent_registry.key_epoch());
+                (void)_ble_transport->set_pet_credential(
+                    _agent_registry.master_key(),
+                    _agent_registry.key_epoch());
+                if (_pet_transfer) {
+                    _pet_transfer->on_credential_replaced(
+                        _agent_registry.key_epoch());
+                }
                 (void)_ble_transport->request_active_disconnect(true);
                 const uint16_t pending = _ble_transport->pending_handle();
                 if (pending != secure_pairing::kNoAgentConnection) {
@@ -4560,6 +4748,7 @@ void AppCodexStatus::set_page(int page, bool animate)
     _last_page_touch_state = LV_INDEV_STATE_REL;
     _current_page = page;
     sync_pending_glow();
+    sync_pet_runtime(GetHAL().millis());
     _pinned_microphone_controller.page_changed(page);
     update_page_indicator();
     (void)sync_agent_panel_for_task_mode(CodexTaskFocusMode::Status);
@@ -4655,6 +4844,7 @@ void AppCodexStatus::sync_display_protection_presentation()
     cancel_task_focus_touch();
     _last_page_touch_state = LV_INDEV_STATE_REL;
     sync_pending_glow();
+    sync_pet_runtime(GetHAL().millis());
     if (_pet_timer != nullptr) {
         if (_screen_off) {
             lv_timer_pause(_pet_timer);
@@ -4725,13 +4915,18 @@ void AppCodexStatus::set_percent(lv_obj_t* label, lv_obj_t* bar, int value)
 void AppCodexStatus::pet_timer_cb(lv_timer_t* timer)
 {
     auto* self = static_cast<AppCodexStatus*>(lv_timer_get_user_data(timer));
-    if (self == nullptr || self->_pet_image == nullptr) {
+    if (self == nullptr || self->_pet_image == nullptr ||
+        self->_pet_runtime == nullptr) {
         return;
     }
 
-    self->_pet_frame = (self->_pet_frame + 1) % CODEX_PET_IDLE_FRAME_COUNT;
-    lv_image_set_src(self->_pet_image, codex_pet_idle_frames[self->_pet_frame]);
-    lv_timer_set_period(timer, codex_pet_idle_durations_ms[self->_pet_frame]);
+    const uint32_t now_ms = GetHAL().millis();
+    self->_pet_runtime->advance(now_ms);
+    if (self->_pet_runtime->take_frame_changed()) {
+        self->apply_pet_image();
+    }
+    lv_timer_set_period(
+        timer, self->_pet_runtime->next_frame_delay_ms(now_ms));
 }
 
 void AppCodexStatus::websocket_event_handler(void* handler_args, esp_event_base_t, int32_t event_id, void* event_data)

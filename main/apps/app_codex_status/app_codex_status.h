@@ -21,6 +21,9 @@
 #include "codex_task_focus_gesture.h"
 #include "codex_task_focus_view.h"
 #include "codex_runtime_session.h"
+#include "codex_pet_runtime.h"
+#include "codex_pet_store.h"
+#include "codex_pet_transfer.h"
 #include "agent_panel_model.h"
 #include "agent_panel_ui_layout.h"
 #include "agent_registry_store.h"
@@ -132,6 +135,14 @@ private:
     esp_websocket_client_handle_t _ws_client = nullptr;
     CodexRuntimeSession _runtime_session;
     ScreenOffRuntimeCadence _screen_off_runtime_cadence;
+    std::unique_ptr<codex_pet::FatPetFileSystem> _pet_files;
+    std::unique_ptr<codex_pet::PsramPetBufferAllocator> _pet_allocator;
+    std::unique_ptr<codex_pet::NvsPetSelectionStore> _pet_selection_store;
+    std::unique_ptr<codex_pet::CodexPetStore> _pet_store;
+    std::unique_ptr<codex_pet::CodexPetTransfer> _pet_transfer;
+    std::unique_ptr<codex_pet::CodexPetRuntime> _pet_runtime;
+    codex_pet::PetSelection _pet_selection{};
+    codex_pet::PetSelection _pet_rendered_selection{};
     CodexBleTransport* _ble_transport = nullptr;
     BleVoiceProbeController* _voice_probe = nullptr;
     VoiceInputController* _voice_input = nullptr;
@@ -139,7 +150,6 @@ private:
     std::string _server_host;
     std::string _transport_mode;
     std::string _ble_name;
-    uint8_t _pet_frame           = 0;
     uint32_t _last_battery_ms    = 0;
     uint32_t _last_network_ms    = 0;
     uint32_t _ble_wait_started_ms = 0;
@@ -219,6 +229,9 @@ private:
     bool _task_voice_ready_applied = false;
     uint16_t _production_voice_mtu = 23;
     uint32_t _production_voice_connection_epoch = 0;
+    uint32_t _pet_connection_epoch = 0;
+    uint64_t _pet_subscription_generation = 0;
+    bool _pet_rendered_selection_valid = false;
     std::mutex _status_mutex;
     std::string _base_status = "START";
     uint32_t _base_status_color = 0;
@@ -283,6 +296,9 @@ private:
         uint32_t now_ms);
     void sync_agent_panel_registry();
     void process_secure_pairing(uint32_t now_ms);
+    void process_pet_transfer(uint32_t now_ms, uint32_t connection_epoch);
+    void sync_pet_runtime(uint32_t now_ms);
+    void apply_pet_image();
     bool send_pairing_empty(
         uint16_t connection_handle,
         secure_pairing::WireMessageType type,

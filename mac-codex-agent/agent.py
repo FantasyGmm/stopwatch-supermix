@@ -38,6 +38,7 @@ from task_detail_crypto import (
     encrypt_task_detail,
 )
 from task_routes import TaskRouteRegistry
+from pet_upload import PetCapability, PetUnsupportedError
 
 
 LOGGER = logging.getLogger(__name__)
@@ -51,6 +52,9 @@ PAIRING_CONTROL_UUID = "7a230007-5474-4f50-5741-544348434f44"
 PAIRING_TX_UUID = "7a230008-5474-4f50-5741-544348434f44"
 INPUT_CONTROL_UUID = "7a230009-5474-4f50-5741-544348434f44"
 INPUT_TX_UUID = "7a23000a-5474-4f50-5741-544348434f44"
+PET_SERVICE_UUID = "7a23000b-5474-4f50-5741-544348434f44"
+PET_CONTROL_UUID = "7a23000c-5474-4f50-5741-544348434f44"
+PET_STATUS_UUID = "7a23000d-5474-4f50-5741-544348434f44"
 STATUS_INTERVAL_SECONDS = 2.0
 SAFE_WRITE_SIZE = 20
 MAX_STATUS_WRITE_SIZE = 256
@@ -79,6 +83,7 @@ GATT_OPERATION_TIMEOUT_SECONDS = 5.0
 PAIRING_CONFIRM_TIMEOUT_SECONDS = 65.0
 PAIRING_RESPONSE_QUEUE_SIZE = 8
 INPUT_NOTIFICATION_QUEUE_SIZE = 8
+PET_NOTIFICATION_QUEUE_SIZE = 8
 _TASK_ROUTE_PATTERN = re.compile(r"^[0-9a-f]{16}$")
 _CODEX_NUMERIC_LIMITS = {
     "codex_5h_left_pct": 100,
@@ -124,6 +129,20 @@ class _InputGeneration:
     queue: asyncio.Queue
     consumer: asyncio.Task
     ingress: _InputIngressGate
+
+
+@dataclasses.dataclass
+class _PetIngressGate:
+    lock: threading.Lock = dataclasses.field(default_factory=threading.Lock)
+    pending: int = 0
+    enabled: bool = True
+
+
+@dataclasses.dataclass(frozen=True)
+class _PetGeneration:
+    queue: asyncio.Queue
+    consumer: asyncio.Task
+    ingress: _PetIngressGate
 
 
 async def _await_cancelled_task(task: asyncio.Task) -> None:
@@ -722,6 +741,8 @@ class BleStatusTransport:
         self._pairing_transaction = 1
         self._input_generation = None
         self._input_notify_started = False
+        self._pet_generation = None
+        self._pet_notify_started = False
 
     @property
     def connected(self) -> bool:
@@ -772,6 +793,13 @@ class BleStatusTransport:
         with generation.ingress.lock:
             return generation.ingress.pending
 
+    @property
+    def negotiated_mtu(self) -> int:
+        value = getattr(self._client, "mtu_size", 23)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 23:
+            return 23
+        return min(value, 515)
+
     async def connect(self, on_device_found: Optional[Callable[[], None]] = None) -> bool:
         try:
             from bleak import BleakClient, BleakScanner
@@ -794,8 +822,14 @@ class BleStatusTransport:
         self._disconnected.clear()
         self._voice_disabled = False
 
+        loop = asyncio.get_running_loop()
+
         def on_disconnect(_client) -> None:
             self._disconnected.set()
+            try:
+                loop.call_soon_threadsafe(self._retire_pet_generation)
+            except RuntimeError:
+                pass
 
         client = BleakClient(device, disconnected_callback=on_disconnect)
         await client.connect()
@@ -1228,6 +1262,172 @@ class BleStatusTransport:
         if failure is not None:
             raise failure
 
+    async def pet_capability(self) -> PetCapability:
+        if not self.connected:
+            return PetCapability.OFFLINE
+        return (
+            PetCapability.READY
+            if self._pet_characteristics_available()
+            else PetCapability.UNSUPPORTED
+        )
+
+    async def enable_pet_notifications(self, handler) -> None:
+        if not self.connected:
+            raise ConnectionError("StopWatch BLE connection is not active")
+        if not self._pet_characteristics_available():
+            raise PetUnsupportedError("Firmware update required")
+        if self._pet_generation is not None:
+            raise RuntimeError("pet notification generation is already active")
+        if self._pet_notify_started:
+            raise RuntimeError("pet notification cleanup is incomplete")
+        loop = asyncio.get_running_loop()
+        queue = asyncio.Queue(maxsize=PET_NOTIFICATION_QUEUE_SIZE)
+        generation = _PetGeneration(
+            queue,
+            asyncio.create_task(self._consume_pet(queue, handler)),
+            _PetIngressGate(),
+        )
+        self._pet_generation = generation
+
+        def on_notification(_sender, data) -> None:
+            payload = bytes(data)
+            with generation.ingress.lock:
+                if (
+                    not generation.ingress.enabled
+                    or generation.ingress.pending >= PET_NOTIFICATION_QUEUE_SIZE
+                ):
+                    return
+                generation.ingress.pending += 1
+            try:
+                loop.call_soon_threadsafe(
+                    self._deliver_pet_payload, generation, payload
+                )
+            except RuntimeError:
+                self._release_pet_ingress(generation)
+
+        self._pet_notify_started = True
+        try:
+            await asyncio.wait_for(
+                self._client.start_notify(PET_STATUS_UUID, on_notification),
+                timeout=GATT_OPERATION_TIMEOUT_SECONDS,
+            )
+        except BaseException:
+            consumer = self._retire_pet_generation(generation)
+            try:
+                if self.connected and self._pet_notify_started:
+                    try:
+                        await asyncio.wait_for(
+                            self._client.stop_notify(PET_STATUS_UUID),
+                            timeout=GATT_OPERATION_TIMEOUT_SECONDS,
+                        )
+                    except Exception:
+                        pass
+                    else:
+                        self._pet_notify_started = False
+            finally:
+                if consumer is not None:
+                    await _await_cancelled_task(consumer)
+            raise
+
+    async def write_pet_control(self, payload: bytes) -> None:
+        if not self.connected:
+            raise ConnectionError("StopWatch BLE connection is not active")
+        if self._pet_generation is None or not self._pet_notify_started:
+            raise RuntimeError("pet notifications must be enabled before control")
+        if not self._pet_characteristics_available():
+            raise PetUnsupportedError("Firmware update required")
+        await asyncio.wait_for(
+            self._client.write_gatt_char(
+                PET_CONTROL_UUID, bytes(payload), response=True
+            ),
+            timeout=GATT_OPERATION_TIMEOUT_SECONDS,
+        )
+
+    async def disable_pet_notifications(self) -> None:
+        consumer = self._retire_pet_generation()
+        failure = None
+        try:
+            if self.connected and self._pet_notify_started:
+                try:
+                    await asyncio.wait_for(
+                        self._client.stop_notify(PET_STATUS_UUID),
+                        timeout=GATT_OPERATION_TIMEOUT_SECONDS,
+                    )
+                except Exception as error:
+                    failure = error
+                else:
+                    self._pet_notify_started = False
+            elif not self.connected:
+                self._pet_notify_started = False
+        finally:
+            if consumer is not None:
+                await _await_cancelled_task(consumer)
+        if failure is not None:
+            raise failure
+
+    def retire_pet_generation(self):
+        return self._retire_pet_generation()
+
+    def _retire_pet_generation(self, expected=None):
+        generation = self._pet_generation
+        if generation is None or (
+            expected is not None and generation is not expected
+        ):
+            return None
+        with generation.ingress.lock:
+            generation.ingress.enabled = False
+        if self._pet_generation is generation:
+            self._pet_generation = None
+        if not generation.consumer.done():
+            generation.consumer.cancel()
+        return generation.consumer
+
+    def _deliver_pet_payload(
+        self, generation: _PetGeneration, payload: bytes
+    ) -> None:
+        with generation.ingress.lock:
+            enabled = generation.ingress.enabled
+        if not enabled or self._pet_generation is not generation:
+            self._release_pet_ingress(generation)
+            return
+        try:
+            generation.queue.put_nowait(payload)
+        except asyncio.QueueFull:
+            self._release_pet_ingress(generation)
+
+    @staticmethod
+    def _release_pet_ingress(generation: _PetGeneration) -> None:
+        with generation.ingress.lock:
+            if generation.ingress.pending:
+                generation.ingress.pending -= 1
+
+    async def _consume_pet(self, queue: asyncio.Queue, handler) -> None:
+        generation = self._pet_generation
+        while True:
+            payload = await queue.get()
+            try:
+                await handler(payload)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                LOGGER.exception("Pet status handler failed")
+            finally:
+                if generation is not None:
+                    self._release_pet_ingress(generation)
+
+    def _pet_characteristics_available(self) -> bool:
+        services = getattr(self._client, "services", None)
+        get_characteristic = getattr(services, "get_characteristic", None)
+        if get_characteristic is None:
+            return False
+        try:
+            return all(
+                get_characteristic(uuid) is not None
+                for uuid in (PET_CONTROL_UUID, PET_STATUS_UUID)
+            )
+        except Exception:
+            return False
+
     def _retire_input_generation(self, expected=None):
         generation = self._input_generation
         if generation is None or (
@@ -1278,6 +1478,10 @@ class BleStatusTransport:
     async def disconnect(self) -> None:
         client = self._client
         if client and client.is_connected:
+            try:
+                await self.disable_pet_notifications()
+            except Exception:
+                pass
             if self._pairing_notify_started:
                 try:
                     await asyncio.wait_for(
@@ -1290,6 +1494,8 @@ class BleStatusTransport:
         self._client = None
         self._pairing_notify_started = False
         self._pairing_responses = None
+        self._retire_pet_generation()
+        self._pet_notify_started = False
 
     async def send_json(self, payload: str, message_type: int) -> None:
         if not self.connected:

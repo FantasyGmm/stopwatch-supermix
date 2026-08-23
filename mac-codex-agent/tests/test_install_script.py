@@ -142,6 +142,51 @@ class InstallScriptTests(unittest.TestCase):
         ):
             self.assertIn(module, script)
 
+    def test_installer_packages_and_smokes_all_pet_modules(self):
+        script = self.read_script()
+        validation_block = script.split("validate_app_contents() {", 1)[1].split(
+            "validate_staged_app() {", 1
+        )[0]
+        packaged_modules = script.split("for module in \\", 1)[1].split(
+            "; do", 1
+        )[0]
+        smoke_block = script.split("smoke_test_packaged_runtime() {", 1)[1].split(
+            "validate_app_contents() {", 1
+        )[0]
+
+        for module in (
+            "pet_package.py",
+            "pet_converter.py",
+            "pet_protocol.py",
+            "pet_upload.py",
+            "pet_cache.py",
+            "pet_window.py",
+        ):
+            self.assertIn(f'"$resources/app/{module}"', validation_block)
+            self.assertIn(module, packaged_modules)
+            self.assertIn(f"import {module.removesuffix('.py')}", smoke_block)
+
+    def test_packaged_runtime_smoke_converts_generated_two_frame_gif(self):
+        script = self.read_script()
+        smoke_block = script.split("smoke_test_packaged_runtime() {", 1)[1].split(
+            "validate_app_contents() {", 1
+        )[0]
+
+        for behavior in (
+            "from PIL import Image",
+            "tempfile.TemporaryDirectory",
+            "Image.new",
+            "save_all=True",
+            "pet_converter.convert_gif",
+            "converted.metadata.source_frames != 2",
+            "converted.metadata.output_frames != 2",
+            "converted.metadata.width != 144",
+            "converted.metadata.height != 156",
+        ):
+            self.assertIn(behavior, smoke_block)
+        self.assertIn('cd "$app_path/Contents/Resources/app"', smoke_block)
+        self.assertIn("external sys.path entries", smoke_block)
+
     def test_installer_builds_and_packages_the_native_audio_bridge(self):
         script = self.read_script()
 

@@ -27,6 +27,8 @@ enum class Domain : uint8_t {
     InputSubmit = 0x22,
     InputForceSteer = 0x23,
     TaskDetail = 0x24,
+    PetControl = 0x30,
+    PetStatus = 0x31,
 };
 
 bool derive_nonce(

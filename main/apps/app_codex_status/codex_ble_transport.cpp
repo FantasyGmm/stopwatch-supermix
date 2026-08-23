@@ -32,6 +32,8 @@ constexpr size_t kVoiceControlQueueDepth = 8;
 constexpr size_t kProductionVoiceControlQueueDepth = 8;
 constexpr size_t kPairingFrameQueueDepth = 8;
 constexpr size_t kInputControlQueueDepth = 8;
+constexpr size_t kPetControlQueueDepth = 8;
+static_assert(kPetControlQueueDepth == codex_pet::kPetControlQueueDepth);
 constexpr size_t kMaxNotificationSize = 256;
 constexpr uint32_t kPendingAuthenticationIdleTimeoutMs = 60000;
 constexpr uint32_t kPendingAuthenticationMaxLifetimeMs = 120000;
@@ -131,6 +133,19 @@ const ble_uuid128_t kInputTxUuid = BLE_UUID128_INIT(
     0x50, 0x4f, 0x74, 0x54, 0x0a, 0x00, 0x23, 0x7a
 );
 uint16_t g_input_tx_value_handle = 0;
+const ble_uuid128_t kPetServiceUuid = BLE_UUID128_INIT(
+    0x44, 0x4f, 0x43, 0x48, 0x43, 0x54, 0x41, 0x57,
+    0x50, 0x4f, 0x74, 0x54, 0x0b, 0x00, 0x23, 0x7a
+);
+const ble_uuid128_t kPetControlUuid = BLE_UUID128_INIT(
+    0x44, 0x4f, 0x43, 0x48, 0x43, 0x54, 0x41, 0x57,
+    0x50, 0x4f, 0x74, 0x54, 0x0c, 0x00, 0x23, 0x7a
+);
+const ble_uuid128_t kPetStatusUuid = BLE_UUID128_INIT(
+    0x44, 0x4f, 0x43, 0x48, 0x43, 0x54, 0x41, 0x57,
+    0x50, 0x4f, 0x74, 0x54, 0x0d, 0x00, 0x23, 0x7a
+);
+uint16_t g_pet_status_value_handle = 0;
 
 bool configure_identity_address()
 {
@@ -336,6 +351,53 @@ int input_tx_access(
     return BLE_ATT_ERR_REQ_NOT_SUPPORTED;
 }
 
+int pet_control_access(
+    uint16_t connection_handle,
+    uint16_t,
+    ble_gatt_access_ctxt* context,
+    void*)
+{
+    if (g_transport == nullptr || context == nullptr ||
+        context->op != BLE_GATT_ACCESS_OP_WRITE_CHR) {
+        return BLE_ATT_ERR_UNLIKELY;
+    }
+    if (!g_transport->authorize_gatt(
+            connection_handle,
+            secure_pairing::AgentGattSurface::Production)) {
+        return BLE_ATT_ERR_INSUFFICIENT_AUTHOR;
+    }
+    const uint16_t length = OS_MBUF_PKTLEN(context->om);
+    if (length == 0 || length > pet_protocol::kMaxFrameBytes) {
+        return BLE_ATT_ERR_INVALID_ATTR_VALUE_LEN;
+    }
+    std::array<uint8_t, pet_protocol::kMaxFrameBytes> bytes{};
+    uint16_t copied = 0;
+    if (ble_hs_mbuf_to_flat(
+            context->om, bytes.data(), bytes.size(), &copied) != 0 ||
+        copied != length) {
+        return BLE_ATT_ERR_UNLIKELY;
+    }
+    return g_transport->enqueue_pet_control_from_ble(
+               connection_handle, bytes.data(), copied)
+               ? 0
+               : BLE_ATT_ERR_INSUFFICIENT_RES;
+}
+
+int pet_status_access(
+    uint16_t connection_handle,
+    uint16_t,
+    ble_gatt_access_ctxt*,
+    void*)
+{
+    if (g_transport == nullptr ||
+        !g_transport->authorize_gatt(
+            connection_handle,
+            secure_pairing::AgentGattSurface::Production)) {
+        return BLE_ATT_ERR_INSUFFICIENT_AUTHOR;
+    }
+    return BLE_ATT_ERR_REQ_NOT_SUPPORTED;
+}
+
 const ble_gatt_chr_def kStatusCharacteristics[] = {
     {
         &kStatusRxUuid.u,
@@ -418,6 +480,30 @@ const ble_gatt_chr_def kPairingCharacteristics[] = {
     {},
 };
 
+const ble_gatt_chr_def kPetCharacteristics[] = {
+    {
+        &kPetControlUuid.u,
+        pet_control_access,
+        nullptr,
+        nullptr,
+        BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP,
+        0,
+        nullptr,
+        nullptr,
+    },
+    {
+        &kPetStatusUuid.u,
+        pet_status_access,
+        nullptr,
+        nullptr,
+        BLE_GATT_CHR_F_NOTIFY,
+        0,
+        &g_pet_status_value_handle,
+        nullptr,
+    },
+    {},
+};
+
 const ble_gatt_svc_def kServices[] = {
     {
         BLE_GATT_SVC_TYPE_PRIMARY,
@@ -436,6 +522,16 @@ const ble_gatt_svc_def kServices[] = {
         &kPairingServiceUuid.u,
         nullptr,
         kPairingCharacteristics,
+    },
+    {},
+};
+
+const ble_gatt_svc_def kPetServices[] = {
+    {
+        BLE_GATT_SVC_TYPE_PRIMARY,
+        &kPetServiceUuid.u,
+        nullptr,
+        kPetCharacteristics,
     },
     {},
 };
@@ -479,6 +575,10 @@ int gap_event(ble_gap_event* event, void*)
                 event->subscribe.attr_handle,
                 event->subscribe.cur_notify != 0);
             g_transport->handle_input_subscription(
+                event->subscribe.conn_handle,
+                event->subscribe.attr_handle,
+                event->subscribe.cur_notify != 0);
+            g_transport->handle_pet_subscription(
                 event->subscribe.conn_handle,
                 event->subscribe.attr_handle,
                 event->subscribe.cur_notify != 0);
@@ -632,6 +732,11 @@ bool CodexBleTransport::start(const std::string& device_name)
         _pairing_frame_queue = nullptr;
         return false;
     }
+    _pet_control_queue = xQueueCreate(
+        kPetControlQueueDepth, sizeof(CodexPetControlFrame));
+    if (_pet_control_queue == nullptr) {
+        ESP_LOGW(kTag, "custom pet channel unavailable: queue allocation failed");
+    }
 
     g_transport = this;
     g_device_name = device_name.empty() ? "StopWatch-Codex" : device_name;
@@ -646,11 +751,15 @@ bool CodexBleTransport::start(const std::string& device_name)
     }
     _input_action_subscribed = false;
     _input_tx_value_handle = 0;
+    _pet_subscription.reset();
+    _pet_service_available = false;
+    _pet_status_value_handle = 0;
     _production_control_guard.reset();
     _input_control_guard.reset();
     g_voice_tx_value_handle = 0;
     g_pairing_tx_value_handle = 0;
     g_input_tx_value_handle = 0;
+    g_pet_status_value_handle = 0;
 
     const esp_err_t init_result = nimble_port_init();
     if (init_result != ESP_OK) {
@@ -665,6 +774,10 @@ bool CodexBleTransport::start(const std::string& device_name)
         _pairing_frame_queue = nullptr;
         vQueueDelete(static_cast<QueueHandle_t>(_input_control_queue));
         _input_control_queue = nullptr;
+        if (_pet_control_queue != nullptr) {
+            vQueueDelete(static_cast<QueueHandle_t>(_pet_control_queue));
+            _pet_control_queue = nullptr;
+        }
         g_transport = nullptr;
         return false;
     }
@@ -684,9 +797,31 @@ bool CodexBleTransport::start(const std::string& device_name)
     g_voice_tx_value_handle = 0;
     g_pairing_tx_value_handle = 0;
     g_input_tx_value_handle = 0;
+    g_pet_status_value_handle = 0;
     int result = ble_gatts_count_cfg(kServices);
+    bool pet_service_ready = _pet_control_queue != nullptr;
+    if (result == 0 && pet_service_ready) {
+        const int pet_count_result = ble_gatts_count_cfg(kPetServices);
+        if (pet_count_result != 0) {
+            ESP_LOGW(
+                kTag,
+                "custom pet service count failed: %d",
+                pet_count_result);
+            pet_service_ready = false;
+        }
+    }
     if (result == 0) {
         result = ble_gatts_add_svcs(kServices);
+    }
+    if (result == 0 && pet_service_ready) {
+        const int pet_add_result = ble_gatts_add_svcs(kPetServices);
+        if (pet_add_result != 0) {
+            ESP_LOGW(
+                kTag,
+                "custom pet service setup failed: %d",
+                pet_add_result);
+            pet_service_ready = false;
+        }
     }
     if (result == 0) {
         result = ble_svc_gap_device_name_set(g_device_name.c_str());
@@ -704,9 +839,14 @@ bool CodexBleTransport::start(const std::string& device_name)
         _pairing_frame_queue = nullptr;
         vQueueDelete(static_cast<QueueHandle_t>(_input_control_queue));
         _input_control_queue = nullptr;
+        if (_pet_control_queue != nullptr) {
+            vQueueDelete(static_cast<QueueHandle_t>(_pet_control_queue));
+            _pet_control_queue = nullptr;
+        }
         g_voice_tx_value_handle = 0;
         g_pairing_tx_value_handle = 0;
         g_input_tx_value_handle = 0;
+        g_pet_status_value_handle = 0;
         g_transport = nullptr;
         return false;
     }
@@ -714,6 +854,9 @@ bool CodexBleTransport::start(const std::string& device_name)
     ble_store_config_init();
     nimble_port_freertos_init(host_task);
     _input_tx_value_handle = g_input_tx_value_handle;
+    _pet_status_value_handle = g_pet_status_value_handle;
+    _pet_service_available =
+        pet_service_ready && g_pet_status_value_handle != 0;
     _initialized = true;
     return true;
 }
@@ -792,15 +935,25 @@ void CodexBleTransport::stop()
         vQueueDelete(static_cast<QueueHandle_t>(_input_control_queue));
         _input_control_queue = nullptr;
     }
+    if (_pet_control_queue != nullptr) {
+        vQueueDelete(static_cast<QueueHandle_t>(_pet_control_queue));
+        _pet_control_queue = nullptr;
+    }
     _messages.clear();
     _reassembler.reset();
     _input_action_subscribed = false;
     _input_tx_value_handle = 0;
+    _pet_subscription.reset();
+    _pet_service_available = false;
+    _pet_status_value_handle = 0;
     _production_control_guard.reset();
     _input_control_guard.reset();
+    _pet_key_epoch = 0;
+    _pet_crypto.clear();
     g_voice_tx_value_handle = 0;
     g_pairing_tx_value_handle = 0;
     g_input_tx_value_handle = 0;
+    g_pet_status_value_handle = 0;
     _initialized = false;
 }
 
@@ -974,6 +1127,22 @@ bool CodexBleTransport::take_input_action_control(
     return true;
 }
 
+bool CodexBleTransport::take_pet_control(CodexPetControlFrame& frame)
+{
+    if (_pet_control_queue == nullptr) {
+        return false;
+    }
+    CodexPetControlFrame queued{};
+    if (xQueueReceive(
+            static_cast<QueueHandle_t>(_pet_control_queue),
+            &queued,
+            0) != pdTRUE) {
+        return false;
+    }
+    frame = queued;
+    return true;
+}
+
 
 bool CodexBleTransport::voice_subscribed() const
 {
@@ -984,6 +1153,21 @@ bool CodexBleTransport::voice_subscribed() const
 bool CodexBleTransport::input_action_subscribed() const
 {
     return _input_action_subscribed.load();
+}
+
+bool CodexBleTransport::pet_subscribed() const
+{
+    return pet_subscription().subscribed;
+}
+
+codex_pet::PetSubscriptionSnapshot
+CodexBleTransport::pet_subscription() const
+{
+    codex_pet::PetSubscriptionSnapshot snapshot =
+        _pet_subscription.snapshot();
+    snapshot.subscribed =
+        snapshot.subscribed && _pet_service_available.load();
+    return snapshot;
 }
 
 
@@ -1157,6 +1341,56 @@ CodexBleNotifyResult CodexBleTransport::notify_input_action(
     return CodexBleNotifyResult::NotReady;
 }
 
+CodexBleNotifyResult CodexBleTransport::notify_pet_status(
+    const uint8_t* data,
+    size_t length,
+    uint64_t subscription_generation)
+{
+    if (data == nullptr || length == 0 ||
+        length > pet_protocol::kMaxFrameBytes) {
+        return CodexBleNotifyResult::InvalidSize;
+    }
+    std::lock_guard<std::mutex> voice_link_lock(_voice_link_mutex);
+    const secure_pairing::AgentVoiceLink link =
+        _connection_router.active_voice_link();
+    const uint16_t value_handle = _pet_status_value_handle.load();
+    const size_t limit = link.mtu <= 3
+        ? 0
+        : std::min(
+              kMaxNotificationSize,
+              static_cast<size_t>(link.mtu - 3));
+    const bool revoked =
+        _active_production_revoked_token.load() ==
+        active_connection_token(link);
+    const codex_pet::PetSubscriptionSnapshot subscription =
+        _pet_subscription.snapshot();
+    if (revoked || !link.authorized || !_pet_service_available.load() ||
+        !subscription.subscribed || subscription_generation == 0 ||
+        subscription.generation != subscription_generation ||
+        link.handle == secure_pairing::kNoAgentConnection ||
+        value_handle == 0 || length > limit) {
+        return CodexBleNotifyResult::NotReady;
+    }
+
+    os_mbuf* mbuf = os_msys_get_pkthdr(static_cast<uint16_t>(length), 0);
+    if (mbuf == nullptr) {
+        return CodexBleNotifyResult::Congested;
+    }
+    if (os_mbuf_append(mbuf, data, static_cast<uint16_t>(length)) != 0) {
+        os_mbuf_free_chain(mbuf);
+        return CodexBleNotifyResult::Congested;
+    }
+    const int result = ble_gatts_notify_custom(
+        link.handle, value_handle, mbuf);
+    if (result == 0) {
+        return CodexBleNotifyResult::Accepted;
+    }
+    if (result == BLE_HS_ENOMEM || result == BLE_HS_EBUSY) {
+        return CodexBleNotifyResult::Congested;
+    }
+    return CodexBleNotifyResult::NotReady;
+}
+
 bool CodexBleTransport::set_voice_credential(
     const voice_input::crypto::Key& key,
     uint32_t key_epoch)
@@ -1181,6 +1415,41 @@ void CodexBleTransport::clear_voice_credential()
 voice_input::crypto::CcmContext& CodexBleTransport::input_action_crypto()
 {
     return _production_voice_crypto;
+}
+
+bool CodexBleTransport::set_pet_credential(
+    const voice_input::crypto::Key& key,
+    uint32_t key_epoch)
+{
+    _pet_key_epoch = 0;
+    if (_pet_control_queue != nullptr) {
+        xQueueReset(static_cast<QueueHandle_t>(_pet_control_queue));
+    }
+    if (key_epoch == 0 || !_pet_crypto.set_key(key)) {
+        _pet_crypto.clear();
+        return false;
+    }
+    _pet_key_epoch = key_epoch;
+    return true;
+}
+
+void CodexBleTransport::clear_pet_credential()
+{
+    _pet_key_epoch = 0;
+    _pet_crypto.clear();
+    if (_pet_control_queue != nullptr) {
+        xQueueReset(static_cast<QueueHandle_t>(_pet_control_queue));
+    }
+}
+
+voice_input::crypto::CcmContext& CodexBleTransport::pet_crypto()
+{
+    return _pet_crypto;
+}
+
+uint32_t CodexBleTransport::pet_key_epoch() const
+{
+    return _pet_key_epoch.load();
 }
 
 
@@ -1226,6 +1495,8 @@ bool CodexBleTransport::promote_pending(uint16_t connection_handle)
     _input_control_guard.reset();
     _input_action_subscribed = false;
     _input_tx_value_handle = g_input_tx_value_handle;
+    _pet_subscription.reset();
+    _pet_status_value_handle = g_pet_status_value_handle;
     if (_input_control_queue != nullptr) {
         xQueueReset(static_cast<QueueHandle_t>(_input_control_queue));
     }
@@ -1236,6 +1507,9 @@ bool CodexBleTransport::promote_pending(uint16_t connection_handle)
         xQueueReset(
             static_cast<QueueHandle_t>(
                 _production_voice_control_queue));
+    }
+    if (_pet_control_queue != nullptr) {
+        xQueueReset(static_cast<QueueHandle_t>(_pet_control_queue));
     }
     _reassembler.reset();
     _messages.clear();
@@ -1425,6 +1699,53 @@ bool CodexBleTransport::enqueue_input_control_from_ble(
                0) == pdTRUE;
 }
 
+bool CodexBleTransport::enqueue_pet_control_from_ble(
+    uint16_t connection_handle,
+    const uint8_t* data,
+    size_t length)
+{
+    if (!_pet_service_available.load() || _pet_control_queue == nullptr ||
+        data == nullptr || length == 0 ||
+        length > pet_protocol::kMaxFrameBytes) {
+        return false;
+    }
+    secure_pairing::AgentActiveConnection active{};
+    codex_pet::PetSubscriptionSnapshot subscription{};
+    {
+        std::lock_guard<std::mutex> voice_link_lock(_voice_link_mutex);
+        const uint64_t revoked_token =
+            _active_production_revoked_token.load();
+        if (!_connection_router.can_access(
+                connection_handle,
+                secure_pairing::AgentGattSurface::Production) ||
+            (revoked_token != 0 && revoked_token == active_connection_token(
+                _connection_router.active_connection()))) {
+            return false;
+        }
+        active = _connection_router.active_connection();
+        subscription = _pet_subscription.snapshot();
+    }
+    const uint32_t key_epoch = _pet_key_epoch.load();
+    if (active.handle != connection_handle || active.generation == 0 ||
+        key_epoch == 0 || !subscription.subscribed ||
+        subscription.generation == 0) {
+        return false;
+    }
+    CodexPetControlFrame frame{};
+    frame.connection_handle = connection_handle;
+    frame.length = static_cast<uint16_t>(length);
+    frame.connection_generation = active.generation;
+    frame.key_epoch = key_epoch;
+    frame.subscription_generation = subscription.generation;
+    frame.authorized = true;
+    frame.subscribed = true;
+    std::copy_n(data, length, frame.data.begin());
+    return xQueueSend(
+               static_cast<QueueHandle_t>(_pet_control_queue),
+               &frame,
+               0) == pdTRUE;
+}
+
 bool CodexBleTransport::handle_gap_connected(uint16_t connection_handle)
 {
     const uint32_t now_ms = static_cast<uint32_t>(
@@ -1494,8 +1815,13 @@ void CodexBleTransport::handle_gap_disconnected(
         if (_input_control_queue != nullptr) {
             xQueueReset(static_cast<QueueHandle_t>(_input_control_queue));
         }
+        if (_pet_control_queue != nullptr) {
+            xQueueReset(static_cast<QueueHandle_t>(_pet_control_queue));
+        }
         _input_action_subscribed = false;
         _input_tx_value_handle = 0;
+        (void)_pet_subscription.update(false);
+        _pet_status_value_handle = 0;
         _input_control_guard.reset();
     } else if ((
                    previous == secure_pairing::AgentConnectionRole::Pending ||
@@ -1534,6 +1860,38 @@ void CodexBleTransport::handle_input_subscription(
             secure_pairing::AgentGattSurface::Production)) {
         _input_action_subscribed = enabled;
         _input_tx_value_handle = g_input_tx_value_handle;
+    }
+}
+
+void CodexBleTransport::handle_pet_subscription(
+    uint16_t connection_handle,
+    uint16_t attr_handle,
+    bool enabled)
+{
+    if (attr_handle != g_pet_status_value_handle) {
+        return;
+    }
+    std::lock_guard<std::mutex> voice_link_lock(_voice_link_mutex);
+    if (_connection_router.active_handle() != connection_handle) {
+        return;
+    }
+    const uint64_t revoked_token = _active_production_revoked_token.load();
+    const bool authorized = _connection_router.can_access(
+        connection_handle,
+        secure_pairing::AgentGattSurface::Production) &&
+        (revoked_token == 0 || revoked_token != active_connection_token(
+            _connection_router.active_connection()));
+    if (enabled && authorized) {
+        (void)_pet_subscription.update(true);
+        _pet_status_value_handle = g_pet_status_value_handle;
+        return;
+    }
+    if (!enabled) {
+        const codex_pet::PetSubscriptionTransition transition =
+            _pet_subscription.update(false);
+        if (transition.lost && _pet_control_queue != nullptr) {
+            xQueueReset(static_cast<QueueHandle_t>(_pet_control_queue));
+        }
     }
 }
 
