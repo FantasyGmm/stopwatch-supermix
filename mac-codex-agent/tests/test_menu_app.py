@@ -11,6 +11,10 @@ import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
+AGENT_VERSION = (
+    pathlib.Path(__file__).resolve().parents[1] / "VERSION"
+).read_text(encoding="utf-8").strip()
+
 from AppKit import (
     NSAlertFirstButtonReturn,
     NSApplication,
@@ -25,7 +29,12 @@ from app_state import (
     PairingState,
     TraeSnapshot,
 )
-from menu_app import MenuBarApplication, confirm_voice_setup, prompt_agent_name
+from menu_app import (
+    ROOT_ACTION_HEIGHT,
+    MenuBarApplication,
+    confirm_voice_setup,
+    prompt_agent_name,
+)
 from voice_driver import BlackHoleInstaller, DriverInstallError, DriverState
 from voice_session import VoiceState
 
@@ -726,12 +735,19 @@ class MenuBarApplicationTests(unittest.TestCase):
         delegate.pet_window_controller_factory = PetWindow
         self.addCleanup(delegate._shutdown)
 
-        self.assertEqual(delegate.codex_pet_item.title(), "Codex Pet…")
+        self.assertEqual(
+            delegate.codex_pet_item.title(), "更改 Codex 宠物 GIF…"
+        )
+        self.assertIsNotNone(delegate.codex_pet_item.view())
+        self.assertEqual(
+            delegate.codex_pet_item.view().frame().size.height,
+            ROOT_ACTION_HEIGHT,
+        )
         separator_index = delegate.menu.indexOfItem_(delegate.codex_pet_item) + 1
         self.assertTrue(delegate.menu.itemAtIndex_(separator_index).isSeparatorItem())
         self.assertIs(
             delegate.menu.itemAtIndex_(separator_index + 1),
-            delegate.connection_item,
+            delegate.reconnect_item,
         )
 
         delegate.openCodexPet_(None)
@@ -878,7 +894,7 @@ class MenuBarApplicationTests(unittest.TestCase):
 
         self.assertEqual(
             delegate.agent_health_label.stringValue(),
-            "Studio Mac · Connected · Voice Ready · v1.0.0",
+            "Studio Mac · 语音可用",
         )
         self.assertIs(delegate.codex_item.submenu(), delegate.codex_submenu)
         self.assertIs(delegate.trae_item.submenu(), delegate.trae_submenu)
@@ -893,6 +909,81 @@ class MenuBarApplicationTests(unittest.TestCase):
         self.assertFalse(any(title.startswith("Task Alerts") for title in root_titles))
 
         delegate._shutdown()
+
+    def test_redesigned_menu_preserves_every_existing_user_action(self):
+        NSApplication.sharedApplication()
+        delegate = MenuBarApplication.alloc().initWithController_(FakeController())
+
+        delegate.applicationDidFinishLaunching_(None)
+        self.addCleanup(delegate._shutdown)
+
+        expected = {
+            delegate.setup_voice_item: ("Set Up Watch Voice Input...", delegate.menu),
+            delegate.accessibility_item: (
+                "Open Accessibility Settings...",
+                delegate.menu,
+            ),
+            delegate.codex_pet_item: ("更改 Codex 宠物 GIF…", delegate.menu),
+            delegate.reconnect_item: ("立即重新连接", delegate.menu),
+            delegate.connection_item: (
+                "Enable Watch Connection",
+                delegate.settings_submenu,
+            ),
+            delegate.rename_agent_item: ("Rename Agent...", delegate.settings_submenu),
+            delegate.retry_pairing_item: ("Retry Pairing", delegate.menu),
+            delegate.forget_watch_item: (
+                "Forget This Watch Credential...",
+                delegate.menu,
+            ),
+            delegate.open_log_item: ("Open Log", delegate.diagnostics_submenu),
+            delegate.quit_item: ("退出 StopWatch Codex Agent", delegate.menu),
+        }
+        for item, (title, owner) in expected.items():
+            with self.subTest(title=title):
+                self.assertEqual(item.title(), title)
+                self.assertIs(item.menu(), owner)
+                self.assertIs(item.target(), delegate)
+                self.assertIsNotNone(item.action())
+
+    def test_root_menu_matches_the_approved_a_visual_hierarchy(self):
+        NSApplication.sharedApplication()
+        delegate = MenuBarApplication.alloc().initWithController_(FakeController())
+
+        delegate.applicationDidFinishLaunching_(None)
+        self.addCleanup(delegate._shutdown)
+
+        self.assertEqual(delegate.agent_health_view.frame().size.width, 430)
+        self.assertEqual(delegate.codex_summary_view.frame().size.height, 52)
+        self.assertEqual(delegate.trae_summary_view.frame().size.height, 52)
+        self.assertEqual(delegate.device_summary_view.frame().size.height, 40)
+        self.assertEqual(delegate.agent_health_title_label.font().pointSize(), 14)
+        self.assertEqual(delegate.agent_health_subtitle_label.font().pointSize(), 11)
+        self.assertEqual(delegate.codex_summary_title_label.font().pointSize(), 13)
+        self.assertEqual(delegate.codex_summary_subtitle_label.font().pointSize(), 11)
+        self.assertEqual(delegate.codex_summary_detail_label.font().pointSize(), 10)
+        self.assertEqual(
+            delegate.agent_health_title_label.stringValue(),
+            "StopWatch 已连接",
+        )
+        self.assertEqual(
+            delegate.agent_health_subtitle_label.stringValue(),
+            "Studio Mac · 语音可用",
+        )
+        self.assertEqual(delegate.agent_version_label.stringValue(), f"v{AGENT_VERSION}")
+        self.assertEqual(delegate.codex_summary_title_label.stringValue(), "Codex")
+        self.assertEqual(
+            delegate.codex_summary_status_label.stringValue(),
+            "1 Pending",
+        )
+        self.assertEqual(delegate.trae_summary_title_label.stringValue(), "Trae")
+        self.assertEqual(delegate.device_summary_title_label.stringValue(), "设备与语音")
+        self.assertIs(delegate.settings_item.submenu(), delegate.settings_submenu)
+        self.assertIs(
+            delegate.diagnostics_item.submenu(), delegate.diagnostics_submenu
+        )
+        self.assertIs(delegate.connection_item.menu(), delegate.settings_submenu)
+        self.assertIs(delegate.rename_agent_item.menu(), delegate.settings_submenu)
+        self.assertIs(delegate.open_log_item.menu(), delegate.diagnostics_submenu)
 
 
 if __name__ == "__main__":

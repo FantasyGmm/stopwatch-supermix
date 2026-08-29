@@ -225,6 +225,8 @@ smoke_test_packaged_runtime() {
             HOME="$HOME" \
             PATH="/usr/bin:/bin" \
             TMPDIR="${TMPDIR:-/tmp}" \
+            PYTHONNOUSERSITE=1 \
+            PYTHONDONTWRITEBYTECODE=1 \
             STOPWATCH_CODEX_APP=0 \
             "$executable" -B -c '
 import os
@@ -275,7 +277,7 @@ import voice_session
 import voice_shortcut
 import watch_credentials
 
-app_root = pathlib.Path(os.environ["PYTHONHOME"]).resolve().parents[4]
+app_root = pathlib.Path(sys.executable).resolve().parents[2]
 external = []
 for entry in sys.path:
     resolved = pathlib.Path(entry or os.getcwd()).resolve()
@@ -323,7 +325,6 @@ validate_app_contents() {
     local required_path=""
     for required_path in \
         "$app_path/Contents/MacOS/StopWatchCodexAgent" \
-        "$app_path/Contents/MacOS/StopWatchCodexAgentPython" \
         "$resources/Drivers/$DRIVER_PACKAGE_NAME" \
         "$resources/native/libstopwatch_voice_audio.dylib" \
         "$resources/app/voice_driver.py" \
@@ -359,6 +360,7 @@ validate_app_contents() {
         "$resources/site-packages/cryptography/__init__.py" \
         "$resources/site-packages/PIL/__init__.py" \
         "$resources/site-packages/PIL/Image.py" \
+        "$app_path/Contents/Frameworks/Python3.framework/Versions/$PYTHON_VERSION/lib/python$PYTHON_VERSION/site-packages/sitecustomize.py" \
         "$app_path/Contents/Frameworks/Python3.framework/Versions/$PYTHON_VERSION/Python3"; do
         if [[ ! -f "$required_path" ]]; then
             echo "Missing packaged runtime file: $required_path" >&2
@@ -367,7 +369,7 @@ validate_app_contents() {
     done
     if ! file -b "$app_path/Contents/MacOS/StopWatchCodexAgent" |
         grep -q 'Mach-O'; then
-        echo "Packaged launcher is not a Mach-O executable" >&2
+        echo "Packaged runtime is not a Mach-O executable" >&2
         return 1
     fi
     verify_driver_package "$resources/Drivers/$DRIVER_PACKAGE_NAME" || return
@@ -553,86 +555,6 @@ write_info_plist() {
 EOF
 }
 
-build_relocatable_launcher() {
-    local output="$1"
-    local source_dir="${BUILD_ROOT:-$(dirname "$output")}"
-    local source_path="$source_dir/StopWatchCodexAgentLauncher.c"
-    mkdir -p "$source_dir"
-    cat > "$source_path" <<EOF
-#include <limits.h>
-#include <mach-o/dyld.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
-
-static int join_path(char *output, size_t size, const char *root, const char *suffix) {
-    int written = snprintf(output, size, "%s%s", root, suffix);
-    return written >= 0 && (size_t)written < size;
-}
-
-int main(int argc, char **argv) {
-    (void)argc;
-    char executable[PATH_MAX];
-    uint32_t executable_size = sizeof(executable);
-    if (_NSGetExecutablePath(executable, &executable_size) != 0) {
-        fputs("Agent launcher path is too long\n", stderr);
-        return 126;
-    }
-
-    char resolved[PATH_MAX];
-    if (realpath(executable, resolved) == NULL) {
-        perror("realpath");
-        return 126;
-    }
-    char *contents_marker = strstr(resolved, "/Contents/MacOS/");
-    if (contents_marker == NULL) {
-        fputs("Agent launcher is outside an application bundle\n", stderr);
-        return 126;
-    }
-    *contents_marker = '\0';
-
-    char python_home[PATH_MAX];
-    char python_path[PATH_MAX * 2];
-    char app_path[PATH_MAX];
-    char site_packages[PATH_MAX];
-    char runtime[PATH_MAX];
-    if (!join_path(python_home, sizeof(python_home), resolved,
-                   "/Contents/Frameworks/Python3.framework/Versions/$PYTHON_VERSION") ||
-        !join_path(app_path, sizeof(app_path), resolved,
-                   "/Contents/Resources/app") ||
-        !join_path(site_packages, sizeof(site_packages), resolved,
-                   "/Contents/Resources/site-packages") ||
-        !join_path(runtime, sizeof(runtime), resolved,
-                   "/Contents/MacOS/StopWatchCodexAgentPython")) {
-        fputs("Agent bundle path is too long\n", stderr);
-        return 126;
-    }
-    int path_written = snprintf(python_path, sizeof(python_path), "%s:%s",
-                                app_path, site_packages);
-    if (path_written < 0 || (size_t)path_written >= sizeof(python_path)) {
-        fputs("Agent Python path is too long\n", stderr);
-        return 126;
-    }
-
-    setenv("PYTHONHOME", python_home, 1);
-    setenv("PYTHONPATH", python_path, 1);
-    setenv("PYTHONNOUSERSITE", "1", 1);
-    setenv("PYTHONDONTWRITEBYTECODE", "1", 1);
-    if (getenv("STOPWATCH_CODEX_APP") == NULL) {
-        setenv("STOPWATCH_CODEX_APP", "1", 1);
-    }
-    execv(runtime, argv);
-    perror("execv");
-    return 127;
-}
-EOF
-    xcrun clang -std=c11 -O2 -arch arm64 -arch x86_64 \
-        "$source_path" -o "$output"
-    rm -f "$source_path"
-    chmod 755 "$output"
-}
-
 build_staged_app() {
     STAGING_APP="$BUILD_ROOT/StopWatch Codex Agent.app"
     STAGING_RESOURCES="$STAGING_APP/Contents/Resources"
@@ -642,7 +564,6 @@ build_staged_app() {
     STAGING_PYTHON_FRAMEWORK="$STAGING_APP/Contents/Frameworks/Python3.framework"
     STAGING_PYTHON_HOME="$STAGING_PYTHON_FRAMEWORK/Versions/$PYTHON_VERSION"
     STAGING_EXECUTABLE="$STAGING_APP/Contents/MacOS/StopWatchCodexAgent"
-    STAGING_PYTHON_EXECUTABLE="$STAGING_APP/Contents/MacOS/StopWatchCodexAgentPython"
 
     mkdir -p \
         "$STAGING_APP/Contents/MacOS" \
@@ -657,14 +578,16 @@ build_staged_app() {
     cp "$NATIVE_LIBRARY" "$STAGING_RESOURCES/native/libstopwatch_voice_audio.dylib"
     ditto "$PYTHON_FRAMEWORK_DIR/" "$STAGING_PYTHON_FRAMEWORK/"
     rm -rf "$STAGING_PYTHON_HOME/lib/python$PYTHON_VERSION/site-packages"
+    mkdir -p "$STAGING_PYTHON_HOME/lib/python$PYTHON_VERSION/site-packages"
     ditto "$SITE_PACKAGES/" "$STAGING_SITE_PACKAGES/"
-    cp "$PYTHON_APP_EXECUTABLE" "$STAGING_PYTHON_EXECUTABLE"
+    cp "$PYTHON_APP_EXECUTABLE" "$STAGING_EXECUTABLE"
     install_name_tool \
         -change '@executable_path/../../../../Python3' \
         '@executable_path/../Frameworks/Python3.framework/Versions/'"$PYTHON_VERSION"'/Python3' \
-        "$STAGING_PYTHON_EXECUTABLE"
-    chmod 755 "$STAGING_PYTHON_EXECUTABLE"
-    build_relocatable_launcher "$STAGING_EXECUTABLE"
+        "$STAGING_EXECUTABLE"
+    chmod 755 "$STAGING_EXECUTABLE"
+    cp "$ROOT_DIR/sitecustomize.py" \
+        "$STAGING_PYTHON_HOME/lib/python$PYTHON_VERSION/site-packages/sitecustomize.py"
 
     find "$STAGING_APP" -name '*.pth' -delete
     find "$STAGING_APP" -type d -name '__pycache__' -prune -exec rm -rf {} +

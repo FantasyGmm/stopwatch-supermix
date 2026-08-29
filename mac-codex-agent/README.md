@@ -8,6 +8,13 @@ release is retained. The first release is `1.0.0`; a changed set of production
 Agent inputs increments the patch version after a successful build, while an
 unchanged rebuild keeps the current version.
 
+After installing and opening the Agent, verify that its status item is actually
+present in the visible macOS menu bar:
+
+```bash
+./check_menu_bar_entry.sh
+```
+
 The current machine has no Developer ID identity, so the generated app is
 ad-hoc signed and may require manual Gatekeeper approval on another Mac.
 
@@ -102,7 +109,7 @@ manually when synchronization is needed again.
 
 ## Codex Pet
 
-Choose **Codex Pet...** (`Codex Pet…` in the menu) to open the independent pet
+Choose **更改 Codex 宠物 GIF…** in the menu to open the independent pet
 window. Drop one `.gif` file or use **Choose GIF…**. Selection and preview work
 while the watch is offline; **Send to Watch** requires an authenticated active
 Production connection to a watch whose firmware exposes the optional pet

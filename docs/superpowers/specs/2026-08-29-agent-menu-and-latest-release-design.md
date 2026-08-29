@@ -20,6 +20,13 @@ source selector and there is no global task collection.
 
 ## Approved menu direction: A, dual-source overview
 
+The locked visual source of truth and measurable native implementation contract
+are stored in
+`docs/superpowers/designs/2026-08-29-agent-menu-a/`. The root menu must use
+custom native rows matching that contract; a default single-line `NSMenuItem`
+summary is not an acceptable approximation because it loses the approved
+two-line hierarchy and source-attached task status.
+
 The root menu presents:
 
 1. A compact Agent health header with connection state, Agent name, voice
@@ -32,7 +39,9 @@ The root menu presents:
    detail.
 4. A Device & Voice row whose submenu contains connection, pairing,
    verification, Watch, Bluetooth, device, and voice details.
-5. Existing reconnect, connection toggle, rename, pairing repair, log, and
+5. The existing Codex pet GIF action, which opens the complete conversion,
+   preview, upload, restore, and cancellation window.
+6. Existing reconnect, connection toggle, rename, pairing repair, log, and
    quit actions. Contextual repair actions appear only when their matching
    error state is active.
 
