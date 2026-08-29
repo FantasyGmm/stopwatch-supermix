@@ -806,6 +806,9 @@ class MenuBarApplicationTests(unittest.TestCase):
             delegate.menu.itemAtIndex_(separator_index + 1),
             delegate.reconnect_item,
         )
+        self.assertGreaterEqual(
+            delegate.settings_submenu.indexOfItem_(delegate.connection_item), 0
+        )
 
         delegate.codex_pet_item.view().mouseUp_(None)
         delegate.codex_pet_item.view().mouseUp_(None)

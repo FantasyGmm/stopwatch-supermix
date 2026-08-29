@@ -219,6 +219,21 @@ class LowBatteryAlertFirmwareContractTests(unittest.TestCase):
         self.assertIn("bool isPlaying()", audio)
         self.assertIn("bool Hal::isAudioPlaying()", audio)
 
+    def test_alert_volume_and_codex_battery_color_share_device_policy(self):
+        service = (
+            ROOT / "main" / "runtime" / "power" / "global_low_battery_alert_service.cpp"
+        ).read_text(encoding="utf-8")
+        codex = (
+            ROOT / "main" / "apps" / "app_codex_status" / "app_codex_status.cpp"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("audio::play_melody({76, 72}, 0.09f, 1.0f);", service)
+        update_start = codex.index("void AppCodexStatus::update_battery()")
+        update_end = codex.index("void AppCodexStatus::ensure_network_started()", update_start)
+        update = codex[update_start:update_end]
+        self.assertIn("LowBatteryAlertLogic::lowThreshold", update)
+        self.assertIn("0xE74C3C", update)
+
 
 if __name__ == "__main__":
     unittest.main()

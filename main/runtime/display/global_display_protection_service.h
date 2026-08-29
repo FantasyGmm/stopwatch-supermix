@@ -32,6 +32,8 @@ public:
     const DisplayProtectionConfig& config() const;
     void applyConfig(const DisplayProtectionConfig& config, bool persist);
     void screenOffNow();
+    void wakeFromDeferredButton();
+    void setRightButtonWakeDeferred(bool deferred);
     void applyUserBrightness(int brightness, bool persist);
     bool touchInputSuppressed() const;
     DisplayProtectionState state() const;
@@ -59,6 +61,7 @@ private:
     ExternalPowerHealthLogPolicy _power_health_log_policy;
     lv_indev_state_t _last_touch_state = LV_INDEV_STATE_REL;
     ButtonPhysicalState _last_buttons{};
+    bool _defer_right_button_wake = false;
     bool _initialized = false;
 };
 

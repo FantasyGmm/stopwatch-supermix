@@ -20,6 +20,8 @@ struct CodexTaskAlert {
     std::string time;
     CodexTaskState state = CodexTaskState::Completed;
     uint64_t route = 0;
+    std::string model;
+    std::string effort;
 };
 
 struct CodexTaskDetailEnvelope {

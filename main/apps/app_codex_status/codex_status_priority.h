@@ -34,6 +34,14 @@ inline bool codex_status_contains(const char* value, const char* token)
         std::strstr(value, token) != nullptr;
 }
 
+inline const char* codex_task_model_display(const char* model)
+{
+    if (model == nullptr) {
+        return "";
+    }
+    return std::strncmp(model, "gpt-", 4) == 0 ? model + 4 : model;
+}
+
 
 inline CodexStatusChannels resolve_codex_status_channels(
     const char* base_text,
@@ -46,31 +54,26 @@ inline CodexStatusChannels resolve_codex_status_channels(
 {
     CodexStatusChannels result;
     if (base_is_error || codex_status_contains(base_text, "ERR")) {
-        result.connection = {
-            "连接异常", palette.red, palette.red, true};
+        result.connection = {"ERROR", palette.red, palette.red, true};
     } else if (codex_status_contains(base_text, "LIVE")) {
-        result.connection = {
-            "Mac 已连接", palette.mint, palette.soft, true};
+        result.connection = {"CONNECTED", palette.mint, palette.soft, true};
     } else if (base_text != nullptr && base_text[0] != '\0' &&
                std::strcmp(base_text, "START") != 0) {
-        result.connection = {
-            "连接中", palette.violet, palette.soft, true};
+        result.connection = {"CONNECTING", palette.violet, palette.soft, true};
     } else {
-        result.connection = {
-            "未连接", palette.dim, palette.dim, false};
+        result.connection = {"UNAVAILABLE", palette.red, palette.red, true};
     }
 
     if (voice_error) {
-        result.voice = {"语音异常", palette.red, palette.red, true};
+        result.voice = {"ERROR", palette.red, palette.red, true};
     } else if (voice_active) {
-        result.voice = {"语音中", palette.cyan, palette.cyan, true};
+        result.voice = {"ACTIVE", palette.cyan, palette.cyan, true};
     } else if (voice_starting) {
-        result.voice = {
-            "语音连接中", palette.violet, palette.soft, true};
+        result.voice = {"CONNECTING", palette.violet, palette.soft, true};
     } else if (voice_ready) {
-        result.voice = {"语音可用", palette.cyan, palette.soft, true};
+        result.voice = {"READY", palette.mint, palette.soft, true};
     } else {
-        result.voice = {"语音不可用", palette.dim, palette.dim, false};
+        result.voice = {"ERROR", palette.red, palette.red, true};
     }
     return result;
 }

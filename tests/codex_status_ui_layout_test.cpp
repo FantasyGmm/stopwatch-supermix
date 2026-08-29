@@ -15,19 +15,6 @@ int main()
     assert(kPetScale == 384);
     assert(kPetX + kPetWidth == 199);
 
-    assert(kChannelDotSize == 6);
-    assert(kChannelStatusY == 63);
-    assert(kConnectionStatusDotX == 132);
-    assert(kConnectionStatusLabelX == 144);
-    assert(kConnectionStatusLabelWidth == 92);
-    assert(kVoiceStatusDotX == 247);
-    assert(kVoiceStatusLabelX == 259);
-    assert(kVoiceStatusLabelWidth == 92);
-    assert(kConnectionStatusLabelX + kConnectionStatusLabelWidth <
-           kVoiceStatusDotX);
-    assert(kVoiceStatusLabelX + kVoiceStatusLabelWidth <= 393);
-    assert(kChannelStatusY > kBrandY);
-
     assert(kBeaconSpine.x == 210);
     assert(kBeaconSpine.y == 96);
     assert(kBeaconSpine.w == 2);
@@ -45,6 +32,27 @@ int main()
     assert(kModelCaptionY < kModelValueY);
     assert(kModelValueY < kEffortCaptionY);
     assert(kEffortCaptionY < kEffortValueY);
+    assert(kVoiceDotSize == 7);
+    assert(kVoiceDotX == kTelemetryX);
+    assert(kVoiceDotX + kVoiceDotSize < kVoiceValueX);
+    assert(kVoiceValueX + kVoiceValueWidth ==
+           kTelemetryX + kTelemetryWidth);
+
+    const AgentNameFit full_size = fit_agent_name(180, kTelemetryWidth);
+    assert(full_size.scale == 256);
+    assert(!full_size.elide);
+    const AgentNameFit size_24 = fit_agent_name(212, kTelemetryWidth);
+    assert(size_24.scale == 236);
+    assert(!size_24.elide);
+    const AgentNameFit size_22 = fit_agent_name(230, kTelemetryWidth);
+    assert(size_22.scale == 217);
+    assert(!size_22.elide);
+    const AgentNameFit size_20 = fit_agent_name(250, kTelemetryWidth);
+    assert(size_20.scale == 197);
+    assert(!size_20.elide);
+    const AgentNameFit elided = fit_agent_name(300, kTelemetryWidth);
+    assert(elided.scale == 197);
+    assert(elided.elide);
 
     assert(kQuotaX == 55);
     assert(kQuotaWidth == 356);
@@ -87,18 +95,28 @@ int main()
     assert(kAlertProjectY == 332);
     assert(kAlertProjectWidth == 176);
     assert(kAlertDetailX == 93);
-    assert(kAlertDetailY == 363);
+    assert(kAlertDetailY == 372);
     assert(kAlertDetailWidth == 280);
     assert(kAlertDetailHeight == 41);
+    assert(kTaskInlineX == 70);
+    assert(kTaskInlineWidth == 326);
+    assert(kTaskInlineX + kTaskInlineWidth == 396);
+    assert(kTaskNameWidth == 174);
+    assert(kTaskModelWidth == 42);
+    assert(kTaskEffortWidth == 44);
+    assert(kTaskInlineGap == 8);
+    assert(kTaskTitleScale == 232);
+    assert(kTaskNameWidth + kTaskModelWidth + kTaskEffortWidth +
+           2 * kTaskInlineGap <= kTaskInlineWidth);
     assert(kPageIndicatorY == 416);
     assert(kBatteryY == 432);
 
     assert(kStateLabelY - kAlertDividerY == 12);
     assert(kAlertProjectY - kTaskIndexY == 26);
-    assert(kAlertDetailY - kAlertProjectY == 31);
-    assert(kPageIndicatorY - (kAlertDetailY + kAlertDetailHeight) == 12);
+    assert(kAlertDetailY - kAlertProjectY == 40);
+    assert(kPageIndicatorY - (kAlertDetailY + kAlertDetailHeight) == 3);
     assert(kBatteryY - kPageIndicatorY == 16);
-    assert(kBatteryY - kAlertDetailY == 69);
+    assert(kBatteryY - kAlertDetailY == 60);
     assert(kBatteryY < kScreenSize);
 
     assert(kPanelGraphite == 0x27303E);

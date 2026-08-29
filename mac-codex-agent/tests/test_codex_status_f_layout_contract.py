@@ -40,7 +40,7 @@ class CodexStatusFLayoutContractTests(unittest.TestCase):
         self.assertIn("constexpr int kStateCountY = 320", layout)
         self.assertIn("constexpr int kTaskIndexY = 306", layout)
         self.assertIn("constexpr int kAlertProjectY = 332", layout)
-        self.assertIn("constexpr int kAlertDetailY = 363", layout)
+        self.assertIn("constexpr int kAlertDetailY = 372", layout)
         self.assertIn("constexpr int kAlertDetailHeight = 41", layout)
         self.assertIn("constexpr int kBatteryY = 432", layout)
 
@@ -95,11 +95,88 @@ class CodexStatusFLayoutContractTests(unittest.TestCase):
         self.assertIn('"RUNNING"', app)
         self.assertIn("_alert_carousel.pending_count()", app)
         self.assertIn("_alert_carousel.running_count()", app)
-        self.assertIn("LV_LABEL_LONG_MODE_WRAP", app)
-        self.assertIn("lv_obj_set_height(_alert_detail, kAlertDetailHeight)", app)
+        self.assertIn("LV_LABEL_LONG_MODE_DOTS", app)
+        self.assertIn("lv_obj_set_size(_alert_info_row, kTaskInlineWidth, kAlertDetailHeight)", app)
         self.assertNotIn('state_label = "等待指令"', app)
         self.assertNotIn('state_label = "正在处理"', app)
         self.assertIn("lv_label_set_text(_alert_detail, alert->title.c_str())", app)
+        self.assertIn("codex_task_model_display(alert->model.c_str())", app)
+        self.assertIn("uppercase_short(effort, sizeof(effort), alert->effort.c_str())", app)
+
+    def test_g3_task_metadata_centers_visible_content_and_matches_approved_type_scale(self):
+        app = (
+            ROOT / "main/apps/app_codex_status/app_codex_status.cpp"
+        ).read_text()
+
+        self.assertIn(
+            "lv_obj_set_style_max_width(_alert_detail, kTaskNameWidth, 0)",
+            app,
+        )
+        self.assertIn("lv_obj_set_width(_alert_detail, LV_SIZE_CONTENT)", app)
+        self.assertIn("TaskBadgeWidgets make_task_badge", app)
+        self.assertEqual(app.count("make_task_badge(_alert_info_row,"), 1)
+        self.assertIn("make_task_text(_alert_info_row, kTaskModelWidth)", app)
+        task_text = app.split("lv_obj_t* make_task_text", 1)[1].split(
+            "lv_obj_t* make_channel_dot", 1
+        )[0]
+        self.assertIn("&lv_font_montserrat_12", task_text)
+        self.assertIn("lv_obj_set_width(label, width)", task_text)
+        self.assertNotIn(
+            "lv_obj_set_size(label, width, kTaskBadgeHeight)", task_text
+        )
+        self.assertIn(
+            "lv_obj_set_style_text_font(label, &lv_font_montserrat_10, 0)",
+            app,
+        )
+        self.assertIn("constexpr int kTaskTitleScale = 232", (
+            ROOT / "main/apps/app_codex_status/codex_status_ui_layout.h"
+        ).read_text())
+        self.assertIn(
+            "lv_obj_set_style_transform_scale_x(_alert_detail, kTaskTitleScale, 0)",
+            app,
+        )
+        self.assertNotIn(
+            "lv_obj_set_style_translate_y(_alert_detail", app
+        )
+
+    def test_voice_value_keeps_text_and_adds_a_colored_status_dot(self):
+        app = (
+            ROOT / "main/apps/app_codex_status/app_codex_status.cpp"
+        ).read_text()
+        header = (
+            ROOT / "main/apps/app_codex_status/app_codex_status.h"
+        ).read_text()
+
+        self.assertIn("_voice_status_dot", header)
+        self.assertIn("_voice_status_dot = make_channel_dot(", app)
+        self.assertIn("presentation.dot_color", app)
+        self.assertIn("presentation.text", app)
+
+    def test_agent_name_is_single_line_and_shrinks_before_eliding(self):
+        app = (
+            ROOT / "main/apps/app_codex_status/app_codex_status.cpp"
+        ).read_text()
+
+        self.assertIn("fit_agent_name(measured.x, kTelemetryWidth)", app)
+        self.assertIn("lv_obj_set_height(_agent_value, kAgentValueHeight)", app)
+        self.assertIn("LV_LABEL_LONG_MODE_DOTS", app)
+
+    def test_live_status_wins_over_stale_status_sampled_earlier_in_the_loop(self):
+        app = (
+            ROOT / "main/apps/app_codex_status/app_codex_status.cpp"
+        ).read_text()
+        loop = app.split("void AppCodexStatus::onRunning()", 1)[1].split(
+            "if (_transport_mode == \"auto\"", 1
+        )[0]
+
+        self.assertLess(
+            loop.index("if (ble_connected && !_ble_was_connected)"),
+            loop.index("if (ble_connected && _last_status_payload_ms != 0"),
+        )
+        self.assertLess(
+            loop.index("if (ble_connected && _last_status_payload_ms != 0"),
+            loop.index("while (_ble_transport->take_message(message))"),
+        )
 
     def test_active_state_labels_share_the_glow_phase_without_an_underline(self):
         app = (

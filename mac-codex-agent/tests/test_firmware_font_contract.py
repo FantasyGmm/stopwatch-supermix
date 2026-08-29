@@ -31,14 +31,8 @@ class FirmwareFontContractTests(unittest.TestCase):
         self.assertIn(": &font_puhui_14_1", app)
         self.assertIn(
             '_alert_detail = make_fixed_label(\n'
-            '        _codex_page,\n'
-            '        "",\n'
-            '        kAlertDetailX,\n'
-            '        kAlertDetailY,\n'
-            '        kAlertDetailWidth,\n'
-            '        &font_puhui_14_1,\n'
-            '        kSignalWhite,\n'
-            '        LV_TEXT_ALIGN_CENTER',
+            '        _alert_info_row, "", 0, 0, kTaskNameWidth,\n'
+            '        &CodexTaskTitle21, kSignalWhite, LV_TEXT_ALIGN_LEFT',
             app,
         )
         for character in "中文项目进展监控":
@@ -120,7 +114,7 @@ class FirmwareFontContractTests(unittest.TestCase):
             "constexpr uint32_t kCodexBlue = kBeaconViolet;",
             app,
         )
-        self.assertIn("resolve_codex_status(", app)
+        self.assertIn("resolve_codex_status_channels(", app)
         self.assertIn("set_status(live_status, kCodexBlue);", app)
         self.assertRegex(
             app,
@@ -136,7 +130,7 @@ class FirmwareFontContractTests(unittest.TestCase):
             '        kAlertProjectX,\n'
             '        kAlertProjectY,\n'
             '        kAlertProjectWidth,\n'
-            '        &lv_font_montserrat_22,\n'
+            '        &MontserratSemiBold26,\n'
             '        kBeaconViolet,\n'
             '        LV_TEXT_ALIGN_CENTER',
             app,
@@ -180,15 +174,17 @@ class FirmwareFontContractTests(unittest.TestCase):
         self.assertIn("kBeaconSpine.x", app)
         self.assertIn("kBeaconSpine.y", app)
         self.assertIn("kBeaconViolet", app)
-        self.assertIn("_model_value = make_telemetry_label(", app)
+        self.assertIn("_agent_value = make_telemetry_label(", app)
+        self.assertIn('"AGENT"', app)
         self.assertIn("kModelCaptionY", app)
         self.assertIn("kModelValueY", app)
-        self.assertIn("_effort_value = make_telemetry_label(", app)
+        self.assertIn("_voice_value = make_telemetry_label(", app)
+        self.assertIn('"VOICE"', app)
         self.assertIn("kEffortCaptionY", app)
         self.assertIn("kEffortValueY", app)
         self.assertGreaterEqual(app.count("&MontserratSemiBold26"), 3)
         self.assertIn(
-            '_model_value = make_telemetry_label(\n'
+            '_agent_value = make_telemetry_label(\n'
             '        _codex_page,\n'
             '        kTelemetryX,\n'
             '        kModelValueY,\n'
@@ -198,11 +194,11 @@ class FirmwareFontContractTests(unittest.TestCase):
             app,
         )
         self.assertIn(
-            '_effort_value = make_telemetry_label(\n'
+            '_voice_value = make_telemetry_label(\n'
             '        _codex_page,\n'
-            '        kTelemetryX,\n'
+            '        kVoiceValueX,\n'
             '        kEffortValueY,\n'
-            '        kTelemetryWidth,\n'
+            '        kVoiceValueWidth,\n'
             '        "--",\n'
             '        &MontserratSemiBold26,',
             app,
@@ -232,16 +228,17 @@ class FirmwareFontContractTests(unittest.TestCase):
             '        kAlertProjectX,\n'
             '        kAlertProjectY,\n'
             '        kAlertProjectWidth,\n'
-            '        &lv_font_montserrat_22,\n'
+            '        &MontserratSemiBold26,\n'
             '        kBeaconViolet,\n'
             '        LV_TEXT_ALIGN_CENTER',
             app,
         )
         self.assertIn(
-            "lv_obj_set_style_text_font(_alert_project, &lv_font_montserrat_22, 0)",
+            "lv_obj_set_style_text_font(_alert_project, &MontserratSemiBold26, 0)",
             app,
         )
-        self.assertIn("? &lv_font_montserrat_22", app)
+        self.assertIn("? &MontserratSemiBold26", app)
+        self.assertIn(": &CodexTaskTitle21", app)
         self.assertIn("lv_color_hex(kQuotaMint)", app)
         self.assertIn("constexpr uint32_t kInstrumentBlack = 0x000000", layout)
         self.assertIn("constexpr Rect kBeaconSpine{210, 96, 2, 120}", layout)

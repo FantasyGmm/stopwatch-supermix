@@ -6,8 +6,9 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 HEADER = ROOT / "main/apps/app_codex_status/codex_task_focus_view.h"
 SOURCE = ROOT / "main/apps/app_codex_status/codex_task_focus_view.cpp"
 PUHUI = ROOT / "main/assets/fonts/font_puhui_14_1.c"
-DETAIL_FONT = ROOT / "main/assets/fonts/CodexDetail16.c"
+DETAIL_FONT = ROOT / "main/assets/fonts/CodexDetail17.c"
 FOCUSED_TITLE_FONT = ROOT / "main/assets/fonts/CodexTaskTitle21.c"
+SDKCONFIG_DEFAULTS = ROOT / "sdkconfig.defaults"
 
 
 class CodexTaskFocusViewContractTests(unittest.TestCase):
@@ -31,7 +32,7 @@ class CodexTaskFocusViewContractTests(unittest.TestCase):
         self.assertIn("std::array<lv_obj_t*, 8> _track_nodes", header)
         self.assertIn("std::array<lv_obj_t*, 16> _detail_paragraphs", header)
         self.assertIn("lv_obj_t* _detail_drag_handle", header)
-        self.assertIn("lv_obj_t* _detail_live_dot", header)
+        self.assertNotIn("_detail_live_dot", header)
         self.assertNotIn("_track_arc", header)
         self.assertNotIn("_track_accents", header)
         self.assertNotIn("_detail_back", header)
@@ -62,14 +63,12 @@ class CodexTaskFocusViewContractTests(unittest.TestCase):
             '"当前语音目标"',
             '"上下滑动切换　↓"',
             '"Agent 最后一条完整回复"',
-            '"Agent 实时进展"',
             '"按住右键 · 发送下一步"',
             '"按住右键 · 引导当前任务"',
         ):
             self.assertIn(copy, source)
         self.assertNotIn("TaskTrackShape::PendingDiamond", source)
-        self.assertIn("task->state == CodexTaskState::Running", source)
-        self.assertIn("set_hidden(_detail_live_dot, !live)", source)
+        self.assertNotIn('"Agent 实时进展"', source)
         self.assertIn("kDetailDragHandleX", source)
         self.assertIn("kDetailDragHandleY", source)
         self.assertIn("kDetailDragHandleWidth", source)
@@ -114,8 +113,8 @@ class CodexTaskFocusViewContractTests(unittest.TestCase):
         layout = (ROOT / "main/apps/app_codex_status/codex_task_focus_layout.h").read_text()
         self.assertIn("kStreamFocusedCjkScale = 256", layout)
         self.assertIn("kStreamNeighborCjkScale = 256", layout)
-        self.assertIn("kDetailBodyFontPx = 16", layout)
-        self.assertIn("kDetailReplyLineHeight = 25", layout)
+        self.assertIn("kDetailBodyFontPx = 17", layout)
+        self.assertIn("kDetailReplyLineHeight = 27", layout)
         self.assertIn("LV_FONT_DECLARE(CodexTaskTitle21)", source)
         self.assertIn(
             "cjk ? &CodexTaskTitle21 : &MontserratSemiBold26",
@@ -126,6 +125,25 @@ class CodexTaskFocusViewContractTests(unittest.TestCase):
             self.assertTrue(static_font.is_file())
             self.assertIn(f"Size: {size} px", static_font.read_text()[:200])
 
+    def test_fixed_detail_fonts_cover_every_rendered_label(self):
+        def generated_symbols(size):
+            source = (
+                ROOT / f"main/assets/fonts/CodexFocusStatic{size}.c"
+            ).read_text(encoding="utf-8")[:2000]
+            return source.split("--symbols ", 1)[1].split(" --no-kerning", 1)[0]
+
+        required = {
+            10: "当前语音目标正在录音",
+            11: "等待你的指令正在执行待回复运行中Agent 最后一条完整回复",
+            16: (
+                "任务上下滑动切换　↓按住右键 · 发送下一步引导当前任务"
+                "连接已断开语音不可用松开右键发送"
+            ),
+        }
+        for size, labels in required.items():
+            symbols = set(generated_symbols(size))
+            self.assertEqual(set(labels) - symbols, set(), f"missing {size}px glyphs")
+
     def test_detail_reply_uses_one_native_font_without_fallback_or_scaling(self):
         source = SOURCE.read_text(encoding="utf-8")
         detail_font = DETAIL_FONT.read_text(encoding="utf-8")
@@ -133,13 +151,18 @@ class CodexTaskFocusViewContractTests(unittest.TestCase):
             "const lv_font_t* detail_body_font()", 1
         )[1].split("void set_text_scale", 1)[0]
 
-        self.assertIn("LV_FONT_DECLARE(CodexDetail16)", source)
-        self.assertIn("return &CodexDetail16;", body_font)
+        self.assertIn("LV_FONT_DECLARE(CodexDetail17)", source)
+        self.assertIn("return &CodexDetail17;", body_font)
         self.assertNotIn("fallback", body_font)
         self.assertNotIn("font_puhui_14_1", body_font)
-        self.assertIn("Size: 16 px", detail_font[:200])
+        self.assertIn("Size: 17 px", detail_font[:200])
         self.assertIn("Bpp: 2", detail_font[:200])
         self.assertIn(".fallback = NULL", detail_font)
+        self.assertIn(".bitmap_format = 2", detail_font)
+        self.assertIn(
+            "CONFIG_LV_USE_FONT_COMPRESSED=y",
+            SDKCONFIG_DEFAULTS.read_text(encoding="utf-8"),
+        )
         self.assertNotIn("set_text_scale(paragraph", source)
 
 

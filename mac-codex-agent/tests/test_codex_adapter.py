@@ -143,6 +143,32 @@ class CodexStateCollectorTests(unittest.TestCase):
             self.assertEqual(snapshot["codex_model"], "gpt-5.6-sol")
             self.assertEqual(snapshot["codex_effort"], "medium")
 
+    def test_each_active_alert_carries_its_own_model_and_effort(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            collector = self.collector_for_running_models(
+                root,
+                (
+                    running_alert("alpha", "2026-07-12T00:01:00Z"),
+                    running_alert("beta", "2026-07-12T00:02:00Z"),
+                    running_alert("missing", "2026-07-12T00:03:00Z"),
+                ),
+                (
+                    ("alpha", "gpt-5.6-sol", "high"),
+                    ("beta", "gpt-5.5", "medium"),
+                ),
+            )
+
+            snapshot = collector.get_state()
+
+            alerts = {
+                item["thread_id"]: (item.get("model", ""), item.get("effort", ""))
+                for item in snapshot["codex_alerts"]
+            }
+            self.assertEqual(alerts["alpha"], ("gpt-5.6-sol", "high"))
+            self.assertEqual(alerts["beta"], ("gpt-5.5", "medium"))
+            self.assertEqual(alerts["missing"], ("", ""))
+
     def test_no_running_conversations_restore_persisted_selection(self):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)

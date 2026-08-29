@@ -24,6 +24,7 @@
 #include "codex_pet_runtime.h"
 #include "codex_pet_store.h"
 #include "codex_pet_transfer.h"
+#include "codex_screen_off_voice_policy.h"
 #include "agent_panel_model.h"
 #include "agent_panel_ui_layout.h"
 #include "agent_registry_store.h"
@@ -86,8 +87,9 @@ private:
     lv_obj_t* _pinned_microphone_stem = nullptr;
     lv_obj_t* _pinned_microphone_base = nullptr;
     lv_obj_t* _pinned_microphone_prompt_label = nullptr;
-    lv_obj_t* _model_value       = nullptr;
-    lv_obj_t* _effort_value      = nullptr;
+    lv_obj_t* _agent_value       = nullptr;
+    lv_obj_t* _voice_status_dot  = nullptr;
+    lv_obj_t* _voice_value       = nullptr;
     lv_obj_t* _week_pct          = nullptr;
     lv_obj_t* _week_bar          = nullptr;
     lv_obj_t* _pending_label     = nullptr;
@@ -96,12 +98,12 @@ private:
     lv_obj_t* _running_count     = nullptr;
     lv_obj_t* _task_index        = nullptr;
     lv_obj_t* _alert_project     = nullptr;
+    lv_obj_t* _alert_info_row    = nullptr;
     lv_obj_t* _alert_detail      = nullptr;
+    lv_obj_t* _alert_model_label = nullptr;
+    lv_obj_t* _alert_effort_badge = nullptr;
+    lv_obj_t* _alert_effort_label = nullptr;
     lv_obj_t* _battery_label     = nullptr;
-    lv_obj_t* _connection_status_dot = nullptr;
-    lv_obj_t* _connection_status_label = nullptr;
-    lv_obj_t* _voice_status_dot = nullptr;
-    lv_obj_t* _voice_status_label = nullptr;
     lv_obj_t* _host_label        = nullptr;
     lv_obj_t* _pet_image         = nullptr;
     lv_obj_t* _agent_panel_root  = nullptr;
@@ -199,6 +201,7 @@ private:
     StatusPageSwipeLogic _page_swipe;
     TraeCardTapLogic _trae_card_tap;
     VoiceButtonDispatcher _voice_button_dispatcher;
+    CodexScreenOffVoicePolicy _screen_off_voice_policy;
     PinnedMicrophoneController _pinned_microphone_controller;
     AgentPanelModel _agent_panel_model;
     secure_pairing::AgentRegistry _agent_registry;

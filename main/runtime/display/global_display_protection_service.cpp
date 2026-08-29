@@ -1,4 +1,5 @@
 #include "global_display_protection_service.h"
+#include "display_button_wake_policy.h"
 
 #include <hal/hal.h>
 #include <hal/utils/settings/settings.h>
@@ -138,9 +139,17 @@ void GlobalDisplayProtectionService::update()
     const ButtonPhysicalState buttons = GetHAL().readButtonPhysicalState();
     const lv_indev_state_t touch_state = lv_indev_get_state(indev);
     const bool touch_wake_requested = GetHAL().consumeTouchWakeRequest();
+    const bool left_pressed_edge =
+        buttons.a_pressed && !_last_buttons.a_pressed;
+    const bool right_pressed_edge =
+        buttons.b_pressed && !_last_buttons.b_pressed;
+    const bool right_wake_deferred = shouldDeferRightButtonWake(
+        display_was_off,
+        buttons.a_pressed,
+        right_pressed_edge,
+        _defer_right_button_wake);
     const bool button_pressed =
-        (buttons.a_pressed && !_last_buttons.a_pressed) ||
-        (buttons.b_pressed && !_last_buttons.b_pressed);
+        left_pressed_edge || (right_pressed_edge && !right_wake_deferred);
     const bool touch_pressed =
         touch_state == LV_INDEV_STATE_PR && _last_touch_state == LV_INDEV_STATE_REL;
 
@@ -184,6 +193,7 @@ void GlobalDisplayProtectionService::shutdown()
     GetHAL().prepareTouchInputForActiveDisplay();
     _last_touch_state = LV_INDEV_STATE_REL;
     _last_buttons = {};
+    _defer_right_button_wake = false;
     _initialized = false;
     GetHAL().setLvglScreenOffMode(false);
 }
@@ -271,6 +281,19 @@ void GlobalDisplayProtectionService::screenOffNow()
         return;
     }
     acceptDecision(_logic.screenOffNow(GetHAL().millis()));
+}
+
+void GlobalDisplayProtectionService::wakeFromDeferredButton()
+{
+    if (!_initialized || _logic.state() != DisplayProtectionState::ScreenOff) {
+        return;
+    }
+    restoreAndReset(GetHAL().millis(), DisplayWakeReason::Button);
+}
+
+void GlobalDisplayProtectionService::setRightButtonWakeDeferred(bool deferred)
+{
+    _defer_right_button_wake = deferred;
 }
 
 void GlobalDisplayProtectionService::applyUserBrightness(int brightness,

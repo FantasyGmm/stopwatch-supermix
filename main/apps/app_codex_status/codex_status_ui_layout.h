@@ -11,6 +11,24 @@ struct Rect {
     int h;
 };
 
+struct AgentNameFit {
+    int scale;
+    bool elide;
+};
+
+inline AgentNameFit fit_agent_name(int unscaled_width, int available_width)
+{
+    constexpr int scales[] = {256, 236, 217, 197};
+    for (const int scale : scales) {
+        const int scaled_width =
+            (unscaled_width * scale + 255) / 256;
+        if (scaled_width <= available_width) {
+            return {scale, false};
+        }
+    }
+    return {scales[3], true};
+}
+
 constexpr int kScreenSize = 466;
 
 constexpr uint32_t kInstrumentBlack = 0x000000;
@@ -27,15 +45,6 @@ constexpr int kLogoY = 22;
 constexpr int kLogoScale = 170;
 constexpr int kBrandX = 218;
 constexpr int kBrandY = 32;
-constexpr int kStatusY = 63;
-constexpr int kChannelStatusY = 63;
-constexpr int kChannelDotSize = 6;
-constexpr int kConnectionStatusDotX = 132;
-constexpr int kConnectionStatusLabelX = 144;
-constexpr int kConnectionStatusLabelWidth = 92;
-constexpr int kVoiceStatusDotX = 247;
-constexpr int kVoiceStatusLabelX = 259;
-constexpr int kVoiceStatusLabelWidth = 92;
 
 constexpr int kPetX = 55;
 constexpr int kPetY = 88;
@@ -46,10 +55,16 @@ constexpr Rect kBeaconSpine{210, 96, 2, 120};
 
 constexpr int kTelemetryX = 231;
 constexpr int kTelemetryWidth = 200;
+constexpr int kAgentValueHeight = 28;
 constexpr int kModelCaptionY = 98;
 constexpr int kModelValueY = 120;
 constexpr int kEffortCaptionY = 154;
 constexpr int kEffortValueY = 176;
+constexpr int kVoiceDotX = 231;
+constexpr int kVoiceDotY = 187;
+constexpr int kVoiceDotSize = 7;
+constexpr int kVoiceValueX = 246;
+constexpr int kVoiceValueWidth = 185;
 
 constexpr int kQuotaX = 55;
 constexpr int kQuotaWidth = 356;
@@ -80,9 +95,17 @@ constexpr int kAlertProjectX = 145;
 constexpr int kAlertProjectY = 332;
 constexpr int kAlertProjectWidth = 176;
 constexpr int kAlertDetailX = 93;
-constexpr int kAlertDetailY = 363;
+constexpr int kAlertDetailY = 372;
 constexpr int kAlertDetailWidth = 280;
 constexpr int kAlertDetailHeight = 41;
+constexpr int kTaskInlineX = 70;
+constexpr int kTaskInlineWidth = 326;
+constexpr int kTaskNameWidth = 174;
+constexpr int kTaskModelWidth = 42;
+constexpr int kTaskEffortWidth = 44;
+constexpr int kTaskBadgeHeight = 18;
+constexpr int kTaskInlineGap = 8;
+constexpr int kTaskTitleScale = 232;
 constexpr int kPageIndicatorY = 416;
 constexpr int kBatteryY = 432;
 

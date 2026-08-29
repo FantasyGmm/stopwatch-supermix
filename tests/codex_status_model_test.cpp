@@ -111,7 +111,17 @@ int main()
     assert(snapshot.alerts[0].state == CodexTaskState::Pending);
     assert(snapshot.alerts[1].route == UINT64_C(0xfedcba9876543210));
     assert(snapshot.alerts[1].state == CodexTaskState::Running);
+    assert(snapshot.alerts[0].model.empty());
+    assert(snapshot.alerts[0].effort.empty());
     assert(snapshot.completed_count == 7);
+
+    assert(parse(
+        R"({"codex_alerts":[{"route":"0123456789abcdef","project":"StopWatch","title":"Waiting","state":"pending","model":"gpt-5.6-sol","effort":"high"}]})",
+        snapshot
+    ) == CodexMessageKind::Status);
+    assert(snapshot.alerts.size() == 1);
+    assert(snapshot.alerts[0].model == "gpt-5.6-sol");
+    assert(snapshot.alerts[0].effort == "high");
 
     const CodexStatusSnapshot valid_snapshot = snapshot;
 
@@ -174,6 +184,21 @@ int main()
         assert(snapshot.alert_revision == valid_snapshot.alert_revision);
         assert(snapshot.alerts.size() == valid_snapshot.alerts.size());
         assert(snapshot.alerts[0].route == valid_snapshot.alerts[0].route);
+    }
+    const std::string invalid_metadata[] = {
+        R"({"codex_alerts":[{"route":"0123456789abcdef","project":"p","title":"t","state":"pending","model":56,"effort":"high"}]})",
+        R"({"codex_alerts":[{"route":"0123456789abcdef","project":"p","title":"t","state":"pending","model":"gpt-5.6-sol"}]})",
+        std::string(
+            R"({"codex_alerts":[{"route":"0123456789abcdef","project":"p","title":"t","state":"pending","model":")") +
+            std::string(65, 'm') + R"(","effort":"high"}]})",
+        std::string(
+            R"({"codex_alerts":[{"route":"0123456789abcdef","project":"p","title":"t","state":"pending","model":"gpt-5.6-sol","effort":")") +
+            std::string(33, 'e') + R"("}]})",
+    };
+    for (const std::string& invalid : invalid_metadata) {
+        assert(parse(invalid.c_str(), snapshot) == CodexMessageKind::Invalid);
+        assert(snapshot.model == valid_snapshot.model);
+        assert(snapshot.alert_revision == valid_snapshot.alert_revision);
     }
 
     std::string too_many = R"({"codex_alerts":[)";
