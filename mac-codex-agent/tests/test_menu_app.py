@@ -20,6 +20,7 @@ from AppKit import (
     NSApplication,
     NSColor,
     NSControlStateValueOn,
+    NSTextAlignmentCenter,
 )
 
 from app_state import (
@@ -692,7 +693,62 @@ class MenuBarApplicationTests(unittest.TestCase):
             ],
         )
 
-    def test_codex_pet_action_precedes_connection_actions_and_reuses_window(self):
+    def test_codex_pet_menu_item_uses_desktop_gif_label(self):
+        NSApplication.sharedApplication()
+        delegate = MenuBarApplication.alloc().initWithController_(FakeController())
+        delegate.applicationDidFinishLaunching_(None)
+        self.addCleanup(delegate._shutdown)
+
+        self.assertEqual(delegate.codex_pet_item.title(), "更改桌面 GIF")
+
+    def test_codex_pet_action_activates_agent_before_showing_window(self):
+        events = []
+
+        class Application:
+            def activateIgnoringOtherApps_(self, value):
+                events.append(("activate", value))
+
+        class PetWindow:
+            @classmethod
+            def alloc(cls):
+                return cls()
+
+            def initWithAgentController_(self, _controller):
+                return self
+
+            def applySnapshotAndPreview(self, _snapshot, _preview):
+                pass
+
+            def showWindow_(self, _sender):
+                events.append("show")
+
+            def window(self):
+                return self
+
+            def makeKeyAndOrderFront_(self, _sender):
+                events.append("front")
+
+            def orderFrontRegardless(self):
+                events.append("front-regardless")
+
+            def stopPreviewTimer(self):
+                pass
+
+        NSApplication.sharedApplication()
+        delegate = MenuBarApplication.alloc().initWithController_(FakeController())
+        delegate.applicationDidFinishLaunching_(None)
+        delegate.application = Application()
+        delegate.pet_window_controller_factory = PetWindow
+        self.addCleanup(delegate._shutdown)
+
+        delegate.codex_pet_item.view().mouseUp_(None)
+
+        self.assertEqual(
+            events,
+            [("activate", True), "show", "front", "front-regardless"],
+        )
+
+    def test_codex_pet_action_row_click_opens_and_reuses_window(self):
         # Creating a new panel for each menu click would lose the converted
         # preview and make late runtime progress disappear from the reopened UI.
         class PetWindow:
@@ -708,6 +764,7 @@ class MenuBarApplicationTests(unittest.TestCase):
                 self.snapshot_previews = []
                 self.show_count = 0
                 self.front_count = 0
+                self.front_regardless_count = 0
                 self.stopped = False
                 PetWindow.constructed.append(self)
                 return self
@@ -725,6 +782,9 @@ class MenuBarApplicationTests(unittest.TestCase):
             def makeKeyAndOrderFront_(self, _sender):
                 self.front_count += 1
 
+            def orderFrontRegardless(self):
+                self.front_regardless_count += 1
+
             def stopPreviewTimer(self):
                 self.stopped = True
 
@@ -735,9 +795,6 @@ class MenuBarApplicationTests(unittest.TestCase):
         delegate.pet_window_controller_factory = PetWindow
         self.addCleanup(delegate._shutdown)
 
-        self.assertEqual(
-            delegate.codex_pet_item.title(), "更改 Codex 宠物 GIF…"
-        )
         self.assertIsNotNone(delegate.codex_pet_item.view())
         self.assertEqual(
             delegate.codex_pet_item.view().frame().size.height,
@@ -750,13 +807,14 @@ class MenuBarApplicationTests(unittest.TestCase):
             delegate.reconnect_item,
         )
 
-        delegate.openCodexPet_(None)
-        delegate.openCodexPet_(None)
+        delegate.codex_pet_item.view().mouseUp_(None)
+        delegate.codex_pet_item.view().mouseUp_(None)
 
         self.assertEqual(len(PetWindow.constructed), 1)
         pet_window = PetWindow.constructed[0]
         self.assertEqual(pet_window.show_count, 2)
         self.assertEqual(pet_window.front_count, 2)
+        self.assertEqual(pet_window.front_regardless_count, 2)
         self.assertEqual(len(pet_window.snapshots), 2)
         self.assertEqual(
             pet_window.snapshot_previews,
@@ -923,7 +981,7 @@ class MenuBarApplicationTests(unittest.TestCase):
                 "Open Accessibility Settings...",
                 delegate.menu,
             ),
-            delegate.codex_pet_item: ("更改 Codex 宠物 GIF…", delegate.menu),
+            delegate.codex_pet_item: ("更改桌面 GIF", delegate.menu),
             delegate.reconnect_item: ("立即重新连接", delegate.menu),
             delegate.connection_item: (
                 "Enable Watch Connection",
@@ -970,6 +1028,31 @@ class MenuBarApplicationTests(unittest.TestCase):
             "Studio Mac · 语音可用",
         )
         self.assertEqual(delegate.agent_version_label.stringValue(), f"v{AGENT_VERSION}")
+        self.assertEqual(
+            delegate.agent_version_label.alignment(),
+            NSTextAlignmentCenter,
+        )
+        self.assertEqual(
+            delegate.agent_health_view.frame().size.width
+            - (
+                delegate.agent_version_label.frame().origin.x
+                + delegate.agent_version_label.frame().size.width
+            ),
+            12,
+        )
+        self.assertLessEqual(
+            abs(
+                (
+                    delegate.agent_version_label.frame().origin.y
+                    + delegate.agent_version_label.frame().size.height / 2
+                )
+                - (
+                    delegate.agent_health_title_label.frame().origin.y
+                    + delegate.agent_health_title_label.frame().size.height / 2
+                )
+            ),
+            0.5,
+        )
         self.assertEqual(delegate.codex_summary_title_label.stringValue(), "Codex")
         self.assertEqual(
             delegate.codex_summary_status_label.stringValue(),

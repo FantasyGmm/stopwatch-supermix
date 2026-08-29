@@ -19,7 +19,9 @@
 - Dividers: 1 pt line with 5 pt vertical margin.
 - Standard row horizontal inset: 12 pt; status dot-to-content gap: 8 pt.
 - Status dots: 7 x 7 pt circles.
-- Version badge: 2 pt vertical and 7 pt horizontal inset, pill radius.
+- Version badge: 52 x 19 pt, 12 pt from the right edge; its vertical center
+  aligns to the health title within 0.5 pt. The version text is centered in
+  the pill (never right-aligned), with a 9.5 pt radius.
 
 ## Typography
 
@@ -59,7 +61,7 @@
   existing Trae submenu.
 - Device & Voice: state-colored dot, title and Bluetooth/voice summary;
   chevron opens the existing device submenu.
-- `更改 Codex 宠物 GIF…` remains a visible root action and opens the existing
+- `更改桌面 GIF` remains a visible root action and opens the existing
   conversion, preview, upload, restore, and cancellation window.
 - Existing reconnect, Agent settings, diagnostics, contextual repair, and quit
   actions remain reachable. No global task entry is introduced.

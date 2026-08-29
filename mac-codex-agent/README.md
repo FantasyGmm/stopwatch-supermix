@@ -109,7 +109,7 @@ manually when synchronization is needed again.
 
 ## Codex Pet
 
-Choose **更改 Codex 宠物 GIF…** in the menu to open the independent pet
+Choose **更改桌面 GIF** in the menu to open the independent pet
 window. Drop one `.gif` file or use **Choose GIF…**. Selection and preview work
 while the watch is offline; **Send to Watch** requires an authenticated active
 Production connection to a watch whose firmware exposes the optional pet

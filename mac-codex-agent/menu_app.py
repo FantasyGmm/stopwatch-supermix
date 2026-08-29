@@ -27,6 +27,7 @@ from AppKit import (
     NSMenuItem,
     NSObject,
     NSStatusBar,
+    NSTextAlignmentCenter,
     NSTextAlignmentRight,
     NSTextField,
     NSVariableStatusItemLength,
@@ -166,12 +167,33 @@ def configure_logging(path: pathlib.Path = LOG_PATH) -> None:
     )
 
 
+class RootActionMenuItemView(NSView):
+    """Styled root row that preserves the NSMenuItem action contract."""
+
+    def initWithFrame_menuItem_(self, frame, menu_item):
+        self = objc.super(RootActionMenuItemView, self).initWithFrame_(frame)
+        if self is None:
+            return None
+        self.menu_item = menu_item
+        return self
+
+    def mouseUp_(self, _event):
+        item = self.menu_item
+        menu = item.menu()
+        if menu is not None:
+            menu.cancelTracking()
+        NSApplication.sharedApplication().sendAction_to_from_(
+            item.action(), item.target(), item
+        )
+
+
 class MenuBarApplication(NSObject):
     def initWithController_(self, controller):
         self = objc.super(MenuBarApplication, self).init()
         if self is None:
             return None
         self.controller = controller
+        self.application = NSApplication.sharedApplication()
         self.status_item = None
         self.menu = None
         self.timer: Optional[NSTimer] = None
@@ -351,7 +373,7 @@ class MenuBarApplication(NSObject):
             root=True,
         )
         self.codex_pet_item = self._action_item(
-            "更改 Codex 宠物 GIF…", "openCodexPet:", root=True
+            "更改桌面 GIF", "openCodexPet:", root=True
         )
         self.menu.addItem_(NSMenuItem.separatorItem())
         self.reconnect_item = self._action_item(
@@ -503,7 +525,7 @@ class MenuBarApplication(NSObject):
             ((366, 32), (52, 19)),
             11,
             color=self._root_color(ROOT_BADGE_TEXT_COLOR),
-            alignment=NSTextAlignmentRight,
+            alignment=NSTextAlignmentCenter,
         )
         version.setWantsLayer_(True)
         version.layer().setBackgroundColor_(
@@ -602,8 +624,8 @@ class MenuBarApplication(NSObject):
         return item, submenu, view, dot, title, subtitle
 
     def _style_root_action_item(self, item, title, chevron=False):
-        view = NSView.alloc().initWithFrame_(
-            ((0, 0), (ROOT_MENU_WIDTH, ROOT_ACTION_HEIGHT))
+        view = RootActionMenuItemView.alloc().initWithFrame_menuItem_(
+            ((0, 0), (ROOT_MENU_WIDTH, ROOT_ACTION_HEIGHT)), item
         )
         label = self._root_label(title, ((12, 4), (385, 19)), 13)
         view.addSubview_(label)
@@ -904,8 +926,10 @@ class MenuBarApplication(NSObject):
         window_controller.applySnapshotAndPreview(
             self.controller.pet_snapshot(), self.controller.pet_preview()
         )
+        self.application.activateIgnoringOtherApps_(True)
         window_controller.showWindow_(sender)
         window_controller.window().makeKeyAndOrderFront_(sender)
+        window_controller.window().orderFrontRegardless()
 
     def openLog_(self, _sender):
         LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
