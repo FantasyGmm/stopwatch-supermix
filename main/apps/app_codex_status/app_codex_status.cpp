@@ -21,6 +21,7 @@
 #include <hal/hal.h>
 #include <hal/utils/settings/settings.h>
 #include <runtime/display/global_display_protection_service.h>
+#include <runtime/power/low_battery_alert_logic.h>
 #include <wifi_manager.h>
 #include <esp_websocket_client.h>
 #include <esp_random.h>
@@ -377,6 +378,8 @@ void AppCodexStatus::onOpen()
         GetGlobalDisplayProtectionService().snapshot().state ==
         DisplayProtectionState::ScreenOff;
     _screen_off_runtime_cadence = {};
+    _screen_off_voice_policy.reset();
+    GetGlobalDisplayProtectionService().setRightButtonWakeDeferred(false);
     _trae_stale = false;
     _suppress_task_navigation = false;
     {
@@ -527,10 +530,6 @@ void AppCodexStatus::onRunning()
         LvglLockGuard lock;
         sync_display_protection_presentation();
     }
-    if (!_screen_off_runtime_cadence.background_work_due(
-            _screen_off, now)) {
-        return;
-    }
     const bool left_pressed = GetHAL().btnA.isPressed();
     const bool right_pressed = GetHAL().btnB.isPressed();
     input::KeyEvent key_event = input::KeyEvent::None;
@@ -555,6 +554,27 @@ void AppCodexStatus::onRunning()
     }
     const bool pinned_blocks_button_voice =
         _pinned_microphone_controller.blocks_button_voice();
+    VoiceButtonSink* const voice_sink =
+        pinned_blocks_button_voice ? nullptr : task_focus_voice_sink();
+    GetGlobalDisplayProtectionService().setRightButtonWakeDeferred(
+        voice_sink != nullptr);
+    const CodexScreenOffVoiceAction screen_off_voice_action =
+        _screen_off_voice_policy.update(
+            _screen_off,
+            right_pressed,
+            voice_sink != nullptr,
+            now,
+            VoiceButtonEdgeGate::kVoiceHoldMs);
+    if (screen_off_voice_action ==
+        CodexScreenOffVoiceAction::WakeDisplay) {
+        GetGlobalDisplayProtectionService().wakeFromDeferredButton();
+        _voice_button_dispatcher.reset(right_pressed);
+        _suppress_task_navigation = true;
+        if (_input_action_controller) {
+            _input_action_controller->clear_pending();
+        }
+        return;
+    }
     const bool global_input_suppressed = GetHAL().buttonInputSuppressed();
     const VoiceButtonDispatchDecision voice_decision = _voice_button_dispatcher.dispatch(
         left_pressed,
@@ -562,7 +582,7 @@ void AppCodexStatus::onRunning()
         woke_screen,
         key_event == input::KeyEvent::GoHome,
         now,
-        pinned_blocks_button_voice ? nullptr : task_focus_voice_sink(),
+        voice_sink,
         this,
         global_input_suppressed);
     if (voice_decision == VoiceButtonDispatchDecision::Close) {
@@ -574,6 +594,11 @@ void AppCodexStatus::onRunning()
         }
         _voice_button_dispatcher.reset(right_pressed);
         close();
+        return;
+    }
+
+    if (!_screen_off_runtime_cadence.background_work_due(
+            _screen_off, now)) {
         return;
     }
 
@@ -880,6 +905,8 @@ void AppCodexStatus::onClose()
 {
     mclog::tagInfo(getAppInfo().name, "on close");
     GetGlobalEdgeControlService().setTouchExclusion(std::nullopt);
+    GetGlobalDisplayProtectionService().setRightButtonWakeDeferred(false);
+    _screen_off_voice_policy.reset();
 
     _key_manager.reset();
     _voice_button_dispatcher.reset(false);
@@ -1517,7 +1544,7 @@ void AppCodexStatus::update_battery()
     uint32_t color = kEtchedGray;
     if (charging) {
         color = 0x3CB371;
-    } else if (percent < 15) {
+    } else if (percent < LowBatteryAlertLogic::lowThreshold) {
         color = 0xE74C3C;
     }
 
@@ -4646,6 +4673,7 @@ void AppCodexStatus::sync_display_protection_presentation()
     }
 
     _screen_off = screen_off;
+    _screen_off_voice_policy.reset();
     if (woke_screen) {
         _suppress_task_navigation = true;
         _screen_off_left_press_started_ms = 0;

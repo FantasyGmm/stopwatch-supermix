@@ -21,6 +21,7 @@
 #include "codex_task_focus_gesture.h"
 #include "codex_task_focus_view.h"
 #include "codex_runtime_session.h"
+#include "codex_screen_off_voice_policy.h"
 #include "agent_panel_model.h"
 #include "agent_panel_ui_layout.h"
 #include "agent_registry_store.h"
@@ -189,6 +190,7 @@ private:
     StatusPageSwipeLogic _page_swipe;
     TraeCardTapLogic _trae_card_tap;
     VoiceButtonDispatcher _voice_button_dispatcher;
+    CodexScreenOffVoicePolicy _screen_off_voice_policy;
     PinnedMicrophoneController _pinned_microphone_controller;
     AgentPanelModel _agent_panel_model;
     secure_pairing::AgentRegistry _agent_registry;

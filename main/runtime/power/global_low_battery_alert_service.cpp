@@ -156,7 +156,7 @@ void GlobalLowBatteryAlertService::applyPendingAudio()
 
     _system_playback_owned = true;
     _sound_started_ms = GetHAL().millis();
-    audio::play_melody({76, 72}, 0.09f, 0.8f);
+    audio::play_melody({76, 72}, 0.09f, 1.0f);
 }
 
 void GlobalLowBatteryAlertService::shutdown()

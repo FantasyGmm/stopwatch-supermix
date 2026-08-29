@@ -466,14 +466,40 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
             running.index("close();"),
         )
         self.assertLess(
-            running.index("close();"),
             running.index("sync_display_protection_presentation()"),
+            running.index("_voice_button_dispatcher.dispatch"),
         )
         priority = (
             ROOT / "main/apps/app_codex_status/codex_status_priority.h"
         ).read_text()
-        for label in ("VOICE", "VOICE OFF", "VOICE ERR"):
+        for label in ("语音可用", "语音不可用", "语音异常"):
             self.assertIn(f'"{label}"', priority)
+
+    def test_codex_can_hold_right_for_voice_without_waking_a_dark_display(self):
+        app = (ROOT / "main/apps/app_codex_status/app_codex_status.cpp").read_text()
+        display = (
+            ROOT / "main/runtime/display/global_display_protection_service.cpp"
+        ).read_text()
+
+        running = app.split("void AppCodexStatus::onRunning()", 1)[1].split(
+            "void AppCodexStatus::onClose()", 1
+        )[0]
+        self.assertIn("setRightButtonWakeDeferred", running)
+        self.assertIn("CodexScreenOffVoiceAction::WakeDisplay", running)
+        self.assertIn("wakeFromDeferredButton()", running)
+        self.assertLess(
+            running.index("_screen_off_voice_policy.update"),
+            running.index("_voice_button_dispatcher.dispatch"),
+        )
+        self.assertLess(
+            running.index("_voice_button_dispatcher.dispatch"),
+            running.index("background_work_due"),
+        )
+        closed = app.split("void AppCodexStatus::onClose()", 1)[1]
+        self.assertIn("setRightButtonWakeDeferred(false)", closed)
+
+        self.assertIn("shouldDeferRightButtonWake", display)
+        self.assertIn("right_pressed_edge && !right_wake_deferred", display)
 
     def test_pinned_microphone_page_uses_approved_three_page_layout(self):
         header = (ROOT / "main/apps/app_codex_status/app_codex_status.h").read_text()

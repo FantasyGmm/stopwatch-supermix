@@ -170,18 +170,25 @@ class EdgeControlFirmwareContractTests(unittest.TestCase):
             "constexpr EdgeControlRect kTaskDeckTouchExclusion = {183, 423, 283, 465}",
             codex,
         )
-        on_open = codex.index("void AppCodexStatus::onOpen()")
+        sync_exclusion = codex.index(
+            "void AppCodexStatus::sync_task_edge_exclusion("
+        )
         on_close = codex.index("void AppCodexStatus::onClose()")
         destroy_view = codex.index("void AppCodexStatus::destroy_view()")
         set_exclusion = codex.index(
-            "setTouchExclusion(kTaskDeckTouchExclusion)", on_open
+            "std::optional<EdgeControlRect>{kTaskDeckTouchExclusion}",
+            sync_exclusion,
+        )
+        task_mode_exclusion = codex.index(
+            "std::optional<EdgeControlRect>{kTaskModeTouchExclusion}",
+            set_exclusion,
         )
         clear_on_close = codex.index("setTouchExclusion(std::nullopt)", on_close)
         clear_on_destroy = codex.index(
             "setTouchExclusion(std::nullopt)", destroy_view
         )
-        self.assertLess(on_open, set_exclusion)
-        self.assertLess(set_exclusion, on_close)
+        self.assertLess(sync_exclusion, set_exclusion)
+        self.assertLess(set_exclusion, task_mode_exclusion)
         self.assertLess(on_close, clear_on_close)
         self.assertLess(destroy_view, clear_on_destroy)
 

@@ -42,8 +42,8 @@ class InstallScriptTests(unittest.TestCase):
             env={**os.environ, **(env or {})},
         )
 
-    def test_bundle_version_starts_at_1_0_0_and_has_no_absolute_runtime_paths(self):
-        self.assertEqual(VERSION_FILE.read_text(encoding="utf-8").strip(), "1.0.0")
+    def test_bundle_version_is_1_0_1_and_has_no_absolute_runtime_paths(self):
+        self.assertEqual(VERSION_FILE.read_text(encoding="utf-8").strip(), "1.0.1")
         with tempfile.TemporaryDirectory() as temporary:
             plist_path = pathlib.Path(temporary) / "Info.plist"
             result = self.run_installer_function(
@@ -63,61 +63,6 @@ class InstallScriptTests(unittest.TestCase):
             plist_text = plist_path.read_text(encoding="utf-8")
             self.assertNotIn(str(pathlib.Path.home()), plist_text)
             self.assertNotIn(str(ROOT), plist_text)
-
-    def test_relocatable_launcher_resolves_runtime_from_moved_bundle(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            bundle = pathlib.Path(temporary) / "Moved Folder" / "Agent.app"
-            executable_dir = bundle / "Contents" / "MacOS"
-            executable_dir.mkdir(parents=True)
-            launcher = executable_dir / "StopWatchCodexAgent"
-            runtime = executable_dir / "StopWatchCodexAgentPython"
-            runtime.write_text(
-                "#!/bin/bash\n"
-                "printf '%s\\n' \"$PYTHONHOME\" \"$PYTHONPATH\" "
-                "\"$STOPWATCH_CODEX_APP\" \"$1\"\n",
-                encoding="utf-8",
-            )
-            runtime.chmod(0o755)
-
-            built = self.run_installer_function(
-                f"""
-                PYTHON_VERSION=3.9
-                build_relocatable_launcher {shlex.quote(str(launcher))}
-                """
-            )
-            self.assertEqual(built.returncode, 0, built.stderr)
-
-            launched = subprocess.run(
-                [str(launcher), "--probe"],
-                capture_output=True,
-                text=True,
-                check=False,
-                env={"HOME": temporary, "PATH": "/usr/bin:/bin"},
-            )
-            self.assertEqual(launched.returncode, 0, launched.stderr)
-            resolved_bundle = bundle.resolve()
-            self.assertEqual(
-                launched.stdout.splitlines(),
-                [
-                    str(
-                        resolved_bundle
-                        / "Contents"
-                        / "Frameworks"
-                        / "Python3.framework"
-                        / "Versions"
-                        / "3.9"
-                    ),
-                    "{}:{}".format(
-                        resolved_bundle / "Contents" / "Resources" / "app",
-                        resolved_bundle
-                        / "Contents"
-                        / "Resources"
-                        / "site-packages",
-                    ),
-                    "1",
-                    "--probe",
-                ],
-            )
 
     def test_installer_does_not_change_agent_or_connection_state(self):
         script = self.read_script()
@@ -734,12 +679,7 @@ class InstallScriptTests(unittest.TestCase):
             script,
         )
         self.assertIn(
-            'STAGING_PYTHON_EXECUTABLE="$STAGING_APP/Contents/MacOS/'
-            'StopWatchCodexAgentPython"',
-            script,
-        )
-        self.assertIn(
-            'cp "$PYTHON_APP_EXECUTABLE" "$STAGING_PYTHON_EXECUTABLE"',
+            'cp "$PYTHON_APP_EXECUTABLE" "$STAGING_EXECUTABLE"',
             script,
         )
         self.assertIn("install_name_tool", script)
@@ -749,10 +689,8 @@ class InstallScriptTests(unittest.TestCase):
             '"$PYTHON_VERSION"\'/Python3\'',
             script,
         )
-        self.assertIn("build_relocatable_launcher()", script)
-        self.assertIn(
-            'build_relocatable_launcher "$STAGING_EXECUTABLE"', script
-        )
+        self.assertNotIn("build_relocatable_launcher()", script)
+        self.assertNotIn("StopWatchCodexAgentPython", script)
         self.assertIn(
             'STAGING_PYTHON_HOME="$STAGING_PYTHON_FRAMEWORK/Versions/'
             '$PYTHON_VERSION"',
@@ -783,8 +721,16 @@ class InstallScriptTests(unittest.TestCase):
         self.assertIn('find "$STAGING_APP" -name \'*.pth\'', script)
         self.assertIn("validate_no_external_symlinks", script)
         self.assertIn("env -i", script)
-        self.assertIn('setenv("PYTHONNOUSERSITE", "1", 1)', script)
         self.assertNotIn("<key>PYTHONNOUSERSITE</key>", script)
+        self.assertIn(
+            'cp "$ROOT_DIR/sitecustomize.py" \\',
+            script,
+        )
+        self.assertIn(
+            '"$STAGING_PYTHON_HOME/lib/python$PYTHON_VERSION/'
+            'site-packages/sitecustomize.py"',
+            script,
+        )
         self.assertIn('STOPWATCH_CODEX_APP=0', script)
         self.assertIn(
             'resolved = pathlib.Path(entry or os.getcwd()).resolve()', script

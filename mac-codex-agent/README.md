@@ -8,6 +8,13 @@ release is retained. The first release is `1.0.0`; a changed set of production
 Agent inputs increments the patch version after a successful build, while an
 unchanged rebuild keeps the current version.
 
+After installing and opening the Agent, verify that its status item is actually
+present in the visible macOS menu bar:
+
+```bash
+./check_menu_bar_entry.sh
+```
+
 The current machine has no Developer ID identity, so the generated app is
 ad-hoc signed and may require manual Gatekeeper approval on another Mac.
 

@@ -343,6 +343,36 @@ class AppStateTests(unittest.TestCase):
         )
         self.assertNotIn("Trae", view.codex_summary_text)
         self.assertNotIn("Pending", view.trae_summary_text)
+        self.assertEqual(view.root_health_title, "StopWatch 已连接")
+        self.assertEqual(
+            view.root_health_subtitle,
+            "Studio Mac · 语音可用",
+        )
+        self.assertEqual(view.root_codex_title, "Codex")
+        self.assertEqual(
+            view.root_codex_subtitle,
+            "gpt-5.6 · High · 5H 82% · 7D 61%",
+        )
+        self.assertEqual(view.root_codex_status, "1 Pending")
+        self.assertEqual(
+            view.root_codex_detail,
+            "2 Running · 8 Completed",
+        )
+        self.assertEqual(view.root_trae_title, "Trae")
+        self.assertEqual(
+            view.root_trae_subtitle,
+            "Online · Model A · High",
+        )
+        self.assertEqual(view.root_trae_status, "StopWatch")
+        self.assertEqual(
+            view.root_trae_detail,
+            "Running · Build status page",
+        )
+        self.assertEqual(view.root_device_title, "设备与语音")
+        self.assertEqual(
+            view.root_device_subtitle,
+            "Bluetooth Connected · Voice Ready",
+        )
 
 
 if __name__ == "__main__":

@@ -11,6 +11,10 @@ import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
+AGENT_VERSION = (
+    pathlib.Path(__file__).resolve().parents[1] / "VERSION"
+).read_text(encoding="utf-8").strip()
+
 from AppKit import (
     NSAlertFirstButtonReturn,
     NSApplication,
@@ -806,7 +810,7 @@ class MenuBarApplicationTests(unittest.TestCase):
 
         self.assertEqual(
             delegate.agent_health_label.stringValue(),
-            "Studio Mac · Connected · Voice Ready · v1.0.0",
+            "Studio Mac · 语音可用",
         )
         self.assertIs(delegate.codex_item.submenu(), delegate.codex_submenu)
         self.assertIs(delegate.trae_item.submenu(), delegate.trae_submenu)
@@ -821,6 +825,46 @@ class MenuBarApplicationTests(unittest.TestCase):
         self.assertFalse(any(title.startswith("Task Alerts") for title in root_titles))
 
         delegate._shutdown()
+
+    def test_root_menu_matches_the_approved_a_visual_hierarchy(self):
+        NSApplication.sharedApplication()
+        delegate = MenuBarApplication.alloc().initWithController_(FakeController())
+
+        delegate.applicationDidFinishLaunching_(None)
+        self.addCleanup(delegate._shutdown)
+
+        self.assertEqual(delegate.agent_health_view.frame().size.width, 430)
+        self.assertEqual(delegate.codex_summary_view.frame().size.height, 52)
+        self.assertEqual(delegate.trae_summary_view.frame().size.height, 52)
+        self.assertEqual(delegate.device_summary_view.frame().size.height, 40)
+        self.assertEqual(delegate.agent_health_title_label.font().pointSize(), 14)
+        self.assertEqual(delegate.agent_health_subtitle_label.font().pointSize(), 11)
+        self.assertEqual(delegate.codex_summary_title_label.font().pointSize(), 13)
+        self.assertEqual(delegate.codex_summary_subtitle_label.font().pointSize(), 11)
+        self.assertEqual(delegate.codex_summary_detail_label.font().pointSize(), 10)
+        self.assertEqual(
+            delegate.agent_health_title_label.stringValue(),
+            "StopWatch 已连接",
+        )
+        self.assertEqual(
+            delegate.agent_health_subtitle_label.stringValue(),
+            "Studio Mac · 语音可用",
+        )
+        self.assertEqual(delegate.agent_version_label.stringValue(), f"v{AGENT_VERSION}")
+        self.assertEqual(delegate.codex_summary_title_label.stringValue(), "Codex")
+        self.assertEqual(
+            delegate.codex_summary_status_label.stringValue(),
+            "1 Pending",
+        )
+        self.assertEqual(delegate.trae_summary_title_label.stringValue(), "Trae")
+        self.assertEqual(delegate.device_summary_title_label.stringValue(), "设备与语音")
+        self.assertIs(delegate.settings_item.submenu(), delegate.settings_submenu)
+        self.assertIs(
+            delegate.diagnostics_item.submenu(), delegate.diagnostics_submenu
+        )
+        self.assertIs(delegate.connection_item.menu(), delegate.settings_submenu)
+        self.assertIs(delegate.rename_agent_item.menu(), delegate.settings_submenu)
+        self.assertIs(delegate.open_log_item.menu(), delegate.diagnostics_submenu)
 
 
 if __name__ == "__main__":

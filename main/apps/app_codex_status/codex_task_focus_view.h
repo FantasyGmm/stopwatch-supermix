@@ -83,7 +83,6 @@ private:
     lv_obj_t* _detail_status = nullptr;
     lv_obj_t* _detail_divider = nullptr;
     lv_obj_t* _detail_label = nullptr;
-    lv_obj_t* _detail_live_dot = nullptr;
     lv_obj_t* _detail_body = nullptr;
     std::array<lv_obj_t*, 16> _detail_paragraphs{};
     lv_obj_t* _detail_footer_label = nullptr;

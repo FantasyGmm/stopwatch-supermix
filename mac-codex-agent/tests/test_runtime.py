@@ -2381,7 +2381,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             7,
             0,
             100,
-            BEGIN_BODY.pack(IMA_ADPCM, PUSH_TO_TALK, 16000, 320, TEST_TASK_ROUTE),
+            BEGIN_BODY.pack(IMA_ADPCM, PUSH_TO_TALK, 16000, 320, 0),
             b"12345678",
         )
         factory = FakeTransportFactory(
@@ -2543,7 +2543,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             9,
             0,
             100,
-            BEGIN_BODY.pack(IMA_ADPCM, PUSH_TO_TALK, 16000, 320, TEST_TASK_ROUTE),
+            BEGIN_BODY.pack(IMA_ADPCM, PUSH_TO_TALK, 16000, 320, 0),
             b"abcdefgh",
         )
 
@@ -2892,7 +2892,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             11,
             0,
             100,
-            BEGIN_BODY.pack(IMA_ADPCM, PUSH_TO_TALK, 16000, 320, TEST_TASK_ROUTE),
+            BEGIN_BODY.pack(IMA_ADPCM, PUSH_TO_TALK, 16000, 320, 0),
             b"abcdefgh",
         )
         drain_started = asyncio.Event()
@@ -2983,7 +2983,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             13,
             0,
             100,
-            BEGIN_BODY.pack(IMA_ADPCM, PUSH_TO_TALK, 16000, 320, TEST_TASK_ROUTE),
+            BEGIN_BODY.pack(IMA_ADPCM, PUSH_TO_TALK, 16000, 320, 0),
             b"abcdefgh",
         )
         end = pack_notification(
@@ -3806,7 +3806,7 @@ class AgentControllerTests(unittest.TestCase):
             12,
             0,
             100,
-            BEGIN_BODY.pack(IMA_ADPCM, PUSH_TO_TALK, 16000, 320, TEST_TASK_ROUTE),
+            BEGIN_BODY.pack(IMA_ADPCM, PUSH_TO_TALK, 16000, 320, 0),
             b"abcdefgh",
         )
         recording_started = threading.Event()
