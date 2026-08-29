@@ -247,12 +247,15 @@ class MenuBarApplicationTests(unittest.TestCase):
         self.assertEqual(delegate.pairing_label.stringValue(), "Pairing: Confirm on Watch")
         self.assertEqual(delegate.verification_label.stringValue(), "Verification Code: 123456")
         self.assertEqual(delegate.watch_identity_label.stringValue(), "Watch: · 0E0F")
+        self.assertEqual(delegate.rename_agent_item.title(), "Rename Agent...")
+        self.assertIn("Studio Mac", delegate.agent_health_label.stringValue())
         delegate.agent_name_prompt = lambda current: "Travel Agent"
 
         delegate.renameAgent_(None)
 
         self.assertEqual(controller.renamed_agents, ["Travel Agent"])
         self.assertEqual(delegate.agent_label.stringValue(), "Agent: Travel Agent")
+        self.assertIn("Travel Agent", delegate.agent_health_label.stringValue())
 
     def test_failed_pairing_exposes_retry_action(self):
         NSApplication.sharedApplication()

@@ -303,7 +303,7 @@ class MenuBarApplication(NSObject):
         )
         self.reconnect_item = self._action_item("Reconnect Now", "reconnect:")
         self.rename_agent_item = self._action_item(
-            "Agent Name...", "renameAgent:"
+            "Rename Agent...", "renameAgent:"
         )
         self.retry_pairing_item = self._action_item(
             "Retry Pairing", "retryPairing:"

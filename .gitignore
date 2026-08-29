@@ -73,3 +73,4 @@ mac-codex-agent/.driver-cache/
 mac-codex-agent/.native/
 *.pkg
 libstopwatch_voice_audio.dylib
+/artifacts/macos-agent/latest/

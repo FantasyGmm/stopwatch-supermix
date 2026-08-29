@@ -1,5 +1,16 @@
 # StopWatch Codex Mac Agent
 
+## Build the latest macOS release
+
+Run `./build_release.sh` from this directory. The release builder creates a
+portable universal2 DMG in `../artifacts/macos-agent/latest/`. Only the latest
+release is retained. The first release is `1.0.0`; a changed set of production
+Agent inputs increments the patch version after a successful build, while an
+unchanged rebuild keeps the current version.
+
+The current machine has no Developer ID identity, so the generated app is
+ad-hoc signed and may require manual Gatekeeper approval on another Mac.
+
 This menu bar agent reads local Codex status and, when Trae CN is installed,
 local Trae task status. It sends compact, source-tagged snapshots to the
 StopWatch over BLE. Trae CN is optional: Codex collection and watch updates
