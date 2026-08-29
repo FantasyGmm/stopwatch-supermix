@@ -167,21 +167,28 @@ class MenuBarApplication(NSObject):
 
         self.menu = NSMenu.alloc().init()
         self.menu.setAutoenablesItems_(False)
+        self.agent_health_item, self.agent_health_label = self._informational_item(
+            "Agent · Starting", header=True
+        )
+        self.menu.addItem_(NSMenuItem.separatorItem())
+
+        self.codex_item, self.codex_submenu = self._submenu_item("Codex")
         self.codex_header_item, self.codex_header_label = self._informational_item(
-            "Codex Status", header=True
+            "Codex Status", header=True, menu=self.codex_submenu
         )
         self.model_item, self.model_label = self._informational_item(
-            "Model: --", indent=STATUS_CHILD_INDENT
+            "Model: --", indent=STATUS_CHILD_INDENT, menu=self.codex_submenu
         )
         self.effort_item, self.effort_label = self._informational_item(
-            "Effort: --", indent=STATUS_CHILD_INDENT
+            "Effort: --", indent=STATUS_CHILD_INDENT, menu=self.codex_submenu
         )
         self.five_hour_item, self.five_hour_label = self._informational_item(
-            "5H Remaining: --", indent=STATUS_CHILD_INDENT
+            "5H Remaining: --", indent=STATUS_CHILD_INDENT, menu=self.codex_submenu
         )
         self.seven_day_item, self.seven_day_label = self._informational_item(
-            "7D Remaining: --", indent=STATUS_CHILD_INDENT
+            "7D Remaining: --", indent=STATUS_CHILD_INDENT, menu=self.codex_submenu
         )
+        self.codex_submenu.addItem_(NSMenuItem.separatorItem())
         self.alert_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
             "Task Alerts · 0 Pending / 0 Running / 0 Completed", None, ""
         )
@@ -189,57 +196,73 @@ class MenuBarApplication(NSObject):
         self.alert_submenu = NSMenu.alloc().init()
         self.alert_submenu.setAutoenablesItems_(False)
         self.alert_item.setSubmenu_(self.alert_submenu)
-        self.menu.addItem_(self.alert_item)
-        self.menu.addItem_(NSMenuItem.separatorItem())
+        self.codex_submenu.addItem_(self.alert_item)
+
+        self.trae_item, self.trae_submenu = self._submenu_item("Trae")
         self.trae_header_item, self.trae_header_label = self._informational_item(
-            "Trae Status", header=True
+            "Trae Status", header=True, menu=self.trae_submenu
         )
         self.trae_online_item, self.trae_online_label = self._informational_item(
-            "Source: Offline", indent=STATUS_CHILD_INDENT
+            "Source: Offline", indent=STATUS_CHILD_INDENT, menu=self.trae_submenu
         )
         self.trae_model_item, self.trae_model_label = self._informational_item(
-            "Model: --", indent=STATUS_CHILD_INDENT
+            "Model: --", indent=STATUS_CHILD_INDENT, menu=self.trae_submenu
         )
         self.trae_effort_item, self.trae_effort_label = self._informational_item(
-            "Effort: --", indent=STATUS_CHILD_INDENT
+            "Effort: --", indent=STATUS_CHILD_INDENT, menu=self.trae_submenu
         )
         self.trae_project_item, self.trae_project_label = self._informational_item(
-            "Project: --", indent=STATUS_CHILD_INDENT
+            "Project: --", indent=STATUS_CHILD_INDENT, menu=self.trae_submenu
         )
         self.trae_state_item, self.trae_state_label = self._informational_item(
-            "State: --", indent=STATUS_CHILD_INDENT
+            "State: --", indent=STATUS_CHILD_INDENT, menu=self.trae_submenu
         )
         self.trae_task_item, self.trae_task_label = self._informational_item(
-            "Task: --", indent=STATUS_CHILD_INDENT
+            "Task: --", indent=STATUS_CHILD_INDENT, menu=self.trae_submenu
         )
         self.trae_detail_item, self.trae_detail_label = self._informational_item(
-            "Detail: --", indent=STATUS_CHILD_INDENT
+            "Detail: --", indent=STATUS_CHILD_INDENT, menu=self.trae_submenu
         )
-        self.menu.addItem_(NSMenuItem.separatorItem())
+
+        self.device_voice_item, self.device_submenu = self._submenu_item(
+            "Device & Voice"
+        )
         (
             self.connection_header_item,
             self.connection_header_label,
-        ) = self._informational_item("Connection Status", header=True)
+        ) = self._informational_item(
+            "Connection Status", header=True, menu=self.device_submenu
+        )
         self.agent_item, self.agent_label = self._informational_item(
-            "Agent: Running", indent=STATUS_CHILD_INDENT
+            "Agent: Running", indent=STATUS_CHILD_INDENT, menu=self.device_submenu
         )
         self.pairing_item, self.pairing_label = self._informational_item(
-            "Pairing: Idle", indent=STATUS_CHILD_INDENT
+            "Pairing: Idle", indent=STATUS_CHILD_INDENT, menu=self.device_submenu
         )
         self.verification_item, self.verification_label = self._informational_item(
-            "Verification Code: --", indent=STATUS_CHILD_INDENT
+            "Verification Code: --",
+            indent=STATUS_CHILD_INDENT,
+            menu=self.device_submenu,
         )
         self.watch_identity_item, self.watch_identity_label = (
-            self._informational_item("Watch: --", indent=STATUS_CHILD_INDENT)
+            self._informational_item(
+                "Watch: --", indent=STATUS_CHILD_INDENT, menu=self.device_submenu
+            )
         )
         self.bluetooth_item, self.bluetooth_label = self._informational_item(
-            "Bluetooth: Scanning", indent=STATUS_CHILD_INDENT
+            "Bluetooth: Scanning",
+            indent=STATUS_CHILD_INDENT,
+            menu=self.device_submenu,
         )
         self.device_item, self.device_label = self._informational_item(
-            "Device: StopWatch-Codex", indent=STATUS_CHILD_INDENT
+            "Device: StopWatch-Codex",
+            indent=STATUS_CHILD_INDENT,
+            menu=self.device_submenu,
         )
         self.voice_item, self.voice_label = self._informational_item(
-            "Voice Input: Error", indent=STATUS_CHILD_INDENT
+            "Voice Input: Error",
+            indent=STATUS_CHILD_INDENT,
+            menu=self.device_submenu,
         )
         self.setup_voice_item = self._action_item(
             "Set Up Watch Voice Input...", "setupVoice:"
@@ -315,6 +338,15 @@ class MenuBarApplication(NSObject):
         target_menu.addItem_(item)
         return item, label
 
+    def _submenu_item(self, title):
+        item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(title, None, "")
+        item.setEnabled_(True)
+        submenu = NSMenu.alloc().init()
+        submenu.setAutoenablesItems_(False)
+        item.setSubmenu_(submenu)
+        self.menu.addItem_(item)
+        return item, submenu
+
     def _rebuild_alert_submenu(self, alerts):
         self.alert_submenu.removeAllItems()
         self._alert_labels = []
@@ -364,6 +396,10 @@ class MenuBarApplication(NSObject):
 
     def refresh_(self, _timer):
         view = present(self.controller.snapshot())
+        self.agent_health_label.setStringValue_(view.agent_summary_text)
+        self.codex_item.setTitle_(view.codex_summary_text)
+        self.trae_item.setTitle_(view.trae_summary_text)
+        self.device_voice_item.setTitle_(view.device_summary_text)
         self.model_label.setStringValue_(view.model_text)
         self.effort_label.setStringValue_(view.effort_text)
         self.five_hour_label.setStringValue_(view.five_hour_text)

@@ -603,8 +603,12 @@ class MenuBarApplicationTests(unittest.TestCase):
         self.assertFalse(delegate.setup_voice_item.isHidden())
         self.assertTrue(delegate.accessibility_item.isHidden())
         self.assertEqual(
-            delegate.menu.indexOfItem_(delegate.voice_item),
-            delegate.menu.indexOfItem_(delegate.device_item) + 1,
+            delegate.device_submenu.indexOfItem_(delegate.voice_item),
+            delegate.device_submenu.indexOfItem_(delegate.device_item) + 1,
+        )
+        self.assertEqual(
+            delegate.menu.indexOfItem_(delegate.setup_voice_item),
+            delegate.menu.indexOfItem_(delegate.device_voice_item) + 1,
         )
 
     def test_menu_uses_exact_snapshot_voice_state_for_row_and_actions(self):
@@ -790,6 +794,26 @@ class MenuBarApplicationTests(unittest.TestCase):
         delegate._shutdown()
         self.assertTrue(controller.stopped)
         self.assertIsNone(delegate.status_item)
+
+    def test_root_menu_groups_codex_and_trae_tasks_under_their_source(self):
+        NSApplication.sharedApplication()
+        delegate = MenuBarApplication.alloc().initWithController_(FakeController())
+
+        delegate.applicationDidFinishLaunching_(None)
+
+        self.assertIs(delegate.codex_item.submenu(), delegate.codex_submenu)
+        self.assertIs(delegate.trae_item.submenu(), delegate.trae_submenu)
+        self.assertIs(delegate.device_voice_item.submenu(), delegate.device_submenu)
+        self.assertIs(delegate.alert_item.menu(), delegate.codex_submenu)
+        self.assertIs(delegate.trae_task_item.menu(), delegate.trae_submenu)
+        self.assertIs(delegate.bluetooth_item.menu(), delegate.device_submenu)
+        root_titles = [
+            delegate.menu.itemAtIndex_(index).title()
+            for index in range(delegate.menu.numberOfItems())
+        ]
+        self.assertFalse(any(title.startswith("Task Alerts") for title in root_titles))
+
+        delegate._shutdown()
 
 
 if __name__ == "__main__":

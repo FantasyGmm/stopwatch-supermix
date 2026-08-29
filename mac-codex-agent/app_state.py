@@ -128,6 +128,10 @@ class AgentSnapshot:
 
 @dataclasses.dataclass(frozen=True)
 class MenuPresentation:
+    agent_summary_text: str
+    codex_summary_text: str
+    trae_summary_text: str
+    device_summary_text: str
     model_text: str
     effort_text: str
     five_hour_text: str
@@ -210,6 +214,28 @@ def present(snapshot: AgentSnapshot) -> MenuPresentation:
     if snapshot.voice_detail:
         voice_text = "{} - {}".format(voice_text, snapshot.voice_detail)
     return MenuPresentation(
+        agent_summary_text="{} · {} · Voice {}".format(
+            snapshot.agent_name or "Agent",
+            _STATE_LABELS[snapshot.state],
+            _VOICE_STATE_LABELS[snapshot.voice_state],
+        ),
+        codex_summary_text=(
+            "Codex · {} · {} Pending / {} Running / {} Completed".format(
+                codex.model or "--",
+                codex.alert_pending,
+                codex.alert_running,
+                codex.alert_completed,
+            )
+        ),
+        trae_summary_text="Trae · {} · {} · {}".format(
+            trae_source,
+            trae.project or "--",
+            trae_state,
+        ),
+        device_summary_text="Device & Voice · {} · {}".format(
+            _STATE_LABELS[snapshot.state],
+            _VOICE_STATE_LABELS[snapshot.voice_state],
+        ),
         model_text="Model: {}".format(codex.model or "--"),
         effort_text="Effort: {}".format(codex.effort.title() if codex.effort else "--"),
         five_hour_text="5H Remaining: {}".format(
