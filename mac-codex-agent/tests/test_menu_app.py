@@ -801,6 +801,10 @@ class MenuBarApplicationTests(unittest.TestCase):
 
         delegate.applicationDidFinishLaunching_(None)
 
+        self.assertEqual(
+            delegate.agent_health_label.stringValue(),
+            "Studio Mac · Connected · Voice Ready · v1.0.0",
+        )
         self.assertIs(delegate.codex_item.submenu(), delegate.codex_submenu)
         self.assertIs(delegate.trae_item.submenu(), delegate.trae_submenu)
         self.assertIs(delegate.device_voice_item.submenu(), delegate.device_submenu)

@@ -59,6 +59,32 @@ ALERT_ROW_WIDTH = 360
 INSTALL_SHUTDOWN_TIMEOUT = 1.0
 
 
+def bundled_agent_version() -> str:
+    bundle = NSBundle.mainBundle()
+    value = bundle.objectForInfoDictionaryKey_("CFBundleShortVersionString")
+    if bundle.bundleIdentifier() == "com.stopwatch.codex-agent" and isinstance(
+        value, str
+    ):
+        parts = value.strip().split(".")
+        if len(parts) == 3 and all(
+            part.isascii() and part.isdigit() for part in parts
+        ):
+            return value.strip()
+    try:
+        value = pathlib.Path(__file__).with_name("VERSION").read_text(
+            encoding="utf-8"
+        ).strip()
+    except OSError:
+        return "dev"
+    parts = value.split(".")
+    return (
+        value
+        if len(parts) == 3
+        and all(part.isascii() and part.isdigit() for part in parts)
+        else "dev"
+    )
+
+
 def bundled_blackhole_package() -> pathlib.Path:
     resource_path = NSBundle.mainBundle().resourcePath()
     if not resource_path:
@@ -154,6 +180,7 @@ class MenuBarApplication(NSObject):
         self._installing_voice = False
         self._last_alert_revision = None
         self._alert_labels = []
+        self.agent_version = bundled_agent_version()
         return self
 
     def applicationDidFinishLaunching_(self, _notification):
@@ -396,7 +423,9 @@ class MenuBarApplication(NSObject):
 
     def refresh_(self, _timer):
         view = present(self.controller.snapshot())
-        self.agent_health_label.setStringValue_(view.agent_summary_text)
+        self.agent_health_label.setStringValue_(
+            "{} · v{}".format(view.agent_summary_text, self.agent_version)
+        )
         self.codex_item.setTitle_(view.codex_summary_text)
         self.trae_item.setTitle_(view.trae_summary_text)
         self.device_voice_item.setTitle_(view.device_summary_text)
