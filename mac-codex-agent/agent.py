@@ -462,14 +462,22 @@ def _watch_codex_status(
             title = _strict_bounded_text(item.get("title"), MAX_TITLE_LENGTH)
             if project is None or title is None:
                 continue
-            display_alerts.append(
-                {
-                    "route": item["route"],
-                    "project": project,
-                    "title": title,
-                    "state": item["state"],
-                }
+            display = {
+                "route": item["route"],
+                "project": project,
+                "title": title,
+                "state": item["state"],
+            }
+            model = _strict_bounded_text(
+                item.get("model"), MAX_CODEX_MODEL_LENGTH
             )
+            effort = _strict_bounded_text(
+                item.get("effort"), MAX_CODEX_EFFORT_LENGTH
+            )
+            if model and effort:
+                display["model"] = model
+                display["effort"] = effort
+            display_alerts.append(display)
         display_alerts.sort(
             key=lambda item: 0 if item.get("state") == "pending" else 1
         )

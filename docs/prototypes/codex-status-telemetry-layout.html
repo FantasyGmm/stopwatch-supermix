@@ -1,0 +1,533 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Codex 状态页信息区布局草图</title>
+  <style>
+    @font-face {
+      font-family: "MontserratUI";
+      src: url("../../components/lvgl/scripts/built_in_font/Montserrat-Medium.ttf") format("truetype");
+      font-style: normal;
+      font-weight: 500 700;
+    }
+    :root {
+      --bg: #101319;
+      --watch: #000;
+      --white: #f2f6f8;
+      --muted: #788391;
+      --line: #27303e;
+      --violet: #7c9dff;
+      --cyan: #49c9ee;
+      --mint: #53d7a4;
+      --red: #ff6248;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      color: var(--white);
+      background:
+        radial-gradient(circle at 50% 35%, #242b38 0, #151922 34%, #0b0d12 72%);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC", sans-serif;
+    }
+    .stage { display: grid; justify-items: center; gap: 26px; padding: 34px 24px 92px; }
+    .watch-shell {
+      width: 558px;
+      height: 558px;
+      padding: 17px;
+      border-radius: 50%;
+      background: linear-gradient(145deg, #282c34, #050607 62%, #252a32);
+      box-shadow: 0 28px 80px #000b, inset 0 0 0 2px #343a45;
+    }
+    .screen {
+      position: relative;
+      width: 524px;
+      height: 524px;
+      overflow: hidden;
+      border-radius: 50%;
+      background: var(--watch);
+      transform-origin: 0 0;
+    }
+    .canvas {
+      position: absolute;
+      inset: 0;
+      width: 466px;
+      height: 466px;
+      transform: scale(1.12446);
+      transform-origin: 0 0;
+    }
+    .brand-mark {
+      position: absolute; left: 168px; top: 22px; width: 38px; height: 30px;
+      filter: drop-shadow(0 0 8px #7c9dff44);
+    }
+    .brand-mark::before,
+    .brand-mark::after {
+      content: ""; position: absolute; border: 3px solid var(--violet); border-radius: 6px;
+    }
+    .brand-mark::before { width: 21px; height: 17px; left: 7px; top: 7px; }
+    .brand-mark::after { width: 6px; height: 6px; left: 15px; top: 0; background: var(--violet); }
+    .brand { position: absolute; left: 218px; top: 28px; font-size: 23px; font-weight: 650; letter-spacing: -.3px; }
+    .pet {
+      position: absolute; left: 55px; top: 88px; width: 144px; height: 156px;
+      object-fit: contain; image-rendering: pixelated;
+      filter: drop-shadow(0 8px 14px #000);
+    }
+    .spine { position: absolute; left: 210px; top: 96px; width: 2px; height: 120px; background: var(--violet); }
+    .caption { color: var(--muted); font-size: 11px; font-weight: 650; letter-spacing: 2.1px; line-height: 1; }
+    .value { color: var(--white); font-size: 22px; font-weight: 700; line-height: 1; white-space: nowrap; }
+    .firmware-value { display: block; width: auto; height: 27px; margin-top: 9px; }
+    .status { display: flex; align-items: center; gap: 7px; min-width: 0; color: #cbd4dc; font-size: 12px; font-weight: 600; white-space: nowrap; }
+    .dot { width: 6px; height: 6px; border-radius: 50%; flex: 0 0 auto; background: var(--mint); box-shadow: 0 0 8px #53d7a488; }
+    .voice .dot { background: var(--cyan); box-shadow: 0 0 8px #49c9ee88; }
+    .status.state-connecting .dot { background: var(--violet); box-shadow: 0 0 8px #7c9dff88; }
+    .status.state-unavailable .dot,
+    .status.state-error .dot { background: var(--red); box-shadow: 0 0 8px #ff624888; }
+    .status.state-error { color: var(--red) !important; }
+
+    .fixed-lower { position: absolute; inset: 0; pointer-events: none; }
+    .quota-label { position: absolute; left: 55px; top: 244px; font-size: 18px; font-weight: 600; }
+    .quota-track { position: absolute; left: 101px; top: 254px; width: 248px; height: 8px; background: var(--line); }
+    .quota-fill { width: 76%; height: 100%; background: var(--mint); }
+    .quota-pct { position: absolute; left: 351px; top: 239px; width: 60px; text-align: right; font-size: 22px; font-weight: 600; }
+    .divider { position: absolute; left: 82px; top: 282px; width: 302px; height: 1px; background: #78839166; }
+    .pending, .running { position: absolute; top: 294px; width: 112px; text-align: center; font-size: 18px; font-weight: 750; }
+    .pending { left: 54px; color: var(--red); }
+    .running { left: 300px; color: var(--cyan); }
+    .count { display: block; margin-top: 7px; color: var(--muted); font-size: 23px; }
+    .task-index { position: absolute; top: 306px; left: 151px; width: 164px; text-align: center; color: var(--muted); font-size: 11px; letter-spacing: 1.5px; }
+    .project { position: absolute; top: 332px; left: 145px; width: 176px; text-align: center; color: var(--violet); font-size: 19px; font-weight: 650; }
+    .detail { position: absolute; top: 363px; left: 93px; width: 280px; text-align: center; font-size: 13px; line-height: 18px; }
+    .pages { position: absolute; top: 416px; left: 211px; display: flex; gap: 10px; }
+    .pages i { width: 8px; height: 8px; border: 1px solid var(--muted); border-radius: 50%; }
+    .pages i:nth-child(2) { background: var(--white); border-color: var(--white); }
+    .battery { position: absolute; top: 432px; left: 0; width: 466px; text-align: center; color: var(--mint); font-size: 13px; font-weight: 650; }
+
+    .variant { display: none; }
+    .variant.active { display: block; }
+
+    /* B — four equal instruments */
+    .b .spine { height: 132px; }
+    .b .grid { position: absolute; left: 228px; top: 103px; width: 198px; height: 126px; display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+    .b .cell { padding: 9px 9px 7px 12px; border-bottom: 1px solid #27303ecc; }
+    .b .cell:nth-child(odd) { border-right: 1px solid #27303ecc; }
+    .b .cell:nth-child(n+3) { border-bottom: 0; }
+    .b .value { margin-top: 8px; font-size: 16px; }
+    .b .status { margin-top: 9px; font-size: 11px; }
+    .b .model-value { font-size: 14px; letter-spacing: -.3px; }
+
+    /* C — one quiet status ledger */
+    .c .spine { top: 105px; height: 128px; background: linear-gradient(var(--violet), var(--cyan)); }
+    .c .ledger { position: absolute; left: 229px; top: 104px; width: 194px; }
+    .c .row { height: 31px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #27303e99; }
+    .c .row:last-child { border-bottom: 0; }
+    .c .caption { font-size: 10px; letter-spacing: 1.6px; }
+    .c .value { font-size: 15px; font-weight: 650; max-width: 123px; overflow: hidden; text-overflow: ellipsis; }
+    .c .status { font-size: 12px; }
+
+    /* D — status belongs to each telemetry heading */
+    .d .spine { top: 105px; height: 126px; }
+    .d .paired { position: absolute; left: 231px; top: 108px; width: 194px; }
+    .d .paired-block { height: 59px; }
+    .d .paired-block + .paired-block { padding-top: 11px; border-top: 1px solid #27303eaa; }
+    .d .topline { display: flex; align-items: center; justify-content: space-between; }
+    .d .topline .status { font-size: 10px; color: #aeb8c3; }
+    .d .paired-block .value { margin-top: 10px; font-size: 21px; }
+
+    /* E — one status rail above the telemetry */
+    .e .spine { top: 105px; height: 128px; }
+    .e .status-rail {
+      position: absolute; left: 231px; top: 106px; width: 194px; height: 25px;
+      display: grid; grid-template-columns: 1fr 1fr; align-items: start;
+      border-bottom: 1px solid #27303ecc;
+    }
+    .e .status-rail .status { font-size: 10px; }
+    .e .model { position: absolute; left: 231px; top: 143px; }
+    .e .effort { position: absolute; left: 231px; top: 188px; }
+    .e .model .value, .e .effort .value { margin-top: 8px; font-size: 20px; }
+
+    /* F — model-first hierarchy, full-width status rows */
+    .f .spine { top: 105px; height: 128px; }
+    .f .hud { position: absolute; left: 231px; top: 111px; width: 194px; }
+    .f .telemetry-head { position: relative; height: 58px; border-bottom: 1px solid #27303ecc; }
+    .f .primary-model { position: absolute; left: 0; top: 0; width: 139px; }
+    .f .primary-model .value { margin-top: 9px; font-size: 20px; }
+    .f .compact-effort { position: absolute; right: 0; top: 0; width: 48px; text-align: right; }
+    .f .compact-effort .caption { letter-spacing: 1.3px; }
+    .f .compact-effort .value { margin-top: 9px; font-size: 17px; }
+    .f .health-row { height: 31px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #27303e77; }
+    .f .health-row:last-child { border-bottom: 0; }
+    .f .health-row .status { font-size: 12px; }
+
+    /* G — one micro status rail above unchanged telemetry */
+    .g .spine { top: 105px; height: 128px; }
+    .g .micro-rail { position: absolute; left: 231px; top: 108px; display: flex; gap: 12px; }
+    .g .micro-rail .status { font-size: 11px; letter-spacing: 0; color: #aeb8c3; }
+    .g .model { position: absolute; left: 231px; top: 139px; }
+    .g .effort { position: absolute; left: 231px; top: 187px; }
+    .g .model .value, .g .effort .value,
+    .h .model .value, .h .effort .value,
+    .j .model .value, .j .effort .value {
+      margin-top: 9px;
+      font-family: "MontserratUI", sans-serif;
+      font-size: 26px;
+      font-weight: 600;
+      letter-spacing: 0;
+    }
+
+    /* H — telemetry first, one micro status rail at the foot */
+    .h .spine { top: 105px; height: 128px; }
+    .h .model { position: absolute; left: 231px; top: 111px; }
+    .h .effort { position: absolute; left: 231px; top: 164px; }
+    .h .micro-rail { position: absolute; left: 231px; top: 218px; display: flex; gap: 12px; }
+    .h .micro-rail .status { font-size: 11px; letter-spacing: 0; color: #aeb8c3; }
+
+    /* J — one micro status rail between model and effort */
+    .j .spine { top: 105px; height: 128px; }
+    .j .model { position: absolute; left: 231px; top: 109px; }
+    .j .micro-rail { position: absolute; left: 231px; top: 166px; display: flex; gap: 12px; }
+    .j .micro-rail .status { font-size: 11px; letter-spacing: 0; color: #aeb8c3; }
+    .j .effort { position: absolute; left: 231px; top: 184px; }
+
+    /* G1/G2/G3 — upper half is locked to the approved original stack. */
+    .g .spine, .j .spine, .h .spine { top: 96px; height: 120px; }
+    .channel-frame { position: absolute; left: 231px; top: 98px; width: 200px; height: 105px; }
+    .channel-block { position: absolute; left: 0; width: 200px; }
+    .channel-block.agent { top: 0; }
+    .channel-block.voice { top: 56px; }
+    .channel-heading { display: block; }
+    .channel-heading .caption { font-size: 14px; letter-spacing: 3px; }
+    .channel-value {
+      width: 200px; margin-top: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      color: var(--white); font-family: "MontserratUI", -apple-system, "PingFang SC", sans-serif;
+      font-size: 26px; font-weight: 600; line-height: 27px;
+    }
+    .channel-block.state-connecting .channel-value { color: var(--violet); }
+    .channel-block.state-unavailable .channel-value,
+    .channel-block.state-error .channel-value { color: var(--red); }
+
+
+    /* Per-task Model/Effort placement: compact, explicit, and split variants. */
+    .task-variant { display: block; }
+    .task-variant .task-index,
+    .task-variant .project,
+    .task-variant .task-meta,
+    .task-variant .detail { position: absolute; text-align: center; }
+    .task-variant .task-index { color: var(--muted); font-size: 11px; letter-spacing: 1.25px; }
+    .task-variant .project { color: var(--violet); font-size: 19px; font-weight: 650; }
+    .task-variant .task-meta { color: #aeb8c3; font-family: "MontserratUI", sans-serif; font-size: 12px; font-weight: 600; }
+    .task-variant .detail { font-size: 13px; line-height: 18px; }
+    .g .task-index, .j .task-index, .h .task-index { top: 298px; left: 151px; width: 164px; }
+    .g .project, .j .project { top: 323px; left: 145px; width: 176px; }
+
+    /* G1 — one quiet metadata line. */
+    .g .detail { top: 350px; left: 93px; width: 280px; }
+    .g .task-meta { top: 379px; left: 106px; width: 254px; }
+
+    /* G2 — explicit two-column fields. */
+    .j .detail { top: 350px; left: 93px; width: 280px; }
+    .j .task-fields { position: absolute; top: 378px; left: 108px; width: 250px; display: grid; grid-template-columns: 1fr 82px; gap: 12px; }
+    .j .task-field { text-align: left; }
+    .j .task-field + .task-field { padding-left: 12px; border-left: 1px solid #27303ecc; }
+    .j .task-field .caption { font-size: 8px; letter-spacing: 1.4px; }
+    .j .task-field .task-value { margin-top: 5px; color: #dce4ea; font-family: "MontserratUI", sans-serif; font-size: 12px; font-weight: 600; }
+
+    /* G3 — task name, model and effort form one continuous information line. */
+    .h .task-head { position: absolute; top: 330px; left: 121px; width: 224px; display: flex; justify-content: center; align-items: center; gap: 10px; }
+    .h .task-head .project { position: static; width: auto; font-size: 22px; font-weight: 700; }
+    .h .task-inline { position: absolute; top: 371px; left: 70px; width: 326px; display: flex; justify-content: center; align-items: center; gap: 8px; white-space: nowrap; }
+    .h .task-name { min-width: 0; max-width: 174px; overflow: hidden; text-overflow: ellipsis; color: var(--white); font-size: 19px; font-weight: 700; line-height: 21px; }
+    .h .model-line, .h .effort-badge {
+      color: #cfd8df; font-family: "MontserratUI", sans-serif;
+      font-size: 10px; font-weight: 400; line-height: 1;
+    }
+    .h .model-line {
+      width: 42px; text-align: center; font-size: 12px;
+    }
+    .h .effort-badge {
+      box-sizing: border-box; height: 18px; display: inline-flex; align-items: center; justify-content: center;
+      border: 1px solid #78839177; border-radius: 8px;
+    }
+    .h .effort-badge { width: 44px; }
+    .channel-block.voice .channel-value { display: flex; align-items: center; gap: 8px; }
+    .channel-block.voice .channel-value::before {
+      content: ""; width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: var(--mint);
+    }
+    .channel-block.voice.state-connecting .channel-value::before { background: var(--violet); }
+    .channel-block.voice.state-active .channel-value::before { background: var(--cyan); }
+    .channel-block.voice.state-error .channel-value::before { background: var(--red); }
+
+    /* I — two tiny status tabs attached to the spine */
+    .i .spine { top: 105px; height: 128px; }
+    .i .spine-status { position: absolute; left: 221px; top: 111px; width: 86px; display: grid; gap: 12px; }
+    .i .spine-status .status { font-size: 11px; letter-spacing: 0; color: #aeb8c3; }
+    .i .model { position: absolute; left: 315px; top: 109px; }
+    .i .effort { position: absolute; left: 315px; top: 171px; }
+    .i .model .value { margin-top: 9px; font-size: 17px; }
+    .i .effort .value { margin-top: 9px; font-size: 21px; }
+
+    .description { text-align: center; max-width: 620px; }
+    .description h1 { margin: 0 0 8px; font-size: 24px; font-weight: 650; }
+    .description p { margin: 0; color: #aab4c0; font-size: 15px; line-height: 1.55; }
+    .state-preview {
+      display: grid; grid-template-columns: auto auto auto; align-items: center; gap: 10px;
+      padding: 9px 12px; border: 1px solid #343b49; border-radius: 12px; background: #11151d;
+      color: #8f9aa8; font-size: 12px;
+    }
+    .state-preview label { display: flex; align-items: center; gap: 6px; color: #c5ced8; }
+    .state-preview select {
+      height: 30px; padding: 0 26px 0 9px; border: 1px solid #3b4452; border-radius: 7px;
+      color: var(--white); background: #1b212b; font: inherit;
+    }
+    .switcher {
+      position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
+      display: flex; align-items: center; gap: 14px; padding: 8px;
+      border: 1px solid #343b49; border-radius: 999px; background: #11151df2;
+      box-shadow: 0 12px 35px #0009; backdrop-filter: blur(16px); z-index: 9;
+    }
+    .switcher button {
+      height: 40px; min-width: 42px; padding: 0 16px; border: 0; border-radius: 999px;
+      color: #b8c1cc; background: transparent; font: inherit; cursor: pointer;
+    }
+    .switcher button.current { color: #0a0c10; background: var(--white); font-weight: 750; }
+    .switcher button:hover:not(.current) { color: white; background: #242b36; }
+    .note { position: fixed; top: 18px; left: 22px; color: #667180; font-size: 12px; letter-spacing: .4px; }
+  </style>
+</head>
+<body>
+  <!-- Three variants of the existing Codex status page, switchable via ?variant=; production geometry remains untouched. -->
+  <div class="note">THROWAWAY UI PROTOTYPE · 466 × 466 ROUND SAFE AREA</div>
+  <main class="stage">
+    <div class="watch-shell">
+      <div class="screen">
+        <div class="canvas">
+          <div class="brand-mark"></div><div class="brand">Codex</div>
+          <img class="pet" src="../../main/apps/app_codex_status/assets/source/trae_robot_idle.png" alt="Codex pet">
+
+          <section class="variant b" data-key="B">
+            <div class="spine"></div>
+            <div class="grid">
+              <div class="cell"><div class="caption">MODEL</div><div class="value model-value">gpt-5.6-sol</div></div>
+              <div class="cell"><div class="caption">EFFORT</div><div class="value">HIGH</div></div>
+              <div class="cell"><div class="caption">MAC</div><div class="status"><i class="dot"></i>已连接</div></div>
+              <div class="cell"><div class="caption">VOICE</div><div class="status voice"><i class="dot"></i>可用</div></div>
+            </div>
+          </section>
+
+          <section class="variant c" data-key="C">
+            <div class="spine"></div>
+            <div class="ledger">
+              <div class="row"><div class="caption">MODEL</div><div class="value">gpt-5.6-sol</div></div>
+              <div class="row"><div class="caption">EFFORT</div><div class="value">HIGH</div></div>
+              <div class="row"><div class="caption">MAC</div><div class="status"><i class="dot"></i>已连接</div></div>
+              <div class="row"><div class="caption">VOICE</div><div class="status voice"><i class="dot"></i>可用</div></div>
+            </div>
+          </section>
+
+          <section class="variant d" data-key="D">
+            <div class="spine"></div>
+            <div class="paired">
+              <div class="paired-block">
+                <div class="topline"><div class="caption">MODEL</div><div class="status"><i class="dot"></i>Mac 已连接</div></div>
+                <div class="value">gpt-5.6-sol</div>
+              </div>
+              <div class="paired-block">
+                <div class="topline"><div class="caption">EFFORT</div><div class="status voice"><i class="dot"></i>语音可用</div></div>
+                <div class="value">HIGH</div>
+              </div>
+            </div>
+          </section>
+
+          <section class="variant e" data-key="E">
+            <div class="spine"></div>
+            <div class="status-rail">
+              <div class="status"><i class="dot"></i>Mac 已连接</div>
+              <div class="status voice"><i class="dot"></i>语音可用</div>
+            </div>
+            <div class="model"><div class="caption">MODEL</div><img class="firmware-value" src="assets/model-gpt-5.6-sol.png" alt="gpt-5.6-sol"></div>
+            <div class="effort"><div class="caption">EFFORT</div><img class="firmware-value" src="assets/effort-high.png" alt="HIGH"></div>
+          </section>
+
+          <section class="variant f" data-key="F">
+            <div class="spine"></div>
+            <div class="hud">
+              <div class="telemetry-head">
+                <div class="primary-model"><div class="caption">MODEL</div><div class="value">gpt-5.6-sol</div></div>
+                <div class="compact-effort"><div class="caption">EFFORT</div><div class="value">HIGH</div></div>
+              </div>
+              <div class="health-row"><div class="caption">MAC</div><div class="status"><i class="dot"></i>已连接</div></div>
+              <div class="health-row"><div class="caption">VOICE</div><div class="status voice"><i class="dot"></i>语音可用</div></div>
+            </div>
+          </section>
+
+          <section class="variant g" data-key="G1">
+            <div class="spine"></div>
+            <div class="channel-frame">
+              <div class="channel-block agent" data-channel="agent">
+                <div class="channel-heading"><span class="caption">AGENT</span></div>
+                <div class="channel-value" data-state-value>Luke的Mac mini</div>
+              </div>
+              <div class="channel-block voice" data-channel="voice">
+                <div class="channel-heading"><span class="caption">VOICE</span></div>
+                <div class="channel-value" data-state-value>READY</div>
+              </div>
+            </div>
+            <div class="task-variant">
+              <div class="task-index">TASK 1 / 2</div>
+              <div class="project">StopWatch</div>
+              <div class="detail">等待确认新的状态布局</div>
+              <div class="task-meta">gpt-5.6-sol · HIGH</div>
+            </div>
+          </section>
+
+          <section class="variant h" data-key="G3">
+            <div class="spine"></div>
+            <div class="channel-frame">
+              <div class="channel-block agent" data-channel="agent">
+                <div class="channel-heading"><span class="caption">AGENT</span></div>
+                <div class="channel-value" data-state-value>Luke的Mac mini</div>
+              </div>
+              <div class="channel-block voice" data-channel="voice">
+                <div class="channel-heading"><span class="caption">VOICE</span></div>
+                <div class="channel-value" data-state-value>READY</div>
+              </div>
+            </div>
+            <div class="task-variant">
+              <div class="task-index">TASK 1 / 2</div>
+              <div class="task-head"><div class="project">StopWatch</div></div>
+              <div class="task-inline"><span class="task-name">等待确认新的状态布局</span><span class="model-line">5.6-sol</span><span class="effort-badge">HIGH</span></div>
+            </div>
+          </section>
+
+          <section class="variant j" data-key="G2">
+            <div class="spine"></div>
+            <div class="channel-frame">
+              <div class="channel-block agent" data-channel="agent">
+                <div class="channel-heading"><span class="caption">AGENT</span></div>
+                <div class="channel-value" data-state-value>Luke的Mac mini</div>
+              </div>
+              <div class="channel-block voice" data-channel="voice">
+                <div class="channel-heading"><span class="caption">VOICE</span></div>
+                <div class="channel-value" data-state-value>READY</div>
+              </div>
+            </div>
+            <div class="task-variant">
+              <div class="task-index">TASK 1 / 2</div>
+              <div class="project">StopWatch</div>
+              <div class="detail">等待确认新的状态布局</div>
+              <div class="task-fields">
+                <div class="task-field"><div class="caption">MODEL</div><div class="task-value">gpt-5.6-sol</div></div>
+                <div class="task-field"><div class="caption">EFFORT</div><div class="task-value">HIGH</div></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="variant i" data-key="I">
+            <div class="spine"></div>
+            <div class="spine-status">
+              <div class="status"><i class="dot"></i>MAC 已连接</div>
+              <div class="status voice"><i class="dot"></i>VOICE 正常</div>
+            </div>
+            <div class="model"><div class="caption">MODEL</div><div class="value">gpt-5.6-sol</div></div>
+            <div class="effort"><div class="caption">EFFORT</div><div class="value">HIGH</div></div>
+          </section>
+
+          <div class="fixed-lower">
+            <div class="quota-label">7D</div><div class="quota-track"><div class="quota-fill"></div></div><div class="quota-pct">76%</div>
+            <div class="divider"></div>
+            <div class="pending">PENDING<span class="count">1</span></div>
+            <div class="running">RUNNING<span class="count">1</span></div>
+            <div class="pages"><i></i><i></i><i></i></div>
+            <div class="battery">⚡ 76%</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="description"><h1 id="title"></h1><p id="copy"></p></div>
+    <div class="state-preview">
+      <span>状态预览</span>
+      <label>AGENT
+        <select id="agent-state">
+          <option value="connected">已连接</option>
+          <option value="connecting">连接中</option>
+          <option value="unavailable">不可用</option>
+          <option value="error">异常</option>
+        </select>
+      </label>
+      <label>VOICE
+        <select id="voice-state">
+          <option value="ready">正常</option>
+          <option value="connecting">连接中</option>
+          <option value="active">使用中</option>
+          <option value="error">异常</option>
+        </select>
+      </label>
+    </div>
+  </main>
+  <nav class="switcher" aria-label="布局方案">
+    <button data-go="G1">G1</button><button data-go="G2">G2</button><button data-go="G3">G3</button>
+  </nav>
+  <script>
+    const meta = {
+      G1: ['下半部 G1 · 单行摘要', '项目名下先显示任务名称，再用一行“模型 · Effort”摘要，最安静、最接近现有布局。'],
+      G2: ['下半部 G2 · 双字段', '项目名下先显示任务名称，最下方把 Model / Effort 拆成两个带标题的小字段。'],
+      G3: ['下半部 G3 · 任务信息流', '任务名称后依次紧跟模型名称与 HIGH，三项保持在同一条信息流中。']
+    };
+    const channelStates = {
+      agent: {
+        connected: ['Luke的Mac mini', ''],
+        connecting: ['CONNECTING', 'state-connecting'],
+        unavailable: ['UNAVAILABLE', 'state-unavailable'],
+        error: ['ERROR', 'state-error']
+      },
+      voice: {
+        ready: ['READY', ''],
+        connecting: ['CONNECTING', 'state-connecting'],
+        active: ['ACTIVE', 'state-active'],
+        error: ['ERROR', 'state-error']
+      }
+    };
+    function applyChannelState(channel, key) {
+      const [text, className] = channelStates[channel][key];
+      document.querySelectorAll(`[data-channel="${channel}"]`).forEach(el => {
+        el.classList.remove('state-connecting', 'state-active', 'state-unavailable', 'state-error');
+        if (className) el.classList.add(className);
+        const value = el.querySelector('[data-state-value]');
+        value.textContent = text;
+        if (channel === 'agent') fitAgentName(value);
+      });
+    }
+    function fitAgentName(value) {
+      for (const size of [26, 24, 22, 20]) {
+        value.style.fontSize = `${size}px`;
+        if (value.scrollWidth <= value.clientWidth) return;
+      }
+    }
+    function show(key, replace = true) {
+      if (key === 'G' || key === 'J' || key === 'H') key = 'G1';
+      if (!meta[key]) key = 'G1';
+      document.querySelectorAll('.variant').forEach(v => v.classList.toggle('active', v.dataset.key === key));
+      document.querySelectorAll('[data-go]').forEach(b => b.classList.toggle('current', b.dataset.go === key));
+      document.getElementById('title').textContent = meta[key][0];
+      document.getElementById('copy').textContent = meta[key][1];
+      if (replace) history.replaceState(null, '', `?variant=${key}`);
+    }
+    const initial = new URLSearchParams(location.search).get('variant') || 'G1';
+    show(initial, false);
+    document.querySelectorAll('[data-channel="agent"] [data-state-value]').forEach(fitAgentName);
+    document.querySelectorAll('[data-go]').forEach(b => b.addEventListener('click', () => show(b.dataset.go)));
+    document.getElementById('agent-state').addEventListener('change', event => applyChannelState('agent', event.target.value));
+    document.getElementById('voice-state').addEventListener('change', event => applyChannelState('voice', event.target.value));
+    addEventListener('keydown', e => {
+      if (!['ArrowLeft', 'ArrowRight'].includes(e.key)) return;
+      if (['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName) || document.activeElement.isContentEditable) return;
+      const keys = ['G1', 'G2', 'G3'];
+      const current = document.querySelector('.variant.active').dataset.key;
+      const delta = e.key === 'ArrowRight' ? 1 : -1;
+      show(keys[(keys.indexOf(current) + delta + keys.length) % keys.length]);
+    });
+  </script>
+</body>
+</html>

@@ -163,17 +163,17 @@ class CodexStateCollector:
             except OSError:
                 pass
 
-    def _read_running_model_pair(
+    def _read_task_model_pairs(
         self, alerts: TaskAlertSnapshot
-    ) -> Optional[Tuple[str, str]]:
-        running = {
-            alert.thread_id: alert.progress_at
+    ) -> Dict[str, Tuple[str, str]]:
+        active_ids = {
+            alert.thread_id
             for alert in alerts.alerts
-            if alert.state == "running" and alert.thread_id
+            if alert.state in ("pending", "running") and alert.thread_id
         }
-        if not running or not self.paths.state_db.exists():
-            return None
-        placeholders = ",".join("?" for _ in running)
+        if not active_ids or not self.paths.state_db.exists():
+            return {}
+        placeholders = ",".join("?" for _ in active_ids)
         try:
             connection = sqlite3.connect(
                 "file:{}?mode=ro".format(self.paths.state_db),
@@ -184,21 +184,48 @@ class CodexStateCollector:
                 rows = connection.execute(
                     "SELECT id, model, reasoning_effort FROM threads "
                     "WHERE id IN ({})".format(placeholders),
-                    tuple(running),
+                    tuple(active_ids),
                 ).fetchall()
             finally:
                 connection.close()
         except (OSError, sqlite3.Error):
-            return None
+            return {}
+        pairs = {}
+        for thread_id, model, effort in rows:
+            model_text = model.strip() if isinstance(model, str) else ""
+            effort_text = effort.strip().lower() if isinstance(effort, str) else ""
+            if model_text and effort_text:
+                pairs[str(thread_id)] = (model_text, effort_text)
+        return pairs
+
+    def _read_running_model_pair(
+        self,
+        alerts: TaskAlertSnapshot,
+        task_pairs: Optional[Dict[str, Tuple[str, str]]] = None,
+    ) -> Optional[Tuple[str, str]]:
+        running = {
+            alert.thread_id: alert.progress_at
+            for alert in alerts.alerts
+            if alert.state == "running" and alert.thread_id
+        }
+        pairs = (
+            task_pairs
+            if task_pairs is not None
+            else self._read_task_model_pairs(alerts)
+        )
         return _majority_running_pair(
-            (model, effort, running.get(str(thread_id), ""))
-            for thread_id, model, effort in rows
+            (model, effort, started_at)
+            for thread_id, started_at in running.items()
+            for model, effort in (pairs.get(thread_id, ("", "")),)
         )
 
     def _apply_running_model_selection(
-        self, status: Dict[str, Any], alerts: TaskAlertSnapshot
+        self,
+        status: Dict[str, Any],
+        alerts: TaskAlertSnapshot,
+        task_pairs: Optional[Dict[str, Tuple[str, str]]] = None,
     ) -> None:
-        winner = self._read_running_model_pair(alerts)
+        winner = self._read_running_model_pair(alerts, task_pairs)
         if winner is not None and winner != self._remembered_model_pair:
             self._remembered_model_pair = winner
             self._save_remembered_model_pair(winner)
@@ -382,7 +409,8 @@ class CodexStateCollector:
             if self._alert_tracker is not None
             else TaskAlertSnapshot()
         )
-        self._apply_running_model_selection(status, alerts)
+        task_model_pairs = self._read_task_model_pairs(alerts)
+        self._apply_running_model_selection(status, alerts, task_model_pairs)
         watch_notification_ids = tuple(
             alert.id
             for alert in alerts.alerts
@@ -415,6 +443,14 @@ class CodexStateCollector:
                     "outcome": alert.outcome,
                     "turn_id": alert.turn_id,
                     "last_reply": alert.last_reply,
+                    **(
+                        {
+                            "model": task_model_pairs[alert.thread_id][0],
+                            "effort": task_model_pairs[alert.thread_id][1],
+                        }
+                        if alert.thread_id in task_model_pairs
+                        else {}
+                    ),
                 }
                 for alert in alerts.alerts
             ],

@@ -15,17 +15,21 @@ int main()
     mixed.running_count = 1;
     mixed.completed_count = 1;
     mixed.alerts = {
-        {"Project A", "Pending A", "10:00", CodexTaskState::Pending},
-        {"Project B", "Running B", "09:59", CodexTaskState::Running},
-        {"Project C", "Pending C", "09:58", CodexTaskState::Pending},
-        {"Project D", "Completed D", "09:57", CodexTaskState::Completed},
+        {"Project A", "Pending A", "10:00", CodexTaskState::Pending, 0, "", ""},
+        {"Project B", "Running B", "09:59", CodexTaskState::Running, 0, "", ""},
+        {"Project C", "Pending C", "09:58", CodexTaskState::Pending, 0, "", ""},
+        {"Project D", "Completed D", "09:57", CodexTaskState::Completed, 0, "", ""},
     };
+    mixed.alerts[0].model = "gpt-5.6-sol";
+    mixed.alerts[0].effort = "high";
 
     assert(carousel.apply(mixed, 0));
     assert(carousel.pending_count() == 2);
     assert(carousel.running_count() == 1);
     assert(carousel.current() != nullptr);
     assert(carousel.current()->title == "Pending A");
+    assert(carousel.current()->model == "gpt-5.6-sol");
+    assert(carousel.current()->effort == "high");
     assert(carousel.heading() == "TASK 1/2");
     assert(carousel.update(3000));
     assert(carousel.current()->title == "Pending C");
@@ -49,7 +53,7 @@ int main()
     single.alert_revision = 9;
     single.pending_count = 1;
     single.alerts = {
-        {"StopWatch", "Only", "", CodexTaskState::Pending},
+        {"StopWatch", "Only", "", CodexTaskState::Pending, 0, "", ""},
     };
     CodexAlertCarousel single_carousel;
     assert(single_carousel.apply(single, 0));
@@ -63,9 +67,9 @@ int main()
     running.running_count = 2;
     running.completed_count = 1;
     running.alerts = {
-        {"Project A", "Running A", "10:01", CodexTaskState::Running},
-        {"Project B", "Completed B", "09:59", CodexTaskState::Completed},
-        {"Project C", "Running C", "09:58", CodexTaskState::Running},
+        {"Project A", "Running A", "10:01", CodexTaskState::Running, 0, "", ""},
+        {"Project B", "Completed B", "09:59", CodexTaskState::Completed, 0, "", ""},
+        {"Project C", "Running C", "09:58", CodexTaskState::Running, 0, "", ""},
     };
 
     assert(carousel.apply(running, 7000));
@@ -84,8 +88,8 @@ int main()
     completed.running_count = 0;
     completed.completed_count = 2;
     completed.alerts = {
-        {"StopWatch", "Status monitor", "10:00", CodexTaskState::Completed},
-        {"webshot", "Improve UI", "09:58", CodexTaskState::Completed},
+        {"StopWatch", "Status monitor", "10:00", CodexTaskState::Completed, 0, "", ""},
+        {"webshot", "Improve UI", "09:58", CodexTaskState::Completed, 0, "", ""},
     };
 
     assert(carousel.apply(completed, 11000));
@@ -102,8 +106,8 @@ int main()
     truncated.running_count = 0;
     truncated.completed_count = 0;
     truncated.alerts = {
-        {"Project A", "Visible A", "10:02", CodexTaskState::Pending},
-        {"Project B", "Visible B", "10:01", CodexTaskState::Pending},
+        {"Project A", "Visible A", "10:02", CodexTaskState::Pending, 0, "", ""},
+        {"Project B", "Visible B", "10:01", CodexTaskState::Pending, 0, "", ""},
     };
 
     assert(carousel.apply(truncated, 15000));

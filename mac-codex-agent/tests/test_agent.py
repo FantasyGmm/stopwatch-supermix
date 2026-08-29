@@ -433,6 +433,27 @@ class CodexStatusAgentTests(unittest.TestCase):
 
         self.assertEqual(len(payload["codex_alerts"]), 8)
 
+    def test_watch_payload_keeps_bounded_model_and_effort_per_task(self):
+        payload = _watch_codex_status(
+            {
+                "codex_alerts": [
+                    {
+                        "route": "0123456789abcdef",
+                        "project": "StopWatch",
+                        "title": "Implement task metadata",
+                        "state": "running",
+                        "model": "m" * 100,
+                        "effort": "e" * 100,
+                    }
+                ]
+            }
+        )
+
+        task = payload["codex_alerts"][0]
+        self.assertEqual(task["model"], "m" * 64)
+        self.assertEqual(task["effort"], "e" * 32)
+        self.assertLessEqual(len(_compact_json_bytes(payload)), MAX_MESSAGE_SIZE)
+
     def test_watch_payload_does_not_forward_malformed_raw_alert_container(self):
         payload = _watch_codex_status(
             {"codex_alerts": {"last_reply": "private", "thread_id": "private"}}

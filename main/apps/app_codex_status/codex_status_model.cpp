@@ -13,6 +13,8 @@ constexpr uint32_t kMaxDetailChunks = 16;
 constexpr size_t kMaxDetailCiphertextBytes = 1300 + 8;
 constexpr size_t kMaxProjectCodepoints = 32;
 constexpr size_t kMaxTitleCodepoints = 48;
+constexpr size_t kMaxModelCodepoints = 64;
+constexpr size_t kMaxEffortCodepoints = 32;
 constexpr double kMaximumExactJsonInteger = 9007199254740991.0;
 constexpr int64_t kMinimumUnixMs = 1577836800000LL;
 constexpr int64_t kMaximumUnixMs = 4102444800000LL;
@@ -217,20 +219,35 @@ bool parse_alerts(cJSON* root, std::vector<CodexTaskAlert>& alerts)
     std::vector<CodexTaskAlert> parsed;
     cJSON* item = nullptr;
     cJSON_ArrayForEach(item, array) {
-        static constexpr const char* kFields[] = {"route", "project", "title", "state"};
-        if (!object_has_exact_fields(item, kFields, 4) || parsed.size() >= kMaxAlerts) {
+        static constexpr const char* kLegacyFields[] = {
+            "route", "project", "title", "state",
+        };
+        static constexpr const char* kMetadataFields[] = {
+            "route", "project", "title", "state", "model", "effort",
+        };
+        const bool has_metadata =
+            object_has_exact_fields(item, kMetadataFields, 6);
+        if ((!has_metadata && !object_has_exact_fields(item, kLegacyFields, 4)) ||
+            parsed.size() >= kMaxAlerts) {
             return false;
         }
         cJSON* route = cJSON_GetObjectItemCaseSensitive(item, "route");
         cJSON* project = cJSON_GetObjectItemCaseSensitive(item, "project");
         cJSON* title = cJSON_GetObjectItemCaseSensitive(item, "title");
         cJSON* state = cJSON_GetObjectItemCaseSensitive(item, "state");
+        cJSON* model = cJSON_GetObjectItemCaseSensitive(item, "model");
+        cJSON* effort = cJSON_GetObjectItemCaseSensitive(item, "effort");
         if (!cJSON_IsString(route) || !cJSON_IsString(project) || !cJSON_IsString(title) ||
             !cJSON_IsString(state) || route->valuestring == nullptr ||
             project->valuestring == nullptr || title->valuestring == nullptr ||
             state->valuestring == nullptr ||
             !valid_utf8_within(project->valuestring, kMaxProjectCodepoints) ||
-            !valid_utf8_within(title->valuestring, kMaxTitleCodepoints)) {
+            !valid_utf8_within(title->valuestring, kMaxTitleCodepoints) ||
+            (has_metadata &&
+             (!cJSON_IsString(model) || model->valuestring == nullptr ||
+              !cJSON_IsString(effort) || effort->valuestring == nullptr ||
+              !valid_utf8_within(model->valuestring, kMaxModelCodepoints) ||
+              !valid_utf8_within(effort->valuestring, kMaxEffortCodepoints)))) {
             return false;
         }
 
@@ -253,6 +270,10 @@ bool parse_alerts(cJSON* root, std::vector<CodexTaskAlert>& alerts)
         alert.title = title->valuestring;
         alert.state = parsed_state;
         alert.route = parsed_route;
+        if (has_metadata) {
+            alert.model = model->valuestring;
+            alert.effort = effort->valuestring;
+        }
         parsed.push_back(std::move(alert));
     }
 

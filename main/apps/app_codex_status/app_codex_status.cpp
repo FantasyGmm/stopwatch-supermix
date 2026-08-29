@@ -38,6 +38,7 @@ using namespace mooncake;
 
 extern "C" const lv_image_dsc_t logo_codex;
 LV_FONT_DECLARE(font_puhui_14_1)
+LV_FONT_DECLARE(CodexTaskTitle21)
 LV_FONT_DECLARE(AgentPanelTitle16)
 LV_FONT_DECLARE(PinnedMicTitle24)
 LV_FONT_DECLARE(PinnedMicState22)
@@ -271,11 +272,49 @@ lv_obj_t* make_fixed_label(
     return label;
 }
 
-lv_obj_t* make_channel_dot(lv_obj_t* parent, int x)
+struct TaskBadgeWidgets {
+    lv_obj_t* badge = nullptr;
+    lv_obj_t* label = nullptr;
+};
+
+TaskBadgeWidgets make_task_badge(lv_obj_t* parent, int width)
+{
+    lv_obj_t* badge = lv_obj_create(parent);
+    lv_obj_set_size(badge, width, kTaskBadgeHeight);
+    lv_obj_set_style_bg_opa(badge, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(badge, 1, 0);
+    lv_obj_set_style_border_color(badge, lv_color_hex(kEtchedGray), 0);
+    lv_obj_set_style_border_opa(badge, LV_OPA_40, 0);
+    lv_obj_set_style_radius(badge, 8, 0);
+    lv_obj_set_style_pad_all(badge, 0, 0);
+    lv_obj_clear_flag(badge, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t* label = lv_label_create(badge);
+    lv_label_set_text(label, "");
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_10, 0);
+    lv_obj_set_style_text_color(label, lv_color_hex(0xCFD8DF), 0);
+    lv_obj_center(label);
+    lv_obj_add_flag(badge, LV_OBJ_FLAG_HIDDEN);
+    return {badge, label};
+}
+
+lv_obj_t* make_task_text(lv_obj_t* parent, int width)
+{
+    lv_obj_t* label = lv_label_create(parent);
+    lv_label_set_text(label, "");
+    lv_obj_set_width(label, width);
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_color(label, lv_color_hex(0xCFD8DF), 0);
+    lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_long_mode(label, LV_LABEL_LONG_MODE_CLIP);
+    lv_obj_add_flag(label, LV_OBJ_FLAG_HIDDEN);
+    return label;
+}
+
+lv_obj_t* make_channel_dot(lv_obj_t* parent, int x, int y, int size)
 {
     lv_obj_t* dot = make_frame_segment(
-        parent, x, kChannelStatusY + 4,
-        kChannelDotSize, kChannelDotSize, kEtchedGray);
+        parent, x, y, size, size, kEtchedGray);
     lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
     return dot;
 }
@@ -298,6 +337,41 @@ void apply_channel_presentation(
     lv_obj_set_style_border_width(dot, presentation.filled ? 0 : 1, 0);
     lv_obj_set_style_border_color(
         dot, lv_color_hex(presentation.dot_color), 0);
+}
+
+void apply_agent_presentation(
+    lv_obj_t* label,
+    const char* text,
+    uint32_t color)
+{
+    if (label == nullptr) {
+        return;
+    }
+    const char* safe_text = text == nullptr ? "" : text;
+    lv_point_t measured{};
+    lv_text_get_size(
+        &measured,
+        safe_text,
+        &MontserratSemiBold26,
+        0,
+        0,
+        LV_COORD_MAX,
+        LV_TEXT_FLAG_NONE);
+    const AgentNameFit fit =
+        fit_agent_name(measured.x, kTelemetryWidth);
+    lv_obj_set_style_transform_scale_x(label, fit.scale, 0);
+    lv_obj_set_style_transform_scale_y(label, fit.scale, 0);
+    lv_obj_set_style_transform_pivot_x(label, 0, 0);
+    lv_obj_set_style_transform_pivot_y(label, 0, 0);
+    lv_obj_set_size(
+        label,
+        std::max(1, kTelemetryWidth * 256 / fit.scale),
+        std::max(1, kAgentValueHeight * 256 / fit.scale));
+    lv_label_set_long_mode(
+        label,
+        fit.elide ? LV_LABEL_LONG_MODE_DOTS : LV_LABEL_LONG_MODE_CLIP);
+    lv_label_set_text(label, safe_text);
+    lv_obj_set_style_text_color(label, lv_color_hex(color), 0);
 }
 
 const char* battery_symbol(int percent)
@@ -814,15 +888,6 @@ void AppCodexStatus::onRunning()
                     now);
             }
         }
-        CodexBleMessage message;
-        while (_ble_transport->take_message(message)) {
-            handle_status_json(
-                message.payload.data(),
-                static_cast<int>(message.payload.size()),
-                "BLE LIVE"
-            );
-        }
-
         if (ble_connected && !_ble_was_connected) {
             _runtime_session.begin_connection();
             stop_network_fallback();
@@ -864,6 +929,15 @@ void AppCodexStatus::onRunning()
             now - _last_status_payload_ms > kStatusStaleMs) {
             set_status("BLE WAIT", kTextDim);
             _last_status_payload_ms = 0;
+        }
+
+        CodexBleMessage message;
+        while (_ble_transport->take_message(message)) {
+            handle_status_json(
+                message.payload.data(),
+                static_cast<int>(message.payload.size()),
+                "BLE LIVE"
+            );
         }
     }
 
@@ -1152,21 +1226,6 @@ void AppCodexStatus::create_view()
 
     make_label(_codex_page, "Codex", kBrandX, kBrandY, &MontserratSemiBold26, kSignalWhite);
 
-    _connection_status_dot = make_channel_dot(
-        _codex_page, kConnectionStatusDotX);
-    _connection_status_label = make_fixed_label(
-        _codex_page, "未连接",
-        kConnectionStatusLabelX, kChannelStatusY,
-        kConnectionStatusLabelWidth, &font_puhui_14_1,
-        kEtchedGray, LV_TEXT_ALIGN_LEFT);
-    _voice_status_dot = make_channel_dot(
-        _codex_page, kVoiceStatusDotX);
-    _voice_status_label = make_fixed_label(
-        _codex_page, "语音不可用",
-        kVoiceStatusLabelX, kChannelStatusY,
-        kVoiceStatusLabelWidth, &font_puhui_14_1,
-        kEtchedGray, LV_TEXT_ALIGN_LEFT);
-
     make_frame_segment(
         _codex_page,
         kBeaconSpine.x,
@@ -1176,17 +1235,17 @@ void AppCodexStatus::create_view()
         kBeaconViolet
     );
 
-    lv_obj_t* model_caption = make_telemetry_label(
+    lv_obj_t* agent_caption = make_telemetry_label(
         _codex_page,
         kTelemetryX,
         kModelCaptionY,
         kTelemetryWidth,
-        "MODEL",
+        "AGENT",
         &lv_font_montserrat_14,
         kEtchedGray
     );
-    lv_obj_set_style_text_letter_space(model_caption, 3, 0);
-    _model_value = make_telemetry_label(
+    lv_obj_set_style_text_letter_space(agent_caption, 3, 0);
+    _agent_value = make_telemetry_label(
         _codex_page,
         kTelemetryX,
         kModelValueY,
@@ -1195,22 +1254,26 @@ void AppCodexStatus::create_view()
         &MontserratSemiBold26,
         kSignalWhite
     );
+    lv_obj_set_height(_agent_value, kAgentValueHeight);
+    lv_label_set_long_mode(_agent_value, LV_LABEL_LONG_MODE_DOTS);
 
-    lv_obj_t* effort_caption = make_telemetry_label(
+    lv_obj_t* voice_caption = make_telemetry_label(
         _codex_page,
         kTelemetryX,
         kEffortCaptionY,
         kTelemetryWidth,
-        "EFFORT",
+        "VOICE",
         &lv_font_montserrat_14,
         kEtchedGray
     );
-    lv_obj_set_style_text_letter_space(effort_caption, 3, 0);
-    _effort_value = make_telemetry_label(
+    lv_obj_set_style_text_letter_space(voice_caption, 3, 0);
+    _voice_status_dot = make_channel_dot(
+        _codex_page, kVoiceDotX, kVoiceDotY, kVoiceDotSize);
+    _voice_value = make_telemetry_label(
         _codex_page,
-        kTelemetryX,
+        kVoiceValueX,
         kEffortValueY,
-        kTelemetryWidth,
+        kVoiceValueWidth,
         "--",
         &MontserratSemiBold26,
         kSignalWhite
@@ -1292,23 +1355,41 @@ void AppCodexStatus::create_view()
         kAlertProjectX,
         kAlertProjectY,
         kAlertProjectWidth,
-        &lv_font_montserrat_22,
+        &MontserratSemiBold26,
         kBeaconViolet,
         LV_TEXT_ALIGN_CENTER
     );
     lv_label_set_long_mode(_alert_project, LV_LABEL_LONG_MODE_DOTS);
+    _alert_info_row = lv_obj_create(_codex_page);
+    lv_obj_set_size(_alert_info_row, kTaskInlineWidth, kAlertDetailHeight);
+    lv_obj_set_pos(_alert_info_row, kTaskInlineX, kAlertDetailY);
+    lv_obj_set_style_bg_opa(_alert_info_row, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(_alert_info_row, 0, 0);
+    lv_obj_set_style_pad_all(_alert_info_row, 0, 0);
+    lv_obj_set_style_pad_column(_alert_info_row, kTaskInlineGap, 0);
+    lv_obj_clear_flag(_alert_info_row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_flex_flow(_alert_info_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(
+        _alert_info_row,
+        LV_FLEX_ALIGN_CENTER,
+        LV_FLEX_ALIGN_CENTER,
+        LV_FLEX_ALIGN_CENTER);
+
     _alert_detail = make_fixed_label(
-        _codex_page,
-        "",
-        kAlertDetailX,
-        kAlertDetailY,
-        kAlertDetailWidth,
-        &font_puhui_14_1,
-        kSignalWhite,
-        LV_TEXT_ALIGN_CENTER
-    );
-    lv_label_set_long_mode(_alert_detail, LV_LABEL_LONG_MODE_WRAP);
-    lv_obj_set_height(_alert_detail, kAlertDetailHeight);
+        _alert_info_row, "", 0, 0, kTaskNameWidth,
+        &CodexTaskTitle21, kSignalWhite, LV_TEXT_ALIGN_LEFT);
+    lv_obj_set_style_transform_scale_x(_alert_detail, kTaskTitleScale, 0);
+    lv_obj_set_style_transform_scale_y(_alert_detail, kTaskTitleScale, 0);
+    lv_obj_set_style_max_width(_alert_detail, kTaskNameWidth, 0);
+    lv_obj_set_width(_alert_detail, LV_SIZE_CONTENT);
+    lv_label_set_long_mode(_alert_detail, LV_LABEL_LONG_MODE_DOTS);
+    _alert_model_label =
+        make_task_text(_alert_info_row, kTaskModelWidth);
+
+    const TaskBadgeWidgets effort_badge =
+        make_task_badge(_alert_info_row, kTaskEffortWidth);
+    _alert_effort_badge = effort_badge.badge;
+    _alert_effort_label = effort_badge.label;
     _pending_glow->set_status_targets(
         _pending_label,
         _pending_count,
@@ -1481,7 +1562,8 @@ void AppCodexStatus::destroy_view()
         _panel = nullptr;
     }
 
-    _model_value    = nullptr;
+    _agent_value    = nullptr;
+    _voice_status_dot = nullptr;
     _page_strip     = nullptr;
     _codex_page     = nullptr;
     _pinned_microphone_page = nullptr;
@@ -1497,7 +1579,7 @@ void AppCodexStatus::destroy_view()
     _pinned_microphone_stem = nullptr;
     _pinned_microphone_base = nullptr;
     _pinned_microphone_prompt_label = nullptr;
-    _effort_value   = nullptr;
+    _voice_value    = nullptr;
     _week_pct       = nullptr;
     _week_bar       = nullptr;
     _pending_label  = nullptr;
@@ -1506,12 +1588,12 @@ void AppCodexStatus::destroy_view()
     _running_count  = nullptr;
     _task_index     = nullptr;
     _alert_project  = nullptr;
+    _alert_info_row = nullptr;
     _alert_detail   = nullptr;
+    _alert_model_label = nullptr;
+    _alert_effort_badge = nullptr;
+    _alert_effort_label = nullptr;
     _battery_label  = nullptr;
-    _connection_status_dot = nullptr;
-    _connection_status_label = nullptr;
-    _voice_status_dot = nullptr;
-    _voice_status_label = nullptr;
     _host_label     = nullptr;
     _pet_image      = nullptr;
     _agent_panel_root = nullptr;
@@ -1829,15 +1911,20 @@ void AppCodexStatus::render_status()
             kTextDim,
             kSignalWhite,
         });
+    const char* agent_text = channels.connection.text;
+    if (std::strcmp(channels.connection.text, "CONNECTED") == 0 &&
+        _ble_transport != nullptr) {
+        const secure_pairing::AgentRecord* active_agent =
+            _agent_registry.find(_ble_transport->active_fingerprint());
+        if (active_agent != nullptr && active_agent->display_name[0] != '\0') {
+            agent_text = active_agent->display_name.data();
+        }
+    }
     LvglLockGuard lock;
+    apply_agent_presentation(
+        _agent_value, agent_text, channels.connection.text_color);
     apply_channel_presentation(
-        _connection_status_dot,
-        _connection_status_label,
-        channels.connection);
-    apply_channel_presentation(
-        _voice_status_dot,
-        _voice_status_label,
-        channels.voice);
+        _voice_status_dot, _voice_value, channels.voice);
 }
 
 void AppCodexStatus::set_host_text(const char* prefix)
@@ -1943,11 +2030,6 @@ bool AppCodexStatus::handle_status_json(const char* data, int length, const char
         return true;
     }
 
-    char model[18];
-    char effort[12];
-    copy_short(model, sizeof(model), snapshot.model.c_str());
-    uppercase_short(effort, sizeof(effort), snapshot.effort.c_str());
-
     bool task_list_changed = false;
     {
         std::lock_guard<std::mutex> task_lock(_task_state_mutex);
@@ -1970,12 +2052,6 @@ bool AppCodexStatus::handle_status_json(const char* data, int length, const char
     }
     {
         LvglLockGuard lock;
-        if (_model_value != nullptr && model[0] != '\0') {
-            lv_label_set_text(_model_value, model);
-        }
-        if (_effort_value != nullptr && effort[0] != '\0') {
-            lv_label_set_text(_effort_value, effort);
-        }
         set_percent(_week_pct, _week_bar, snapshot.week_left_pct);
 
         if (_alert_carousel.apply(snapshot, GetHAL().millis())) {
@@ -1997,7 +2073,8 @@ void AppCodexStatus::render_alert()
 {
     if (_pending_count == nullptr || _running_count == nullptr ||
         _task_index == nullptr || _alert_project == nullptr ||
-        _alert_detail == nullptr) {
+        _alert_detail == nullptr || _alert_model_label == nullptr ||
+        _alert_effort_badge == nullptr || _alert_effort_label == nullptr) {
         return;
     }
 
@@ -2037,8 +2114,10 @@ void AppCodexStatus::render_alert()
     lv_label_set_text(_task_index, heading.c_str());
     if (alert == nullptr) {
         lv_label_set_text(_alert_project, "--");
-        lv_obj_set_style_text_font(_alert_project, &lv_font_montserrat_22, 0);
+        lv_obj_set_style_text_font(_alert_project, &MontserratSemiBold26, 0);
         lv_label_set_text(_alert_detail, "");
+        lv_obj_add_flag(_alert_model_label, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(_alert_effort_badge, LV_OBJ_FLAG_HIDDEN);
         lv_obj_set_style_text_color(_task_index, lv_color_hex(kTextDim), 0);
         sync_pending_glow();
         return;
@@ -2054,11 +2133,26 @@ void AppCodexStatus::render_alert()
     lv_obj_set_style_text_font(
         _alert_project,
         is_ascii_text(alert->project.c_str())
-            ? &lv_font_montserrat_22
-            : &font_puhui_14_1,
+            ? &MontserratSemiBold26
+            : &CodexTaskTitle21,
         0
     );
     lv_label_set_text(_alert_detail, alert->title.c_str());
+    const char* model = codex_task_model_display(alert->model.c_str());
+    if (model[0] == '\0') {
+        lv_obj_add_flag(_alert_model_label, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_label_set_text(_alert_model_label, model);
+        lv_obj_remove_flag(_alert_model_label, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (alert->effort.empty()) {
+        lv_obj_add_flag(_alert_effort_badge, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        char effort[12];
+        uppercase_short(effort, sizeof(effort), alert->effort.c_str());
+        lv_label_set_text(_alert_effort_label, effort);
+        lv_obj_remove_flag(_alert_effort_badge, LV_OBJ_FLAG_HIDDEN);
+    }
     lv_obj_set_style_text_color(
         _task_index,
         lv_color_hex(state_color),
