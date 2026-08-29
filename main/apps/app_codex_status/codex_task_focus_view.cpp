@@ -13,7 +13,7 @@
 
 
 LV_FONT_DECLARE(font_puhui_14_1)
-LV_FONT_DECLARE(CodexDetail16)
+LV_FONT_DECLARE(CodexDetail17)
 LV_FONT_DECLARE(CodexTaskTitle21)
 LV_FONT_DECLARE(CodexFocusStatic9)
 LV_FONT_DECLARE(CodexFocusStatic10)
@@ -23,9 +23,6 @@ LV_FONT_DECLARE(CodexFocusStatic16)
 namespace {
 
 using namespace codex_task_focus_layout;
-
-constexpr int kCjk10Scale = 183;
-
 
 lv_obj_t* make_layer(lv_obj_t* parent)
 {
@@ -152,19 +149,19 @@ const lv_font_t* project_font(const char* text)
 
 const lv_font_t* detail_project_font(const char* text)
 {
-    return has_non_ascii(text) ? &font_puhui_14_1 : &lv_font_montserrat_10;
+    return has_non_ascii(text) ? &font_puhui_14_1 : &lv_font_montserrat_14;
 }
 
 
 const lv_font_t* detail_title_font(const char* text)
 {
-    return has_non_ascii(text) ? &CodexDetail16 : &lv_font_montserrat_16;
+    return has_non_ascii(text) ? &CodexTaskTitle21 : &lv_font_montserrat_22;
 }
 
 
 const lv_font_t* detail_body_font()
 {
-    return &CodexDetail16;
+    return &CodexDetail17;
 }
 
 
@@ -174,24 +171,6 @@ void set_text_scale(lv_obj_t* label, int scale)
     lv_obj_set_style_transform_scale_y(label, scale, 0);
     lv_obj_set_style_transform_pivot_x(label, 0, 0);
     lv_obj_set_style_transform_pivot_y(label, 0, 0);
-}
-
-
-void set_scaled_label_box(
-    lv_obj_t* label,
-    int x,
-    int y,
-    int width,
-    int height,
-    int scale
-)
-{
-    set_text_scale(label, scale);
-    lv_obj_set_pos(label, x, y);
-    lv_obj_set_size(
-        label,
-        std::max(1, width * 256 / scale),
-        std::max(1, height * 256 / scale));
 }
 
 
@@ -363,17 +342,17 @@ void CodexTaskFocusView::init(lv_obj_t* parent)
         0);
     _detail_project = make_label(
         _detail_layer, "", kDetailHeaderX, kDetailProjectY,
-        kDetailHeaderWidth, kDetailProjectHeight, &lv_font_montserrat_10,
+        kDetailHeaderWidth, kDetailProjectHeight, &lv_font_montserrat_14,
         kProjectViolet,
         LV_TEXT_ALIGN_CENTER, LV_LABEL_LONG_MODE_DOTS);
     _detail_title = make_label(
         _detail_layer, "", kDetailHeaderX, kDetailTitleY,
-        kDetailHeaderWidth, kDetailTitleHeight, &lv_font_montserrat_16,
+        kDetailHeaderWidth, kDetailTitleHeight, &lv_font_montserrat_22,
         kSignalWhite,
         LV_TEXT_ALIGN_CENTER, LV_LABEL_LONG_MODE_DOTS);
     _detail_status = make_label(
         _detail_layer, "", kDetailHeaderX, kDetailStatusY,
-        kDetailHeaderWidth, kDetailStatusHeight, &CodexFocusStatic9,
+        kDetailHeaderWidth, kDetailStatusHeight, &CodexFocusStatic11,
         kDetailState,
         LV_TEXT_ALIGN_CENTER, LV_LABEL_LONG_MODE_CLIP);
     _detail_divider = make_geometry(_detail_layer);
@@ -384,14 +363,8 @@ void CodexTaskFocusView::init(lv_obj_t* parent)
     _detail_label = make_label(
         _detail_layer, "Agent 最后一条完整回复",
         kDetailLabelX, kDetailLabelTextY,
-        kDetailLabelWidth, 14, &CodexFocusStatic10, kDetailLabel,
+        kDetailLabelWidth, 16, &CodexFocusStatic11, kDetailLabel,
         LV_TEXT_ALIGN_CENTER, LV_LABEL_LONG_MODE_CLIP);
-    _detail_live_dot = make_geometry(_detail_layer);
-    lv_obj_set_pos(_detail_live_dot, kDetailLiveDotX, kDetailLiveDotY);
-    lv_obj_set_size(_detail_live_dot, kDetailLiveDotSize, kDetailLiveDotSize);
-    lv_obj_set_style_radius(_detail_live_dot, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(
-        _detail_live_dot, lv_color_hex(kRunningCyan), 0);
 
     _detail_body = lv_obj_create(_detail_layer);
     lv_obj_set_pos(_detail_body, kDetailBodyX, kDetailBodyY);
@@ -418,11 +391,11 @@ void CodexTaskFocusView::init(lv_obj_t* parent)
 
     _detail_footer_label = make_label(
         _detail_layer, "当前语音目标", kDetailFooterX, kDetailFooterY,
-        kDetailFooterWidth, 13, &CodexFocusStatic9, kProjectViolet,
+        kDetailFooterWidth, 15, &CodexFocusStatic10, kProjectViolet,
         LV_TEXT_ALIGN_CENTER, LV_LABEL_LONG_MODE_CLIP);
     _detail_footer = make_label(
         _detail_layer, "", kDetailFooterX, kDetailFooterY + 15,
-        kDetailFooterWidth, 15, &CodexFocusStatic11,
+        kDetailFooterWidth, 20, &CodexFocusStatic16,
         kSignalWhite, LV_TEXT_ALIGN_CENTER, LV_LABEL_LONG_MODE_CLIP);
     _detail_recording_dot = make_geometry(_detail_layer);
     lv_obj_set_size(_detail_recording_dot, 7, 7);
@@ -435,7 +408,6 @@ void CodexTaskFocusView::init(lv_obj_t* parent)
     set_hidden(_detail_layer, true);
     set_hidden(_deck_empty, true);
     set_hidden(_connection_hint, true);
-    set_hidden(_detail_live_dot, true);
     set_hidden(_detail_recording_dot, true);
     for (size_t index = 0; index < _track_nodes.size(); ++index) {
         set_hidden(_track_nodes[index], true);
@@ -471,7 +443,6 @@ void CodexTaskFocusView::shutdown()
     _detail_status = nullptr;
     _detail_divider = nullptr;
     _detail_label = nullptr;
-    _detail_live_dot = nullptr;
     _detail_body = nullptr;
     _detail_paragraphs.fill(nullptr);
     for (std::string& paragraph : _detail_paragraph_text) {
@@ -636,29 +607,24 @@ void CodexTaskFocusView::show_detail(
     lv_label_set_text(_detail_project, task->project.c_str());
     lv_obj_set_style_text_font(
         _detail_project, detail_project_font(task->project.c_str()), 0);
-    const int project_scale = has_non_ascii(task->project.c_str())
-        ? kCjk10Scale
-        : 256;
-    set_scaled_label_box(
-        _detail_project, kDetailHeaderX, kDetailProjectY,
-        kDetailHeaderWidth, kDetailProjectHeight, project_scale);
+    set_text_scale(_detail_project, 256);
+    lv_obj_set_pos(_detail_project, kDetailHeaderX, kDetailProjectY);
+    lv_obj_set_size(
+        _detail_project, kDetailHeaderWidth, kDetailProjectHeight);
     _detail_title_text = elide_utf8(
         task->title.c_str(), kDetailTitleMaxScalars);
     lv_label_set_text(_detail_title, _detail_title_text.c_str());
     lv_obj_set_style_text_font(
         _detail_title, detail_title_font(task->title.c_str()), 0);
-    set_scaled_label_box(
-        _detail_title, kDetailHeaderX, kDetailTitleY,
-        kDetailHeaderWidth, kDetailTitleHeight, 256);
+    set_text_scale(_detail_title, 256);
+    lv_obj_set_pos(_detail_title, kDetailHeaderX, kDetailTitleY);
+    lv_obj_set_size(
+        _detail_title, kDetailHeaderWidth, kDetailTitleHeight);
     lv_obj_set_pos(_detail_status, kDetailHeaderX, kDetailStatusY);
     lv_obj_set_size(
         _detail_status, kDetailHeaderWidth, kDetailStatusHeight);
     render_status(task, false);
-    const bool live = task->state == CodexTaskState::Running;
-    lv_label_set_text(
-        _detail_label,
-        live ? "Agent 实时进展" : "Agent 最后一条完整回复");
-    set_hidden(_detail_live_dot, !live);
+    lv_label_set_text(_detail_label, "Agent 最后一条完整回复");
     const bool reset_scroll =
         _detail_scroll_identity.update(task->route, revision);
     const std::string display_reply = detail_display_text(reply);
@@ -920,7 +886,6 @@ void CodexTaskFocusView::apply_connection(bool connected)
     lv_obj_set_style_opa(_detail_status, content_opacity, 0);
     lv_obj_set_style_opa(_detail_divider, content_opacity, 0);
     lv_obj_set_style_opa(_detail_label, content_opacity, 0);
-    lv_obj_set_style_opa(_detail_live_dot, content_opacity, 0);
     lv_obj_set_style_opa(_detail_body, content_opacity, 0);
     lv_obj_set_style_opa(_detail_footer_label, content_opacity, 0);
     lv_obj_set_style_opa(_detail_footer, content_opacity, 0);

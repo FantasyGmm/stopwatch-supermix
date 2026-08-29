@@ -10,18 +10,27 @@ LowBatteryAlertActions LowBatteryAlertLogic::update(const LowBatteryAlertInput& 
         if (input.battery_sample_valid) {
             if (input.battery_percent >= rearmThreshold) {
                 rearm(actions);
-            } else if (input.battery_percent < lowThreshold && !_episode_active) {
-                if (_consecutive_low_samples < confirmationSamples) {
-                    ++_consecutive_low_samples;
-                }
-                if (_consecutive_low_samples >= confirmationSamples) {
-                    _episode_active = true;
-                    _sound_pending = true;
-                    _text_pending = true;
-                    _alert_percent = input.battery_percent;
-                }
-            } else if (!_episode_active) {
+            } else if (input.battery_percent < criticalThreshold &&
+                       !_critical_alerted) {
                 _consecutive_low_samples = 0;
+                if (_consecutive_critical_samples < confirmationSamples) {
+                    ++_consecutive_critical_samples;
+                }
+                if (_consecutive_critical_samples >= confirmationSamples) {
+                    armAlert(input.battery_percent, true);
+                }
+            } else {
+                _consecutive_critical_samples = 0;
+                if (input.battery_percent < lowThreshold && !_episode_active) {
+                    if (_consecutive_low_samples < confirmationSamples) {
+                        ++_consecutive_low_samples;
+                    }
+                    if (_consecutive_low_samples >= confirmationSamples) {
+                        armAlert(input.battery_percent, false);
+                    }
+                } else if (!_episode_active) {
+                    _consecutive_low_samples = 0;
+                }
             }
         }
     }
@@ -72,12 +81,27 @@ void LowBatteryAlertLogic::rearm(LowBatteryAlertActions& actions)
     }
     _phase = LowBatteryAlertPhase::Armed;
     _consecutive_low_samples = 0;
+    _consecutive_critical_samples = 0;
     _alert_percent = 0;
     _episode_active = false;
+    _critical_alerted = false;
     _sound_pending = false;
     _text_pending = false;
     _text_visible = false;
     _text_visible_since_ms = 0;
+}
+
+void LowBatteryAlertLogic::armAlert(
+    uint8_t battery_percent,
+    bool critical)
+{
+    _episode_active = true;
+    _critical_alerted = _critical_alerted || critical;
+    _sound_pending = true;
+    _text_pending = true;
+    _alert_percent = battery_percent;
+    _consecutive_low_samples = 0;
+    _consecutive_critical_samples = 0;
 }
 
 void LowBatteryAlertLogic::refreshPhase()

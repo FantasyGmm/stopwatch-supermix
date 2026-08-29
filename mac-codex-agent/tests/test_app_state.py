@@ -288,6 +288,92 @@ class AppStateTests(unittest.TestCase):
         self.assertEqual(view.trae_task_text, "Task: Add Trae page")
         self.assertEqual(view.trae_detail_text, "Detail: Building the collector")
 
+    def test_source_summaries_keep_each_task_with_its_agent(self):
+        snapshot = AgentSnapshot(
+            ConnectionState.CONNECTED,
+            True,
+            agent_name="Studio Mac",
+            voice_state=VoiceState.READY,
+            codex=CodexSnapshot.from_status(
+                {
+                    "codex_model": "gpt-5.6",
+                    "codex_effort": "high",
+                    "codex_5h_left_pct": 82,
+                    "codex_week_left_pct": 61,
+                    "codex_alert_pending": 1,
+                    "codex_alert_running": 2,
+                    "codex_alert_completed": 8,
+                }
+            ),
+            trae=TraeSnapshot.from_status(
+                {
+                    "trae_online": True,
+                    "trae_model": "Model A",
+                    "trae_effort": "high",
+                    "trae_fresh": True,
+                    "trae_tasks": [
+                        {
+                            "project": "StopWatch",
+                            "title": "Build status page",
+                            "detail": "Rendering the menu",
+                            "state": "running",
+                        }
+                    ],
+                }
+            ),
+        )
+
+        view = present(snapshot)
+
+        self.assertEqual(
+            view.agent_summary_text,
+            "Studio Mac · Connected · Voice Ready",
+        )
+        self.assertEqual(
+            view.codex_summary_text,
+            "Codex · gpt-5.6 · 1 Pending / 2 Running / 8 Completed",
+        )
+        self.assertEqual(
+            view.trae_summary_text,
+            "Trae · Online · StopWatch · Running",
+        )
+        self.assertEqual(
+            view.device_summary_text,
+            "Device & Voice · Connected · Ready",
+        )
+        self.assertNotIn("Trae", view.codex_summary_text)
+        self.assertNotIn("Pending", view.trae_summary_text)
+        self.assertEqual(view.root_health_title, "StopWatch 已连接")
+        self.assertEqual(
+            view.root_health_subtitle,
+            "Studio Mac · 语音可用",
+        )
+        self.assertEqual(view.root_codex_title, "Codex")
+        self.assertEqual(
+            view.root_codex_subtitle,
+            "gpt-5.6 · High · 5H 82% · 7D 61%",
+        )
+        self.assertEqual(view.root_codex_status, "1 Pending")
+        self.assertEqual(
+            view.root_codex_detail,
+            "2 Running · 8 Completed",
+        )
+        self.assertEqual(view.root_trae_title, "Trae")
+        self.assertEqual(
+            view.root_trae_subtitle,
+            "Online · Model A · High",
+        )
+        self.assertEqual(view.root_trae_status, "StopWatch")
+        self.assertEqual(
+            view.root_trae_detail,
+            "Running · Build status page",
+        )
+        self.assertEqual(view.root_device_title, "设备与语音")
+        self.assertEqual(
+            view.root_device_subtitle,
+            "Bluetooth Connected · Voice Ready",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -27,6 +27,7 @@ from AppKit import (
     NSMenuItem,
     NSObject,
     NSStatusBar,
+    NSTextAlignmentRight,
     NSTextField,
     NSVariableStatusItemLength,
     NSView,
@@ -58,6 +59,44 @@ STATUS_LEFT_MARGIN = 18
 STATUS_CHILD_INDENT = 16
 ALERT_ROW_WIDTH = 360
 INSTALL_SHUTDOWN_TIMEOUT = 1.0
+ROOT_MENU_WIDTH = 430
+ROOT_HEALTH_HEIGHT = 61
+ROOT_SOURCE_HEIGHT = 52
+ROOT_DEVICE_HEIGHT = 40
+ROOT_ACTION_HEIGHT = 27
+ROOT_PRIMARY_COLOR = (0xED, 0xF1, 0xF7)
+ROOT_SECONDARY_COLOR = (0x8C, 0x94, 0xA2)
+ROOT_GREEN_COLOR = (0x5B, 0xD6, 0x9B)
+ROOT_ORANGE_COLOR = (0xFF, 0xB3, 0x5A)
+ROOT_BLUE_COLOR = (0x69, 0xA7, 0xFF)
+ROOT_BADGE_TEXT_COLOR = (0xB5, 0xD1, 0xFF)
+ROOT_BADGE_BACKGROUND_COLOR = (0x25, 0x34, 0x4A)
+
+
+def bundled_agent_version() -> str:
+    bundle = NSBundle.mainBundle()
+    value = bundle.objectForInfoDictionaryKey_("CFBundleShortVersionString")
+    if bundle.bundleIdentifier() == "com.stopwatch.codex-agent" and isinstance(
+        value, str
+    ):
+        parts = value.strip().split(".")
+        if len(parts) == 3 and all(
+            part.isascii() and part.isdigit() for part in parts
+        ):
+            return value.strip()
+    try:
+        value = pathlib.Path(__file__).with_name("VERSION").read_text(
+            encoding="utf-8"
+        ).strip()
+    except OSError:
+        return "dev"
+    parts = value.split(".")
+    return (
+        value
+        if len(parts) == 3
+        and all(part.isascii() and part.isdigit() for part in parts)
+        else "dev"
+    )
 
 
 def bundled_blackhole_package() -> pathlib.Path:
@@ -157,6 +196,7 @@ class MenuBarApplication(NSObject):
         self._installing_voice = False
         self._last_alert_revision = None
         self._alert_labels = []
+        self.agent_version = bundled_agent_version()
         return self
 
     def applicationDidFinishLaunching_(self, _notification):
@@ -170,21 +210,46 @@ class MenuBarApplication(NSObject):
 
         self.menu = NSMenu.alloc().init()
         self.menu.setAutoenablesItems_(False)
+        self.menu.setMinimumWidth_(ROOT_MENU_WIDTH)
+        (
+            self.agent_health_item,
+            self.agent_health_view,
+            self.agent_health_dot,
+            self.agent_health_title_label,
+            self.agent_health_subtitle_label,
+            self.agent_version_label,
+        ) = self._root_health_item()
+        self.agent_health_label = self.agent_health_subtitle_label
+        self.menu.addItem_(NSMenuItem.separatorItem())
+
+        (
+            self.codex_item,
+            self.codex_submenu,
+            self.codex_summary_view,
+            self.codex_summary_dot,
+            self.codex_summary_title_label,
+            self.codex_summary_subtitle_label,
+            self.codex_summary_status_label,
+            self.codex_summary_detail_label,
+        ) = self._root_source_item(
+            "Codex", self._root_color(ROOT_ORANGE_COLOR)
+        )
         self.codex_header_item, self.codex_header_label = self._informational_item(
-            "Codex Status", header=True
+            "Codex Status", header=True, menu=self.codex_submenu
         )
         self.model_item, self.model_label = self._informational_item(
-            "Model: --", indent=STATUS_CHILD_INDENT
+            "Model: --", indent=STATUS_CHILD_INDENT, menu=self.codex_submenu
         )
         self.effort_item, self.effort_label = self._informational_item(
-            "Effort: --", indent=STATUS_CHILD_INDENT
+            "Effort: --", indent=STATUS_CHILD_INDENT, menu=self.codex_submenu
         )
         self.five_hour_item, self.five_hour_label = self._informational_item(
-            "5H Remaining: --", indent=STATUS_CHILD_INDENT
+            "5H Remaining: --", indent=STATUS_CHILD_INDENT, menu=self.codex_submenu
         )
         self.seven_day_item, self.seven_day_label = self._informational_item(
-            "7D Remaining: --", indent=STATUS_CHILD_INDENT
+            "7D Remaining: --", indent=STATUS_CHILD_INDENT, menu=self.codex_submenu
         )
+        self.codex_submenu.addItem_(NSMenuItem.separatorItem())
         self.alert_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
             "Task Alerts · 0 Pending / 0 Running / 0 Completed", None, ""
         )
@@ -192,84 +257,132 @@ class MenuBarApplication(NSObject):
         self.alert_submenu = NSMenu.alloc().init()
         self.alert_submenu.setAutoenablesItems_(False)
         self.alert_item.setSubmenu_(self.alert_submenu)
-        self.menu.addItem_(self.alert_item)
-        self.menu.addItem_(NSMenuItem.separatorItem())
+        self.codex_submenu.addItem_(self.alert_item)
+
+        (
+            self.trae_item,
+            self.trae_submenu,
+            self.trae_summary_view,
+            self.trae_summary_dot,
+            self.trae_summary_title_label,
+            self.trae_summary_subtitle_label,
+            self.trae_summary_status_label,
+            self.trae_summary_detail_label,
+        ) = self._root_source_item("Trae", self._root_color(ROOT_BLUE_COLOR))
         self.trae_header_item, self.trae_header_label = self._informational_item(
-            "Trae Status", header=True
+            "Trae Status", header=True, menu=self.trae_submenu
         )
         self.trae_online_item, self.trae_online_label = self._informational_item(
-            "Source: Offline", indent=STATUS_CHILD_INDENT
+            "Source: Offline", indent=STATUS_CHILD_INDENT, menu=self.trae_submenu
         )
         self.trae_model_item, self.trae_model_label = self._informational_item(
-            "Model: --", indent=STATUS_CHILD_INDENT
+            "Model: --", indent=STATUS_CHILD_INDENT, menu=self.trae_submenu
         )
         self.trae_effort_item, self.trae_effort_label = self._informational_item(
-            "Effort: --", indent=STATUS_CHILD_INDENT
+            "Effort: --", indent=STATUS_CHILD_INDENT, menu=self.trae_submenu
         )
         self.trae_project_item, self.trae_project_label = self._informational_item(
-            "Project: --", indent=STATUS_CHILD_INDENT
+            "Project: --", indent=STATUS_CHILD_INDENT, menu=self.trae_submenu
         )
         self.trae_state_item, self.trae_state_label = self._informational_item(
-            "State: --", indent=STATUS_CHILD_INDENT
+            "State: --", indent=STATUS_CHILD_INDENT, menu=self.trae_submenu
         )
         self.trae_task_item, self.trae_task_label = self._informational_item(
-            "Task: --", indent=STATUS_CHILD_INDENT
+            "Task: --", indent=STATUS_CHILD_INDENT, menu=self.trae_submenu
         )
         self.trae_detail_item, self.trae_detail_label = self._informational_item(
-            "Detail: --", indent=STATUS_CHILD_INDENT
+            "Detail: --", indent=STATUS_CHILD_INDENT, menu=self.trae_submenu
         )
+
         self.menu.addItem_(NSMenuItem.separatorItem())
+        (
+            self.device_voice_item,
+            self.device_submenu,
+            self.device_summary_view,
+            self.device_summary_dot,
+            self.device_summary_title_label,
+            self.device_summary_subtitle_label,
+        ) = self._root_device_item(
+            self._root_color(ROOT_GREEN_COLOR)
+        )
         (
             self.connection_header_item,
             self.connection_header_label,
-        ) = self._informational_item("Connection Status", header=True)
+        ) = self._informational_item(
+            "Connection Status", header=True, menu=self.device_submenu
+        )
         self.agent_item, self.agent_label = self._informational_item(
-            "Agent: Running", indent=STATUS_CHILD_INDENT
+            "Agent: Running", indent=STATUS_CHILD_INDENT, menu=self.device_submenu
         )
         self.pairing_item, self.pairing_label = self._informational_item(
-            "Pairing: Idle", indent=STATUS_CHILD_INDENT
+            "Pairing: Idle", indent=STATUS_CHILD_INDENT, menu=self.device_submenu
         )
         self.verification_item, self.verification_label = self._informational_item(
-            "Verification Code: --", indent=STATUS_CHILD_INDENT
+            "Verification Code: --",
+            indent=STATUS_CHILD_INDENT,
+            menu=self.device_submenu,
         )
         self.watch_identity_item, self.watch_identity_label = (
-            self._informational_item("Watch: --", indent=STATUS_CHILD_INDENT)
+            self._informational_item(
+                "Watch: --", indent=STATUS_CHILD_INDENT, menu=self.device_submenu
+            )
         )
         self.bluetooth_item, self.bluetooth_label = self._informational_item(
-            "Bluetooth: Scanning", indent=STATUS_CHILD_INDENT
+            "Bluetooth: Scanning",
+            indent=STATUS_CHILD_INDENT,
+            menu=self.device_submenu,
         )
         self.device_item, self.device_label = self._informational_item(
-            "Device: StopWatch-Codex", indent=STATUS_CHILD_INDENT
+            "Device: StopWatch-Codex",
+            indent=STATUS_CHILD_INDENT,
+            menu=self.device_submenu,
         )
         self.voice_item, self.voice_label = self._informational_item(
-            "Voice Input: Error", indent=STATUS_CHILD_INDENT
+            "Voice Input: Error",
+            indent=STATUS_CHILD_INDENT,
+            menu=self.device_submenu,
         )
         self.setup_voice_item = self._action_item(
-            "Set Up Watch Voice Input...", "setupVoice:"
+            "Set Up Watch Voice Input...", "setupVoice:", root=True
         )
         self.accessibility_item = self._action_item(
-            "Open Accessibility Settings...", "openAccessibilitySettings:"
+            "Open Accessibility Settings...",
+            "openAccessibilitySettings:",
+            root=True,
         )
         self.codex_pet_item = self._action_item("Codex Pet…", "openCodexPet:")
         self.menu.addItem_(NSMenuItem.separatorItem())
-        self.connection_item = self._action_item(
-            "Enable Watch Connection", "toggleConnection:"
+        self.reconnect_item = self._action_item(
+            "立即重新连接", "reconnect:", root=True
         )
-        self.reconnect_item = self._action_item("Reconnect Now", "reconnect:")
+
+        self.settings_item, self.settings_submenu = self._root_submenu_item(
+            "Agent 设置"
+        )
+        self.connection_item = self._action_item(
+            "Enable Watch Connection",
+            "toggleConnection:",
+            menu=self.settings_submenu,
+        )
         self.rename_agent_item = self._action_item(
-            "Agent Name...", "renameAgent:"
+            "Rename Agent...", "renameAgent:", menu=self.settings_submenu
         )
         self.retry_pairing_item = self._action_item(
-            "Retry Pairing", "retryPairing:"
+            "Retry Pairing", "retryPairing:", root=True
         )
         self.forget_watch_item = self._action_item(
-            "Forget This Watch Credential...", "forgetWatch:"
+            "Forget This Watch Credential...", "forgetWatch:", root=True
+        )
+
+        self.diagnostics_item, self.diagnostics_submenu = self._root_submenu_item(
+            "诊断"
+        )
+        self.open_log_item = self._action_item(
+            "Open Log", "openLog:", menu=self.diagnostics_submenu
         )
         self.menu.addItem_(NSMenuItem.separatorItem())
-        self.open_log_item = self._action_item("Open Log", "openLog:")
-        self.menu.addItem_(NSMenuItem.separatorItem())
         self.quit_item = self._action_item(
-            "Quit StopWatch Codex Agent", "quitApplication:"
+            "退出 StopWatch Codex Agent", "quitApplication:", root=True
         )
         self.status_item.setMenu_(self.menu)
 
@@ -319,6 +432,210 @@ class MenuBarApplication(NSObject):
         target_menu.addItem_(item)
         return item, label
 
+    @staticmethod
+    def _root_color(rgb):
+        return NSColor.colorWithSRGBRed_green_blue_alpha_(
+            rgb[0] / 255.0,
+            rgb[1] / 255.0,
+            rgb[2] / 255.0,
+            1.0,
+        )
+
+    def _root_label(
+        self,
+        title,
+        frame,
+        size,
+        color=None,
+        semibold=False,
+        alignment=None,
+    ):
+        label = NSTextField.labelWithString_(title)
+        label.setFrame_(frame)
+        label.setFont_(
+            NSFont.systemFontOfSize_weight_(size, NSFontWeightSemibold)
+            if semibold
+            else NSFont.systemFontOfSize_(size)
+        )
+        label.setTextColor_(
+            color if color is not None else self._root_color(ROOT_PRIMARY_COLOR)
+        )
+        label.setLineBreakMode_(NSLineBreakByTruncatingTail)
+        label.setUsesSingleLineMode_(True)
+        if alignment is not None:
+            label.setAlignment_(alignment)
+        return label
+
+    @staticmethod
+    def _set_dot_color(dot, color):
+        dot.layer().setBackgroundColor_(color.CGColor())
+
+    def _root_dot(self, frame, color):
+        dot = NSView.alloc().initWithFrame_(frame)
+        dot.setWantsLayer_(True)
+        dot.layer().setCornerRadius_(3.5)
+        self._set_dot_color(dot, color)
+        return dot
+
+    def _root_health_item(self):
+        view = NSView.alloc().initWithFrame_(
+            ((0, 0), (ROOT_MENU_WIDTH, ROOT_HEALTH_HEIGHT))
+        )
+        dot = self._root_dot(
+            ((12, 40), (7, 7)), self._root_color(ROOT_GREEN_COLOR)
+        )
+        title = self._root_label(
+            "StopWatch 启动中",
+            ((27, 31), (315, 22)),
+            14,
+            semibold=True,
+        )
+        subtitle = self._root_label(
+            "Agent · 语音状态检查中",
+            ((27, 8), (335, 17)),
+            11,
+            color=self._root_color(ROOT_SECONDARY_COLOR),
+        )
+        version = self._root_label(
+            "v{}".format(self.agent_version),
+            ((366, 32), (52, 19)),
+            11,
+            color=self._root_color(ROOT_BADGE_TEXT_COLOR),
+            alignment=NSTextAlignmentRight,
+        )
+        version.setWantsLayer_(True)
+        version.layer().setBackgroundColor_(
+            self._root_color(ROOT_BADGE_BACKGROUND_COLOR).CGColor()
+        )
+        version.layer().setCornerRadius_(9.5)
+        for child in (dot, title, subtitle, version):
+            view.addSubview_(child)
+        item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "Agent Status", None, ""
+        )
+        item.setEnabled_(False)
+        item.setView_(view)
+        self.menu.addItem_(item)
+        return item, view, dot, title, subtitle, version
+
+    def _root_source_item(self, source, dot_color):
+        view = NSView.alloc().initWithFrame_(
+            ((0, 0), (ROOT_MENU_WIDTH, ROOT_SOURCE_HEIGHT))
+        )
+        dot = self._root_dot(((12, 23), (7, 7)), dot_color)
+        title = self._root_label(
+            source, ((27, 29), (225, 17)), 13, semibold=True
+        )
+        subtitle = self._root_label(
+            "--",
+            ((27, 10), (240, 15)),
+            11,
+            color=self._root_color(ROOT_SECONDARY_COLOR),
+        )
+        status = self._root_label(
+            "--",
+            ((270, 29), (128, 16)),
+            13,
+            alignment=NSTextAlignmentRight,
+        )
+        detail = self._root_label(
+            "--",
+            ((260, 10), (138, 14)),
+            10,
+            color=self._root_color(ROOT_SECONDARY_COLOR),
+            alignment=NSTextAlignmentRight,
+        )
+        chevron = self._root_label(
+            "›",
+            ((407, 14), (11, 24)),
+            18,
+            color=self._root_color(ROOT_SECONDARY_COLOR),
+            alignment=NSTextAlignmentRight,
+        )
+        for child in (dot, title, subtitle, status, detail, chevron):
+            view.addSubview_(child)
+        item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            source, None, ""
+        )
+        item.setEnabled_(True)
+        submenu = NSMenu.alloc().init()
+        submenu.setAutoenablesItems_(False)
+        item.setSubmenu_(submenu)
+        item.setView_(view)
+        self.menu.addItem_(item)
+        return item, submenu, view, dot, title, subtitle, status, detail
+
+    def _root_device_item(self, dot_color):
+        view = NSView.alloc().initWithFrame_(
+            ((0, 0), (ROOT_MENU_WIDTH, ROOT_DEVICE_HEIGHT))
+        )
+        dot = self._root_dot(((12, 17), (7, 7)), dot_color)
+        title = self._root_label(
+            "设备与语音", ((27, 20), (255, 16)), 13, semibold=True
+        )
+        subtitle = self._root_label(
+            "--",
+            ((27, 4), (340, 14)),
+            11,
+            color=self._root_color(ROOT_SECONDARY_COLOR),
+        )
+        chevron = self._root_label(
+            "›",
+            ((407, 8), (11, 24)),
+            18,
+            color=self._root_color(ROOT_SECONDARY_COLOR),
+            alignment=NSTextAlignmentRight,
+        )
+        for child in (dot, title, subtitle, chevron):
+            view.addSubview_(child)
+        item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "设备与语音", None, ""
+        )
+        item.setEnabled_(True)
+        submenu = NSMenu.alloc().init()
+        submenu.setAutoenablesItems_(False)
+        item.setSubmenu_(submenu)
+        item.setView_(view)
+        self.menu.addItem_(item)
+        return item, submenu, view, dot, title, subtitle
+
+    def _style_root_action_item(self, item, title, chevron=False):
+        view = NSView.alloc().initWithFrame_(
+            ((0, 0), (ROOT_MENU_WIDTH, ROOT_ACTION_HEIGHT))
+        )
+        label = self._root_label(title, ((12, 4), (385, 19)), 13)
+        view.addSubview_(label)
+        if chevron:
+            arrow = self._root_label(
+                "›",
+                ((407, 2), (11, 23)),
+                18,
+                color=self._root_color(ROOT_SECONDARY_COLOR),
+                alignment=NSTextAlignmentRight,
+            )
+            view.addSubview_(arrow)
+        item.setView_(view)
+        return view, label
+
+    def _root_submenu_item(self, title):
+        item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(title, None, "")
+        item.setEnabled_(True)
+        submenu = NSMenu.alloc().init()
+        submenu.setAutoenablesItems_(False)
+        item.setSubmenu_(submenu)
+        self._style_root_action_item(item, title, chevron=True)
+        self.menu.addItem_(item)
+        return item, submenu
+
+    def _submenu_item(self, title):
+        item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(title, None, "")
+        item.setEnabled_(True)
+        submenu = NSMenu.alloc().init()
+        submenu.setAutoenablesItems_(False)
+        item.setSubmenu_(submenu)
+        self.menu.addItem_(item)
+        return item, submenu
+
     def _rebuild_alert_submenu(self, alerts):
         self.alert_submenu.removeAllItems()
         self._alert_labels = []
@@ -360,14 +677,48 @@ class MenuBarApplication(NSObject):
             )
             self._alert_labels.append(label)
 
-    def _action_item(self, title, action):
+    def _action_item(self, title, action, menu=None, root=False):
         item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(title, action, "")
         item.setTarget_(self)
-        self.menu.addItem_(item)
+        target_menu = menu if menu is not None else self.menu
+        if root:
+            self._style_root_action_item(item, title)
+        target_menu.addItem_(item)
         return item
 
     def refresh_(self, _timer):
         view = present(self.controller.snapshot())
+        self.agent_health_title_label.setStringValue_(view.root_health_title)
+        self.agent_health_subtitle_label.setStringValue_(view.root_health_subtitle)
+        self.codex_summary_title_label.setStringValue_(view.root_codex_title)
+        self.codex_summary_subtitle_label.setStringValue_(view.root_codex_subtitle)
+        self.codex_summary_status_label.setStringValue_(view.root_codex_status)
+        self.codex_summary_detail_label.setStringValue_(view.root_codex_detail)
+        self.trae_summary_title_label.setStringValue_(view.root_trae_title)
+        self.trae_summary_subtitle_label.setStringValue_(view.root_trae_subtitle)
+        self.trae_summary_status_label.setStringValue_(view.root_trae_status)
+        self.trae_summary_detail_label.setStringValue_(view.root_trae_detail)
+        self.device_summary_title_label.setStringValue_(view.root_device_title)
+        self.device_summary_subtitle_label.setStringValue_(view.root_device_subtitle)
+        connected = "Connected" in view.bluetooth_text
+        ready = view.voice_state in (VoiceState.READY, VoiceState.RECORDING)
+        state_color = self._root_color(
+            ROOT_GREEN_COLOR if connected else ROOT_SECONDARY_COLOR
+        )
+        self._set_dot_color(self.agent_health_dot, state_color)
+        self._set_dot_color(
+            self.device_summary_dot,
+            self._root_color(
+                ROOT_GREEN_COLOR if connected and ready else ROOT_SECONDARY_COLOR
+            ),
+        )
+        self.codex_summary_status_label.setTextColor_(
+            self._root_color(
+                ROOT_ORANGE_COLOR
+                if view.root_codex_status != "0 Pending"
+                else ROOT_SECONDARY_COLOR
+            )
+        )
         self.model_label.setStringValue_(view.model_text)
         self.effort_label.setStringValue_(view.effort_text)
         self.five_hour_label.setStringValue_(view.five_hour_text)

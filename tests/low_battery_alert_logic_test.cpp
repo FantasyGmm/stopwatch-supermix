@@ -68,6 +68,32 @@ int main()
     {
         LowBatteryAlertLogic policy;
         policy.update(sample(0, 29));
+        assert(policy.update(sample(1000, 29)).play_sound);
+        assert(!policy.update(sample(2000, 9)).play_sound);
+        const auto critical = policy.update(sample(3000, 9));
+        assert(critical.play_sound && critical.show_text);
+        assert(critical.battery_percent == 9);
+        assert(!policy.update(sample(4000, 8)).play_sound);
+    }
+
+    {
+        LowBatteryAlertLogic policy;
+        policy.update(sample(0, 9));
+        const auto critical = policy.update(sample(1000, 9));
+        assert(critical.play_sound && critical.show_text);
+        assert(!policy.update(sample(2000, 8)).play_sound);
+    }
+
+    {
+        LowBatteryAlertLogic policy;
+        policy.update(sample(0, 10));
+        assert(policy.update(sample(1000, 10)).play_sound);
+        assert(!policy.update(sample(2000, 10)).play_sound);
+    }
+
+    {
+        LowBatteryAlertLogic policy;
+        policy.update(sample(0, 29));
         policy.update(sample(1000, 31));
         assert(!policy.update(sample(2000, 29)).play_sound);
         assert(policy.update(sample(3000, 29)).play_sound);

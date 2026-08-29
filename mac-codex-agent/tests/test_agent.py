@@ -826,7 +826,7 @@ class CodexStatusAgentTests(unittest.TestCase):
                     "state": "pending" if index % 2 else "running",
                     "last_reply": "reply-{}".format(index),
                 }
-                for index in range(10)
+                for index in range(1, 11)
             ],
         }
 
@@ -858,7 +858,7 @@ class CodexStatusAgentTests(unittest.TestCase):
                     "state": "pending",
                     "last_reply": "reply-{}".format(index),
                 }
-                for index in range(8)
+                for index in range(1, 9)
             ],
         }
 

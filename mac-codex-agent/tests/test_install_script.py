@@ -1,5 +1,6 @@
 import os
 import pathlib
+import plistlib
 import shlex
 import subprocess
 import tempfile
@@ -16,6 +17,7 @@ BLACKHOLE_SHA256 = (
     "57b540f27a3e29c37e310e01bee0fdfab76733087e47f997ef9dccf851400dcf"
 )
 INSTALL_SCRIPT = ROOT / "install_launch_agent.sh"
+VERSION_FILE = ROOT / "VERSION"
 
 
 class InstallScriptTests(unittest.TestCase):
@@ -39,6 +41,28 @@ class InstallScriptTests(unittest.TestCase):
             check=False,
             env={**os.environ, **(env or {})},
         )
+
+    def test_bundle_version_is_1_0_1_and_has_no_absolute_runtime_paths(self):
+        self.assertEqual(VERSION_FILE.read_text(encoding="utf-8").strip(), "1.0.1")
+        with tempfile.TemporaryDirectory() as temporary:
+            plist_path = pathlib.Path(temporary) / "Info.plist"
+            result = self.run_installer_function(
+                f"""
+                AGENT_VERSION=1.0.0
+                AGENT_BUILD_NUMBER=1
+                write_info_plist {shlex.quote(str(plist_path))}
+                """
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            with plist_path.open("rb") as stream:
+                info = plistlib.load(stream)
+            self.assertEqual(info["CFBundleShortVersionString"], "1.0.0")
+            self.assertEqual(info["CFBundleVersion"], "1")
+            self.assertNotIn("LSEnvironment", info)
+            plist_text = plist_path.read_text(encoding="utf-8")
+            self.assertNotIn(str(pathlib.Path.home()), plist_text)
+            self.assertNotIn(str(ROOT), plist_text)
 
     def test_installer_does_not_change_agent_or_connection_state(self):
         script = self.read_script()
@@ -700,7 +724,8 @@ class InstallScriptTests(unittest.TestCase):
             script,
         )
         self.assertIn(
-            'cp "$PYTHON_APP_EXECUTABLE" "$STAGING_EXECUTABLE"', script
+            'cp "$PYTHON_APP_EXECUTABLE" "$STAGING_EXECUTABLE"',
+            script,
         )
         self.assertIn("install_name_tool", script)
         self.assertIn("'@executable_path/../../../../Python3'", script)
@@ -709,7 +734,8 @@ class InstallScriptTests(unittest.TestCase):
             '"$PYTHON_VERSION"\'/Python3\'',
             script,
         )
-        self.assertNotIn("write_launcher()", script)
+        self.assertNotIn("build_relocatable_launcher()", script)
+        self.assertNotIn("StopWatchCodexAgentPython", script)
         self.assertIn(
             'STAGING_PYTHON_HOME="$STAGING_PYTHON_FRAMEWORK/Versions/'
             '$PYTHON_VERSION"',
@@ -740,8 +766,16 @@ class InstallScriptTests(unittest.TestCase):
         self.assertIn('find "$STAGING_APP" -name \'*.pth\'', script)
         self.assertIn("validate_no_external_symlinks", script)
         self.assertIn("env -i", script)
-        self.assertIn("PYTHONNOUSERSITE=1", script)
-        self.assertIn("<key>PYTHONNOUSERSITE</key>", script)
+        self.assertNotIn("<key>PYTHONNOUSERSITE</key>", script)
+        self.assertIn(
+            'cp "$ROOT_DIR/sitecustomize.py" \\',
+            script,
+        )
+        self.assertIn(
+            '"$STAGING_PYTHON_HOME/lib/python$PYTHON_VERSION/'
+            'site-packages/sitecustomize.py"',
+            script,
+        )
         self.assertIn('STOPWATCH_CODEX_APP=0', script)
         self.assertIn(
             'resolved = pathlib.Path(entry or os.getcwd()).resolve()', script
@@ -757,16 +791,9 @@ class InstallScriptTests(unittest.TestCase):
         ):
             self.assertIn(f"import {dependency}", script)
 
-        self.assertIn(
-            '<string>$APP_DIR/Contents/Frameworks/Python3.framework/'
-            'Versions/$PYTHON_VERSION</string>',
-            script,
-        )
-        self.assertIn(
-            '<string>$APP_DIR/Contents/Resources/app:'
-            '$APP_DIR/Contents/Resources/site-packages</string>',
-            script,
-        )
+        self.assertNotIn("<key>LSEnvironment</key>", script)
+        self.assertNotIn("<string>$APP_DIR/Contents/Frameworks", script)
+        self.assertNotIn("<string>$APP_DIR/Contents/Resources", script)
         self.assertNotIn('<string>$PYTHON_FRAMEWORK_ROOT</string>', script)
         self.assertNotIn('<string>$SITE_PACKAGES</string>', script)
 

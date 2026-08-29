@@ -2,10 +2,17 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VERSION_FILE="$ROOT_DIR/VERSION"
+AGENT_VERSION="${STOPWATCH_AGENT_VERSION:-$(<"$VERSION_FILE")}"
+if [[ ! "$AGENT_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+    echo "Invalid Agent version: $AGENT_VERSION" >&2
+    exit 2
+fi
+AGENT_BUILD_NUMBER="${STOPWATCH_AGENT_BUILD_NUMBER:-$((10#${BASH_REMATCH[3]} + 1))}"
 LABEL="com.stopwatch.codex-agent"
 CODE_REQUIREMENT='=designated => identifier "com.stopwatch.codex-agent"'
 LOG_DIR="$HOME/Library/Logs"
-APP_PARENT="$HOME/Applications"
+APP_PARENT="${STOPWATCH_APP_PARENT:-$HOME/Applications}"
 APP_DIR="$APP_PARENT/StopWatch Codex Agent.app"
 PUBLISH_LOCK="$APP_PARENT/.stopwatch-agent-publish.lock"
 NATIVE_BUILD_DIR="$ROOT_DIR/.native"
@@ -194,16 +201,14 @@ validate_no_key_material() {
 
 validate_info_plist_paths() {
     local app_path="$1"
-    local expected_home="$APP_DIR/Contents/Frameworks/Python3.framework/Versions/$PYTHON_VERSION"
-    local expected_path="$APP_DIR/Contents/Resources/app:$APP_DIR/Contents/Resources/site-packages"
     local plist="$app_path/Contents/Info.plist"
-    local configured_home=""
-    local configured_path=""
-    configured_home="$(/usr/libexec/PlistBuddy -c 'Print :LSEnvironment:PYTHONHOME' "$plist")"
-    configured_path="$(/usr/libexec/PlistBuddy -c 'Print :LSEnvironment:PYTHONPATH' "$plist")"
-    [[ "$configured_home" == "$expected_home" ]]
-    [[ "$configured_path" == "$expected_path" ]]
+    if /usr/libexec/PlistBuddy -c 'Print :LSEnvironment' "$plist" \
+        >/dev/null 2>&1; then
+        echo "Info.plist must not contain path-bound LSEnvironment values" >&2
+        return 1
+    fi
     if grep -F "$ROOT_DIR" "$plist" >/dev/null ||
+        grep -F "$HOME" "$plist" >/dev/null ||
         grep -F '/Library/Developer/CommandLineTools' "$plist" >/dev/null ||
         grep -F '/.venv/' "$plist" >/dev/null; then
         echo "External Python path in Info.plist" >&2
@@ -220,8 +225,6 @@ smoke_test_packaged_runtime() {
             HOME="$HOME" \
             PATH="/usr/bin:/bin" \
             TMPDIR="${TMPDIR:-/tmp}" \
-            PYTHONHOME="$app_path/Contents/Frameworks/Python3.framework/Versions/$PYTHON_VERSION" \
-            PYTHONPATH="$app_path/Contents/Resources/app:$app_path/Contents/Resources/site-packages" \
             PYTHONNOUSERSITE=1 \
             PYTHONDONTWRITEBYTECODE=1 \
             STOPWATCH_CODEX_APP=0 \
@@ -274,7 +277,7 @@ import voice_session
 import voice_shortcut
 import watch_credentials
 
-app_root = pathlib.Path(os.environ["PYTHONHOME"]).resolve().parents[4]
+app_root = pathlib.Path(sys.executable).resolve().parents[2]
 external = []
 for entry in sys.path:
     resolved = pathlib.Path(entry or os.getcwd()).resolve()
@@ -357,6 +360,7 @@ validate_app_contents() {
         "$resources/site-packages/cryptography/__init__.py" \
         "$resources/site-packages/PIL/__init__.py" \
         "$resources/site-packages/PIL/Image.py" \
+        "$app_path/Contents/Frameworks/Python3.framework/Versions/$PYTHON_VERSION/lib/python$PYTHON_VERSION/site-packages/sitecustomize.py" \
         "$app_path/Contents/Frameworks/Python3.framework/Versions/$PYTHON_VERSION/Python3"; do
         if [[ ! -f "$required_path" ]]; then
             echo "Missing packaged runtime file: $required_path" >&2
@@ -365,7 +369,7 @@ validate_app_contents() {
     done
     if ! file -b "$app_path/Contents/MacOS/StopWatchCodexAgent" |
         grep -q 'Mach-O'; then
-        echo "Packaged launcher is not a Mach-O executable" >&2
+        echo "Packaged runtime is not a Mach-O executable" >&2
         return 1
     fi
     verify_driver_package "$resources/Drivers/$DRIVER_PACKAGE_NAME" || return
@@ -539,24 +543,11 @@ write_info_plist() {
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>2.0</string>
+    <string>$AGENT_VERSION</string>
     <key>CFBundleVersion</key>
-    <string>2</string>
+    <string>$AGENT_BUILD_NUMBER</string>
     <key>LSUIElement</key>
     <true/>
-    <key>LSEnvironment</key>
-    <dict>
-        <key>PYTHONHOME</key>
-        <string>$APP_DIR/Contents/Frameworks/Python3.framework/Versions/$PYTHON_VERSION</string>
-        <key>PYTHONPATH</key>
-        <string>$APP_DIR/Contents/Resources/app:$APP_DIR/Contents/Resources/site-packages</string>
-        <key>PYTHONNOUSERSITE</key>
-        <string>1</string>
-        <key>PYTHONDONTWRITEBYTECODE</key>
-        <string>1</string>
-        <key>STOPWATCH_CODEX_APP</key>
-        <string>1</string>
-    </dict>
     <key>NSBluetoothAlwaysUsageDescription</key>
     <string>Send local Codex status to your StopWatch over Bluetooth.</string>
 </dict>
@@ -587,6 +578,7 @@ build_staged_app() {
     cp "$NATIVE_LIBRARY" "$STAGING_RESOURCES/native/libstopwatch_voice_audio.dylib"
     ditto "$PYTHON_FRAMEWORK_DIR/" "$STAGING_PYTHON_FRAMEWORK/"
     rm -rf "$STAGING_PYTHON_HOME/lib/python$PYTHON_VERSION/site-packages"
+    mkdir -p "$STAGING_PYTHON_HOME/lib/python$PYTHON_VERSION/site-packages"
     ditto "$SITE_PACKAGES/" "$STAGING_SITE_PACKAGES/"
     cp "$PYTHON_APP_EXECUTABLE" "$STAGING_EXECUTABLE"
     install_name_tool \
@@ -594,6 +586,8 @@ build_staged_app() {
         '@executable_path/../Frameworks/Python3.framework/Versions/'"$PYTHON_VERSION"'/Python3' \
         "$STAGING_EXECUTABLE"
     chmod 755 "$STAGING_EXECUTABLE"
+    cp "$ROOT_DIR/sitecustomize.py" \
+        "$STAGING_PYTHON_HOME/lib/python$PYTHON_VERSION/site-packages/sitecustomize.py"
 
     find "$STAGING_APP" -name '*.pth' -delete
     find "$STAGING_APP" -type d -name '__pycache__' -prune -exec rm -rf {} +

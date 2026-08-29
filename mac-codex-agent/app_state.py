@@ -128,6 +128,22 @@ class AgentSnapshot:
 
 @dataclasses.dataclass(frozen=True)
 class MenuPresentation:
+    agent_summary_text: str
+    codex_summary_text: str
+    trae_summary_text: str
+    device_summary_text: str
+    root_health_title: str
+    root_health_subtitle: str
+    root_codex_title: str
+    root_codex_subtitle: str
+    root_codex_status: str
+    root_codex_detail: str
+    root_trae_title: str
+    root_trae_subtitle: str
+    root_trae_status: str
+    root_trae_detail: str
+    root_device_title: str
+    root_device_subtitle: str
     model_text: str
     effort_text: str
     five_hour_text: str
@@ -188,6 +204,28 @@ _PAIRING_STATE_LABELS = {
     PairingState.ERROR: "Failed",
 }
 
+_ROOT_STATE_LABELS = {
+    ConnectionState.DISABLED: "连接已关闭",
+    ConnectionState.SCANNING: "扫描中",
+    ConnectionState.WAITING: "等待手表",
+    ConnectionState.CONNECTING: "连接中",
+    ConnectionState.CONNECTED: "已连接",
+    ConnectionState.DISCONNECTING: "正在断开",
+    ConnectionState.UNAUTHORIZED: "需要授权",
+    ConnectionState.UNAVAILABLE: "不可用",
+    ConnectionState.ERROR: "连接错误",
+}
+
+_ROOT_VOICE_LABELS = {
+    VoiceState.DRIVER_REQUIRED: "需要驱动",
+    VoiceState.RESTART_REQUIRED: "需要重启",
+    VoiceState.ACCESSIBILITY_REQUIRED: "需要辅助权限",
+    VoiceState.TYPELESS_NOT_RUNNING: "Typeless 未运行",
+    VoiceState.READY: "语音可用",
+    VoiceState.RECORDING: "语音中",
+    VoiceState.ERROR: "语音错误",
+}
+
 
 def present(snapshot: AgentSnapshot) -> MenuPresentation:
     codex = snapshot.codex
@@ -210,6 +248,61 @@ def present(snapshot: AgentSnapshot) -> MenuPresentation:
     if snapshot.voice_detail:
         voice_text = "{} - {}".format(voice_text, snapshot.voice_detail)
     return MenuPresentation(
+        agent_summary_text="{} · {} · Voice {}".format(
+            snapshot.agent_name or "Agent",
+            _STATE_LABELS[snapshot.state],
+            _VOICE_STATE_LABELS[snapshot.voice_state],
+        ),
+        codex_summary_text=(
+            "Codex · {} · {} Pending / {} Running / {} Completed".format(
+                codex.model or "--",
+                codex.alert_pending,
+                codex.alert_running,
+                codex.alert_completed,
+            )
+        ),
+        trae_summary_text="Trae · {} · {} · {}".format(
+            trae_source,
+            trae.project or "--",
+            trae_state,
+        ),
+        device_summary_text="Device & Voice · {} · {}".format(
+            _STATE_LABELS[snapshot.state],
+            _VOICE_STATE_LABELS[snapshot.voice_state],
+        ),
+        root_health_title="StopWatch {}".format(_ROOT_STATE_LABELS[snapshot.state]),
+        root_health_subtitle="{} · {}".format(
+            snapshot.agent_name or "Agent",
+            _ROOT_VOICE_LABELS[snapshot.voice_state],
+        ),
+        root_codex_title="Codex",
+        root_codex_subtitle="{} · {} · 5H {} · 7D {}".format(
+            codex.model or "--",
+            codex.effort.title() if codex.effort else "--",
+            _format_number(codex.five_hour_left_pct, "%"),
+            _format_number(codex.week_left_pct, "%"),
+        ),
+        root_codex_status="{} Pending".format(codex.alert_pending),
+        root_codex_detail="{} Running · {} Completed".format(
+            codex.alert_running,
+            codex.alert_completed,
+        ),
+        root_trae_title="Trae",
+        root_trae_subtitle="{} · {} · {}".format(
+            trae_source,
+            trae.model or "--",
+            trae.effort.title() if trae.effort and trae.effort != "--" else "--",
+        ),
+        root_trae_status=trae.project or "--",
+        root_trae_detail="{} · {}".format(
+            trae_state,
+            trae.task_title or "--",
+        ),
+        root_device_title="设备与语音",
+        root_device_subtitle="Bluetooth {} · Voice {}".format(
+            _STATE_LABELS[snapshot.state],
+            _VOICE_STATE_LABELS[snapshot.voice_state],
+        ),
         model_text="Model: {}".format(codex.model or "--"),
         effort_text="Effort: {}".format(codex.effort.title() if codex.effort else "--"),
         five_hour_text="5H Remaining: {}".format(

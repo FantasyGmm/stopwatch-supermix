@@ -11,6 +11,10 @@ import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
+AGENT_VERSION = (
+    pathlib.Path(__file__).resolve().parents[1] / "VERSION"
+).read_text(encoding="utf-8").strip()
+
 from AppKit import (
     NSAlertFirstButtonReturn,
     NSApplication,
@@ -255,12 +259,15 @@ class MenuBarApplicationTests(unittest.TestCase):
         self.assertEqual(delegate.pairing_label.stringValue(), "Pairing: Confirm on Watch")
         self.assertEqual(delegate.verification_label.stringValue(), "Verification Code: 123456")
         self.assertEqual(delegate.watch_identity_label.stringValue(), "Watch: · 0E0F")
+        self.assertEqual(delegate.rename_agent_item.title(), "Rename Agent...")
+        self.assertIn("Studio Mac", delegate.agent_health_label.stringValue())
         delegate.agent_name_prompt = lambda current: "Travel Agent"
 
         delegate.renameAgent_(None)
 
         self.assertEqual(controller.renamed_agents, ["Travel Agent"])
         self.assertEqual(delegate.agent_label.stringValue(), "Agent: Travel Agent")
+        self.assertIn("Travel Agent", delegate.agent_health_label.stringValue())
 
     def test_failed_pairing_exposes_retry_action(self):
         NSApplication.sharedApplication()
@@ -611,8 +618,12 @@ class MenuBarApplicationTests(unittest.TestCase):
         self.assertFalse(delegate.setup_voice_item.isHidden())
         self.assertTrue(delegate.accessibility_item.isHidden())
         self.assertEqual(
-            delegate.menu.indexOfItem_(delegate.voice_item),
-            delegate.menu.indexOfItem_(delegate.device_item) + 1,
+            delegate.device_submenu.indexOfItem_(delegate.voice_item),
+            delegate.device_submenu.indexOfItem_(delegate.device_item) + 1,
+        )
+        self.assertEqual(
+            delegate.menu.indexOfItem_(delegate.setup_voice_item),
+            delegate.menu.indexOfItem_(delegate.device_voice_item) + 1,
         )
 
     def test_menu_uses_exact_snapshot_voice_state_for_row_and_actions(self):
@@ -724,7 +735,10 @@ class MenuBarApplicationTests(unittest.TestCase):
         self.assertTrue(delegate.menu.itemAtIndex_(separator_index).isSeparatorItem())
         self.assertIs(
             delegate.menu.itemAtIndex_(separator_index + 1),
-            delegate.connection_item,
+            delegate.reconnect_item,
+        )
+        self.assertGreaterEqual(
+            delegate.settings_submenu.indexOfItem_(delegate.connection_item), 0
         )
 
         delegate.openCodexPet_(None)
@@ -862,6 +876,70 @@ class MenuBarApplicationTests(unittest.TestCase):
         delegate._shutdown()
         self.assertTrue(controller.stopped)
         self.assertIsNone(delegate.status_item)
+
+    def test_root_menu_groups_codex_and_trae_tasks_under_their_source(self):
+        NSApplication.sharedApplication()
+        delegate = MenuBarApplication.alloc().initWithController_(FakeController())
+
+        delegate.applicationDidFinishLaunching_(None)
+
+        self.assertEqual(
+            delegate.agent_health_label.stringValue(),
+            "Studio Mac · 语音可用",
+        )
+        self.assertIs(delegate.codex_item.submenu(), delegate.codex_submenu)
+        self.assertIs(delegate.trae_item.submenu(), delegate.trae_submenu)
+        self.assertIs(delegate.device_voice_item.submenu(), delegate.device_submenu)
+        self.assertIs(delegate.alert_item.menu(), delegate.codex_submenu)
+        self.assertIs(delegate.trae_task_item.menu(), delegate.trae_submenu)
+        self.assertIs(delegate.bluetooth_item.menu(), delegate.device_submenu)
+        root_titles = [
+            delegate.menu.itemAtIndex_(index).title()
+            for index in range(delegate.menu.numberOfItems())
+        ]
+        self.assertFalse(any(title.startswith("Task Alerts") for title in root_titles))
+
+        delegate._shutdown()
+
+    def test_root_menu_matches_the_approved_a_visual_hierarchy(self):
+        NSApplication.sharedApplication()
+        delegate = MenuBarApplication.alloc().initWithController_(FakeController())
+
+        delegate.applicationDidFinishLaunching_(None)
+        self.addCleanup(delegate._shutdown)
+
+        self.assertEqual(delegate.agent_health_view.frame().size.width, 430)
+        self.assertEqual(delegate.codex_summary_view.frame().size.height, 52)
+        self.assertEqual(delegate.trae_summary_view.frame().size.height, 52)
+        self.assertEqual(delegate.device_summary_view.frame().size.height, 40)
+        self.assertEqual(delegate.agent_health_title_label.font().pointSize(), 14)
+        self.assertEqual(delegate.agent_health_subtitle_label.font().pointSize(), 11)
+        self.assertEqual(delegate.codex_summary_title_label.font().pointSize(), 13)
+        self.assertEqual(delegate.codex_summary_subtitle_label.font().pointSize(), 11)
+        self.assertEqual(delegate.codex_summary_detail_label.font().pointSize(), 10)
+        self.assertEqual(
+            delegate.agent_health_title_label.stringValue(),
+            "StopWatch 已连接",
+        )
+        self.assertEqual(
+            delegate.agent_health_subtitle_label.stringValue(),
+            "Studio Mac · 语音可用",
+        )
+        self.assertEqual(delegate.agent_version_label.stringValue(), f"v{AGENT_VERSION}")
+        self.assertEqual(delegate.codex_summary_title_label.stringValue(), "Codex")
+        self.assertEqual(
+            delegate.codex_summary_status_label.stringValue(),
+            "1 Pending",
+        )
+        self.assertEqual(delegate.trae_summary_title_label.stringValue(), "Trae")
+        self.assertEqual(delegate.device_summary_title_label.stringValue(), "设备与语音")
+        self.assertIs(delegate.settings_item.submenu(), delegate.settings_submenu)
+        self.assertIs(
+            delegate.diagnostics_item.submenu(), delegate.diagnostics_submenu
+        )
+        self.assertIs(delegate.connection_item.menu(), delegate.settings_submenu)
+        self.assertIs(delegate.rename_agent_item.menu(), delegate.settings_submenu)
+        self.assertIs(delegate.open_log_item.menu(), delegate.diagnostics_submenu)
 
 
 if __name__ == "__main__":

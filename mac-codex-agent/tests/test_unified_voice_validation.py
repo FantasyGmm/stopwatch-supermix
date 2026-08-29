@@ -44,6 +44,7 @@ EXPECTED_HOST_TESTS = (
     "codex_task_detail_store_test",
     "codex_task_focus_deck_test",
     "codex_task_focus_layout_test",
+    "codex_screen_off_voice_policy_test",
     "status_page_swipe_logic_test",
     "trae_card_tap_logic_test",
     "display_protection_config_test",
@@ -273,7 +274,7 @@ output.chmod(0o700)
         declared_total = re.search(r"^TOTAL_STAGES=(\d+)$", runner, re.MULTILINE)
         self.assertIsNotNone(declared_total)
         self.assertEqual(total, int(declared_total.group(1)))
-        self.assertEqual(total, 68)
+        self.assertEqual(total, 69)
         self.assertEqual(len(stages), total)
         self.assertEqual([stage[0] for stage in stages], list(range(1, total + 1)))
         self.assertEqual({stage[1] for stage in stages}, {total})

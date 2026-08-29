@@ -11,7 +11,12 @@ from unittest.mock import patch
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from completion_classifier import CLASSIFIER_VERSION
-from task_alerts import TaskAlert, TaskAlertTracker, classify_outcome
+from task_alerts import (
+    REPLY_METADATA_VERSION,
+    TaskAlert,
+    TaskAlertTracker,
+    classify_outcome,
+)
 
 
 UTC = datetime.timezone.utc
@@ -283,7 +288,9 @@ class TaskAlertTrackerTests(unittest.TestCase):
 
         self.assertEqual(reconciled.alerts[0].last_reply, reply)
         persisted = json.loads(self.ledger.read_text(encoding="utf-8"))
-        self.assertEqual(persisted["reply_metadata_version"], 1)
+        self.assertEqual(
+            persisted["reply_metadata_version"], REPLY_METADATA_VERSION
+        )
         self.assertEqual(persisted["reply_metadata_retry_threads"], [])
         self.assertEqual(persisted["alerts"][-1]["last_reply"], reply)
 
@@ -320,6 +327,42 @@ class TaskAlertTrackerTests(unittest.TestCase):
         self.assertEqual(running.turn_id, "turn-running")
         self.assertEqual(running.last_reply, reply)
 
+    def test_reply_metadata_upgrade_restores_complete_reply_over_live_commentary(self):
+        reply = "第一段原文。\n\n第二段原文。"
+        tracker = self.tracker()
+        tracker.refresh()
+        append_event(
+            self.rollout,
+            "task_complete",
+            "2026-07-12T00:01:00Z",
+            last_agent_message=reply,
+        )
+        append_event(self.rollout, "user_message", "2026-07-12T00:01:30Z")
+        append_event(
+            self.rollout,
+            "task_started",
+            "2026-07-12T00:02:00Z",
+            turn_id="turn-running",
+        )
+        append_agent_message(
+            self.rollout,
+            "2026-07-12T00:02:30Z",
+            "只有一段的实时进展。",
+        )
+        tracker.refresh()
+        saved = json.loads(self.ledger.read_text(encoding="utf-8"))
+        running = next(
+            alert for alert in saved["alerts"] if alert["state"] == "running"
+        )
+        running["last_reply"] = "只有一段的实时进展。"
+        saved["reply_metadata_version"] = REPLY_METADATA_VERSION - 1
+        self.ledger.write_text(json.dumps(saved), encoding="utf-8")
+
+        migrated = self.tracker().refresh()
+
+        running = next(alert for alert in migrated.alerts if alert.state == "running")
+        self.assertEqual(running.last_reply, reply)
+
     def test_reply_metadata_upgrade_preserves_undiscovered_thread_for_retry(self):
         reply = "reply recovered after database returns"
         tracker = self.tracker()
@@ -352,7 +395,9 @@ class TaskAlertTrackerTests(unittest.TestCase):
 
         self.assertIsNone(unavailable.alerts[0].last_reply)
         waiting = json.loads(self.ledger.read_text(encoding="utf-8"))
-        self.assertEqual(waiting["reply_metadata_version"], 1)
+        self.assertEqual(
+            waiting["reply_metadata_version"], REPLY_METADATA_VERSION
+        )
         self.assertEqual(waiting["reply_metadata_retry_threads"], ["thread-a"])
 
         recovered = self.tracker().refresh()
@@ -384,7 +429,9 @@ class TaskAlertTrackerTests(unittest.TestCase):
 
         self.assertIsNone(retrying.alerts[0].last_reply)
         persisted = json.loads(self.ledger.read_text(encoding="utf-8"))
-        self.assertEqual(persisted["reply_metadata_version"], 1)
+        self.assertEqual(
+            persisted["reply_metadata_version"], REPLY_METADATA_VERSION
+        )
         self.assertEqual(persisted["reply_metadata_retry_threads"], ["thread-a"])
 
         with self.rollout.open("ab") as stream:
@@ -1028,7 +1075,50 @@ class TaskAlertTrackerTests(unittest.TestCase):
         saved = json.loads(self.ledger.read_text(encoding="utf-8"))
         self.assertEqual(saved["alerts"][-1]["last_reply"], reply)
 
-    def test_running_agent_message_replaces_cached_reply_and_advances_revision(self):
+    def test_running_agent_message_does_not_replace_last_complete_reply(self):
+        tracker = self.tracker()
+        tracker.refresh()
+        append_event(
+            self.rollout,
+            "task_started",
+            "2026-07-12T00:02:00Z",
+            turn_id="turn-complete",
+        )
+        append_event(
+            self.rollout,
+            "task_complete",
+            "2026-07-12T00:02:10Z",
+            turn_id="turn-complete",
+            last_agent_message="第一段原文。\n\n第二段原文。",
+        )
+        tracker.refresh()
+        append_event(
+            self.rollout,
+            "task_started",
+            "2026-07-12T00:02:20Z",
+            turn_id="turn-live",
+        )
+        started = tracker.refresh()
+        append_agent_message(
+            self.rollout,
+            "2026-07-12T00:02:25Z",
+            "正在检查真实事件流。",
+        )
+
+        unchanged = tracker.refresh()
+
+        self.assertEqual(unchanged.running_count, 1)
+        self.assertEqual(unchanged.revision, started.revision)
+        self.assertEqual(unchanged.alerts[0].turn_id, "turn-live")
+        self.assertEqual(
+            unchanged.alerts[0].last_reply,
+            "第一段原文。\n\n第二段原文。",
+        )
+        saved = json.loads(self.ledger.read_text(encoding="utf-8"))
+        running = next(item for item in saved["alerts"] if item["state"] == "running")
+        self.assertEqual(running["last_reply"], "第一段原文。\n\n第二段原文。")
+
+    def test_running_agent_messages_do_not_create_reply_without_a_completion(self):
         tracker = self.tracker()
         tracker.refresh()
         append_event(
@@ -1041,34 +1131,13 @@ class TaskAlertTrackerTests(unittest.TestCase):
         append_agent_message(
             self.rollout,
             "2026-07-12T00:02:05Z",
-            "正在检查真实事件流。",
-        )
-
-        live = tracker.refresh()
-
-        self.assertEqual(live.running_count, 1)
-        self.assertGreater(live.revision, started.revision)
-        self.assertEqual(live.alerts[0].turn_id, "turn-live")
-        self.assertEqual(live.alerts[0].last_reply, "正在检查真实事件流。")
-        saved = json.loads(self.ledger.read_text(encoding="utf-8"))
-        self.assertEqual(saved["alerts"][-1]["last_reply"], "正在检查真实事件流。")
-
-    def test_running_agent_message_ignores_empty_nonstring_and_unchanged_text(self):
-        tracker = self.tracker()
-        tracker.refresh()
-        append_event(
-            self.rollout,
-            "task_started",
-            "2026-07-12T00:02:00Z",
-            turn_id="turn-live",
-        )
-        append_agent_message(
-            self.rollout,
-            "2026-07-12T00:02:05Z",
             "最新进展",
         )
-        live = tracker.refresh()
-        baseline_revision = live.revision
+        unchanged = tracker.refresh()
+
+        self.assertEqual(unchanged.revision, started.revision)
+        self.assertIsNone(unchanged.alerts[0].last_reply)
+        baseline_revision = unchanged.revision
         append_agent_message(
             self.rollout,
             "2026-07-12T00:02:06Z",
@@ -1085,10 +1154,10 @@ class TaskAlertTrackerTests(unittest.TestCase):
             {"text": "not safe"},
         )
 
-        unchanged = tracker.refresh()
+        still_unchanged = tracker.refresh()
 
-        self.assertEqual(unchanged.revision, baseline_revision)
-        self.assertEqual(unchanged.alerts[0].last_reply, "最新进展")
+        self.assertEqual(still_unchanged.revision, baseline_revision)
+        self.assertIsNone(still_unchanged.alerts[0].last_reply)
 
     def test_agent_message_after_completion_does_not_replace_final_reply(self):
         tracker = self.tracker()
