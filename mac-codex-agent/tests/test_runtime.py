@@ -1,4 +1,5 @@
 import asyncio
+import dataclasses
 import json
 import pathlib
 import sys
@@ -36,7 +37,19 @@ from runtime import (
     AgentRuntime,
     SecureCredentialRefresh,
     SecureConnectionAuthorizer,
+    _BleSessionContext,
     _create_voice_session,
+)
+from pet_cache import CachedPreview
+from pet_package import HEIGHT, WIDTH, PetFrame, encode_package, render_rgba_frames
+from pet_upload import (
+    PetCapability,
+    PetOperation,
+    PetProgress,
+    PetRequest,
+    PetUnsupportedError,
+    PetUploadError,
+    PetWatchState,
 )
 from codex_task_composer import CodexTaskComposerClient
 from task_routes import route_id_for_thread
@@ -2381,7 +2394,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             7,
             0,
             100,
-            BEGIN_BODY.pack(IMA_ADPCM, PUSH_TO_TALK, 16000, 320, TEST_TASK_ROUTE),
+            BEGIN_BODY.pack(IMA_ADPCM, PUSH_TO_TALK, 16000, 320, 0),
             b"12345678",
         )
         factory = FakeTransportFactory(
@@ -2543,7 +2556,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             9,
             0,
             100,
-            BEGIN_BODY.pack(IMA_ADPCM, PUSH_TO_TALK, 16000, 320, TEST_TASK_ROUTE),
+            BEGIN_BODY.pack(IMA_ADPCM, PUSH_TO_TALK, 16000, 320, 0),
             b"abcdefgh",
         )
 
@@ -2892,7 +2905,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             11,
             0,
             100,
-            BEGIN_BODY.pack(IMA_ADPCM, PUSH_TO_TALK, 16000, 320, TEST_TASK_ROUTE),
+            BEGIN_BODY.pack(IMA_ADPCM, PUSH_TO_TALK, 16000, 320, 0),
             b"abcdefgh",
         )
         drain_started = asyncio.Event()
@@ -2983,7 +2996,7 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
             13,
             0,
             100,
-            BEGIN_BODY.pack(IMA_ADPCM, PUSH_TO_TALK, 16000, 320, TEST_TASK_ROUTE),
+            BEGIN_BODY.pack(IMA_ADPCM, PUSH_TO_TALK, 16000, 320, 0),
             b"abcdefgh",
         )
         end = pack_notification(
@@ -3588,6 +3601,1883 @@ class AgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.wait_for(task, 1)
 
 
+class AgentRuntimePetTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        class Cache:
+            def __init__(self):
+                self.stored = []
+                self.removed = []
+
+            def store(self, watch_id, package):
+                self.stored.append((watch_id, package))
+
+            def remove_watch(self, watch_id):
+                self.removed.append(watch_id)
+
+        self.cache = Cache()
+        pixels = WIDTH * HEIGHT
+        self.package = encode_package(
+            WIDTH,
+            HEIGHT,
+            (0xF800,),
+            1,
+            (PetFrame(120, bytes([0]) * pixels),),
+        )
+        self.credential = WatchCredential(
+            bytes(range(16)),
+            b"K" * 16,
+            9,
+            b"F" * 16,
+            b"\x02" + b"W" * 32,
+        )
+
+    def test_pet_snapshot_marks_request_ownership_active(self):
+        runtime = AgentRuntime(collector=FakeCollector(), pet_cache=self.cache)
+        with runtime._pet_lock:
+            runtime._pet_state = PetWatchState(
+                self.credential.watch_id,
+                PetCapability.READY,
+                "built-in",
+                1,
+                1,
+                1,
+                bytes(32),
+                True,
+            )
+            runtime._pet_request = PetRequest(
+                "request-1",
+                PetOperation.UPLOAD,
+                self.package,
+                lambda _progress: None,
+            )
+
+        self.assertTrue(getattr(runtime.pet_snapshot(), "operation_active", False))
+
+    def test_pet_snapshot_marks_cancel_ownership_active(self):
+        runtime = AgentRuntime(collector=FakeCollector(), pet_cache=self.cache)
+        with runtime._pet_lock:
+            runtime._pet_state = PetWatchState(
+                self.credential.watch_id,
+                PetCapability.READY,
+                "built-in",
+                1,
+                1,
+                1,
+                bytes(32),
+                True,
+            )
+            runtime._pet_cancel_task = object()
+
+        self.assertTrue(getattr(runtime.pet_snapshot(), "operation_active", False))
+
+    async def test_authenticated_query_publishes_authoritative_watch_state(self):
+        created = []
+
+        class Uploader:
+            def __init__(self, watch_id):
+                self.watch_id = watch_id
+
+            async def query(self):
+                return PetWatchState(
+                    self.watch_id,
+                    PetCapability.READY,
+                    "custom",
+                    1,
+                    1,
+                    4,
+                    b"H" * 32,
+                    True,
+                )
+
+            async def close(self):
+                pass
+
+        def factory(_transport, key, epoch, _nonce_factory, *, watch_id):
+            self.assertEqual((key, epoch), (b"K" * 16, 9))
+            uploader = Uploader(watch_id)
+            created.append(uploader)
+            return uploader
+
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            pet_uploader_factory=factory,
+            pet_cache=self.cache,
+        )
+        context = _BleSessionContext(FakeTransport())
+        context.credential = self.credential
+        context.voice_key = self.credential.master_key
+        context.voice_key_epoch = self.credential.key_epoch
+
+        await runtime._prepare_pet(context)
+
+        self.assertEqual(len(created), 1)
+        self.assertIs(context.pet_uploader, created[0])
+        self.assertEqual(runtime.pet_snapshot().watch_id, self.credential.watch_id)
+        self.assertEqual(runtime.pet_snapshot().active_hash, b"H" * 32)
+
+    async def test_recreated_runtime_reloads_matching_authoritative_preview(self):
+        preview = CachedPreview(
+            self.package,
+            render_rgba_frames(self.package),
+            tuple(frame.duration_ms for frame in self.package.frames),
+        )
+        load_calls = []
+
+        class Cache:
+            def load(self, watch_id, active_hash):
+                load_calls.append((watch_id, active_hash))
+                return preview
+
+        class Uploader:
+            async def query(self):
+                return PetWatchState(
+                    self_credential.watch_id,
+                    PetCapability.READY,
+                    "custom",
+                    1,
+                    1,
+                    4,
+                    self_package.sha256,
+                    True,
+                )
+
+            async def close(self):
+                pass
+
+        self_credential = self.credential
+        self_package = self.package
+        for _ in range(2):
+            runtime = AgentRuntime(
+                collector=FakeCollector(),
+                pet_uploader_factory=lambda *_args, **_kwargs: Uploader(),
+                pet_cache=Cache(),
+            )
+            context = _BleSessionContext(FakeTransport())
+            context.credential = self.credential
+            await runtime._prepare_pet(context)
+            self.assertIs(runtime.pet_preview(), preview)
+
+        self.assertEqual(
+            load_calls,
+            [(self.credential.watch_id, self.package.sha256)] * 2,
+        )
+
+    async def test_mismatched_or_corrupt_cached_preview_is_never_exposed(self):
+        mismatched_package = encode_package(
+            WIDTH,
+            HEIGHT,
+            (0x001F,),
+            1,
+            (PetFrame(120, bytes([0]) * (WIDTH * HEIGHT)),),
+        )
+        mismatched = CachedPreview(
+            mismatched_package,
+            render_rgba_frames(mismatched_package),
+            tuple(frame.duration_ms for frame in mismatched_package.frames),
+        )
+
+        class Cache:
+            def __init__(self, loaded):
+                self.loaded = loaded
+
+            def load(self, _watch_id, _active_hash):
+                return self.loaded
+
+        class Uploader:
+            async def query(self):
+                return PetWatchState(
+                    self_credential.watch_id,
+                    PetCapability.READY,
+                    "custom",
+                    1,
+                    1,
+                    4,
+                    self_package.sha256,
+                    True,
+                )
+
+            async def close(self):
+                pass
+
+        self_credential = self.credential
+        self_package = self.package
+        for cached in (mismatched, None):
+            with self.subTest(cached=cached is not None):
+                runtime = AgentRuntime(
+                    collector=FakeCollector(),
+                    pet_uploader_factory=lambda *_args, **_kwargs: Uploader(),
+                    pet_cache=Cache(cached),
+                )
+                context = _BleSessionContext(FakeTransport())
+                context.credential = self.credential
+                await runtime._prepare_pet(context)
+                self.assertIsNone(runtime.pet_preview())
+
+    async def test_missing_optional_service_does_not_touch_input_or_voice(self):
+        events = []
+
+        class Uploader:
+            async def query(self):
+                raise PetUnsupportedError("Firmware update required")
+
+            async def close(self):
+                events.append("pet.close")
+
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            pet_uploader_factory=lambda *_args, **_kwargs: Uploader(),
+            pet_cache=self.cache,
+        )
+        transport = FakeTransport(events=events)
+        context = _BleSessionContext(transport)
+        context.credential = self.credential
+        context.voice_key = self.credential.master_key
+        context.voice_key_epoch = self.credential.key_epoch
+
+        await runtime._prepare_pet(context)
+
+        self.assertEqual(
+            runtime.pet_snapshot().capability, PetCapability.UNSUPPORTED
+        )
+        self.assertEqual(events, [])
+        self.assertEqual(transport.input_disable_count, 0)
+        self.assertEqual(transport.voice_payloads, [])
+
+    async def test_unauthenticated_context_never_constructs_uploader(self):
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            pet_uploader_factory=lambda *_args, **_kwargs: self.fail(
+                "unauthenticated pet uploader was constructed"
+            ),
+            pet_cache=self.cache,
+        )
+
+        await runtime._prepare_pet(_BleSessionContext(FakeTransport()))
+
+        self.assertEqual(
+            runtime.pet_snapshot().capability, PetCapability.OFFLINE
+        )
+
+    async def test_one_request_slot_reports_busy_and_explicit_cancel_finishes_active(self):
+        started = asyncio.Event()
+        release = asyncio.Event()
+        cancel_calls = []
+
+        class Uploader:
+            async def query(self):
+                return PetWatchState(
+                    self_watch_id,
+                    PetCapability.READY,
+                    "built-in",
+                    1,
+                    1,
+                    0,
+                    bytes(32),
+                    True,
+                )
+
+            async def upload(self, package, progress, *, request_id=None):
+                progress(
+                    PetProgress(
+                        request_id,
+                        "sending",
+                        0,
+                        len(package.encoded),
+                    )
+                )
+                started.set()
+                await release.wait()
+                progress(
+                    PetProgress(
+                        request_id,
+                        "installed",
+                        len(package.encoded),
+                        len(package.encoded),
+                    )
+                )
+                return PetWatchState(
+                    self_watch_id,
+                    PetCapability.READY,
+                    "custom",
+                    1,
+                    1,
+                    1,
+                    package.sha256,
+                    True,
+                )
+
+            async def cancel(self, request_id):
+                cancel_calls.append(request_id)
+                release.set()
+
+            async def close(self):
+                release.set()
+
+        self_watch_id = self.credential.watch_id
+        uploader = Uploader()
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            pet_uploader_factory=lambda *_args, **_kwargs: uploader,
+            pet_cache=self.cache,
+        )
+        context = _BleSessionContext(FakeTransport())
+        context.credential = self.credential
+        context.voice_key = self.credential.master_key
+        context.voice_key_epoch = self.credential.key_epoch
+        await runtime._prepare_pet(context)
+        runtime._loop = asyncio.get_running_loop()
+        first_states = []
+        installed_snapshot_hashes = []
+        busy_states = []
+
+        def receive_first(progress):
+            first_states.append(progress)
+            if progress.phase == "installed":
+                installed_snapshot_hashes.append(
+                    runtime.pet_snapshot().active_hash
+                )
+
+        first = PetRequest(
+            "request-one", PetOperation.UPLOAD, self.package, receive_first
+        )
+        second = PetRequest(
+            "request-two", PetOperation.UPLOAD, self.package, busy_states.append
+        )
+
+        self.assertTrue(runtime.submit_pet_request(first))
+        await asyncio.wait_for(started.wait(), 1)
+        self.assertFalse(runtime.submit_pet_request(second))
+        self.assertEqual(busy_states[-1].error_code, "busy")
+        self.assertTrue(
+            runtime.submit_pet_request(
+                PetRequest(
+                    "request-one",
+                    PetOperation.CANCEL,
+                    None,
+                    lambda _state: None,
+                )
+            )
+        )
+        for _ in range(100):
+            if runtime._pet_request is None:
+                break
+            await asyncio.sleep(0.01)
+
+        self.assertEqual(cancel_calls, ["request-one"])
+        self.assertEqual(runtime.pet_snapshot().active_hash, self.package.sha256)
+        self.assertEqual(first_states[-1].phase, "installed")
+        self.assertEqual(installed_snapshot_hashes, [self.package.sha256])
+        self.assertEqual(
+            self.cache.stored,
+            [(self.credential.watch_id, self.package)],
+        )
+
+    async def test_storage_error_fields_survive_runtime_progress_boundary(self):
+        class Uploader:
+            async def query(self):
+                return PetWatchState(
+                    self_watch_id,
+                    PetCapability.READY,
+                    "built-in",
+                    1,
+                    1,
+                    0,
+                    bytes(32),
+                    True,
+                )
+
+            async def upload(self, package, progress, *, request_id=None):
+                error = PetUploadError("watch storage is insufficient")
+                error.error_code = "insufficient_storage"
+                error.required_bytes = 263144
+                error.available_bytes = 131071
+                raise error
+
+            async def close(self):
+                pass
+
+        self_watch_id = self.credential.watch_id
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            pet_uploader_factory=lambda *_args, **_kwargs: Uploader(),
+            pet_cache=self.cache,
+        )
+        context = _BleSessionContext(FakeTransport())
+        context.credential = self.credential
+        await runtime._prepare_pet(context)
+        runtime._loop = asyncio.get_running_loop()
+        states = []
+
+        self.assertTrue(
+            runtime.submit_pet_request(
+                PetRequest(
+                    "storage-error",
+                    PetOperation.UPLOAD,
+                    self.package,
+                    states.append,
+                )
+            )
+        )
+        for _ in range(100):
+            if runtime._pet_request is None:
+                break
+            await asyncio.sleep(0.01)
+
+        self.assertEqual(states[-1].error_code, "insufficient_storage")
+        self.assertEqual(states[-1].required_bytes, 263144)
+        self.assertEqual(states[-1].available_bytes, 131071)
+
+    async def test_repeated_cancel_ingress_owns_one_bounded_cancel_task(self):
+        started = asyncio.Event()
+        finish = asyncio.Event()
+        cancel_calls = []
+
+        class Uploader:
+            async def query(self):
+                return PetWatchState(
+                    self_watch_id,
+                    PetCapability.READY,
+                    "built-in",
+                    1,
+                    1,
+                    0,
+                    bytes(32),
+                    True,
+                )
+
+            async def upload(self, package, progress, *, request_id=None):
+                started.set()
+                await finish.wait()
+                return PetWatchState(
+                    self_watch_id,
+                    PetCapability.READY,
+                    "custom",
+                    1,
+                    1,
+                    1,
+                    package.sha256,
+                    True,
+                )
+
+            async def cancel(self, request_id):
+                cancel_calls.append(request_id)
+                await finish.wait()
+
+            async def close(self):
+                finish.set()
+
+        self_watch_id = self.credential.watch_id
+        uploader = Uploader()
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            pet_uploader_factory=lambda *_args, **_kwargs: uploader,
+            pet_cache=self.cache,
+        )
+        context = _BleSessionContext(FakeTransport())
+        context.credential = self.credential
+        await runtime._prepare_pet(context)
+        runtime._loop = asyncio.get_running_loop()
+        self.assertTrue(
+            runtime.submit_pet_request(
+                PetRequest(
+                    "cancel-flood",
+                    PetOperation.UPLOAD,
+                    self.package,
+                    lambda _progress: None,
+                )
+            )
+        )
+        await asyncio.wait_for(started.wait(), 1)
+
+        for _ in range(32):
+            self.assertTrue(
+                runtime.submit_pet_request(
+                    PetRequest(
+                        "cancel-flood",
+                        PetOperation.CANCEL,
+                        None,
+                        lambda _progress: None,
+                    )
+                )
+            )
+        for _ in range(100):
+            if cancel_calls:
+                break
+            await asyncio.sleep(0)
+
+        self.assertEqual(cancel_calls, ["cancel-flood"])
+        finish.set()
+
+    async def test_hung_cancel_times_out_without_leaking_cancel_ownership(self):
+        started = asyncio.Event()
+        finish = asyncio.Event()
+
+        class Uploader:
+            async def query(self):
+                return PetWatchState(
+                    self_watch_id,
+                    PetCapability.READY,
+                    "built-in",
+                    1,
+                    1,
+                    0,
+                    bytes(32),
+                    True,
+                )
+
+            async def upload(self, package, progress, *, request_id=None):
+                started.set()
+                await finish.wait()
+                return PetWatchState(
+                    self_watch_id,
+                    PetCapability.READY,
+                    "custom",
+                    1,
+                    1,
+                    1,
+                    package.sha256,
+                    True,
+                )
+
+            async def cancel(self, request_id):
+                await asyncio.Event().wait()
+
+            async def close(self):
+                finish.set()
+
+        self_watch_id = self.credential.watch_id
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            pet_uploader_factory=lambda *_args, **_kwargs: Uploader(),
+            pet_cache=self.cache,
+            disconnect_timeout=0.01,
+        )
+        context = _BleSessionContext(FakeTransport())
+        context.credential = self.credential
+        await runtime._prepare_pet(context)
+        runtime._loop = asyncio.get_running_loop()
+        self.assertTrue(
+            runtime.submit_pet_request(
+                PetRequest(
+                    "hung-cancel",
+                    PetOperation.UPLOAD,
+                    self.package,
+                    lambda _progress: None,
+                )
+            )
+        )
+        await asyncio.wait_for(started.wait(), 1)
+        cancel_progress = []
+
+        self.assertTrue(
+            runtime.submit_pet_request(
+                PetRequest(
+                    "hung-cancel",
+                    PetOperation.CANCEL,
+                    None,
+                    cancel_progress.append,
+                )
+            )
+        )
+        for _ in range(100):
+            if runtime._pet_cancel_task is None:
+                break
+            await asyncio.sleep(0.01)
+
+        self.assertIsNone(runtime._pet_cancel_task)
+        self.assertEqual(cancel_progress[-1].error_code, "cancel_failed")
+        busy_progress = []
+        self.assertFalse(
+            runtime.submit_pet_request(
+                PetRequest(
+                    "after-cancel",
+                    PetOperation.RESTORE,
+                    None,
+                    busy_progress.append,
+                )
+            )
+        )
+        self.assertEqual(busy_progress[-1].error_code, "busy")
+
+        finish.set()
+        for _ in range(100):
+            if runtime._pet_request is None:
+                break
+            await asyncio.sleep(0.01)
+        self.assertIsNone(runtime._pet_request)
+
+    async def test_resistant_cancel_is_bounded_and_rekey_fails_closed(self):
+        events = []
+        started = asyncio.Event()
+        resisted_cancel = asyncio.Event()
+        release_cancel = asyncio.Event()
+        operation_done = asyncio.Event()
+        cancel_calls = []
+        updated = dataclasses.replace(
+            self.credential, master_key=b"N" * 16, key_epoch=10
+        )
+
+        class OldUploader:
+            async def query(self):
+                return PetWatchState(
+                    self_watch_id,
+                    PetCapability.READY,
+                    "built-in",
+                    1,
+                    1,
+                    0,
+                    bytes(32),
+                    True,
+                )
+
+            async def upload(self, package, progress, *, request_id=None):
+                started.set()
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    operation_done.set()
+
+            async def cancel(self, request_id):
+                cancel_calls.append(request_id)
+                while not release_cancel.is_set():
+                    try:
+                        await release_cancel.wait()
+                    except asyncio.CancelledError:
+                        resisted_cancel.set()
+                events.append("old.cancel.late")
+
+            async def close(self):
+                events.append("old.close")
+                await operation_done.wait()
+
+        class NewUploader:
+            async def query(self):
+                events.append("new.query")
+                return PetWatchState(
+                    self_watch_id,
+                    PetCapability.READY,
+                    "built-in",
+                    1,
+                    1,
+                    0,
+                    bytes(32),
+                    True,
+                )
+
+            async def close(self):
+                pass
+
+        self_watch_id = self.credential.watch_id
+        old = OldUploader()
+
+        def factory(_transport, key, _epoch, _nonce_factory, *, watch_id):
+            return old if key == self.credential.master_key else NewUploader()
+
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            pet_uploader_factory=factory,
+            pet_cache=self.cache,
+            disconnect_timeout=0.02,
+        )
+        context = _BleSessionContext(FakeTransport(events=events))
+        context.credential = self.credential
+        context.voice_key = self.credential.master_key
+        context.voice_key_epoch = self.credential.key_epoch
+        await runtime._prepare_pet(context)
+        runtime._loop = asyncio.get_running_loop()
+        runtime._prepare_voice = lambda _context: asyncio.sleep(0)
+        self.assertTrue(
+            runtime.submit_pet_request(
+                PetRequest(
+                    "resistant-cancel",
+                    PetOperation.UPLOAD,
+                    self.package,
+                    lambda _progress: None,
+                )
+            )
+        )
+        await asyncio.wait_for(started.wait(), 1)
+        cancel_progress = []
+        self.assertTrue(
+            runtime.submit_pet_request(
+                PetRequest(
+                    "resistant-cancel",
+                    PetOperation.CANCEL,
+                    None,
+                    cancel_progress.append,
+                )
+            )
+        )
+        await asyncio.wait_for(resisted_cancel.wait(), 1)
+        await asyncio.sleep(0.03)
+        returned_at_deadline = runtime._pet_cancel_task is None
+
+        for _ in range(16):
+            self.assertTrue(
+                runtime.submit_pet_request(
+                    PetRequest(
+                        "resistant-cancel",
+                        PetOperation.CANCEL,
+                        None,
+                        lambda _progress: None,
+                    )
+                )
+            )
+        replacement = await runtime._replace_voice_credential(context, updated)
+        credential_after_rekey = context.credential
+        release_cancel.set()
+        for _ in range(100):
+            if "old.cancel.late" in events:
+                break
+            await asyncio.sleep(0.01)
+        state_after_late_cancel = runtime.pet_snapshot()
+        await runtime._retire_pet_uploader(context)
+
+        self.assertTrue(returned_at_deadline)
+        self.assertEqual(cancel_calls, ["resistant-cancel"])
+        self.assertFalse(replacement)
+        self.assertEqual(credential_after_rekey, self.credential)
+        self.assertNotIn("new.query", events)
+        self.assertEqual(
+            state_after_late_cancel.capability, PetCapability.OFFLINE
+        )
+
+    async def test_reconnect_and_stop_retain_resistant_pet_retirement(self):
+        transports = []
+        uploaders = []
+        late_writes = []
+
+        class Transport(FakeTransport):
+            def __init__(self):
+                super().__init__()
+                self.pet_retired = False
+
+            def retire_pet_generation(self):
+                self.pet_retired = True
+
+            async def write_pet_control(self, payload):
+                if not self.connected or self.pet_retired:
+                    raise ConnectionError("retired transport")
+                late_writes.append((self, bytes(payload)))
+
+            async def disconnect(self):
+                self.disconnect_count += 1
+                self.disconnected_event.set()
+
+        class TransportFactory:
+            def __call__(self):
+                transport = Transport()
+                transports.append(transport)
+                return transport
+
+        class Authorizer:
+            async def authorize(self, _transport, _publish):
+                return self_credential
+
+        class Uploader:
+            def __init__(self, transport):
+                self.transport = transport
+                self.started = asyncio.Event()
+                self.resisted = asyncio.Event()
+                self.release = asyncio.Event()
+                self.request_done = asyncio.Event()
+                self.close_calls = 0
+
+            async def query(self):
+                return PetWatchState(
+                    self_credential.watch_id,
+                    PetCapability.READY,
+                    "built-in",
+                    1,
+                    1,
+                    0,
+                    bytes(32),
+                    True,
+                )
+
+            async def upload(self, package, progress, *, request_id=None):
+                self.started.set()
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    self.request_done.set()
+
+            async def cancel(self, request_id):
+                while not self.release.is_set():
+                    try:
+                        await self.release.wait()
+                    except asyncio.CancelledError:
+                        self.resisted.set()
+                try:
+                    await self.transport.write_pet_control(b"late")
+                except ConnectionError:
+                    pass
+
+            async def close(self):
+                self.close_calls += 1
+                if self.started.is_set():
+                    await self.request_done.wait()
+
+        def uploader_factory(transport, *_args, **_kwargs):
+            uploader = Uploader(transport)
+            uploaders.append(uploader)
+            return uploader
+
+        self_credential = self.credential
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            transport_factory=TransportFactory(),
+            secure_authorizer=Authorizer(),
+            pet_uploader_factory=uploader_factory,
+            pet_cache=self.cache,
+            retry_delays=(0.01,),
+            status_interval=0.01,
+            disconnect_timeout=0.02,
+        )
+        runtime._prepare_voice = lambda _context: asyncio.sleep(0)
+        task = asyncio.create_task(runtime.run())
+        try:
+            for _ in range(100):
+                if uploaders:
+                    break
+                await asyncio.sleep(0.01)
+            self.assertEqual(len(uploaders), 1)
+            first = uploaders[0]
+            self.assertTrue(
+                runtime.submit_pet_request(
+                    PetRequest(
+                        "session-resistant",
+                        PetOperation.UPLOAD,
+                        self.package,
+                        lambda _progress: None,
+                    )
+                )
+            )
+            await asyncio.wait_for(first.started.wait(), 1)
+            self.assertTrue(
+                runtime.submit_pet_request(
+                    PetRequest(
+                        "session-resistant",
+                        PetOperation.CANCEL,
+                        None,
+                        lambda _progress: None,
+                    )
+                )
+            )
+            await asyncio.wait_for(first.resisted.wait(), 1)
+
+            runtime.submit(AgentCommand.RECONNECT)
+            await asyncio.wait_for(transports[0].disconnected_event.wait(), 1)
+            await asyncio.sleep(0.06)
+
+            self.assertEqual(len(transports), 1)
+            self.assertEqual(len(uploaders), 1)
+
+            first.release.set()
+            for _ in range(100):
+                if len(uploaders) == 2:
+                    break
+                await asyncio.sleep(0.01)
+            self.assertEqual(len(uploaders), 2)
+            self.assertEqual(first.close_calls, 1)
+            self.assertEqual(late_writes, [])
+
+            second = uploaders[1]
+            self.assertTrue(
+                runtime.submit_pet_request(
+                    PetRequest(
+                        "stop-resistant",
+                        PetOperation.UPLOAD,
+                        self.package,
+                        lambda _progress: None,
+                    )
+                )
+            )
+            await asyncio.wait_for(second.started.wait(), 1)
+            self.assertTrue(
+                runtime.submit_pet_request(
+                    PetRequest(
+                        "stop-resistant",
+                        PetOperation.CANCEL,
+                        None,
+                        lambda _progress: None,
+                    )
+                )
+            )
+            await asyncio.wait_for(second.resisted.wait(), 1)
+
+            runtime.submit(AgentCommand.STOP)
+            await asyncio.wait_for(transports[1].disconnected_event.wait(), 1)
+            done, _ = await asyncio.wait((task,), timeout=0.06)
+
+            self.assertEqual(done, set())
+            self.assertEqual(len(transports), 2)
+            second.release.set()
+            await asyncio.wait_for(task, 1)
+            self.assertEqual(second.close_calls, 1)
+            self.assertEqual(runtime._pet_retirements, [])
+            self.assertEqual(late_writes, [])
+        finally:
+            for uploader in uploaders:
+                uploader.release.set()
+            if not task.done():
+                runtime.submit(AgentCommand.STOP)
+                await asyncio.wait_for(task, 1)
+
+    async def test_restore_removes_cache_only_after_authoritative_state(self):
+        class Uploader:
+            async def query(self):
+                return PetWatchState(
+                    self_watch_id,
+                    PetCapability.READY,
+                    "custom",
+                    1,
+                    1,
+                    4,
+                    self.package_hash,
+                    True,
+                )
+
+            async def restore(self, progress, *, request_id=None):
+                progress(PetProgress(request_id, "applying", 0, 0))
+                progress(PetProgress(request_id, "installed", 0, 0))
+                return PetWatchState(
+                    self_watch_id,
+                    PetCapability.READY,
+                    "built-in",
+                    1,
+                    1,
+                    5,
+                    bytes(32),
+                    True,
+                )
+
+            async def close(self):
+                pass
+
+            package_hash = self.package.sha256
+
+        self_watch_id = self.credential.watch_id
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            pet_uploader_factory=lambda *_args, **_kwargs: Uploader(),
+            pet_cache=self.cache,
+        )
+        context = _BleSessionContext(FakeTransport())
+        context.credential = self.credential
+        await runtime._prepare_pet(context)
+        runtime._loop = asyncio.get_running_loop()
+        states = []
+
+        self.assertTrue(
+            runtime.submit_pet_request(
+                PetRequest(
+                    "restore",
+                    PetOperation.RESTORE,
+                    None,
+                    states.append,
+                )
+            )
+        )
+        for _ in range(100):
+            if runtime._pet_request is None:
+                break
+            await asyncio.sleep(0.01)
+
+        self.assertEqual(self.cache.removed, [self.credential.watch_id])
+        self.assertEqual(runtime.pet_snapshot().source, "built-in")
+        self.assertEqual(states[-1].phase, "installed")
+
+    async def test_retired_cache_store_cannot_overtake_later_restore(self):
+        store_started = threading.Event()
+        store_finished = threading.Event()
+        release_store = threading.Event()
+        cache_events = []
+
+        class Cache:
+            def store(self, watch_id, package):
+                store_started.set()
+                release_store.wait()
+                cache_events.append(("store", watch_id, package.sha256))
+                store_finished.set()
+
+            def remove_watch(self, watch_id):
+                cache_events.append(("remove", watch_id))
+
+        class OldUploader:
+            async def query(self):
+                return PetWatchState(
+                    watch_id,
+                    PetCapability.READY,
+                    "built-in",
+                    1,
+                    1,
+                    0,
+                    bytes(32),
+                    True,
+                )
+
+            async def upload(self, package, progress, *, request_id=None):
+                return PetWatchState(
+                    watch_id,
+                    PetCapability.READY,
+                    "custom",
+                    1,
+                    1,
+                    1,
+                    package.sha256,
+                    True,
+                )
+
+            async def close(self):
+                pass
+
+        class NewUploader:
+            async def query(self):
+                return PetWatchState(
+                    watch_id,
+                    PetCapability.READY,
+                    "built-in",
+                    1,
+                    1,
+                    1,
+                    bytes(32),
+                    True,
+                )
+
+            async def restore(self, progress, *, request_id=None):
+                return PetWatchState(
+                    watch_id,
+                    PetCapability.READY,
+                    "built-in",
+                    1,
+                    1,
+                    2,
+                    bytes(32),
+                    True,
+                )
+
+            async def close(self):
+                pass
+
+        watch_id = self.credential.watch_id
+        package_hash = self.package.sha256
+        uploaders = iter((OldUploader(), NewUploader()))
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            pet_uploader_factory=lambda *_args, **_kwargs: next(uploaders),
+            pet_cache=Cache(),
+            disconnect_timeout=0.02,
+        )
+        runtime._loop = asyncio.get_running_loop()
+        first = _BleSessionContext(FakeTransport())
+        first.credential = self.credential
+        second = _BleSessionContext(FakeTransport())
+        second.credential = self.credential
+
+        try:
+            await runtime._prepare_pet(first)
+            self.assertTrue(
+                runtime.submit_pet_request(
+                    PetRequest(
+                        "old-upload",
+                        PetOperation.UPLOAD,
+                        self.package,
+                        lambda _progress: None,
+                    )
+                )
+            )
+            self.assertTrue(
+                await asyncio.to_thread(store_started.wait, 1)
+            )
+            await asyncio.wait_for(
+                runtime._retire_pet_uploader(first), 1
+            )
+            await runtime._prepare_pet(second)
+            self.assertTrue(
+                runtime.submit_pet_request(
+                    PetRequest(
+                        "new-restore",
+                        PetOperation.RESTORE,
+                        None,
+                        lambda _progress: None,
+                    )
+                )
+            )
+            await asyncio.sleep(0.05)
+            release_store.set()
+            self.assertTrue(
+                await asyncio.to_thread(store_finished.wait, 1)
+            )
+            for _ in range(100):
+                if runtime._pet_request is None:
+                    break
+                await asyncio.sleep(0.01)
+            self.assertIsNone(runtime._pet_request)
+
+            self.assertEqual(
+                cache_events,
+                [
+                    ("store", watch_id, package_hash),
+                    ("remove", watch_id),
+                ],
+            )
+        finally:
+            release_store.set()
+            await asyncio.wait_for(
+                runtime._retire_pet_uploader(second), 1
+            )
+
+    async def test_schema_mismatch_disables_upload_but_preserves_restore(self):
+        upload_calls = []
+        restore_calls = []
+
+        class Uploader:
+            async def query(self):
+                return PetWatchState(
+                    self_watch_id,
+                    PetCapability.READY,
+                    "custom",
+                    2,
+                    2,
+                    4,
+                    package_hash,
+                    True,
+                )
+
+            async def upload(self, *args, **kwargs):
+                upload_calls.append((args, kwargs))
+
+            async def restore(self, progress, *, request_id=None):
+                restore_calls.append(request_id)
+                return PetWatchState(
+                    self_watch_id,
+                    PetCapability.READY,
+                    "built-in",
+                    2,
+                    2,
+                    5,
+                    bytes(32),
+                    True,
+                )
+
+            async def close(self):
+                pass
+
+        self_watch_id = self.credential.watch_id
+        package_hash = self.package.sha256
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            pet_uploader_factory=lambda *_args, **_kwargs: Uploader(),
+            pet_cache=self.cache,
+        )
+        context = _BleSessionContext(FakeTransport())
+        context.credential = self.credential
+        await runtime._prepare_pet(context)
+        runtime._loop = asyncio.get_running_loop()
+        upload_states = []
+
+        self.assertFalse(
+            runtime.submit_pet_request(
+                PetRequest(
+                    "schema-upload",
+                    PetOperation.UPLOAD,
+                    self.package,
+                    upload_states.append,
+                )
+            )
+        )
+        self.assertEqual(upload_states[-1].error_code, "unsupported")
+        self.assertEqual(upload_calls, [])
+        self.assertTrue(runtime.pet_snapshot().usable)
+
+        self.assertTrue(
+            runtime.submit_pet_request(
+                PetRequest(
+                    "schema-restore",
+                    PetOperation.RESTORE,
+                    None,
+                    lambda _progress: None,
+                )
+            )
+        )
+        for _ in range(100):
+            if runtime._pet_request is None:
+                break
+            await asyncio.sleep(0.01)
+        self.assertEqual(restore_calls, ["schema-restore"])
+        self.assertEqual(runtime.pet_snapshot().source, "built-in")
+
+    async def test_restore_reconciliation_publishes_actual_custom_state(self):
+        class Uploader:
+            async def query(self):
+                return PetWatchState(
+                    self_watch_id,
+                    PetCapability.READY,
+                    "custom",
+                    1,
+                    1,
+                    4,
+                    package_hash,
+                    True,
+                )
+
+            async def restore(self, progress, *, request_id=None):
+                progress(PetProgress(request_id, "applying", 0, 0))
+                return PetWatchState(
+                    self_watch_id,
+                    PetCapability.READY,
+                    "custom",
+                    1,
+                    1,
+                    5,
+                    package_hash,
+                    True,
+                )
+
+            async def close(self):
+                pass
+
+        self_watch_id = self.credential.watch_id
+        package_hash = self.package.sha256
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            pet_uploader_factory=lambda *_args, **_kwargs: Uploader(),
+            pet_cache=self.cache,
+        )
+        context = _BleSessionContext(FakeTransport())
+        context.credential = self.credential
+        await runtime._prepare_pet(context)
+        runtime._loop = asyncio.get_running_loop()
+        states = []
+
+        self.assertTrue(
+            runtime.submit_pet_request(
+                PetRequest(
+                    "restore-ambiguous",
+                    PetOperation.RESTORE,
+                    None,
+                    states.append,
+                )
+            )
+        )
+        for _ in range(100):
+            if runtime._pet_request is None:
+                break
+            await asyncio.sleep(0.01)
+
+        self.assertEqual(runtime.pet_snapshot().source, "custom")
+        self.assertEqual(runtime.pet_snapshot().generation, 5)
+        self.assertEqual(states[-1].phase, "error")
+        self.assertEqual(self.cache.removed, [])
+
+    async def test_failed_restore_reconciliation_marks_runtime_offline(self):
+        class Uploader:
+            def __init__(self):
+                self.watch_state = ready_state
+
+            async def query(self):
+                return self.watch_state
+
+            async def restore(self, progress, *, request_id=None):
+                self.watch_state = dataclasses.replace(
+                    ready_state,
+                    capability=PetCapability.OFFLINE,
+                    usable=False,
+                )
+                raise PetUploadError("restore result could not be reconciled")
+
+            async def close(self):
+                pass
+
+        self_watch_id = self.credential.watch_id
+        ready_state = PetWatchState(
+            self_watch_id,
+            PetCapability.READY,
+            "custom",
+            1,
+            1,
+            4,
+            self.package.sha256,
+            True,
+        )
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            pet_uploader_factory=lambda *_args, **_kwargs: Uploader(),
+            pet_cache=self.cache,
+        )
+        context = _BleSessionContext(FakeTransport())
+        context.credential = self.credential
+        await runtime._prepare_pet(context)
+        runtime._loop = asyncio.get_running_loop()
+
+        self.assertTrue(
+            runtime.submit_pet_request(
+                PetRequest(
+                    "restore-offline",
+                    PetOperation.RESTORE,
+                    None,
+                    lambda _progress: None,
+                )
+            )
+        )
+        for _ in range(100):
+            if runtime._pet_request is None:
+                break
+            await asyncio.sleep(0.01)
+
+        self.assertEqual(
+            runtime.pet_snapshot().capability, PetCapability.OFFLINE
+        )
+        self.assertFalse(runtime.pet_snapshot().usable)
+
+    async def test_reconnect_constructs_new_uploader_and_requeries(self):
+        queries = []
+
+        class Uploader:
+            def __init__(self, generation):
+                self.generation = generation
+
+            async def query(self):
+                queries.append(self.generation)
+                return PetWatchState(
+                    self_watch_id,
+                    PetCapability.READY,
+                    "built-in",
+                    1,
+                    1,
+                    self.generation,
+                    bytes(32),
+                    True,
+                )
+
+            async def close(self):
+                pass
+
+        self_watch_id = self.credential.watch_id
+        uploaders = iter((Uploader(1), Uploader(2)))
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            pet_uploader_factory=lambda *_args, **_kwargs: next(uploaders),
+            pet_cache=self.cache,
+        )
+        first = _BleSessionContext(FakeTransport())
+        first.credential = self.credential
+        await runtime._prepare_pet(first)
+        await runtime._retire_pet_uploader(first)
+        second = _BleSessionContext(FakeTransport())
+        second.credential = self.credential
+
+        await runtime._prepare_pet(second)
+
+        self.assertEqual(queries, [1, 2])
+        self.assertEqual(runtime.pet_snapshot().generation, 2)
+
+    async def test_credential_replacement_closes_old_pet_before_new_epoch(self):
+        events = []
+        updated = dataclasses.replace(
+            self.credential, master_key=b"N" * 16, key_epoch=10
+        )
+
+        class OldUploader:
+            async def close(self):
+                events.append("old.close")
+
+        class NewUploader:
+            async def query(self):
+                events.append("new.query")
+                return PetWatchState(
+                    updated.watch_id,
+                    PetCapability.READY,
+                    "built-in",
+                    1,
+                    1,
+                    0,
+                    bytes(32),
+                    True,
+                )
+
+            async def close(self):
+                pass
+
+        def factory(_transport, key, epoch, _nonce_factory, *, watch_id):
+            events.append(("factory", key, epoch, watch_id))
+            return NewUploader()
+
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            pet_uploader_factory=factory,
+            pet_cache=self.cache,
+        )
+        transport = FakeTransport(events=events)
+        transport._input_disabled = False
+        context = _BleSessionContext(transport)
+        context.credential = self.credential
+        context.voice_key = self.credential.master_key
+        context.voice_key_epoch = self.credential.key_epoch
+        context.pet_uploader = OldUploader()
+        runtime._pet_uploader = context.pet_uploader
+        runtime._prepare_voice = lambda _context: asyncio.sleep(0)
+
+        self.assertTrue(await runtime._replace_voice_credential(context, updated))
+
+        self.assertLess(events.index("old.close"), events.index("input.disable"))
+        self.assertIn(("factory", b"N" * 16, 10, updated.watch_id), events)
+        self.assertEqual(runtime.pet_snapshot().capability, PetCapability.READY)
+
+    async def test_late_progress_from_replaced_credential_is_suppressed(self):
+        events = []
+        started = asyncio.Event()
+        release = asyncio.Event()
+        callbacks = []
+        updated = dataclasses.replace(
+            self.credential, master_key=b"N" * 16, key_epoch=10
+        )
+
+        class OldUploader:
+            async def query(self):
+                return PetWatchState(
+                    self_watch_id,
+                    PetCapability.READY,
+                    "built-in",
+                    1,
+                    1,
+                    0,
+                    bytes(32),
+                    True,
+                )
+
+            async def upload(self, package, progress, *, request_id=None):
+                progress(PetProgress(request_id, "sending", 0, len(package.encoded)))
+                started.set()
+                await release.wait()
+                progress(
+                    PetProgress(
+                        request_id,
+                        "installed",
+                        len(package.encoded),
+                        len(package.encoded),
+                    )
+                )
+                return PetWatchState(
+                    self_watch_id,
+                    PetCapability.READY,
+                    "custom",
+                    1,
+                    1,
+                    1,
+                    package.sha256,
+                    True,
+                )
+
+            async def close(self):
+                events.append("old.close")
+                release.set()
+                await asyncio.sleep(0)
+
+        class NewUploader:
+            async def query(self):
+                events.append("new.query")
+                return PetWatchState(
+                    self_watch_id,
+                    PetCapability.READY,
+                    "built-in",
+                    1,
+                    1,
+                    0,
+                    bytes(32),
+                    True,
+                )
+
+            async def close(self):
+                pass
+
+        self_watch_id = self.credential.watch_id
+        old = OldUploader()
+
+        def factory(_transport, key, _epoch, _nonce_factory, *, watch_id):
+            return old if key == self.credential.master_key else NewUploader()
+
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            pet_uploader_factory=factory,
+            pet_cache=self.cache,
+        )
+        context = _BleSessionContext(FakeTransport())
+        context.credential = self.credential
+        context.voice_key = self.credential.master_key
+        context.voice_key_epoch = self.credential.key_epoch
+        await runtime._prepare_pet(context)
+        runtime._loop = asyncio.get_running_loop()
+        runtime._prepare_voice = lambda _context: asyncio.sleep(0)
+        self.assertTrue(
+            runtime.submit_pet_request(
+                PetRequest(
+                    "old-request",
+                    PetOperation.UPLOAD,
+                    self.package,
+                    callbacks.append,
+                )
+            )
+        )
+        await asyncio.wait_for(started.wait(), 1)
+        count_before_rekey = len(callbacks)
+
+        self.assertTrue(await runtime._replace_voice_credential(context, updated))
+        await asyncio.sleep(0)
+
+        self.assertEqual(len(callbacks), count_before_rekey)
+        self.assertEqual(self.cache.stored, [])
+        self.assertEqual(events[:2], ["old.close", "new.query"])
+
+    async def test_rekey_cancels_and_awaits_stalled_old_upload_before_new_query(self):
+        events = []
+        started = asyncio.Event()
+        release_write = asyncio.Event()
+        operation_done = asyncio.Event()
+        updated = dataclasses.replace(
+            self.credential, master_key=b"N" * 16, key_epoch=10
+        )
+
+        class OldUploader:
+            async def query(self):
+                return PetWatchState(
+                    self_watch_id,
+                    PetCapability.READY,
+                    "built-in",
+                    1,
+                    1,
+                    0,
+                    bytes(32),
+                    True,
+                )
+
+            async def upload(self, package, progress, *, request_id=None):
+                started.set()
+                try:
+                    await release_write.wait()
+                    events.append("old.late.write")
+                    return PetWatchState(
+                        self_watch_id,
+                        PetCapability.READY,
+                        "custom",
+                        1,
+                        1,
+                        1,
+                        package.sha256,
+                        True,
+                    )
+                finally:
+                    operation_done.set()
+
+            async def close(self):
+                events.append("old.close")
+                await operation_done.wait()
+
+        class NewUploader:
+            async def query(self):
+                events.append("new.query")
+                return PetWatchState(
+                    self_watch_id,
+                    PetCapability.READY,
+                    "built-in",
+                    1,
+                    1,
+                    0,
+                    bytes(32),
+                    True,
+                )
+
+            async def close(self):
+                pass
+
+        self_watch_id = self.credential.watch_id
+        old = OldUploader()
+
+        def factory(_transport, key, _epoch, _nonce_factory, *, watch_id):
+            return old if key == self.credential.master_key else NewUploader()
+
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            pet_uploader_factory=factory,
+            pet_cache=self.cache,
+            disconnect_timeout=0.01,
+        )
+        transport = FakeTransport(events=events)
+        context = _BleSessionContext(transport)
+        context.credential = self.credential
+        context.voice_key = self.credential.master_key
+        context.voice_key_epoch = self.credential.key_epoch
+        await runtime._prepare_pet(context)
+        runtime._loop = asyncio.get_running_loop()
+        runtime._prepare_voice = lambda _context: asyncio.sleep(0)
+        self.assertTrue(
+            runtime.submit_pet_request(
+                PetRequest(
+                    "stalled",
+                    PetOperation.UPLOAD,
+                    self.package,
+                    lambda _progress: None,
+                )
+            )
+        )
+        await asyncio.wait_for(started.wait(), 1)
+
+        self.assertTrue(await runtime._replace_voice_credential(context, updated))
+        release_write.set()
+        await asyncio.sleep(0)
+
+        self.assertNotIn("old.late.write", events)
+        self.assertEqual(events[-1], "new.query")
+
+    async def test_rekey_fails_closed_when_old_upload_cannot_quiesce(self):
+        events = []
+        started = asyncio.Event()
+        ignored_cancel = asyncio.Event()
+        release = asyncio.Event()
+        operation_done = asyncio.Event()
+        updated = dataclasses.replace(
+            self.credential, master_key=b"N" * 16, key_epoch=10
+        )
+
+        class OldUploader:
+            async def query(self):
+                return PetWatchState(
+                    self_watch_id,
+                    PetCapability.READY,
+                    "built-in",
+                    1,
+                    1,
+                    0,
+                    bytes(32),
+                    True,
+                )
+
+            async def upload(self, package, progress, *, request_id=None):
+                started.set()
+                try:
+                    await release.wait()
+                except asyncio.CancelledError:
+                    ignored_cancel.set()
+                    await release.wait()
+                events.append("old.late.write")
+                operation_done.set()
+                return PetWatchState(
+                    self_watch_id,
+                    PetCapability.READY,
+                    "custom",
+                    1,
+                    1,
+                    1,
+                    package.sha256,
+                    True,
+                )
+
+            async def close(self):
+                events.append("old.close")
+                await operation_done.wait()
+
+        class NewUploader:
+            async def query(self):
+                events.append("new.query")
+
+        self_watch_id = self.credential.watch_id
+        old = OldUploader()
+
+        def factory(_transport, key, _epoch, _nonce_factory, *, watch_id):
+            return old if key == self.credential.master_key else NewUploader()
+
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            pet_uploader_factory=factory,
+            pet_cache=self.cache,
+            disconnect_timeout=0.02,
+        )
+        context = _BleSessionContext(FakeTransport(events=events))
+        context.credential = self.credential
+        context.voice_key = self.credential.master_key
+        context.voice_key_epoch = self.credential.key_epoch
+        await runtime._prepare_pet(context)
+        runtime._loop = asyncio.get_running_loop()
+        runtime._prepare_voice = lambda _context: asyncio.sleep(0)
+        self.assertTrue(
+            runtime.submit_pet_request(
+                PetRequest(
+                    "stubborn",
+                    PetOperation.UPLOAD,
+                    self.package,
+                    lambda _progress: None,
+                )
+            )
+        )
+        await asyncio.wait_for(started.wait(), 1)
+
+        self.assertFalse(
+            await runtime._replace_voice_credential(context, updated)
+        )
+        await asyncio.wait_for(ignored_cancel.wait(), 1)
+        self.assertEqual(context.credential, self.credential)
+        self.assertNotIn("new.query", events)
+        self.assertEqual(
+            runtime.pet_snapshot().capability, PetCapability.OFFLINE
+        )
+
+        release.set()
+        for _ in range(100):
+            if operation_done.is_set():
+                break
+            await asyncio.sleep(0.01)
+        self.assertTrue(await runtime._retire_pet_uploader(context))
+
+    async def test_rekey_fails_closed_when_old_uploader_close_fails(self):
+        events = []
+        updated = dataclasses.replace(
+            self.credential, master_key=b"N" * 16, key_epoch=10
+        )
+
+        class OldUploader:
+            async def close(self):
+                events.append("old.close")
+                raise RuntimeError("close failed")
+
+        class NewUploader:
+            async def query(self):
+                events.append("new.query")
+
+        def factory(_transport, key, _epoch, _nonce_factory, *, watch_id):
+            return NewUploader()
+
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            pet_uploader_factory=factory,
+            pet_cache=self.cache,
+        )
+        context = _BleSessionContext(FakeTransport(events=events))
+        context.credential = self.credential
+        context.voice_key = self.credential.master_key
+        context.voice_key_epoch = self.credential.key_epoch
+        context.pet_uploader = OldUploader()
+        context.pet_generation = 1
+        runtime._pet_uploader = context.pet_uploader
+        runtime._pet_generation = 1
+        runtime._prepare_voice = lambda _context: asyncio.sleep(0)
+
+        self.assertFalse(
+            await runtime._replace_voice_credential(context, updated)
+        )
+
+        self.assertEqual(context.credential, self.credential)
+        self.assertEqual(events, ["old.close"])
+        self.assertEqual(
+            runtime.pet_snapshot().capability, PetCapability.OFFLINE
+        )
+
+    async def test_shutdown_cancels_stalled_pet_before_transport_disconnect(self):
+        events = []
+        started = asyncio.Event()
+        release_write = asyncio.Event()
+        operation_done = asyncio.Event()
+
+        class Uploader:
+            async def query(self):
+                return PetWatchState(
+                    self_watch_id,
+                    PetCapability.READY,
+                    "built-in",
+                    1,
+                    1,
+                    0,
+                    bytes(32),
+                    True,
+                )
+
+            async def upload(self, package, progress, *, request_id=None):
+                started.set()
+                try:
+                    await release_write.wait()
+                    events.append("pet.late.write")
+                    return PetWatchState(
+                        self_watch_id,
+                        PetCapability.READY,
+                        "custom",
+                        1,
+                        1,
+                        1,
+                        package.sha256,
+                        True,
+                    )
+                finally:
+                    operation_done.set()
+
+            async def close(self):
+                events.append("pet.close")
+                await operation_done.wait()
+
+        self_watch_id = self.credential.watch_id
+        uploader = Uploader()
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            pet_uploader_factory=lambda *_args, **_kwargs: uploader,
+            disconnect_timeout=0.1,
+            pet_cache=self.cache,
+        )
+        transport = FakeTransport(events=events)
+        transport._connected = True
+        context = _BleSessionContext(transport)
+        context.credential = self.credential
+        await runtime._prepare_pet(context)
+        runtime._loop = asyncio.get_running_loop()
+        self.assertTrue(
+            runtime.submit_pet_request(
+                PetRequest(
+                    "shutdown-stalled",
+                    PetOperation.UPLOAD,
+                    self.package,
+                    lambda _progress: None,
+                )
+            )
+        )
+        await asyncio.wait_for(started.wait(), 1)
+
+        await runtime._shutdown_session(context, False)
+        release_write.set()
+        await asyncio.sleep(0)
+
+        self.assertNotIn("pet.late.write", events)
+        self.assertLess(events.index("pet.close"), events.index("ble.disconnect"))
+
+    async def test_agent_quit_retires_pet_before_other_channels(self):
+        events = []
+
+        class Uploader:
+            async def close(self):
+                events.append("pet.close")
+
+        runtime = AgentRuntime(
+            collector=FakeCollector(),
+            disconnect_timeout=0.2,
+            pet_cache=self.cache,
+        )
+        transport = FakeTransport(events=events)
+        transport._connected = True
+        transport._input_disabled = False
+        transport._voice_disabled = False
+        context = _BleSessionContext(transport)
+        context.pet_uploader = Uploader()
+        context.pet_generation = 1
+        runtime._pet_generation = 1
+        runtime._pet_uploader = context.pet_uploader
+
+        await runtime._shutdown_session(context, False)
+
+        self.assertLess(events.index("pet.close"), events.index("input.disable"))
+        self.assertLess(events.index("input.disable"), events.index("voice.disable"))
+        self.assertLess(events.index("voice.disable"), events.index("ble.disconnect"))
+        self.assertEqual(
+            runtime.pet_snapshot().capability, PetCapability.OFFLINE
+        )
+
+
 class PrivacyDocumentationContractTests(unittest.TestCase):
     def test_readmes_document_secure_task_detail_boundary(self):
         root = pathlib.Path(__file__).resolve().parents[2]
@@ -3628,6 +5518,18 @@ class FakeRuntime:
         self.voice_setup_results = []
         self.voice_setup_token = object()
         self.agent_names = []
+        self.pet_requests = []
+        self.pet_preview_value = None
+        self.pet_state = PetWatchState(
+            None,
+            PetCapability.OFFLINE,
+            "built-in",
+            0,
+            0,
+            0,
+            bytes(32),
+            False,
+        )
 
     def submit(self, command):
         self.commands.append(command)
@@ -3647,8 +5549,46 @@ class FakeRuntime:
     def report_voice_setup_result(self, token, state):
         self.voice_setup_results.append((token, state))
 
+    def submit_pet_request(self, request):
+        self.pet_requests.append(request)
+        return True
+
+    def pet_snapshot(self):
+        return self.pet_state
+
+    def pet_preview(self):
+        return self.pet_preview_value
+
 
 class AgentControllerTests(unittest.TestCase):
+    def test_pet_controller_methods_submit_immutable_runtime_requests(self):
+        runtime = FakeRuntime()
+        controller = AgentController(
+            preferences=MemoryPreferences(True), runtime=runtime
+        )
+        pixels = WIDTH * HEIGHT
+        package = encode_package(
+            WIDTH,
+            HEIGHT,
+            (0x001F,),
+            1,
+            (PetFrame(120, bytes([0]) * pixels),),
+        )
+        progress = []
+
+        upload_id = controller.upload_pet(package, progress.append)
+        controller.cancel_pet(upload_id)
+        restore_id = controller.restore_default(progress.append)
+
+        self.assertEqual(
+            [request.operation for request in runtime.pet_requests],
+            [PetOperation.UPLOAD, PetOperation.CANCEL, PetOperation.RESTORE],
+        )
+        self.assertIs(runtime.pet_requests[0].package, package)
+        self.assertIsNone(runtime.pet_requests[1].package)
+        self.assertNotEqual(upload_id, restore_id)
+        self.assertEqual(controller.pet_snapshot(), runtime.pet_state)
+
     def test_forget_current_watch_removes_credential_and_reconnects(self):
         class Authorizer:
             def __init__(self):
@@ -3806,7 +5746,7 @@ class AgentControllerTests(unittest.TestCase):
             12,
             0,
             100,
-            BEGIN_BODY.pack(IMA_ADPCM, PUSH_TO_TALK, 16000, 320, TEST_TASK_ROUTE),
+            BEGIN_BODY.pack(IMA_ADPCM, PUSH_TO_TALK, 16000, 320, 0),
             b"abcdefgh",
         )
         recording_started = threading.Event()
@@ -3862,22 +5802,26 @@ class AgentControllerTests(unittest.TestCase):
             preferences=MemoryPreferences(True), runtime=runtime
         )
         controller.start()
-        self.assertTrue(recording_started.wait(1))
+        stopped = False
+        try:
+            self.assertTrue(recording_started.wait(1))
 
-        started = time.monotonic()
-        stopped = controller.stop(timeout=0.5)
-        elapsed = time.monotonic() - started
-        if not stopped and "release" in drain_holder:
-            drain_holder["loop"].call_soon_threadsafe(
-                drain_holder["release"].set
-            )
-            controller.stop(timeout=1)
+            started = time.monotonic()
+            stopped = controller.stop(timeout=0.5)
+            elapsed = time.monotonic() - started
 
-        self.assertTrue(stopped)
-        self.assertLess(elapsed, 0.25)
-        self.assertEqual(shortcut.calls, ["start", "stop"])
-        self.assertEqual(route.calls, ["start", "stop"])
-        self.assertEqual(factory.instances[0].disconnect_count, 1)
+            self.assertTrue(stopped)
+            self.assertLess(elapsed, 0.25)
+            self.assertEqual(shortcut.calls, ["start", "stop"])
+            self.assertEqual(route.calls, ["start", "stop"])
+            self.assertEqual(factory.instances[0].disconnect_count, 1)
+        finally:
+            if not stopped:
+                if "release" in drain_holder:
+                    drain_holder["loop"].call_soon_threadsafe(
+                        drain_holder["release"].set
+                    )
+                controller.stop(timeout=1)
 
     def test_connection_setting_is_persisted_before_command(self):
         preferences = MemoryPreferences()

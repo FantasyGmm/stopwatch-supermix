@@ -230,6 +230,7 @@ smoke_test_packaged_runtime() {
 import os
 import pathlib
 import sys
+import tempfile
 import AppKit
 import ApplicationServices
 import Quartz
@@ -238,6 +239,7 @@ import bleak
 import certifi
 import cryptography
 import PIL
+from PIL import Image
 from cryptography.hazmat.primitives.ciphers.aead import AESCCM
 import agent
 import agent_identity
@@ -247,6 +249,12 @@ import combined_collector
 import completion_classifier
 import ima_adpcm
 import menu_app
+import pet_cache
+import pet_converter
+import pet_package
+import pet_protocol
+import pet_upload
+import pet_window
 import protocol
 import rollout_change_watcher
 import runtime
@@ -279,6 +287,32 @@ if app_root not in pathlib.Path(certifi.where()).resolve().parents:
     raise SystemExit("external certifi bundle")
 if AESCCM is None:
     raise SystemExit("AESCCM unavailable")
+
+with tempfile.TemporaryDirectory(prefix="stopwatch-pet-smoke-") as temporary:
+    gif_path = pathlib.Path(temporary) / "two-frame.gif"
+    frames = (
+        Image.new("RGBA", (2, 2), (255, 0, 0, 255)),
+        Image.new("RGBA", (2, 2), (0, 255, 0, 255)),
+    )
+    frames[0].save(
+        gif_path,
+        format="GIF",
+        save_all=True,
+        append_images=frames[1:],
+        duration=(80, 120),
+        loop=0,
+        disposal=2,
+    )
+    converted = pet_converter.convert_gif(gif_path)
+    if converted.metadata.source_frames != 2:
+        raise SystemExit("pet GIF source-frame smoke failed")
+    if converted.metadata.output_frames != 2:
+        raise SystemExit("pet GIF output-frame smoke failed")
+    if converted.metadata.width != 144 or converted.metadata.height != 156:
+        raise SystemExit("pet GIF dimensions smoke failed")
+    parsed = pet_package.parse_package(converted.package.encoded)
+    if len(parsed.frames) != 2 or parsed.sha256 != converted.package.sha256:
+        raise SystemExit("pet CXP1 package smoke failed")
 '
     )
 }
@@ -312,12 +346,19 @@ validate_app_contents() {
         "$resources/app/secure_pairing_crypto.py" \
         "$resources/app/secure_pairing_protocol.py" \
         "$resources/app/secure_pairing_wire.py" \
+        "$resources/app/pet_package.py" \
+        "$resources/app/pet_converter.py" \
+        "$resources/app/pet_protocol.py" \
+        "$resources/app/pet_upload.py" \
+        "$resources/app/pet_cache.py" \
+        "$resources/app/pet_window.py" \
         "$resources/site-packages/AppKit/__init__.py" \
         "$resources/site-packages/Quartz/__init__.py" \
         "$resources/site-packages/bleak/__init__.py" \
         "$resources/site-packages/certifi/__init__.py" \
         "$resources/site-packages/cryptography/__init__.py" \
         "$resources/site-packages/PIL/__init__.py" \
+        "$resources/site-packages/PIL/Image.py" \
         "$app_path/Contents/Frameworks/Python3.framework/Versions/$PYTHON_VERSION/Python3"; do
         if [[ ! -f "$required_path" ]]; then
             echo "Missing packaged runtime file: $required_path" >&2
@@ -651,6 +692,12 @@ build_staged_app() {
         secure_pairing_crypto.py \
         secure_pairing_protocol.py \
         secure_pairing_wire.py \
+        pet_package.py \
+        pet_converter.py \
+        pet_protocol.py \
+        pet_upload.py \
+        pet_cache.py \
+        pet_window.py \
         voice_driver.py \
         voice_shortcut.py \
         voice_audio.py \

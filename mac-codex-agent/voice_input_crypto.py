@@ -22,6 +22,8 @@ INPUT_READY_DOMAIN = 0x21
 INPUT_SUBMIT_DOMAIN = 0x22
 INPUT_FORCE_STEER_DOMAIN = 0x23
 TASK_DETAIL_DOMAIN = 0x24
+PET_CONTROL_DOMAIN = 0x30
+PET_STATUS_DOMAIN = 0x31
 
 DOMAINS = frozenset(
     {
@@ -35,6 +37,8 @@ DOMAINS = frozenset(
         INPUT_SUBMIT_DOMAIN,
         INPUT_FORCE_STEER_DOMAIN,
         TASK_DETAIL_DOMAIN,
+        PET_CONTROL_DOMAIN,
+        PET_STATUS_DOMAIN,
     }
 )
 
@@ -59,7 +63,11 @@ def validate_key_epoch(key_epoch: int) -> None:
 
 
 def derive_nonce(domain: int, exchange_nonce: bytes, sequence: int) -> bytes:
-    if domain not in DOMAINS:
+    if (
+        isinstance(domain, bool)
+        or not isinstance(domain, int)
+        or domain not in DOMAINS
+    ):
         raise ValueError("unknown voice nonce domain")
     if (
         not isinstance(exchange_nonce, bytes)
@@ -67,8 +75,12 @@ def derive_nonce(domain: int, exchange_nonce: bytes, sequence: int) -> bytes:
         or not any(exchange_nonce)
     ):
         raise ValueError("exchange nonce must be 8 nonzero bytes")
+    if isinstance(sequence, bool) or not isinstance(sequence, int):
+        raise ValueError("sequence must be a non-boolean integer")
     if not 0 <= sequence <= 0xFFFFFFFF:
         raise ValueError("sequence must be 0..4294967295")
+    if sequence == 0 and domain in (PET_CONTROL_DOMAIN, PET_STATUS_DOMAIN):
+        raise ValueError("pet sequence must be 1..4294967295")
     return bytes((domain,)) + exchange_nonce + sequence.to_bytes(4, "little")
 
 

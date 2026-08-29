@@ -160,6 +160,9 @@ class FirmwareFontContractTests(unittest.TestCase):
         layout = (self.codex_root / "codex_status_ui_layout.h").read_text(
             encoding="utf-8"
         )
+        pet_runtime = (self.codex_root / "codex_pet_runtime.cpp").read_text(
+            encoding="utf-8"
+        )
 
         for legacy_caption in (
             'make_arc_value(_panel, 70, 138, "MODEL"',
@@ -241,8 +244,8 @@ class FirmwareFontContractTests(unittest.TestCase):
         self.assertIn("? &lv_font_montserrat_22", app)
         self.assertIn("lv_color_hex(kQuotaMint)", app)
         self.assertIn("constexpr uint32_t kInstrumentBlack = 0x000000", layout)
-        self.assertIn("constexpr Rect kBeaconSpine{194, 96, 2, 104}", layout)
-        self.assertIn("constexpr int kTelemetryX = 214", layout)
+        self.assertIn("constexpr Rect kBeaconSpine{210, 96, 2, 120}", layout)
+        self.assertIn("constexpr int kTelemetryX = 231", layout)
         self.assertIn("constexpr int kTelemetryWidth = 200", layout)
         self.assertIn("constexpr int kQuotaBarX = 101", layout)
         self.assertIn("constexpr int kQuotaBarWidth = 248", layout)
@@ -250,15 +253,17 @@ class FirmwareFontContractTests(unittest.TestCase):
         self.assertIn("constexpr int kQuotaPercentWidth = 60", layout)
         self.assertIn("lv_image_set_src(logo, &logo_codex)", app)
         self.assertIn("lv_image_set_scale(logo, kLogoScale)", app)
-        self.assertIn("lv_image_set_src(_pet_image, codex_pet_idle_frames[0])", app)
         self.assertIn("lv_image_set_antialias(_pet_image, false)", app)
-        self.assertIn("lv_image_set_scale(_pet_image, kPetScale)", app)
+        self.assertIn("sync_pet_runtime(GetHAL().millis());", app)
+        self.assertIn("lv_image_set_src(_pet_image, image)", app)
+        self.assertIn("_pet_runtime->using_custom() ? LV_SCALE_NONE : kPetScale", app)
         self.assertIn("lv_obj_set_pos(_pet_image, kPetX, kPetY)", app)
         self.assertIn("lv_obj_set_pos(pct, kQuotaPercentX, y - 5)", app)
         self.assertIn(
             "lv_obj_set_style_text_align(pct, LV_TEXT_ALIGN_RIGHT, 0)", app
         )
-        self.assertIn("codex_pet_idle_durations_ms[self->_pet_frame]", app)
+        self.assertIn("codex_pet_idle_frames[frame_index", pet_runtime)
+        self.assertIn("codex_pet_idle_durations_ms[", pet_runtime)
         self.assertIn('"Codex", kBrandX, kBrandY, &MontserratSemiBold26, kSignalWhite', app)
         self.assertIn(
             "make_line(_codex_page, kAlertDividerX, kAlertDividerY, kAlertDividerWidth)",

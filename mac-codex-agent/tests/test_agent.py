@@ -17,6 +17,9 @@ from agent import (
     INPUT_CONTROL_UUID,
     INPUT_NOTIFICATION_QUEUE_SIZE,
     INPUT_TX_UUID,
+    PET_CONTROL_UUID,
+    PET_NOTIFICATION_QUEUE_SIZE,
+    PET_STATUS_UUID,
     VOICE_NOTIFICATION_QUEUE_SIZE,
     VOICE_CONTROL_UUID,
     VOICE_TX_UUID,
@@ -29,6 +32,7 @@ from agent import (
     _watch_codex_status,
     _watch_trae_status,
 )
+from pet_upload import PetCapability, PetUnsupportedError
 from secure_pairing_wire import (
     WireMessageType,
     decode_frame as decode_pairing_frame,
@@ -2636,6 +2640,151 @@ class BleStatusTransportInputActionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(handled, [])
         self.assertEqual(client.stop_calls, 2)
         self.assertIsNone(transport._input_consumer)
+
+
+class BleStatusTransportPetTests(unittest.IsolatedAsyncioTestCase):
+    async def test_missing_service_isolated_from_existing_channels(self):
+        class Services:
+            @staticmethod
+            def get_characteristic(_uuid):
+                return None
+
+        client = type(
+            "Client",
+            (),
+            {"is_connected": True, "services": Services()},
+        )()
+        transport = BleStatusTransport()
+        transport._client = client
+        voice_generation = object()
+        input_generation = object()
+        transport._voice_generation = voice_generation
+        transport._input_generation = input_generation
+
+        self.assertEqual(
+            await transport.pet_capability(), PetCapability.UNSUPPORTED
+        )
+        with self.assertRaises(PetUnsupportedError):
+            await transport.enable_pet_notifications(
+                lambda _payload: asyncio.sleep(0)
+            )
+
+        self.assertIs(transport._voice_generation, voice_generation)
+        self.assertIs(transport._input_generation, input_generation)
+
+    async def test_pet_notifications_write_exact_uuids_and_retire_stale_callback(self):
+        class Services:
+            @staticmethod
+            def get_characteristic(uuid):
+                return object() if uuid in (PET_CONTROL_UUID, PET_STATUS_UUID) else None
+
+        class Client:
+            is_connected = True
+            mtu_size = 247
+            services = Services()
+
+            def __init__(self):
+                self.callbacks = []
+                self.calls = []
+
+            async def start_notify(self, uuid, callback):
+                self.calls.append(("start", uuid))
+                self.callbacks.append(callback)
+
+            async def write_gatt_char(self, uuid, payload, response):
+                self.calls.append(("write", uuid, bytes(payload), response))
+
+            async def stop_notify(self, uuid):
+                self.calls.append(("stop", uuid))
+
+        client = Client()
+        transport = BleStatusTransport()
+        transport._client = client
+        handled = []
+
+        await transport.enable_pet_notifications(
+            lambda payload: _append_async(handled, payload)
+        )
+        old_callback = client.callbacks[-1]
+        await transport.write_pet_control(b"authenticated-control")
+        await transport.disable_pet_notifications()
+        await transport.enable_pet_notifications(
+            lambda payload: _append_async(handled, payload)
+        )
+        old_callback(None, b"stale")
+        current_callback = client.callbacks[-1]
+        current_callback(None, bytearray(b"current"))
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        transport.retire_pet_generation()
+        current_callback(None, b"stale-after-disconnect")
+        await asyncio.sleep(0)
+        await transport.disable_pet_notifications()
+
+        self.assertEqual(handled, [b"current"])
+        self.assertEqual(transport.negotiated_mtu, 247)
+        self.assertEqual(
+            client.calls,
+            [
+                ("start", PET_STATUS_UUID),
+                (
+                    "write",
+                    PET_CONTROL_UUID,
+                    b"authenticated-control",
+                    True,
+                ),
+                ("stop", PET_STATUS_UUID),
+                ("start", PET_STATUS_UUID),
+                ("stop", PET_STATUS_UUID),
+            ],
+        )
+
+    async def test_pet_notification_queue_drops_newest_at_eight(self):
+        class Services:
+            @staticmethod
+            def get_characteristic(uuid):
+                return object() if uuid in (PET_CONTROL_UUID, PET_STATUS_UUID) else None
+
+        class Client:
+            is_connected = True
+            services = Services()
+
+            async def start_notify(self, _uuid, callback):
+                self.callback = callback
+
+            async def stop_notify(self, _uuid):
+                pass
+
+        client = Client()
+        transport = BleStatusTransport()
+        transport._client = client
+        release = asyncio.Event()
+        handled = []
+
+        async def handle(payload):
+            await release.wait()
+            handled.append(payload)
+
+        await transport.enable_pet_notifications(handle)
+        for index in range(PET_NOTIFICATION_QUEUE_SIZE + 1):
+            client.callback(None, bytes([index]))
+        await asyncio.sleep(0)
+
+        self.assertEqual(
+            transport._pet_generation.ingress.pending,
+            PET_NOTIFICATION_QUEUE_SIZE,
+        )
+        release.set()
+        for _ in range(100):
+            if transport._pet_generation.ingress.pending == 0:
+                break
+            await asyncio.sleep(0.01)
+
+        self.assertEqual(
+            handled,
+            [bytes([index]) for index in range(PET_NOTIFICATION_QUEUE_SIZE)],
+        )
+        await transport.disable_pet_notifications()
 
 
 if __name__ == "__main__":

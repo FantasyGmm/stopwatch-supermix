@@ -113,10 +113,10 @@ class CodexPendingGlowFirmwareContractTests(unittest.TestCase):
         self.assertIn("CodexTaskFocusMode::Status", app)
         self.assertIn("_pending_glow->shutdown()", app)
         self.assertIn("constexpr uint32_t kInstrumentBlack = 0x000000", layout)
-        self.assertIn("constexpr int kPetX = 73", layout)
+        self.assertIn("constexpr int kPetX = 55", layout)
         self.assertIn("constexpr int kPetY = 88", layout)
-        self.assertIn("constexpr int kPetScale = 293", layout)
-        self.assertIn("constexpr Rect kBeaconSpine{194, 96, 2, 104}", layout)
+        self.assertIn("constexpr int kPetScale = 384", layout)
+        self.assertIn("constexpr Rect kBeaconSpine{210, 96, 2, 120}", layout)
         self.assertNotIn("kHostY", layout)
 
     def test_main_page_touch_does_not_restart_glow(self):

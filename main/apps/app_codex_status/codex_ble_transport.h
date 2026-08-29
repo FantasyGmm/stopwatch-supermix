@@ -4,6 +4,7 @@
 #include "ble_voice_probe_protocol.h"
 #include "agent_connection_router.h"
 #include "input_action_controller.h"
+#include "codex_pet_transfer.h"
 #include "voice_input_controller.h"
 
 #include <array>
@@ -49,8 +50,11 @@ public:
     bool take_production_voice_control(CodexProductionVoiceControl& control);
     bool take_pairing_frame(CodexPairingFrame& frame);
     bool take_input_action_control(CodexInputActionControl& control);
+    bool take_pet_control(CodexPetControlFrame& frame);
     bool voice_subscribed() const;
     bool input_action_subscribed() const;
+    bool pet_subscribed() const;
+    codex_pet::PetSubscriptionSnapshot pet_subscription() const;
     uint16_t negotiated_mtu() const;
     size_t voice_notification_limit() const;
     CodexBleNotifyResult notify_voice(const uint8_t* data, size_t length);
@@ -59,6 +63,10 @@ public:
     CodexBleNotifyResult notify_input_action(
         const uint8_t* data,
         size_t length);
+    CodexBleNotifyResult notify_pet_status(
+        const uint8_t* data,
+        size_t length,
+        uint64_t subscription_generation);
     CodexBleNotifyResult notify_pairing(
         uint16_t connection_handle,
         const uint8_t* data,
@@ -68,6 +76,12 @@ public:
         uint32_t key_epoch);
     void clear_voice_credential();
     voice_input::crypto::CcmContext& input_action_crypto();
+    bool set_pet_credential(
+        const voice_input::crypto::Key& key,
+        uint32_t key_epoch);
+    void clear_pet_credential();
+    voice_input::crypto::CcmContext& pet_crypto();
+    uint32_t pet_key_epoch() const;
 
     bool authorize_gatt(
         uint16_t connection_handle,
@@ -108,7 +122,15 @@ public:
         uint16_t connection_handle,
         const uint8_t* data,
         size_t length);
+    bool enqueue_pet_control_from_ble(
+        uint16_t connection_handle,
+        const uint8_t* data,
+        size_t length);
     void handle_input_subscription(
+        uint16_t connection_handle,
+        uint16_t attr_handle,
+        bool enabled);
+    void handle_pet_subscription(
         uint16_t connection_handle,
         uint16_t attr_handle,
         bool enabled);
@@ -126,10 +148,13 @@ private:
     void* _production_voice_control_queue = nullptr;
     void* _pairing_frame_queue = nullptr;
     void* _input_control_queue = nullptr;
+    void* _pet_control_queue = nullptr;
     voice_input::ControlReplayGuard _production_control_guard;
     InputActionReadyReplayGuard _input_control_guard;
     voice_input::crypto::CcmContext _production_voice_crypto;
+    voice_input::crypto::CcmContext _pet_crypto;
     std::atomic<uint32_t> _production_voice_key_epoch{0};
+    std::atomic<uint32_t> _pet_key_epoch{0};
     std::atomic<uint64_t> _active_disconnect_token{0};
     std::atomic<uint64_t> _active_production_revoked_token{0};
     mutable std::mutex _voice_link_mutex;
@@ -141,6 +166,9 @@ private:
     std::deque<CodexBleMessage> _messages;
     std::atomic<bool> _stopping{false};
     std::atomic<bool> _input_action_subscribed{false};
+    codex_pet::PetSubscriptionTracker _pet_subscription;
+    std::atomic<bool> _pet_service_available{false};
     bool _initialized = false;
     std::atomic<uint16_t> _input_tx_value_handle{0};
+    std::atomic<uint16_t> _pet_status_value_handle{0};
 };

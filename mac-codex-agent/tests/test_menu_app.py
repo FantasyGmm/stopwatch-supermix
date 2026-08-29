@@ -50,6 +50,8 @@ class FakeController:
         self.pairing_state = pairing_state
         self.renamed_agents = []
         self.forgot_watch_count = 0
+        self.pet_snapshot_value = object()
+        self.pet_preview_value = object()
 
     def start(self):
         self.started = True
@@ -140,6 +142,12 @@ class FakeController:
 
     def refresh_voice_readiness(self):
         self.voice_refresh_count += 1
+
+    def pet_snapshot(self):
+        return self.pet_snapshot_value
+
+    def pet_preview(self):
+        return self.pet_preview_value
 
     def begin_voice_setup(self):
         return (
@@ -673,6 +681,70 @@ class MenuBarApplicationTests(unittest.TestCase):
             [
                 "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
             ],
+        )
+
+    def test_codex_pet_action_precedes_connection_actions_and_reuses_window(self):
+        # Creating a new panel for each menu click would lose the converted
+        # preview and make late runtime progress disappear from the reopened UI.
+        class PetWindow:
+            constructed = []
+
+            @classmethod
+            def alloc(cls):
+                return cls()
+
+            def initWithAgentController_(self, controller):
+                self.controller = controller
+                self.snapshots = []
+                self.snapshot_previews = []
+                self.show_count = 0
+                self.front_count = 0
+                self.stopped = False
+                PetWindow.constructed.append(self)
+                return self
+
+            def applySnapshotAndPreview(self, snapshot, preview):
+                self.snapshots.append(snapshot)
+                self.snapshot_previews.append((snapshot, preview))
+
+            def showWindow_(self, _sender):
+                self.show_count += 1
+
+            def window(self):
+                return self
+
+            def makeKeyAndOrderFront_(self, _sender):
+                self.front_count += 1
+
+            def stopPreviewTimer(self):
+                self.stopped = True
+
+        NSApplication.sharedApplication()
+        controller = FakeController()
+        delegate = MenuBarApplication.alloc().initWithController_(controller)
+        delegate.applicationDidFinishLaunching_(None)
+        delegate.pet_window_controller_factory = PetWindow
+        self.addCleanup(delegate._shutdown)
+
+        self.assertEqual(delegate.codex_pet_item.title(), "Codex Pet…")
+        separator_index = delegate.menu.indexOfItem_(delegate.codex_pet_item) + 1
+        self.assertTrue(delegate.menu.itemAtIndex_(separator_index).isSeparatorItem())
+        self.assertIs(
+            delegate.menu.itemAtIndex_(separator_index + 1),
+            delegate.connection_item,
+        )
+
+        delegate.openCodexPet_(None)
+        delegate.openCodexPet_(None)
+
+        self.assertEqual(len(PetWindow.constructed), 1)
+        pet_window = PetWindow.constructed[0]
+        self.assertEqual(pet_window.show_count, 2)
+        self.assertEqual(pet_window.front_count, 2)
+        self.assertEqual(len(pet_window.snapshots), 2)
+        self.assertEqual(
+            pet_window.snapshot_previews,
+            [(controller.pet_snapshot_value, controller.pet_preview_value)] * 2,
         )
 
     def test_menu_lifecycle_and_actions(self):

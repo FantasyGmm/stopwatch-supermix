@@ -21,19 +21,26 @@ class CodexStatusFLayoutContractTests(unittest.TestCase):
         self.assertNotIn("_five_hour_bar", header)
         self.assertNotIn('make_quota_row(_codex_page, kFiveHourY, "5H")', app)
         self.assertIn('make_quota_row(_codex_page, kWeekY, "7D")', app)
-        self.assertIn("constexpr int kWeekY = 220", layout)
-        self.assertIn("constexpr int kAlertDividerY = 258", layout)
+        self.assertIn("constexpr int kPetX = 55", layout)
+        self.assertIn("constexpr int kPetY = 88", layout)
+        self.assertIn("constexpr int kPetWidth = 144", layout)
+        self.assertIn("constexpr int kPetHeight = 156", layout)
+        self.assertIn("constexpr int kPetScale = 384", layout)
+        self.assertIn("constexpr Rect kBeaconSpine{210, 96, 2, 120}", layout)
+        self.assertIn("constexpr int kTelemetryX = 231", layout)
+        self.assertIn("constexpr int kWeekY = 246", layout)
+        self.assertIn("constexpr int kAlertDividerY = 282", layout)
 
         self.assertIn("constexpr int kPendingLabelX = 54", layout)
         self.assertIn("constexpr int kRunningLabelX = 300", layout)
         self.assertIn("constexpr int kPendingCountX = 78", layout)
         self.assertIn("constexpr int kRunningCountX = 324", layout)
-        self.assertIn("constexpr int kStateLabelY = 272", layout)
+        self.assertIn("constexpr int kStateLabelY = 294", layout)
         self.assertIn("constexpr int kStateLabelWidth = 112", layout)
-        self.assertIn("constexpr int kStateCountY = 298", layout)
-        self.assertIn("constexpr int kTaskIndexY = 284", layout)
-        self.assertIn("constexpr int kAlertProjectY = 307", layout)
-        self.assertIn("constexpr int kAlertDetailY = 359", layout)
+        self.assertIn("constexpr int kStateCountY = 320", layout)
+        self.assertIn("constexpr int kTaskIndexY = 306", layout)
+        self.assertIn("constexpr int kAlertProjectY = 332", layout)
+        self.assertIn("constexpr int kAlertDetailY = 363", layout)
         self.assertIn("constexpr int kAlertDetailHeight = 41", layout)
         self.assertIn("constexpr int kBatteryY = 432", layout)
 
@@ -128,6 +135,56 @@ class CodexStatusFLayoutContractTests(unittest.TestCase):
         self.assertIn("tests/codex_pending_glow_logic_test.cpp", runner)
         self.assertIn("tests/codex_alert_carousel_test.cpp", runner)
         self.assertIn("tests/codex_status_ui_layout_test.cpp", runner)
+        self.assertIn("tests/codex_pet_runtime_test.cpp", runner)
+
+    def test_custom_pet_runtime_owns_psram_frames_and_only_observes_selection(self):
+        runtime_header = (
+            ROOT / "main/apps/app_codex_status/codex_pet_runtime.h"
+        ).read_text()
+        runtime_source = (
+            ROOT / "main/apps/app_codex_status/codex_pet_runtime.cpp"
+        ).read_text()
+        app = (
+            ROOT / "main/apps/app_codex_status/app_codex_status.cpp"
+        ).read_text()
+
+        self.assertIn("class CodexPetRuntime", runtime_header)
+        self.assertIn("bool open(const PetSelection& selection)", runtime_header)
+        self.assertIn(
+            "bool prepare_generation(const PetSelection& selection)", runtime_header
+        )
+        self.assertIn("void set_visible(bool visible, uint32_t now_ms)", runtime_header)
+        self.assertIn("void advance(uint32_t now_ms)", runtime_header)
+        self.assertIn("const lv_image_dsc_t* current_image() const", runtime_header)
+        self.assertIn("bool take_frame_changed()", runtime_header)
+        self.assertIn("void acknowledge_image_published()", runtime_header)
+        self.assertIn("bool using_custom() const", runtime_header)
+        self.assertIn("void close()", runtime_header)
+        self.assertIn("LV_COLOR_FORMAT_RGB565A8", runtime_source)
+        self.assertIn("kRgb565A8Bytes", runtime_source)
+        self.assertIn("kSlotEnvelopeBytes", runtime_source)
+        self.assertIn("decode_frame", runtime_source)
+        self.assertIn("transitions < kMaxFrames", runtime_source)
+        self.assertNotIn("CodexPetTransfer", runtime_header)
+        self.assertIn("_pet_runtime->prepare_generation(_pet_selection)", app)
+        self.assertIn("_pet_runtime->set_visible(", app)
+        self.assertIn("_pet_runtime->close()", app)
+        self.assertIn("lv_image_set_pivot(_pet_image, 0, 0);", app)
+        self.assertIn("_pet_runtime->acknowledge_image_published();", app)
+        apply_body = app.split("void AppCodexStatus::apply_pet_image()", 1)[1].split(
+            "void AppCodexStatus::sync_pet_runtime", 1
+        )[0]
+        self.assertIn(
+            "_pet_runtime->using_custom() ? LV_SCALE_NONE : kPetScale",
+            apply_body,
+        )
+        self.assertIn("lv_obj_set_pos(_pet_image, kPetX, kPetY);", apply_body)
+        self.assertLess(
+            apply_body.index("lv_image_set_src(_pet_image, image);"),
+            apply_body.index("_pet_runtime->acknowledge_image_published();"),
+        )
+        self.assertEqual(96 * 384 // 256, 144)
+        self.assertEqual(104 * 384 // 256, 156)
 
 
 if __name__ == "__main__":

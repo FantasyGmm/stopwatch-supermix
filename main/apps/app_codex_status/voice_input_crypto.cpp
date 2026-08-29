@@ -21,6 +21,8 @@ bool valid_domain(Domain domain)
         case Domain::InputSubmit:
         case Domain::InputForceSteer:
         case Domain::TaskDetail:
+        case Domain::PetControl:
+        case Domain::PetStatus:
             return true;
     }
     return false;
@@ -51,7 +53,9 @@ bool derive_nonce(
     Nonce& output)
 {
     output = {};
-    if (!valid_domain(domain) || !nonzero_nonce(exchange_nonce)) {
+    if (!valid_domain(domain) || !nonzero_nonce(exchange_nonce) ||
+        (sequence == 0 &&
+         (domain == Domain::PetControl || domain == Domain::PetStatus))) {
         return false;
     }
     output[0] = static_cast<uint8_t>(domain);

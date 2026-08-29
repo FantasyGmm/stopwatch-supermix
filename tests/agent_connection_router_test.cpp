@@ -1,4 +1,5 @@
 #include "main/apps/app_codex_status/agent_connection_router.h"
+#include "main/apps/app_codex_status/codex_pet_transfer.h"
 #include "main/apps/app_codex_status/connection_termination_guard.h"
 
 #include <cassert>
@@ -36,6 +37,83 @@ void test_active_voice_link_is_one_coherent_snapshot()
     assert(disconnected.generation != active.generation);
     assert(!disconnected.subscribed);
     assert(!disconnected.authorized);
+}
+
+void test_production_surface_checks_do_not_mutate_voice_subscription()
+{
+    using namespace secure_pairing;
+
+    AgentConnectionRouter router;
+    AgentFingerprint fingerprint = {};
+    fingerprint[0] = 0x51;
+    assert(router.connected(41) == AgentConnectionAdmission::Pending);
+    assert(router.authorize_pending(41, fingerprint));
+    assert(router.promote_pending(41));
+    assert(router.update_mtu(41, 256));
+    assert(router.update_voice_subscription(41, true));
+    assert(router.connected(42) == AgentConnectionAdmission::Pending);
+
+    const AgentVoiceLink before = router.active_voice_link();
+    assert(router.can_access(41, AgentGattSurface::Production));
+    assert(!router.can_access(42, AgentGattSurface::Production));
+    const AgentVoiceLink after = router.active_voice_link();
+    assert(after.handle == before.handle);
+    assert(after.generation == before.generation);
+    assert(after.mtu == before.mtu);
+    assert(after.subscribed == before.subscribed);
+    assert(after.authorized == before.authorized);
+}
+
+void test_pet_subscription_generation_exposes_fast_loss_and_resubscribe()
+{
+    codex_pet::PetSubscriptionTracker tracker;
+    const auto enabled = tracker.update(true);
+    assert(enabled.changed);
+    assert(!enabled.lost);
+    assert(enabled.snapshot.subscribed);
+    assert(enabled.snapshot.generation == 1);
+
+    const auto lost = tracker.update(false);
+    assert(lost.changed);
+    assert(lost.lost);
+    assert(!lost.snapshot.subscribed);
+    assert(lost.snapshot.generation == 2);
+
+    const auto resubscribed = tracker.update(true);
+    assert(resubscribed.changed);
+    assert(!resubscribed.lost);
+    assert(resubscribed.snapshot.subscribed);
+    assert(resubscribed.snapshot.generation == 3);
+    assert(!tracker.accepts(enabled.snapshot.generation));
+    assert(tracker.accepts(resubscribed.snapshot.generation));
+}
+
+void test_pet_subscription_generation_saturation_fails_closed_consistently()
+{
+    constexpr uint64_t kSaturatedGeneration = 0x7fffffffU;
+
+    const auto entered_saturation =
+        codex_pet::PetSubscriptionTracker::advance(
+            {kSaturatedGeneration - 1U, false}, true);
+    assert(entered_saturation.changed);
+    assert(!entered_saturation.lost);
+    assert(!entered_saturation.snapshot.subscribed);
+    assert(
+        entered_saturation.snapshot.generation == kSaturatedGeneration);
+
+    const auto saturated = codex_pet::PetSubscriptionTracker::advance(
+        entered_saturation.snapshot, true);
+    assert(!saturated.changed);
+    assert(!saturated.lost);
+    assert(!saturated.snapshot.subscribed);
+    assert(saturated.snapshot.generation == kSaturatedGeneration);
+
+    const auto lost_at_limit = codex_pet::PetSubscriptionTracker::advance(
+        {kSaturatedGeneration, true}, false);
+    assert(lost_at_limit.changed);
+    assert(lost_at_limit.lost);
+    assert(!lost_at_limit.snapshot.subscribed);
+    assert(lost_at_limit.snapshot.generation == kSaturatedGeneration);
 }
 
 void test_connection_termination_holds_router_guard_through_submission()
@@ -87,6 +165,9 @@ int main()
     using namespace secure_pairing;
 
     test_active_voice_link_is_one_coherent_snapshot();
+    test_production_surface_checks_do_not_mutate_voice_subscription();
+    test_pet_subscription_generation_exposes_fast_loss_and_resubscribe();
+    test_pet_subscription_generation_saturation_fails_closed_consistently();
     test_connection_termination_holds_router_guard_through_submission();
 
     AgentConnectionRouter router;

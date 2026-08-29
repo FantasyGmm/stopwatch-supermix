@@ -1,4 +1,5 @@
 #include "main/apps/app_codex_status/codex_runtime_session.h"
+#include "main/apps/app_codex_status/codex_pet_transfer.h"
 
 #include <cassert>
 #include <vector>
@@ -6,6 +7,7 @@
 namespace {
 
 enum class CleanupEvent {
+    DisconnectPet,
     DisconnectInputActions,
     DisconnectVoice,
     DisconnectVoiceProbe,
@@ -16,6 +18,10 @@ enum class CleanupEvent {
 };
 
 struct RecordingCleanup {
+    void disconnect_pet()
+    {
+        events.push_back(CleanupEvent::DisconnectPet);
+    }
     void disconnect_input_actions()
     {
         events.push_back(CleanupEvent::DisconnectInputActions);
@@ -47,6 +53,46 @@ struct RecordingCleanup {
 
     std::vector<CleanupEvent> events;
 };
+
+void test_app_owned_pet_cleanup_precedes_independent_disconnect_cleanup()
+{
+    CodexRuntimeSessionLifecycle lifecycle;
+    RecordingCleanup cleanup;
+
+    lifecycle.begin();
+    assert(
+        codex_pet::PetCleanupSequence::run(
+            [&]() { cleanup.disconnect_pet(); },
+            [&]() { return lifecycle.disconnect(cleanup); }) ==
+        CodexRuntimeCleanupAction::Disconnect);
+    assert((cleanup.events == std::vector<CleanupEvent>{
+        CleanupEvent::DisconnectPet,
+        CleanupEvent::DisconnectInputActions,
+        CleanupEvent::DisconnectVoice,
+        CleanupEvent::DisconnectVoiceProbe,
+    }));
+}
+
+void test_app_owned_pet_cleanup_precedes_independent_shutdown_cleanup()
+{
+    CodexRuntimeSessionLifecycle lifecycle;
+    RecordingCleanup cleanup;
+
+    lifecycle.begin();
+    assert(
+        codex_pet::PetCleanupSequence::run(
+            [&]() { cleanup.disconnect_pet(); },
+            [&]() { return lifecycle.shutdown(cleanup); }) ==
+        CodexRuntimeCleanupAction::Shutdown);
+    assert((cleanup.events == std::vector<CleanupEvent>{
+        CleanupEvent::DisconnectPet,
+        CleanupEvent::DisconnectInputActions,
+        CleanupEvent::ShutdownVoice,
+        CleanupEvent::ShutdownVoiceProbe,
+        CleanupEvent::StopTransport,
+        CleanupEvent::ReleaseResources,
+    }));
+}
 
 void test_disconnect_and_shutdown_are_idempotent()
 {
@@ -120,6 +166,8 @@ void test_shutdown_covers_an_active_connection()
 
 int main()
 {
+    test_app_owned_pet_cleanup_precedes_independent_disconnect_cleanup();
+    test_app_owned_pet_cleanup_precedes_independent_shutdown_cleanup();
     test_disconnect_and_shutdown_are_idempotent();
     test_new_connection_rearms_disconnect_cleanup();
     test_shutdown_covers_an_active_connection();

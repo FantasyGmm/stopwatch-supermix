@@ -173,17 +173,24 @@ class EdgeControlFirmwareContractTests(unittest.TestCase):
         on_open = codex.index("void AppCodexStatus::onOpen()")
         on_close = codex.index("void AppCodexStatus::onClose()")
         destroy_view = codex.index("void AppCodexStatus::destroy_view()")
-        set_exclusion = codex.index(
-            "setTouchExclusion(kTaskDeckTouchExclusion)", on_open
+        apply_status_exclusion = codex.index(
+            "sync_task_edge_exclusion(CodexTaskFocusMode::Status)", on_open
         )
+        helper = codex.index("void AppCodexStatus::sync_task_edge_exclusion(")
         clear_on_close = codex.index("setTouchExclusion(std::nullopt)", on_close)
         clear_on_destroy = codex.index(
             "setTouchExclusion(std::nullopt)", destroy_view
         )
-        self.assertLess(on_open, set_exclusion)
-        self.assertLess(set_exclusion, on_close)
+        self.assertLess(on_open, apply_status_exclusion)
+        self.assertLess(apply_status_exclusion, on_close)
         self.assertLess(on_close, clear_on_close)
         self.assertLess(destroy_view, clear_on_destroy)
+        self.assertIn(
+            "mode == CodexTaskFocusMode::Status\n"
+            "            ? std::optional<EdgeControlRect>{kTaskDeckTouchExclusion}\n"
+            "            : std::optional<EdgeControlRect>{kTaskModeTouchExclusion}",
+            codex[helper:],
+        )
 
     def test_watch_face_cancels_raw_gesture_when_global_touch_is_owned(self):
         source = (
