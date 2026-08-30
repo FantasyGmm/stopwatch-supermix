@@ -19,7 +19,7 @@ static TraeTask task(
 }
 
 
-static TraeStatusSnapshot snapshot_with_pending_and_running()
+static TraeStatusSnapshot snapshot_with_four_active_tasks()
 {
     TraeStatusSnapshot snapshot;
     snapshot.revision = 1;
@@ -27,7 +27,7 @@ static TraeStatusSnapshot snapshot_with_pending_and_running()
     snapshot.tasks[0] = task("pending-a", "Pending A", TraeTaskState::Pending);
     snapshot.tasks[1] = task("pending-b", "Pending B", TraeTaskState::Pending);
     snapshot.tasks[2] = task("running-a", "Running A", TraeTaskState::Running);
-    snapshot.tasks[3] = task("done-a", "Done", TraeTaskState::Completed);
+    snapshot.tasks[3] = task("running-b", "Running B", TraeTaskState::Running);
     return snapshot;
 }
 
@@ -47,36 +47,37 @@ static TraeStatusSnapshot snapshot_with_same_ids_reordered()
 int main()
 {
     TraeTaskCarousel deck;
-    assert(deck.apply(snapshot_with_pending_and_running(), 0));
-    assert(deck.task_count() == 3);
+    assert(deck.apply(snapshot_with_four_active_tasks(), 0));
+    assert(deck.task_count() == 4);
     assert(std::string(deck.current()->id.data()) == "pending-a");
-    assert(deck.next() != nullptr);
     assert(std::string(deck.next()->id.data()) == "pending-b");
-    assert(deck.update(3000));
+
+    // The list stays put until the user scrolls it.
+    assert(!deck.update(3000));
+    assert(std::string(deck.current()->id.data()) == "pending-a");
+
+    // Each upward swipe advances the two-row window by one task.
+    assert(deck.scroll_forward());
     assert(std::string(deck.current()->id.data()) == "pending-b");
     assert(std::string(deck.next()->id.data()) == "running-a");
-    assert(deck.manual_next(3200));
-    assert(deck.manual_mode());
+    assert(deck.scroll_forward());
     assert(std::string(deck.current()->id.data()) == "running-a");
-    assert(std::string(deck.next()->id.data()) == "pending-a");
-    assert(!deck.update(7000));
-    assert(deck.update(8200));
-    assert(!deck.manual_mode());
+    assert(std::string(deck.next()->id.data()) == "running-b");
+
+    // The window clamps at both ends instead of wrapping.
+    assert(!deck.scroll_forward());
+    assert(std::string(deck.current()->id.data()) == "running-a");
+    assert(deck.scroll_backward());
+    assert(std::string(deck.current()->id.data()) == "pending-b");
+    assert(deck.scroll_backward());
     assert(std::string(deck.current()->id.data()) == "pending-a");
+    assert(!deck.scroll_backward());
 
     TraeStatusSnapshot reordered = snapshot_with_same_ids_reordered();
     reordered.revision = 2;
     assert(deck.apply(reordered, 8300));
-    assert(std::string(deck.current()->id.data()) == "pending-a");
-
-    TraeTaskCarousel retained_priority_card;
-    assert(retained_priority_card.apply(snapshot_with_pending_and_running(), 0));
-    assert(retained_priority_card.manual_next(10));
-    assert(retained_priority_card.update(5010));
-    assert(std::string(retained_priority_card.current()->id.data()) == "pending-a");
-    assert(retained_priority_card.apply(reordered, 5100));
-    assert(retained_priority_card.update(8100));
-    assert(std::string(retained_priority_card.current()->id.data()) == "pending-b");
+    assert(std::string(deck.current()->id.data()) == "pending-b");
+    assert(std::string(deck.next()->id.data()) == "pending-a");
 
     TraeTaskCarousel newly_pending_deck;
     TraeStatusSnapshot running_only;
@@ -91,9 +92,9 @@ int main()
     pending_added.tasks[0] = task("pending-a", "Pending A", TraeTaskState::Pending);
     pending_added.tasks[1] = task("running-a", "Running A", TraeTaskState::Running);
     assert(newly_pending_deck.apply(pending_added, 100));
-    assert(std::string(newly_pending_deck.current()->id.data()) == "running-a");
-    assert(newly_pending_deck.update(3100));
     assert(std::string(newly_pending_deck.current()->id.data()) == "pending-a");
+    assert(std::string(newly_pending_deck.next()->id.data()) == "running-a");
+    assert(!newly_pending_deck.update(3100));
 
     TraeStatusSnapshot terminal_only;
     terminal_only.revision = 3;
@@ -104,7 +105,8 @@ int main()
     assert(deck.next() == nullptr);
     assert(deck.task_count() == 0);
     assert(!deck.update(12000));
-    assert(!deck.manual_next(12000));
+    assert(!deck.scroll_forward());
+    assert(!deck.scroll_backward());
 
     TraeStatusSnapshot one_running;
     one_running.revision = 4;
@@ -112,14 +114,8 @@ int main()
     one_running.tasks[0] = task("running-only", "Running", TraeTaskState::Running);
     assert(deck.apply(one_running, 13000));
     assert(!deck.update(16000));
-    assert(!deck.manual_next(16000));
+    assert(!deck.scroll_forward());
+    assert(!deck.scroll_backward());
     assert(std::string(deck.current()->id.data()) == "running-only");
     assert(deck.next() == nullptr);
-
-    TraeTaskCarousel constrained_manual_deck;
-    assert(constrained_manual_deck.apply(snapshot_with_pending_and_running(), 0));
-    assert(constrained_manual_deck.manual_next(10));
-    one_running.revision = 2;
-    assert(constrained_manual_deck.apply(one_running, 20));
-    assert(!constrained_manual_deck.manual_mode());
 }

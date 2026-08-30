@@ -26,15 +26,23 @@ _TERMINAL_METADATA_STATES = {"completed", "cancelled", "failed"}
 _SESSION_MODEL_MAP_KEY = "lukeren_ai-chat:sessionRelation:modelMap"
 _GLOBAL_MODEL_MAP_KEY = "lukeren_ai-chat:sessionRelation:globalModelMap"
 _MODEL_LIST_MAP_KEY = "lukeren_AI.agent.model.model_list_map"
+_SESSION_MODEL_MAP_SUFFIX = "ai-chat:sessionRelation:modelMap"
+_GLOBAL_MODEL_MAP_SUFFIX = "ai-chat:sessionRelation:globalModelMap"
+_MODEL_LIST_MAP_SUFFIX = "AI.agent.model.model_list_map"
 _SESSION_STORAGE_KEY = "memento/icube-ai-agent-storage"
-_TITLE_MARKER = b"generate_session_title_and_icon_cloud:"
+_TITLE_MARKER = b"generate_session_title"
 _TRAE_PROCESS_LOCK = (
     pathlib.Path.home() / "Library" / "Application Support" / "Trae CN" / "code.lock"
 )
-_TITLE_RE = re.compile(
+_LEGACY_TITLE_RE = re.compile(
     r'generate_session_title_and_icon_cloud:\s*session_id:\s*"(?P<session>[^"]+)"'
     r',\s*title:\s*"(?P<title>(?:\\.|[^"\\])*)"'
 )
+_GENERATED_TITLE_RE = re.compile(
+    r'generate_session_title:.*?session_id:\s*"(?P<session>[^"]+)"'
+    r'.*?generated_title:\s*"(?P<title>(?:\\.|[^"\\])*)"'
+)
+_TITLE_RES = (_LEGACY_TITLE_RE, _GENERATED_TITLE_RE)
 _MODEL_PREFIX_RE = re.compile(r"^\d+_-_")
 
 
@@ -147,6 +155,37 @@ class TraeStateCollector:
 
         now = self._now()
         snapshot = self._tracker.refresh(self._log_paths(), now)
+        model_catalog = self._model_catalog()
+        catalog_tasks = tuple(
+            dataclasses.replace(
+                task,
+                model=model_catalog.get(task.model, (task.model, ""))[0],
+                effort=(
+                    task.effort
+                    or model_catalog.get(task.model, (task.model, ""))[1]
+                ),
+            )
+            for task in snapshot.tasks
+        )
+        snapshot_model, catalog_effort = model_catalog.get(
+            snapshot.model,
+            (snapshot.model, ""),
+        )
+        if not snapshot_model:
+            latest_task_with_model = max(
+                (task for task in catalog_tasks if task.model),
+                default=None,
+                key=lambda task: task.updated_at,
+            )
+            if latest_task_with_model is not None:
+                snapshot_model = latest_task_with_model.model
+                catalog_effort = latest_task_with_model.effort
+        snapshot = dataclasses.replace(
+            snapshot,
+            tasks=catalog_tasks,
+            model=snapshot_model,
+            effort=snapshot.effort or catalog_effort or None,
+        )
         metadata_observations = (
             self._current_agent_metadata()
             + self._real_session_metadata(snapshot.tasks, now)
@@ -289,17 +328,30 @@ class TraeStateCollector:
         return TraeStateCollector._read_json_row(path, _CURRENT_AGENT_KEY)
 
     @staticmethod
-    def _read_json_row(path: pathlib.Path, key: str) -> object:
+    def _read_json_row(
+        path: pathlib.Path,
+        key: str,
+        suffix: Optional[str] = None,
+    ) -> object:
         connection = None
         try:
             uri = "file:{}?mode=ro".format(
                 urllib.parse.quote(str(path), safe="/:")
             )
             connection = sqlite3.connect(uri, uri=True)
-            row = connection.execute(
-                "SELECT value FROM ItemTable WHERE key = ? LIMIT 1",
-                (key,),
-            ).fetchone()
+            if suffix is None:
+                row = connection.execute(
+                    "SELECT value FROM ItemTable WHERE key = ? LIMIT 1",
+                    (key,),
+                ).fetchone()
+            else:
+                row = connection.execute(
+                    "SELECT value FROM ItemTable "
+                    "WHERE key = ? OR substr(key, -length(?)) = ? "
+                    "ORDER BY CASE WHEN key = ? THEN 0 ELSE 1 END, key "
+                    "LIMIT 1",
+                    (key, suffix, suffix, key),
+                ).fetchone()
             if row is None:
                 return None
             raw = row[0]
@@ -336,7 +388,11 @@ class TraeStateCollector:
             return ()
 
         for state_path in state_paths:
-            model_map = self._read_json_row(state_path, _SESSION_MODEL_MAP_KEY)
+            model_map = self._read_json_row(
+                state_path,
+                _SESSION_MODEL_MAP_KEY,
+                _SESSION_MODEL_MAP_SUFFIX,
+            )
             if not isinstance(model_map, Mapping):
                 model_map = {}
             session_storage = self._read_json_row(
@@ -353,7 +409,9 @@ class TraeStateCollector:
                         and isinstance(item.get("sessionId"), str)
                     )
             global_model = self._read_json_row(
-                state_path, _GLOBAL_MODEL_MAP_KEY
+                state_path,
+                _GLOBAL_MODEL_MAP_KEY,
+                _GLOBAL_MODEL_MAP_SUFFIX,
             )
             workspace_path = state_path.with_name("workspace.json")
             project_path = ""
@@ -421,7 +479,11 @@ class TraeStateCollector:
             / "globalStorage"
             / "state.vscdb"
         )
-        value = self._read_json_row(path, _MODEL_LIST_MAP_KEY)
+        value = self._read_json_row(
+            path,
+            _MODEL_LIST_MAP_KEY,
+            _MODEL_LIST_MAP_SUFFIX,
+        )
         if not isinstance(value, Mapping):
             return {}
         catalog = {}
@@ -490,7 +552,11 @@ class TraeStateCollector:
                             line = data[line_start:line_end].decode(
                                 "utf-8", errors="replace"
                             )
-                            match = _TITLE_RE.search(line)
+                            match = None
+                            for pattern in _TITLE_RES:
+                                match = pattern.search(line)
+                                if match is not None:
+                                    break
                             if match is None or match.group("session") not in pending:
                                 continue
                             try:

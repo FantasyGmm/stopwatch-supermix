@@ -19,7 +19,12 @@ constexpr int kViewportHeight = 466;
 }  // namespace
 
 
-void StatusPageSwipeLogic::press(int x, int y, uint32_t now_ms)
+void StatusPageSwipeLogic::press(
+    int x,
+    int y,
+    uint32_t now_ms,
+    bool trae_task_candidate
+)
 {
     _active = true;
     _axis = Axis::Undecided;
@@ -28,6 +33,7 @@ void StatusPageSwipeLogic::press(int x, int y, uint32_t now_ms)
     _last_x = x;
     _last_y = y;
     _start_ms = now_ms;
+    _trae_task_candidate = trae_task_candidate;
 }
 
 
@@ -80,12 +86,21 @@ StatusPageSwipeResult StatusPageSwipeLogic::release(uint32_t now_ms, int current
     const int dx = _last_x - _start_x;
     const int dy = _last_y - _start_y;
     const int abs_x = std::abs(dx);
+    const int abs_y = std::abs(dy);
     const uint32_t elapsed_ms = now_ms - _start_ms;
     const bool fast_swipe =
         abs_x >= kFastSwipeMinDistance && elapsed_ms <= kFastSwipeMaxMs;
     const bool long_drag = abs_x >= kDragSwipeMinDistance;
 
     if (_axis == Axis::Vertical) {
+        const bool fast_vertical =
+            abs_y >= kFastSwipeMinDistance && elapsed_ms <= kFastSwipeMaxMs;
+        const bool long_vertical = abs_y >= kDragSwipeMinDistance;
+        if (current_page == 2 && _trae_task_candidate &&
+            (fast_vertical || long_vertical)) {
+            return dy < 0 ? StatusPageSwipeResult::TraeTasksForward
+                          : StatusPageSwipeResult::TraeTasksBackward;
+        }
         const int upward_distance = -dy;
         const bool in_deck_zone =
             _start_x >= kDeckMinX && _start_x <= kDeckMaxX &&
@@ -122,4 +137,5 @@ void StatusPageSwipeLogic::cancel()
 {
     _active = false;
     _axis = Axis::Undecided;
+    _trae_task_candidate = false;
 }

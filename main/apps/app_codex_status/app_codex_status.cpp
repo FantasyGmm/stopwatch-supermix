@@ -991,10 +991,12 @@ void AppCodexStatus::onRunning()
         update_battery();
     }
 
+    bool voice_status_changed = false;
     {
         std::lock_guard<std::mutex> controller_lock(_task_controller_mutex);
-        _voice_status.store(
-            _voice_input ? _voice_input->ui_state() : VoiceInputUiState::Off);
+        const VoiceInputUiState voice_status =
+            _voice_input ? _voice_input->ui_state() : VoiceInputUiState::Off;
+        voice_status_changed = _voice_status.exchange(voice_status) != voice_status;
         if (_voice_input) {
             _pinned_microphone_controller.sync(
                 _production_voice_link_usable &&
@@ -1018,6 +1020,10 @@ void AppCodexStatus::onRunning()
     sync_task_voice_readiness();
     if (!_screen_off) {
         render_status();
+        if (voice_status_changed) {
+            LvglLockGuard lock;
+            render_trae_status();
+        }
     }
 }
 
@@ -1914,6 +1920,8 @@ void AppCodexStatus::set_status(const char* status, uint32_t color)
     }
     if (!_screen_off) {
         render_status();
+        LvglLockGuard lock;
+        render_trae_status();
     }
 }
 
@@ -2197,12 +2205,57 @@ void AppCodexStatus::render_trae_status()
     if (_trae_status_page == nullptr) {
         return;
     }
+    std::string base_status;
+    bool base_is_error = false;
+    {
+        std::lock_guard<std::mutex> lock(_status_mutex);
+        base_status = _base_status;
+        base_is_error = _base_status_is_error;
+    }
+    const VoiceInputUiState voice_state = _voice_status.load();
+    const CodexStatusChannels channels = resolve_codex_status_channels(
+        base_status.c_str(),
+        base_is_error,
+        voice_state == VoiceInputUiState::Ready,
+        voice_state == VoiceInputUiState::Starting,
+        voice_state == VoiceInputUiState::Active,
+        voice_state == VoiceInputUiState::Error,
+        CodexStatusPalette{
+            kQuotaMint,
+            kRunningCyan,
+            kBeaconViolet,
+            kCodexRed,
+            kTextDim,
+            kSignalWhite,
+        });
+    const char* agent_text = channels.connection.text;
+    if (std::strcmp(channels.connection.text, "CONNECTED") == 0 &&
+        _ble_transport != nullptr) {
+        const secure_pairing::AgentRecord* active_agent =
+            _agent_registry.find(_ble_transport->active_fingerprint());
+        if (active_agent != nullptr && active_agent->display_name[0] != '\0') {
+            agent_text = active_agent->display_name.data();
+        }
+    }
+    const TraeChannelPresentation presentation = {
+        {
+            agent_text,
+            channels.connection.dot_color,
+            channels.connection.text_color,
+        },
+        {
+            channels.voice.text,
+            channels.voice.dot_color,
+            channels.voice.text_color,
+        },
+    };
     const bool bluetooth_connected =
         _ble_transport && _ble_transport->connected();
     _trae_status_page->render(
         _trae_snapshot,
         _trae_carousel.current(),
         _trae_carousel.next(),
+        presentation,
         _trae_stale,
         bluetooth_connected
     );
@@ -4797,11 +4850,16 @@ void AppCodexStatus::update_page_swipe(uint32_t now_ms)
     }
     if (state == LV_INDEV_STATE_PR) {
         if (_last_page_touch_state == LV_INDEV_STATE_REL) {
-            _page_swipe.press(point.x, point.y, now_ms);
             const bool task_candidate =
                 _current_page == 2 &&
                 _trae_status_page != nullptr &&
                 _trae_status_page->contains_task_point(point.x, point.y);
+            _page_swipe.press(
+                point.x,
+                point.y,
+                now_ms,
+                task_candidate
+            );
             _trae_card_tap.press(
                 point.x,
                 point.y,
@@ -4837,6 +4895,7 @@ void AppCodexStatus::update_page_swipe(uint32_t now_ms)
     } else if (_last_page_touch_state == LV_INDEV_STATE_PR) {
         const StatusPageSwipeResult result =
             _page_swipe.release(now_ms, _current_page);
+        const bool trae_card_tapped = _trae_card_tap.release(now_ms);
         if (result == StatusPageSwipeResult::Codex) {
             set_page(1, true);
         } else if (result == StatusPageSwipeResult::PinnedMicrophone) {
@@ -4846,11 +4905,19 @@ void AppCodexStatus::update_page_swipe(uint32_t now_ms)
         } else if (result == StatusPageSwipeResult::OpenTaskDeck) {
             open_task_deck();
             settle_task_deck_entry(true, true);
+        } else if (result == StatusPageSwipeResult::TraeTasksForward) {
+            if (_trae_carousel.scroll_forward()) {
+                render_trae_status();
+            }
+        } else if (result == StatusPageSwipeResult::TraeTasksBackward) {
+            if (_trae_carousel.scroll_backward()) {
+                render_trae_status();
+            }
         } else if (_task_deck_drag_active) {
             settle_task_deck_entry(false, true);
-        } else if (_trae_card_tap.release(now_ms) &&
-                   _trae_carousel.manual_next(now_ms)) {
-            render_trae_status();
+        } else if (trae_card_tapped) {
+            // Taps keep the current task window stable. TRAE task navigation
+            // is owned exclusively by vertical swipes.
         }
     }
     _last_page_touch_state = state;

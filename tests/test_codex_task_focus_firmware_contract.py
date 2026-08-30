@@ -38,7 +38,7 @@ class CodexTaskFocusFirmwareContractTests(unittest.TestCase):
 
     def test_detail_is_a_separate_authenticated_transaction(self):
         detail = self.source.split("if (kind == CodexMessageKind::TaskDetail)", 1)[1]
-        detail = detail.split("char model[18]", 1)[0]
+        detail = detail.split("bool task_list_changed", 1)[0]
         self.assertIn("decrypt_codex_task_detail", detail)
         self.assertIn("_task_detail_store.accept", detail)
         self.assertIn("render_task_focus_detail", detail)
@@ -78,9 +78,9 @@ class CodexTaskFocusFirmwareContractTests(unittest.TestCase):
         selection = self.source.split("_task_focus_deck.select_focused()", 1)[1]
         self.assertLess(selection.index("sync_task_voice_route"),
                         selection.index("render_task_focus_detail"))
-        running = self.source.split("update_agent_panel_touch(now);", 1)[1]
+        running = self.source.split("update_agent_panel_touch(touch_now);", 1)[1]
         self.assertLess(running.index("_agent_panel_model.owns_touch()"),
-                        running.index("update_task_focus_touch(now)"))
+                        running.index("update_task_focus_touch(touch_now)"))
         self.assertIn("task_mode == CodexTaskFocusMode::Status",
                       running)
 
@@ -100,7 +100,7 @@ class CodexTaskFocusFirmwareContractTests(unittest.TestCase):
             "if (agent_panel_available && !consume_auto_dismiss_touch)",
             running,
         )
-        self.assertIn("update_agent_panel_touch(now)", running)
+        self.assertIn("update_agent_panel_touch(touch_now)", running)
 
     def test_voice_is_available_across_codex_pages_and_lifecycle_fails_closed(self):
         self.assertIn("task_focus_voice_sink()", self.source)

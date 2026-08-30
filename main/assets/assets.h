@@ -7,8 +7,25 @@
 #include <lvgl.h>
 
 LV_FONT_DECLARE(MontserratSemiBold26);
+LV_FONT_DECLARE(MontserratBold12Trae);
+LV_FONT_DECLARE(MontserratBold13Trae);
+LV_FONT_DECLARE(MontserratBold14Trae);
+LV_FONT_DECLARE(MontserratBold15Trae);
 LV_FONT_DECLARE(MontserratBold16);
+LV_FONT_DECLARE(MontserratBold16Trae);
+LV_FONT_DECLARE(MontserratBold17Trae);
+LV_FONT_DECLARE(MontserratBold18Trae);
+LV_FONT_DECLARE(MontserratBold19Trae);
 LV_FONT_DECLARE(MontserratBold22);
+LV_FONT_DECLARE(MontserratBold24Digits);
+LV_FONT_DECLARE(MontserratBold24Trae);
+LV_FONT_DECLARE(MontserratBold25Digits);
+LV_FONT_DECLARE(MontserratBold26Digits);
+LV_FONT_DECLARE(MontserratBold28Trae);
+LV_FONT_DECLARE(MontserratBold29Trae);
+LV_FONT_DECLARE(MontserratMedium13Trae);
+LV_FONT_DECLARE(MontserratMedium14Trae);
+LV_FONT_DECLARE(MontserratMedium15Trae);
 LV_FONT_DECLARE(CommissionerMedium64);
 LV_FONT_DECLARE(CommissionerMedium108);
 LV_FONT_DECLARE(lv_font_maple_mono_medium_24);

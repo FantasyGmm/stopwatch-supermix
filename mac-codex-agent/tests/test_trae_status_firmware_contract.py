@@ -65,13 +65,17 @@ class TraeStatusFirmwareContractTests(unittest.TestCase):
 
         for token in (
             "TraeCardTapLogic _trae_card_tap",
-            "_trae_carousel.manual_next(now_ms)",
             "_trae_status_page->contains_task_point",
             "_trae_carousel.next()",
+            "StatusPageSwipeResult::TraeTasksForward",
+            "StatusPageSwipeResult::TraeTasksBackward",
+            "_trae_carousel.scroll_forward()",
+            "_trae_carousel.scroll_backward()",
             "_trae_status_page->set_active(_current_page == 2 && !_screen_off)",
             "_ble_transport && _ble_transport->connected()",
         ):
             self.assertIn(token, header + source)
+        self.assertNotIn("_trae_carousel.manual_next", source)
 
     def test_trae_page_keeps_model_and_effort_without_quota_widgets(self):
         header = (self.app_root / "trae_status_page.h").read_text(encoding="utf-8")
@@ -91,12 +95,10 @@ class TraeStatusFirmwareContractTests(unittest.TestCase):
             "bool contains_task_point(int x, int y) const",
             "void shutdown()",
             '"TRAE"',
-            '"MODEL"',
-            '"EFFORT"',
-            '"BT LIVE"',
-            '"TRAE LIVE"',
-            '"待确认"',
-            '"运行中"',
+            '"AGENT"',
+            '"VOICE"',
+            "row.model",
+            "row.effort_badge",
             "lv_obj_set_style_border_width",
             "LV_LABEL_LONG_MODE_DOTS",
         ):
@@ -130,13 +132,14 @@ class TraeStatusFirmwareContractTests(unittest.TestCase):
 
         for token in (
             "kBrandIconX",
-            "kHealthX",
-            "kRobotX",
-            "kSummaryLabelY",
-            "kSummaryCountY",
-            "kCurrentProjectY",
-            "kCurrentTaskY",
-            "kNextTaskY",
+            "kAgentX",
+            "kVoiceX",
+            "kSpineX",
+            "kPendingCountY",
+            "kRunningCountY",
+            "kTaskTitleX",
+            "kMultiTaskRows",
+            "kSingleTaskRow",
         ):
             self.assertIn(token, layout)
 
@@ -151,17 +154,21 @@ class TraeStatusFirmwareContractTests(unittest.TestCase):
         page_contract = header + source + layout
 
         for token in (
-            "lv_font_montserrat_10",
             "NotoSansSCBold16Trae",
-            "kBluetoothDotX",
-            "kProcessDotX",
-            "kPendingAnchorX",
-            "kRunningAnchorX",
-            "kCurrentProjectX",
-            "kCurrentTaskX",
-            "kNextTaskX",
-            '"下一任务"',
-            "_next_task",
+            "MontserratBold24Trae",
+            "MontserratBold28Trae",
+            "kAgentX",
+            "kVoiceX",
+            "kPendingCountX",
+            "kRunningCountX",
+            "kTaskProjectX",
+            "kTaskTitleX",
+            "kMultiTaskTitleMinFontPx",
+            "kMultiTaskTitleMaxFontPx",
+            "kSingleTaskTitleMinFontPx",
+            "kSingleTaskTitleMaxFontPx",
+            "title_font_scale",
+            "std::array<TaskRow, 2> _task_rows",
         ):
             self.assertIn(token, page_contract)
 
@@ -169,10 +176,11 @@ class TraeStatusFirmwareContractTests(unittest.TestCase):
             "make_card(",
             "_cards",
             "text_outline_stroke",
-            '"PENDING"',
-            '"RUNNING"',
             "kCardRadius",
             "kDeckHintY",
+            "kRobotX",
+            "trae_robot_frames",
+            "manual_next",
         ):
             self.assertNotIn(forbidden, page_contract)
 

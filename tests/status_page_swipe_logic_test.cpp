@@ -57,6 +57,40 @@ static bool vertical_drag_does_not_move_page()
 }
 
 
+static void assert_trae_task_vertical_swipes_scroll_one_row()
+{
+    StatusPageSwipeLogic upward;
+    upward.press(220, 260, 1000, true);
+    upward.move(222, 220);
+    assert(
+        upward.release(1200, 2) ==
+        StatusPageSwipeResult::TraeTasksForward
+    );
+
+    StatusPageSwipeLogic downward;
+    downward.press(220, 220, 1000, true);
+    downward.move(218, 260);
+    assert(
+        downward.release(1200, 2) ==
+        StatusPageSwipeResult::TraeTasksBackward
+    );
+}
+
+
+static void assert_trae_vertical_swipe_requires_task_region_ownership()
+{
+    StatusPageSwipeLogic outside;
+    outside.press(80, 260, 1000, false);
+    outside.move(82, 220);
+    assert(outside.release(1200, 2) == StatusPageSwipeResult::Stay);
+
+    StatusPageSwipeLogic short_drag;
+    short_drag.press(220, 260, 1000, true);
+    short_drag.move(220, 230);
+    assert(short_drag.release(1400, 2) == StatusPageSwipeResult::Stay);
+}
+
+
 static bool short_slow_drag_snaps_back()
 {
     StatusPageSwipeLogic swipe;
@@ -212,6 +246,8 @@ int main()
     assert(left_to_right_fast_swipe_moves_codex_to_pinned_microphone());
     assert(long_horizontal_drag_moves_page());
     assert(vertical_drag_does_not_move_page());
+    assert_trae_task_vertical_swipes_scroll_one_row();
+    assert_trae_vertical_swipe_requires_task_region_ownership();
     assert(short_slow_drag_snaps_back());
     assert_pinned_page_does_not_wrap_right();
     assert_trae_page_does_not_wrap_left();

@@ -9,12 +9,19 @@ enum class StatusPageSwipeResult {
     PinnedMicrophone,
     Trae,
     OpenTaskDeck,
+    TraeTasksForward,
+    TraeTasksBackward,
 };
 
 
 class StatusPageSwipeLogic {
 public:
-    void press(int x, int y, uint32_t now_ms);
+    void press(
+        int x,
+        int y,
+        uint32_t now_ms,
+        bool trae_task_candidate = false
+    );
     void move(int x, int y);
     bool task_deck_drag_active(int current_page) const;
     int task_deck_drag_offset(int current_page) const;
@@ -35,4 +42,5 @@ private:
     int _last_x = 0;
     int _last_y = 0;
     uint32_t _start_ms = 0;
+    bool _trae_task_candidate = false;
 };

@@ -2,6 +2,7 @@
 
 #include "trae_status_model.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -37,55 +38,157 @@ constexpr int kBrandTextVisibleCenterY = 45;
 constexpr int kHealthX = 118;
 constexpr int kHealthY = 67;
 constexpr int kHealthWidth = 230;
-constexpr int kHealthLabelY = 68;
-constexpr int kHealthDotY = 72;
+constexpr int kConsoleX = 161;
+constexpr int kConsoleY = 78;
+constexpr int kConsoleWidth = 247;
+constexpr int kHealthCaptionY = 78;
+constexpr int kHealthValueY = 95;
 constexpr int kHealthDotSize = 6;
-constexpr int kBluetoothDotX = 156;
-constexpr int kBluetoothTextX = 167;
-constexpr int kBluetoothWidth = 60;
-constexpr int kProcessDotX = 234;
-constexpr int kProcessTextX = 245;
-constexpr int kProcessWidth = 82;
+constexpr int kAgentX = 161;
+constexpr int kAgentWidth = 118;
+constexpr int kVoiceX = 291;
+constexpr int kVoiceWidth = 118;
+constexpr int kStatusDotY = 99;
+constexpr int kStatusTextInset = 11;
 
-constexpr int kRobotX = 96;
-constexpr int kRobotY = 105;
-constexpr int kRobotWidth = 77;
-constexpr int kRobotHeight = 86;
-constexpr int kRobotScale = 183;
-constexpr int kTelemetryX = 214;
-constexpr int kTelemetryWidth = 200;
-constexpr int kModelCaptionY = 98;
-constexpr int kModelValueY = 120;
-constexpr int kEffortCaptionY = 154;
-constexpr int kEffortValueY = 176;
+constexpr int kSpineX = 129;
+constexpr int kSpineY = 116;
+constexpr int kSpineWidth = 2;
+constexpr int kSpineHeight = 246;
+constexpr int kPendingCountX = 45;
+constexpr int kPendingCountY = 274;
+constexpr int kRunningCountX = 45;
+constexpr int kRunningCountY = 322;
+constexpr int kRailCountWidth = 69;
+constexpr int kRailLabelOffsetY = 22;
 
-constexpr int kDividerX = 82;
-constexpr int kDividerY = 223;
-constexpr int kDividerWidth = 302;
+constexpr int kTaskLabelX = 161;
+constexpr int kTaskLabelY = 131;
+constexpr int kTaskLabelWidth = 247;
+constexpr int kTaskRowWidth = 247;
+constexpr int kTaskProjectX = 161;
+constexpr int kTaskTitleX = 161;
+constexpr int kTaskMetaX = 161;
+constexpr int kTaskModelMaxWidth = 164;
+constexpr int kTaskMetaGap = 7;
+constexpr int kMicroFontPx = 13;
+constexpr int kChannelValueFontPx = 15;
+constexpr int kTaskGroupFontPx = 14;
+constexpr int kRailLabelFontPx = 14;
+constexpr int kMultiProjectFontPx = 13;
+constexpr int kProjectFontPx = 17;
+constexpr int kMultiTaskTitleMinFontPx = 20;
+constexpr int kMultiTaskTitleMaxFontPx = 24;
+constexpr int kSingleTaskTitleMinFontPx = 20;
+constexpr int kSingleTaskTitleMaxFontPx = 28;
+constexpr int kCountFontPx = 26;
+constexpr int kBrandFontPx = 29;
+constexpr int kScale14To15 = 274;
+constexpr int kScale14To17 = 311;
+constexpr int kEffortBadgeHeight = 20;
+constexpr int kEffortBadgePadX = 7;
+constexpr int kSingleTitleMaxHeight = 62;
+constexpr int kSingleMetaGap = 15;
+constexpr int kTransformScaleNone = 256;
 
-constexpr int kSummaryLabelY = 249;
-constexpr int kSummaryCountY = 266;
-constexpr int kPendingAnchorX = 110;
-constexpr int kRunningAnchorX = 284;
-constexpr int kSummaryAnchorWidth = 72;
+constexpr int font_scale_for_pixels(int base_font_px, int visual_font_px)
+{
+    return base_font_px <= 0
+               ? kTransformScaleNone
+               : (visual_font_px * kTransformScaleNone + base_font_px / 2) /
+                     base_font_px;
+}
 
-constexpr int kCurrentProjectX = 112;
-constexpr int kCurrentProjectY = 299;
-constexpr int kCurrentTaskX = 112;
-constexpr int kCurrentTaskY = 329;
-constexpr int kCurrentTextWidth = 242;
-constexpr int kNextCaptionX = 109;
-constexpr int kNextTaskX = 165;
-constexpr int kNextTaskY = 365;
-constexpr int kNextCaptionWidth = 56;
-constexpr int kNextTaskWidth = 192;
-constexpr int kTaskFocusX = 82;
-constexpr int kTaskFocusY = 241;
-constexpr int kTaskFocusWidth = 302;
-constexpr int kTaskFocusHeight = 165;
+constexpr int title_font_scale(
+    int raw_text_width,
+    int visual_width,
+    int base_font_px,
+    int min_font_px,
+    int max_font_px
+)
+{
+    const int min_scale = font_scale_for_pixels(base_font_px, min_font_px);
+    const int max_scale = font_scale_for_pixels(base_font_px, max_font_px);
+    if (raw_text_width <= 0 || visual_width <= 0) {
+        return max_scale;
+    }
+    const int fit_scale =
+        visual_width * kTransformScaleNone / raw_text_width;
+    return fit_scale < min_scale
+               ? min_scale
+               : (fit_scale > max_scale ? max_scale : fit_scale);
+}
 
-constexpr uint32_t kRobotIdleDurationMs = 1300;
-constexpr uint32_t kRobotActionDurationMs = 320;
+constexpr bool title_overflows(
+    int raw_text_width,
+    int scale,
+    int visual_width
+)
+{
+    return raw_text_width > 0 &&
+           raw_text_width * scale > visual_width * kTransformScaleNone;
+}
+
+constexpr int scaled_visual_height(int raw_height, int scale)
+{
+    const int scaled = raw_height * scale / kTransformScaleNone;
+    return scaled < 1 ? 1 : scaled;
+}
+
+struct TaskRowGeometry {
+    int top;
+    int project_y;
+    int title_y;
+    int meta_y;
+};
+
+constexpr std::array<TaskRowGeometry, 2> kMultiTaskRows{{
+    {138, 148, 164, 191},
+    {213, 223, 239, 266},
+}};
+constexpr TaskRowGeometry kSingleTaskRow{145, 173, 201, 0};
+constexpr int kTaskDividerY = 216;
+constexpr int kRunningSummaryY = 295;
+constexpr int kEmptyStateY = 205;
+
+constexpr int kTaskFocusX = 161;
+constexpr int kTaskFocusY = 127;
+constexpr int kTaskFocusWidth = 247;
+constexpr int kTaskFocusHeight = 236;
+
+constexpr int single_task_meta_y(int title_visual_height)
+{
+    const int bounded_height = title_visual_height < 1
+                                   ? 1
+                                   : (title_visual_height > kSingleTitleMaxHeight
+                                          ? kSingleTitleMaxHeight
+                                          : title_visual_height);
+    return kSingleTaskRow.title_y + bounded_height + kSingleMetaGap;
+}
+
+enum class TaskLayout {
+    Empty,
+    Single,
+    Multiple,
+};
+
+constexpr TaskLayout resolve_task_layout(size_t active_task_count)
+{
+    return active_task_count == 0
+               ? TaskLayout::Empty
+               : (active_task_count == 1 ? TaskLayout::Single
+                                         : TaskLayout::Multiple);
+}
+
+constexpr const char* task_group_label(TraeTaskState state)
+{
+    return state == TraeTaskState::Pending ? "PENDING TASKS" : "RUNNING TASKS";
+}
+
+constexpr uint32_t task_group_color(TraeTaskState state)
+{
+    return state == TraeTaskState::Pending ? kPending : kRunning;
+}
 
 
 enum class ProcessHealth {
@@ -107,19 +210,6 @@ enum class EmptyState {
     StatusUnavailable,
     ProcessOff,
     NoActiveTasks,
-};
-
-
-struct RobotActivation {
-    bool paused;
-    bool action;
-    uint32_t period_ms;
-};
-
-
-struct RobotTimerStep {
-    bool action;
-    uint32_t period_ms;
 };
 
 
@@ -208,31 +298,6 @@ constexpr const char* empty_state_text(EmptyState state)
             return nullptr;
     }
     return nullptr;
-}
-
-
-constexpr RobotActivation resolve_robot_activation(bool active)
-{
-    return {!active, false, kRobotIdleDurationMs};
-}
-
-
-constexpr RobotTimerStep resolve_robot_timer_step(bool current_action)
-{
-    return current_action
-               ? RobotTimerStep{false, kRobotIdleDurationMs}
-               : RobotTimerStep{true, kRobotActionDurationMs};
-}
-
-
-inline bool should_trigger_task_action(
-    bool active,
-    const char* previous_id,
-    const char* current_id
-)
-{
-    return active && current_id != nullptr && current_id[0] != '\0' &&
-           (previous_id == nullptr || std::strcmp(previous_id, current_id) != 0);
 }
 
 

@@ -25,6 +25,11 @@ _MODEL_RE = re.compile(
     r'(?:(?:Some\("(?P<effort>[^"\r\n]{1,32})"\))|None)'
     r"[^}\r\n]{0,512}?\}"
 )
+_TIMING_MODEL_RE = re.compile(
+    r'TimingCostOriginEvent[^\r\n]{0,4096}?'
+    r'\\"provider_model_name\\":\\"'
+    r'(?P<model>[^"\\\r\n]{1,64})\\"'
+)
 _TASK_STATUS_RE = re.compile(
     r"ai_agent::domain::task::cloud_service:\s+TASK:\s+"
     r"[^\r\n]{0,1024}?\bstatus=(?P<status>Created|Completed)\b",
@@ -90,6 +95,24 @@ def parse_trae_log_event(line: str) -> Optional[TraeLogEvent]:
         except (OverflowError, ValueError):
             occurred_at = None
 
+    timing_model_match = _TIMING_MODEL_RE.search(line)
+    if timing_model_match is not None:
+        session_match = _SESSION_RE.search(line)
+        task_match = _TASK_RE.search(line)
+        return TraeLogEvent(
+            kind="model",
+            session_id=(
+                session_match.group("value")
+                if session_match is not None
+                else None
+            ),
+            task_id=(
+                task_match.group("value") if task_match is not None else None
+            ),
+            model=timing_model_match.group("model"),
+            occurred_at=occurred_at,
+        )
+
     model_match = _MODEL_RE.search(line)
     if model_match is not None:
         return TraeLogEvent(
@@ -136,7 +159,7 @@ def apply_trae_log_event(
     effort: Optional[str] = None,
 ) -> Tuple[TraeTask, ...]:
     current = list(tasks)
-    if event.kind == "model" or event.session_id is None or event.task_id is None:
+    if event.session_id is None or event.task_id is None:
         return tuple(current)
 
     matching_index = next(
@@ -148,6 +171,18 @@ def apply_trae_log_event(
         None,
     )
     existing = current[matching_index] if matching_index is not None else None
+
+    if event.kind == "model":
+        if existing is None or event.model is None:
+            return tuple(current)
+        current[matching_index] = dataclasses.replace(
+            existing,
+            model=event.model,
+            effort=(
+                event.effort if event.effort is not None else existing.effort
+            ),
+        )
+        return tuple(current)
 
     if event.kind == "progress" and existing is None:
         return tuple(current)
@@ -207,6 +242,7 @@ def select_transport_tasks(
 
 class TraeTaskTracker:
     _METADATA_TAIL_BYTES = 256 * 1024
+    _TASK_METADATA_RECOVERY_BYTES = 8 * 1024 * 1024
     _MAX_LEDGER_TASKS = 32
     _LEDGER_VERSION = 4
 
@@ -254,17 +290,38 @@ class TraeTaskTracker:
             if requires_baseline:
                 model_event = self._baseline(path, stat)
                 if model_event is not None:
+                    model_event_time = self._event_time(
+                        model_event, stat.st_mtime_ns, 0
+                    )
                     model_events.append(
                         (
-                            self._event_time(model_event, stat.st_mtime_ns, 0),
+                            model_event_time,
                             key,
                             0,
                             model_event,
                         )
                     )
+                    updated = apply_trae_log_event(
+                        self._tasks,
+                        model_event,
+                        model_event_time,
+                    )
+                    if updated != self._tasks:
+                        self._tasks = updated
+                        changed = True
                 continue
 
-            local_model = (
+            recovery_is_relevant = not cursor.model and any(
+                task.state != "completed"
+                and (stat.st_mtime_ns / 1_000_000_000.0) >= task.updated_at
+                for task in self._tasks
+            )
+            recovered_task_model = (
+                self._latest_correlated_model_from_tail(path, cursor.offset)
+                if recovery_is_relevant
+                else None
+            )
+            local_model = recovered_task_model or (
                 TraeLogEvent(
                     kind="model",
                     model=cursor.model,
@@ -291,6 +348,14 @@ class TraeTaskTracker:
                         local_model,
                     )
                 )
+                updated = apply_trae_log_event(
+                    self._tasks,
+                    local_model,
+                    local_model_updated_at,
+                )
+                if updated != self._tasks:
+                    self._tasks = updated
+                    changed = True
             try:
                 with path.open("rb") as stream:
                     stream.seek(cursor.offset)
@@ -319,6 +384,16 @@ class TraeTaskTracker:
                                 event,
                             )
                         )
+                        if event.session_id is not None and event.task_id is not None:
+                            activity_events.append(
+                                (
+                                    local_model_updated_at,
+                                    key,
+                                    line_index,
+                                    event,
+                                    local_model,
+                                )
+                            )
                         continue
                     activity_events.append(
                         (
@@ -463,6 +538,34 @@ class TraeTaskTracker:
         for line in tail.decode("utf-8", errors="replace").splitlines():
             event = parse_trae_log_event(line)
             if event is not None and event.kind == "model":
+                latest = event
+        return latest
+
+    def _latest_correlated_model_from_tail(
+        self,
+        path: pathlib.Path,
+        size: int,
+    ) -> Optional[TraeLogEvent]:
+        active_keys = {
+            (task.session_id, task.task_id)
+            for task in self._tasks
+            if task.state != "completed"
+        }
+        if not active_keys:
+            return None
+        start = max(0, size - self._TASK_METADATA_RECOVERY_BYTES)
+        with path.open("rb") as stream:
+            stream.seek(start)
+            tail = stream.read(size - start)
+        if start > 0:
+            first_newline = tail.find(b"\n")
+            tail = tail[first_newline + 1 :] if first_newline >= 0 else b""
+        latest = None
+        for line in tail.decode("utf-8", errors="replace").splitlines():
+            event = parse_trae_log_event(line)
+            if event is None or event.kind != "model":
+                continue
+            if (event.session_id, event.task_id) in active_keys:
                 latest = event
         return latest
 

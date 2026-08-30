@@ -10,28 +10,79 @@ int main()
 
     assert(kBrandIconX == 168 && kBrandIconY == 22);
     assert(kBrandX == 218 && kBrandY == 32);
-    assert(kHealthX == 118 && kHealthY == 67 && kHealthWidth == 230);
-    assert(kHealthLabelY == 68);
-    assert(kHealthDotY == 72 && kHealthDotSize == 6);
-    assert(kBluetoothDotX == 156 && kBluetoothTextX == 167);
-    assert(kProcessDotX == 234 && kProcessTextX == 245);
-    assert(kRobotX == 96 && kRobotY == 105);
-    assert(kRobotWidth == 77 && kRobotHeight == 86);
-    assert(kTelemetryX == 214);
-    assert(kDividerX == 82 && kDividerY == 223 && kDividerWidth == 302);
-    assert(kSummaryLabelY == 249 && kSummaryCountY == 266);
-    assert(kPendingAnchorX == 110 && kRunningAnchorX == 284);
-    assert(kSummaryAnchorWidth == 72);
-    assert(kCurrentProjectX == 112 && kCurrentProjectY == 299);
-    assert(kCurrentTaskX == 112 && kCurrentTaskY == 329);
-    assert(kCurrentTextWidth == 242);
-    assert(kNextCaptionX == 109 && kNextTaskY == 365);
-    assert(kNextCaptionWidth == 56);
-    assert(kNextTaskX == 165 && kNextTaskWidth == 192);
-    assert(kTaskFocusX == 82 && kTaskFocusY == 241);
-    assert(kTaskFocusWidth == 302 && kTaskFocusHeight == 165);
-    assert(kNextTaskY + 18 < kPageIndicatorY);
+    assert(kConsoleX == 161 && kConsoleY == 78 && kConsoleWidth == 247);
+    assert(kHealthCaptionY == 78 && kHealthValueY == 95);
+    assert(kAgentX == 161 && kAgentWidth == 118);
+    assert(kVoiceX == 291 && kVoiceWidth == 118);
+    assert(kHealthDotSize == 6);
+    assert(kSpineX == 129 && kSpineY == 116);
+    assert(kSpineWidth == 2 && kSpineHeight == 246);
+    assert(kPendingCountX == 45 && kPendingCountY == 274);
+    assert(kRunningCountX == 45 && kRunningCountY == 322);
+    assert(kRailCountWidth == 69);
+    assert(kRailLabelOffsetY == 22);
+    assert(kPendingCountX + kRailCountWidth == 114);
+    assert(kRunningCountX + kRailCountWidth == 114);
+    assert(kPendingCountX + kRailCountWidth < kSpineX);
+    assert(kTaskLabelX == 161 && kTaskLabelY == 131);
+    assert(kTaskLabelWidth == 247);
+    assert(kMultiTaskRows[0].top == 138);
+    assert(kMultiTaskRows[0].project_y == 148);
+    assert(kMultiTaskRows[0].title_y == 164);
+    assert(kMultiTaskRows[0].meta_y == 191);
+    assert(kMultiTaskRows[1].top == 213);
+    assert(kMultiTaskRows[1].project_y == 223);
+    assert(kMultiTaskRows[1].title_y == 239);
+    assert(kMultiTaskRows[1].meta_y == 266);
+    assert(kTaskDividerY == 216);
+    assert(kSingleTaskRow.top == 145);
+    assert(kSingleTaskRow.project_y == 173);
+    assert(kSingleTaskRow.title_y == 201);
+    assert(single_task_meta_y(29) == 245);
+    assert(single_task_meta_y(58) == 274);
+    assert(single_task_meta_y(100) == 278);
+    assert(kTaskFocusX == 161 && kTaskFocusY == 127);
+    assert(kTaskFocusWidth == 247 && kTaskFocusHeight == 236);
     assert(kPageIndicatorY == 416 && kBatteryY == 438);
+    assert(kMicroFontPx == 13);
+    assert(kChannelValueFontPx == 15);
+    assert(kTaskGroupFontPx == 14);
+    assert(kRailLabelFontPx == 14);
+    assert(kMultiProjectFontPx == 13);
+    assert(kProjectFontPx == 17);
+    assert(kMultiTaskTitleMinFontPx == 20);
+    assert(kMultiTaskTitleMaxFontPx == 24);
+    assert(kSingleTaskTitleMinFontPx == 20);
+    assert(kSingleTaskTitleMaxFontPx == 28);
+    assert(kCountFontPx == 26);
+    assert(kBrandFontPx == 29);
+    assert(kEffortBadgeHeight == 20);
+    assert(kScale14To15 == 274);
+    assert(kScale14To17 == 311);
+    assert(title_font_scale(180, 247, 21, 20, 28) == 341);
+    assert(title_font_scale(190, 247, 21, 20, 28) == 332);
+    assert(!title_overflows(190, 332, 247));
+    assert(title_font_scale(300, 247, 21, 20, 28) == 244);
+    assert(title_overflows(300, 244, 247));
+    assert(scaled_visual_height(26, 256) == 26);
+    assert(scaled_visual_height(16, 384) == 24);
+    assert(
+        kMultiTaskRows[0].title_y >=
+        kMultiTaskRows[0].project_y + kMultiProjectFontPx
+    );
+    assert(
+        kMultiTaskRows[1].title_y >=
+        kMultiTaskRows[1].project_y + kMultiProjectFontPx
+    );
+
+    assert(resolve_task_layout(0) == TaskLayout::Empty);
+    assert(resolve_task_layout(1) == TaskLayout::Single);
+    assert(resolve_task_layout(2) == TaskLayout::Multiple);
+    assert(resolve_task_layout(4) == TaskLayout::Multiple);
+    assert(std::strcmp(task_group_label(TraeTaskState::Pending), "PENDING TASKS") == 0);
+    assert(std::strcmp(task_group_label(TraeTaskState::Running), "RUNNING TASKS") == 0);
+    assert(task_group_color(TraeTaskState::Pending) == kPending);
+    assert(task_group_color(TraeTaskState::Running) == kRunning);
 
     assert(kBrandIconRenderY == 19);
     assert(
@@ -181,20 +232,4 @@ int main()
     );
     assert(empty_state_text(EmptyState::None) == nullptr);
 
-    const RobotActivation active = resolve_robot_activation(true);
-    const RobotActivation inactive = resolve_robot_activation(false);
-    assert(!active.paused && !active.action);
-    assert(active.period_ms == kRobotIdleDurationMs);
-    assert(inactive.paused && !inactive.action);
-    assert(inactive.period_ms == kRobotIdleDurationMs);
-    assert(kRobotIdleDurationMs == 1300);
-    assert(kRobotActionDurationMs == 320);
-    const RobotTimerStep from_idle = resolve_robot_timer_step(false);
-    const RobotTimerStep from_action = resolve_robot_timer_step(true);
-    assert(from_idle.action && from_idle.period_ms == kRobotActionDurationMs);
-    assert(!from_action.action && from_action.period_ms == kRobotIdleDurationMs);
-    assert(should_trigger_task_action(true, "task-a", "task-b"));
-    assert(!should_trigger_task_action(true, "task-a", "task-a"));
-    assert(!should_trigger_task_action(false, "task-a", "task-b"));
-    assert(!should_trigger_task_action(true, "task-a", ""));
 }

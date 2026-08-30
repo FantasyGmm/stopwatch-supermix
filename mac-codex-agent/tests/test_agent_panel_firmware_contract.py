@@ -147,8 +147,8 @@ class AgentPanelFirmwareContractTests(unittest.TestCase):
             "void AppCodexStatus::onClose()", 1
         )[0]
         self.assertLess(
-            running.index("update_agent_panel_touch(now)"),
-            running.index("update_page_swipe(now)"),
+            running.index("update_agent_panel_touch(touch_now)"),
+            running.index("update_page_swipe(touch_now)"),
         )
         self.assertIn("_agent_panel_model.owns_touch()", source)
 

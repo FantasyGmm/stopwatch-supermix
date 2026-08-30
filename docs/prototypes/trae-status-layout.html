@@ -1,0 +1,679 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TRAE Watch — Layout Directions</title>
+  <style>
+    :root {
+      --bg: #06070a;
+      --panel: #0a0d13;
+      --white: #f2f6f8;
+      --soft: #b8c2cc;
+      --dim: #788391;
+      --line: #2b3441;
+      --lavender: #99b1ff;
+      --cyan: #49c9ee;
+      --mint: #1ce994;
+      --red: #ff6248;
+      --amber: #ffc35c;
+      --violet: #9c7dff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--white);
+      background: #11141a;
+      font-family: Montserrat, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+      display: grid;
+      place-items: center;
+      padding: 34px 24px 118px;
+    }
+    .page {
+      width: min(1040px, 100%);
+      display: grid;
+      grid-template-columns: minmax(466px, 1fr) 300px;
+      gap: 54px;
+      align-items: center;
+    }
+    .stage { display: grid; place-items: center; min-height: 520px; }
+    .watch {
+      position: relative;
+      width: 466px;
+      height: 466px;
+      overflow: hidden;
+      border-radius: 50%;
+      background: var(--bg);
+      border: 1px solid #303744;
+      box-shadow: 0 22px 60px #0009, inset 0 0 0 8px #000, inset 0 0 38px #000;
+    }
+    .safe {
+      position: absolute;
+      inset: 27px;
+      border-radius: 50%;
+      border: 1px dashed #99b1ff22;
+      pointer-events: none;
+      z-index: 30;
+    }
+    .variant { display: none; position: absolute; inset: 0; }
+    .variant.active { display: block; }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--white);
+      font-size: 26px;
+      font-weight: 700;
+      letter-spacing: .01em;
+    }
+    .brand img { width: 31px; height: 31px; image-rendering: pixelated; object-fit: cover; object-position: top; }
+    .robot { image-rendering: pixelated; object-fit: contain; filter: drop-shadow(0 0 10px #99b1ff38); }
+    .eyebrow { font-size: 11px; line-height: 1; letter-spacing: .20em; color: var(--dim); font-weight: 600; }
+    .status-value { margin-top: 7px; font-size: 16px; line-height: 1; color: var(--white); font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--mint); box-shadow: 0 0 9px #1ce99488; flex: none; }
+    .dot.voice { background: var(--cyan); box-shadow: 0 0 9px #49c9ee88; }
+    .tag {
+      display: inline-flex;
+      align-items: center;
+      min-height: 19px;
+      padding: 2px 8px;
+      border: 1px solid #7f8aa055;
+      border-radius: 9px;
+      color: #d5dde5;
+      font-size: 10px;
+      line-height: 1;
+      letter-spacing: .04em;
+      white-space: nowrap;
+    }
+    .model-name { color: var(--lavender); }
+    .page-dots { position: absolute; left: 0; right: 0; bottom: 35px; display: flex; gap: 12px; justify-content: center; align-items: center; z-index: 25; }
+    .page-dots i { width: 8px; height: 8px; border-radius: 50%; border: 2px solid var(--cyan); }
+    .page-dots i:nth-child(3) { background: var(--cyan); box-shadow: 0 0 8px #49c9eeaa; }
+    .battery { position: absolute; left: 0; right: 0; bottom: 13px; text-align: center; font-size: 13px; color: var(--mint); font-weight: 700; z-index: 25; }
+
+    /* A — Orbit: task volume is the instrument, robot is the centre of gravity. */
+    .a .brand { position: absolute; top: 28px; left: 180px; }
+    .a .orbit {
+      position: absolute; left: 91px; top: 89px; width: 284px; height: 214px;
+      border: 1px solid #99b1ff38; border-radius: 50%;
+      box-shadow: inset 0 0 32px #99b1ff0a;
+    }
+    .a .orbit::before, .a .orbit::after { content:""; position:absolute; width:7px; height:7px; border-radius:50%; background:var(--lavender); box-shadow:0 0 11px #99b1ffaa; }
+    .a .orbit::before { left: 15px; top: 60px; }
+    .a .orbit::after { right: 24px; bottom: 36px; background: var(--cyan); }
+    .a .robot { position: absolute; width: 105px; height: 118px; left: 181px; top: 116px; }
+    .a .agent-node, .a .voice-node {
+      position: absolute; width: 132px; padding: 11px 13px 10px;
+      background: #0a0d13e8; border: 1px solid #303a49; border-radius: 16px;
+    }
+    .a .agent-node { left: 47px; top: 120px; text-align: right; }
+    .a .voice-node { right: 45px; top: 177px; }
+    .a .agent-node .eyebrow, .a .voice-node .eyebrow { font-size: 9px; }
+    .a .node-value { display:flex; align-items:center; gap:7px; margin-top:7px; font-size:13px; font-weight:650; min-width:0; }
+    .a .agent-node .node-value { justify-content:flex-end; }
+    .a .node-value span:last-child { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .a .counts { position:absolute; top:236px; left:123px; width:220px; display:flex; justify-content:space-between; }
+    .a .count { min-width: 72px; text-align:center; }
+    .a .count strong { display:block; font-size:25px; line-height:1; margin-bottom:4px; }
+    .a .count.pending strong { color:var(--red); }
+    .a .count.running strong { color:var(--cyan); }
+    .a .count span { font-size:9px; letter-spacing:.16em; color:var(--dim); }
+    .a .task-focus { position:absolute; left:68px; top:305px; width:330px; text-align:center; }
+    .a .project { color:var(--lavender); font-size:13px; font-weight:650; letter-spacing:.02em; }
+    .a .title { margin-top:7px; font-size:21px; line-height:1.15; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .a .meta { margin-top:10px; display:flex; justify-content:center; align-items:center; gap:8px; }
+    .a .model-name { font-size:11px; }
+
+    /* B — Mission deck: current task is a physical command card. */
+    .b .brand { position:absolute; left:72px; top:36px; }
+    .b .live-mark { position:absolute; right:71px; top:43px; display:flex; gap:7px; align-items:center; color:var(--mint); font-size:10px; letter-spacing:.13em; }
+    .b .deck {
+      position:absolute; left:57px; top:91px; width:352px; height:238px;
+      border:1px solid #334053; border-radius:28px; background:#090c12;
+      box-shadow: inset 0 0 0 1px #99b1ff0b, 0 0 24px #99b1ff0a;
+      overflow:hidden;
+    }
+    .b .deck::before { content:""; position:absolute; left:0; top:0; width:6px; height:100%; background:var(--lavender); }
+    .b .robot { position:absolute; right:14px; top:28px; width:122px; height:137px; opacity:.95; }
+    .b .deck-copy { position:absolute; left:27px; top:26px; width:192px; }
+    .b .project { font-size:12px; color:var(--lavender); font-weight:700; letter-spacing:.08em; }
+    .b .title { margin-top:10px; font-size:25px; line-height:1.08; font-weight:720; max-height:57px; overflow:hidden; }
+    .b .detail { margin-top:11px; width:185px; color:var(--soft); font-size:11px; line-height:1.45; max-height:32px; overflow:hidden; }
+    .b .deck-meta { position:absolute; left:27px; right:22px; bottom:20px; display:flex; align-items:center; gap:8px; }
+    .b .deck-meta .model-name { font-size:12px; font-weight:650; max-width:140px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .b .deck-meta .task-index { margin-left:auto; font-size:10px; color:var(--dim); letter-spacing:.13em; }
+    .b .status-strip { position:absolute; left:70px; top:344px; width:326px; display:grid; grid-template-columns:1fr 1fr; gap:13px; }
+    .b .status-cell { min-width:0; }
+    .b .status-cell + .status-cell { border-left:1px solid var(--line); padding-left:14px; }
+    .b .status-cell .status-value { display:flex; gap:7px; align-items:center; font-size:13px; min-width:0; }
+    .b .status-cell .status-value span:last-child { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .b .counts { position:absolute; top:66px; left:190px; display:flex; gap:16px; color:var(--dim); font-size:10px; }
+    .b .counts b { font-size:13px; margin-right:3px; color:var(--white); }
+
+    /* C — Signal spine: asymmetric, scan from live conditions into the work queue. */
+    .c .brand { position:absolute; top:26px; left:181px; font-size:29px; }
+    .c .mode { display:none; }
+    .c .spine { position:absolute; left:129px; top:116px; width:2px; height:246px; background:#344052; }
+    .c .robot { position:absolute; left:54px; top:135px; width:100px; height:112px; }
+    .c .rail-count { position:absolute; left:61px; width:53px; text-align:right; }
+    .c .rail-count.pending { top:274px; }
+    .c .rail-count.running { top:322px; }
+    .c .rail-count strong { display:block; font-size:26px; line-height:1; }
+    .c .rail-count.pending strong { color:var(--red); }
+    .c .rail-count.running strong { color:var(--cyan); }
+    .c .rail-count span { position:relative; top:-3px; font-size:14px; letter-spacing:.12em; color:var(--dim); }
+    .c .console { position:absolute; left:161px; top:78px; width:247px; }
+    .c .eyebrow { font-size:13px; }
+    .c .health-row { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:20px; }
+    .c .health-row .status-value { display:flex; align-items:center; gap:6px; font-size:15px; font-weight:700; min-width:0; }
+    .c .health-row .status-value span:last-child { overflow:hidden; text-overflow:ellipsis; }
+    .c .task-label { font-size:14px; letter-spacing:.16em; color:var(--red); }
+    .c .c-task { position:relative; padding:10px 0 9px; overflow:hidden; }
+    .c .c-task + .c-task { border-top:1px solid #2a313d; }
+    .c .c-task .project { color:var(--lavender); font-size:13px; font-weight:700; letter-spacing:.05em; }
+    .c .c-task .title { margin-top:5px; font-size:24px; line-height:1; font-weight:720; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .c .c-task .detail { margin-top:4px; color:var(--soft); font-size:9px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .c .c-task .meta { margin-top:4px; display:flex; gap:7px; color:var(--dim); font-size:15px; }
+    .c .effort-tag { min-height:20px; font-size:13px; }
+    .c .running-rail { margin-top:7px; padding-top:8px; border-top:1px solid var(--line); display:flex; gap:8px; color:var(--soft); font-size:13px; white-space:nowrap; overflow:hidden; }
+    .c .running-rail span:first-child { color:var(--cyan); letter-spacing:.10em; }
+    .c .running-rail span:last-child { overflow:hidden; text-overflow:ellipsis; }
+
+    /* D — Constellation: four active jobs are visible as a system, not a list. */
+    .d .brand { position:absolute; top:26px; left:181px; }
+    .d .top-health { position:absolute; top:75px; left:79px; width:308px; display:flex; justify-content:space-between; }
+    .d .mini-health { display:flex; align-items:center; gap:7px; font-size:10px; color:var(--soft); max-width:142px; }
+    .d .mini-health span:last-child { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .d .constellation { position:absolute; left:85px; top:104px; width:296px; height:207px; }
+    .d .ring { position:absolute; left:55px; top:7px; width:186px; height:186px; border:1px solid #99b1ff35; border-radius:50%; }
+    .d .ring::before { content:""; position:absolute; inset:25px; border:1px dashed #49c9ee2f; border-radius:50%; }
+    .d .robot { position:absolute; left:96px; top:36px; width:105px; height:118px; }
+    .d .star { position:absolute; width:13px; height:13px; border-radius:50%; background:#0a0d13; border:2px solid var(--cyan); box-shadow:0 0 9px #49c9ee66; }
+    .d .star.pending { border-color:var(--red); box-shadow:0 0 9px #ff624866; }
+    .d .s1 { left:48px; top:38px; } .d .s2 { right:45px; top:31px; } .d .s3 { left:34px; bottom:31px; } .d .s4 { right:34px; bottom:38px; }
+    .d .star-label { position:absolute; font-size:8px; letter-spacing:.08em; color:var(--dim); }
+    .d .l1 { left:4px; top:34px; } .d .l2 { right:-1px; top:27px; } .d .l3 { left:-4px; bottom:10px; } .d .l4 { right:-7px; bottom:17px; }
+    .d .task-focus { position:absolute; left:73px; top:305px; width:320px; text-align:center; }
+    .d .task-head { display:flex; justify-content:center; align-items:center; gap:8px; }
+    .d .project { color:var(--lavender); font-size:12px; font-weight:700; }
+    .d .title { margin-top:7px; font-size:20px; font-weight:720; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .d .meta { margin-top:9px; display:flex; align-items:center; justify-content:center; gap:8px; }
+    .d .model-name { font-size:11px; max-width:145px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .d .task-count { color:var(--dim); font-size:9px; letter-spacing:.12em; }
+
+    /* V2 common — status counts and task information are the primary content. */
+    .v2-brand { position:absolute; display:flex; align-items:center; gap:7px; font-size:21px; font-weight:750; }
+    .v2-brand img { width:26px; height:26px; image-rendering:pixelated; object-fit:contain; }
+    .v2-health { position:absolute; display:flex; align-items:center; gap:12px; color:var(--dim); font-size:9px; letter-spacing:.08em; white-space:nowrap; }
+    .v2-health span { display:flex; align-items:center; gap:5px; max-width:112px; overflow:hidden; text-overflow:ellipsis; }
+    .v2-health .dot { width:6px; height:6px; }
+    .state-counts { position:absolute; display:flex; align-items:stretch; }
+    .state-count { color:var(--dim); }
+    .state-count strong { color:var(--white); font-weight:720; }
+    .state-count.pending strong, .state-count.pending.active { color:var(--red); }
+    .state-count.running strong, .state-count.running.active { color:var(--cyan); }
+    .task-row { overflow:hidden; }
+    .task-row .project { color:var(--lavender); font-weight:700; letter-spacing:.04em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .task-row .task-title { color:var(--white); font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .task-row .task-meta { display:flex; align-items:center; gap:7px; color:var(--dim); white-space:nowrap; overflow:hidden; }
+    .task-row .task-meta .model { color:#aebdff; overflow:hidden; text-overflow:ellipsis; }
+    .effort-tag {
+      display:inline-flex; align-items:center; justify-content:center; flex:none;
+      min-height:16px; padding:2px 7px; border:1px solid #74819777; border-radius:7px;
+      color:#d9e0e8; font-size:.92em; line-height:1; letter-spacing:.06em; font-weight:650;
+    }
+
+    /* E — Pending desk: state tabs choose the full-width task list. */
+    .e .v2-brand, .f .v2-brand, .g .v2-brand, .h .v2-brand, .i .v2-brand, .j .v2-brand { left:184px; top:27px; }
+    .e .v2-health, .f .v2-health, .g .v2-health, .h .v2-health, .i .v2-health, .j .v2-health { left:140px; top:66px; width:186px; justify-content:center; gap:10px; }
+    .e .state-counts { left:67px; top:94px; width:332px; height:59px; border-bottom:1px solid var(--line); }
+    .e .state-count { position:relative; flex:1; display:flex; align-items:center; justify-content:center; gap:10px; font-size:10px; letter-spacing:.14em; }
+    .e .state-count + .state-count { border-left:1px solid var(--line); }
+    .e .state-count strong { font-size:28px; letter-spacing:0; }
+    .e .state-count.active::after { content:""; position:absolute; left:25px; right:25px; bottom:-1px; height:3px; border-radius:2px; background:var(--red); box-shadow:0 0 10px #ff624888; }
+    .e .queue-title { position:absolute; left:76px; top:163px; font-size:9px; letter-spacing:.18em; color:var(--red); }
+    .e .task-list { position:absolute; left:65px; top:181px; width:336px; display:grid; gap:9px; }
+    .e .task-row { position:relative; height:87px; padding:12px 15px 10px 18px; border:1px solid #303a47; border-radius:17px; background:#090c12; }
+    .e .task-row::before { content:""; position:absolute; left:0; top:15px; bottom:15px; width:3px; border-radius:2px; background:var(--red); }
+    .e .task-row .project { font-size:9px; }
+    .e .task-row .task-title { margin-top:5px; font-size:15px; }
+    .e .task-row .task-meta { position:absolute; right:13px; top:10px; max-width:135px; font-size:8px; }
+    .e .more-line { position:absolute; left:0; right:0; top:368px; text-align:center; color:var(--dim); font-size:9px; letter-spacing:.08em; }
+
+    /* F — Activity ledger: all active states appear in one chronological scan. */
+    .f .state-counts { left:76px; top:94px; width:314px; justify-content:center; gap:44px; }
+    .f .state-count { display:flex; align-items:baseline; gap:7px; font-size:10px; letter-spacing:.12em; }
+    .f .state-count strong { font-size:27px; }
+    .f .ledger { position:absolute; left:69px; top:137px; width:328px; }
+    .f .ledger-line { position:absolute; left:14px; top:5px; bottom:4px; width:1px; background:#394454; }
+    .f .task-row { position:relative; min-height:75px; padding:0 4px 10px 36px; }
+    .f .task-row + .task-row { padding-top:10px; border-top:1px solid #222a35; }
+    .f .task-row::before { content:""; position:absolute; left:9px; top:5px; width:11px; height:11px; border-radius:50%; background:#0a0d13; border:2px solid var(--cyan); box-shadow:0 0 8px #49c9ee55; }
+    .f .task-row.pending::before { border-color:var(--red); box-shadow:0 0 8px #ff624855; }
+    .f .task-row + .task-row::before { top:15px; }
+    .f .task-row .row-head { display:flex; align-items:center; gap:7px; min-width:0; }
+    .f .task-row .project { font-size:9px; max-width:112px; }
+    .f .task-row .task-title { margin-top:5px; font-size:14px; }
+    .f .task-row .task-meta { margin-top:4px; font-size:8px; }
+
+    /* G — Project matrix: group active tasks by project before state. */
+    .g .state-counts { left:69px; top:94px; width:328px; height:45px; border:1px solid #313a48; border-radius:16px; }
+    .g .state-count { flex:1; display:flex; justify-content:center; align-items:center; gap:8px; font-size:9px; letter-spacing:.12em; }
+    .g .state-count strong { font-size:23px; }
+    .g .state-count + .state-count { border-left:1px solid #313a48; }
+    .g .matrix-label { position:absolute; left:75px; top:150px; color:var(--dim); font-size:9px; letter-spacing:.18em; }
+    .g .project-stack { position:absolute; left:65px; top:167px; width:336px; display:grid; gap:8px; }
+    .g .project-card { height:110px; padding:9px 14px; border:1px solid #303a47; border-radius:18px; background:#090c12; overflow:hidden; }
+    .g .project-head { display:flex; align-items:center; gap:7px; }
+    .g .project-name { color:var(--lavender); font-size:13px; font-weight:720; max-width:150px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .g .project-badges { margin-left:auto; display:flex; gap:5px; }
+    .g .mini-badge { padding:2px 6px; border-radius:7px; border:1px solid #536071; color:var(--dim); font-size:8px; }
+    .g .mini-badge.pending { color:var(--red); border-color:#ff624866; }
+    .g .mini-badge.running { color:var(--cyan); border-color:#49c9ee66; }
+    .g .project-task { margin-top:7px; display:grid; grid-template-columns:7px 1fr; gap:7px; align-items:start; }
+    .g .project-task + .project-task { margin-top:6px; }
+    .g .project-task i { width:6px; height:6px; border-radius:50%; margin-top:4px; background:var(--red); }
+    .g .project-card:last-child .project-task i { background:var(--cyan); }
+    .g .project-task b { display:block; font-size:12px; line-height:1.2; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .g .project-task .task-meta { margin-top:3px; display:flex; align-items:center; gap:6px; color:var(--soft); font-size:9px; white-space:nowrap; overflow:hidden; }
+    .g .project-task .task-meta .model { overflow:hidden; text-overflow:ellipsis; }
+    .g .effort-tag { min-height:13px; padding:1px 5px; border-radius:6px; }
+    .g .more-projects { position:absolute; top:370px; left:0; right:0; text-align:center; color:var(--dim); font-size:9px; }
+
+    /* H — Pending inbox: actionable work dominates; running becomes context. */
+    .h .inbox-head { position:absolute; left:65px; top:96px; width:336px; display:flex; align-items:flex-end; padding-bottom:9px; border-bottom:1px solid #40303a; }
+    .h .inbox-head .pending-title { color:var(--red); font-size:11px; letter-spacing:.18em; font-weight:700; }
+    .h .inbox-head strong { margin-left:9px; color:var(--red); font-size:31px; line-height:.8; }
+    .h .inbox-head .running-summary { margin-left:auto; color:var(--dim); font-size:9px; letter-spacing:.09em; }
+    .h .inbox-head .running-summary b { color:var(--cyan); font-size:15px; margin-right:4px; }
+    .h .inbox-list { position:absolute; left:65px; top:140px; width:336px; }
+    .h .task-row { position:relative; height:96px; padding:10px 15px 9px 17px; }
+    .h .task-row + .task-row { border-top:1px solid #29232a; }
+    .h .task-row .project { font-size:10px; max-width:205px; }
+    .h .task-row .task-title { margin-top:6px; font-size:16px; max-width:278px; }
+    .h .task-row .task-meta { margin-top:6px; font-size:8px; max-width:285px; }
+    .h .running-now { position:absolute; left:77px; top:340px; width:312px; display:grid; grid-template-columns:54px 1fr; gap:10px; align-items:center; }
+    .h .running-now .label { color:var(--cyan); font-size:8px; letter-spacing:.12em; }
+    .h .running-now .copy { min-width:0; font-size:10px; color:var(--soft); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+
+    /* I — Task stage: one task becomes the hero; multiple tasks form a compact stage stack. */
+    .i .stage-counts { position:absolute; left:99px; top:96px; width:268px; display:flex; justify-content:center; gap:36px; }
+    .i .stage-count { display:flex; align-items:baseline; gap:7px; color:var(--dim); font-size:9px; letter-spacing:.12em; }
+    .i .stage-count strong { font-size:25px; color:var(--white); line-height:1; }
+    .i .stage-count.pending strong { color:var(--red); }
+    .i .stage-count.running strong { color:var(--cyan); }
+    .i .stage-list { position:absolute; left:64px; top:137px; width:338px; display:grid; gap:8px; }
+    .i .stage-task { position:relative; min-height:72px; padding:12px 17px 10px 22px; border:1px solid #303947; border-radius:17px; background:linear-gradient(105deg,#0d1119,#080a0f); overflow:hidden; }
+    .i .stage-task::before { content:""; position:absolute; left:0; top:0; bottom:0; width:4px; background:var(--red); }
+    .i .stage-task.running-task::before { background:var(--cyan); }
+    .i .project { color:var(--lavender); font-size:9px; font-weight:700; letter-spacing:.05em; }
+    .i .task-title { margin-top:5px; font-size:15px; font-weight:720; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .i .task-meta { position:absolute; right:13px; top:10px; display:flex; align-items:center; gap:6px; max-width:155px; color:var(--dim); font-size:8px; }
+    .i .task-meta .model { color:#aebdff; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+    /* J — Dual board: state owns the column, tasks stay visually subordinate. */
+    .j .dual-board { position:absolute; left:62px; top:102px; width:342px; height:264px; display:grid; grid-template-columns:1fr 1fr; gap:9px; }
+    .j .zone { min-width:0; padding:13px 12px 11px; border:1px solid #303947; border-radius:20px; background:#090c12; overflow:hidden; }
+    .j .zone-head { display:flex; align-items:center; padding-bottom:10px; border-bottom:1px solid #2c3440; color:var(--dim); font-size:8px; letter-spacing:.13em; }
+    .j .zone-head strong { margin-left:auto; font-size:23px; line-height:1; }
+    .j .pending-zone .zone-head strong { color:var(--red); }
+    .j .running-zone .zone-head strong { color:var(--cyan); }
+    .j .zone-task { padding:12px 2px 10px; overflow:hidden; }
+    .j .zone-task + .zone-task { border-top:1px solid #252c36; }
+    .j .project { color:var(--lavender); font-size:8px; font-weight:700; letter-spacing:.04em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .j .task-title { margin-top:6px; font-size:13px; line-height:1.2; font-weight:720; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; }
+    .j .task-meta { margin-top:8px; display:flex; align-items:center; gap:5px; min-width:0; color:var(--dim); font-size:7px; }
+    .j .task-meta .model { color:#aebdff; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+    /* Single-task responsive compositions: use the released area, do not leave a compact row floating in space. */
+    body.single-mode .secondary-task,
+    body.single-mode .running-task,
+    body.single-mode .secondary-project,
+    body.single-mode .running-rail,
+    body.single-mode .running-now,
+    body.single-mode .more-line,
+    body.single-mode .more-projects { display:none; }
+    body.single-mode .c .task-label { margin-top:18px; font-size:14px; }
+    body.single-mode .c .primary-task { padding:28px 0 24px; border:0; }
+    body.single-mode .c .primary-task .project { font-size:17px; }
+    body.single-mode .c .primary-task .title { margin-top:10px; font-size:28px; line-height:1.13; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    body.single-mode .c .primary-task .meta { margin-top:13px; font-size:15px; gap:10px; }
+    body.single-mode .e .task-list { top:181px; }
+    body.single-mode .e .primary-task { height:180px; padding:42px 25px 28px; text-align:center; }
+    body.single-mode .e .primary-task::before { top:28px; bottom:28px; }
+    body.single-mode .e .primary-task .project { font-size:13px; }
+    body.single-mode .e .primary-task .task-title { margin-top:12px; font-size:25px; line-height:1.15; white-space:normal; }
+    body.single-mode .e .primary-task .task-meta { position:static; justify-content:center; margin-top:17px; font-size:11px; max-width:none; }
+    body.single-mode .f .primary-task { min-height:220px; padding:40px 8px 28px 42px; }
+    body.single-mode .f .primary-task::before { top:47px; width:14px; height:14px; }
+    body.single-mode .f .primary-task .project { font-size:13px; max-width:220px; }
+    body.single-mode .f .primary-task .task-title { margin-top:13px; font-size:25px; line-height:1.15; white-space:normal; }
+    body.single-mode .f .primary-task .task-meta { margin-top:17px; font-size:11px; gap:10px; }
+    body.single-mode .g .primary-project { height:196px; padding:24px 22px; }
+    body.single-mode .g .primary-project .project-name { font-size:18px; max-width:220px; }
+    body.single-mode .g .primary-project .project-badges { margin-left:auto; }
+    body.single-mode .g .primary-project .primary-task { margin-top:32px; grid-template-columns:10px 1fr; gap:12px; }
+    body.single-mode .g .primary-project .primary-task i { width:9px; height:9px; margin-top:8px; }
+    body.single-mode .g .primary-project .primary-task b { font-size:24px; line-height:1.15; white-space:normal; }
+    body.single-mode .g .primary-project .primary-task .task-meta { margin-top:14px; color:#aebdff; font-size:11px; }
+    body.single-mode .g .primary-project .primary-task .effort-tag { min-height:16px; padding:2px 7px; }
+    body.single-mode .h .primary-task { height:196px; padding:38px 28px 24px; text-align:center; }
+    body.single-mode .h .primary-task .project { font-size:13px; max-width:none; }
+    body.single-mode .h .primary-task .task-title { margin-top:13px; font-size:26px; line-height:1.15; max-width:none; white-space:normal; }
+    body.single-mode .h .primary-task .task-meta { margin-top:17px; justify-content:center; font-size:11px; max-width:none; gap:10px; }
+    body.single-mode .i .stage-list { top:142px; }
+    body.single-mode .i .primary-task { height:214px; padding:48px 28px 30px; text-align:center; border-radius:24px; }
+    body.single-mode .i .primary-task::before { width:5px; top:26px; bottom:26px; border-radius:3px; }
+    body.single-mode .i .primary-task .project { font-size:13px; }
+    body.single-mode .i .primary-task .task-title { margin-top:13px; font-size:27px; line-height:1.14; white-space:normal; }
+    body.single-mode .i .primary-task .task-meta { position:static; margin-top:18px; max-width:none; justify-content:center; font-size:11px; }
+    body.single-mode .j .dual-board { grid-template-columns:1fr; height:242px; top:116px; }
+    body.single-mode .j .running-zone { display:none; }
+    body.single-mode .j .pending-zone { padding:19px 24px; }
+    body.single-mode .j .pending-zone .zone-head { padding-bottom:13px; }
+    body.single-mode .j .pending-zone .primary-task { padding:35px 15px 20px; text-align:center; }
+    body.single-mode .j .pending-zone .primary-task .project { font-size:13px; }
+    body.single-mode .j .pending-zone .primary-task .task-title { margin-top:13px; font-size:26px; line-height:1.15; display:block; }
+    body.single-mode .j .pending-zone .primary-task .task-meta { margin-top:18px; justify-content:center; font-size:11px; }
+
+    .scenario-switch {
+      position:fixed; left:50%; bottom:84px; transform:translateX(-50%); z-index:100;
+      display:flex; align-items:center; gap:5px; padding:5px; border:1px solid #394350;
+      border-radius:18px; background:#080a0eef; box-shadow:0 8px 24px #0008;
+    }
+    .scenario-switch button { border:0; background:transparent; color:var(--dim); height:28px; padding:0 14px; border-radius:13px; font:600 11px/1 inherit; cursor:pointer; }
+    .scenario-switch button.active { background:#2b3340; color:var(--white); }
+
+    .notes { align-self: stretch; display:flex; flex-direction:column; justify-content:center; }
+    .kicker { color:var(--lavender); font-size:11px; letter-spacing:.22em; font-weight:700; }
+    h1 { margin:11px 0 12px; font-size:31px; line-height:1.06; letter-spacing:-.035em; }
+    .notes p { margin:0; color:#aeb7c3; font-size:14px; line-height:1.65; }
+    .facts { margin:24px 0 0; padding:0; list-style:none; display:grid; gap:13px; }
+    .facts li { display:grid; grid-template-columns:20px 1fr; gap:9px; color:#d6dce3; font-size:13px; line-height:1.45; }
+    .facts i { width:8px; height:8px; margin-top:5px; border-radius:50%; background:var(--lavender); box-shadow:0 0 8px #99b1ff77; }
+    .research { margin-top:23px; padding-top:16px; border-top:1px solid #2b3340; color:#7f8a98; font-size:11px; line-height:1.55; }
+
+    .switcher {
+      position:fixed; left:50%; bottom:28px; transform:translateX(-50%); z-index:100;
+      display:flex; align-items:center; gap:5px; padding:8px;
+      border:1px solid #394350; border-radius:22px; background:#080a0eef; box-shadow:0 10px 34px #000b;
+      backdrop-filter: blur(16px);
+    }
+    .switcher button { border:0; color:var(--soft); background:transparent; height:34px; min-width:30px; border-radius:15px; font:inherit; cursor:pointer; }
+    .switcher button:hover { background:#202631; color:var(--white); }
+    .switcher .choice { min-width:28px; padding:0; font-size:12px; font-weight:700; letter-spacing:.06em; }
+    .switcher .choice.active { color:#071015; background:var(--lavender); }
+    .variant-name { min-width:110px; padding:0 5px; color:var(--dim); font-size:11px; text-align:center; }
+
+    @media (max-width: 880px) {
+      .page { grid-template-columns:1fr; gap:16px; }
+      .notes { max-width:466px; margin:auto; }
+      .stage { min-height:490px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="stage">
+      <div class="watch" aria-label="TRAE watch prototype">
+        <div class="safe"></div>
+
+        <section class="variant a" data-variant="A">
+          <div class="brand"><img src="../../main/apps/app_codex_status/assets/source/trae_robot_head.png" alt=""><span>TRAE</span></div>
+          <div class="orbit"></div>
+          <img class="robot" src="../../main/apps/app_codex_status/assets/source/trae_robot_idle.png" alt="TRAE robot">
+          <div class="agent-node"><div class="eyebrow">AGENT</div><div class="node-value"><span class="dot"></span><span data-agent>LukeMac-mini</span></div></div>
+          <div class="voice-node"><div class="eyebrow">VOICE</div><div class="node-value"><span class="dot voice"></span><span data-voice>READY</span></div></div>
+          <div class="counts"><div class="count pending"><strong>2</strong><span>PENDING</span></div><div class="count running"><strong>3</strong><span>RUNNING</span></div></div>
+          <div class="task-focus"><div class="project">StopWatch</div><div class="title">重构任务同步与状态更新</div><div class="meta"><span class="model-name">Claude 4 Sonnet</span><span class="tag">HIGH</span><span class="tag">2 / 5</span></div></div>
+          <div class="page-dots"><i></i><i></i><i></i></div><div class="battery">⚡ 86%</div>
+        </section>
+
+        <section class="variant b" data-variant="B">
+          <div class="brand"><img src="../../main/apps/app_codex_status/assets/source/trae_robot_head.png" alt=""><span>TRAE</span></div>
+          <div class="live-mark"><span class="dot"></span><span>SOLO LIVE</span></div>
+          <div class="counts"><span><b style="color:var(--red)">2</b>PENDING</span><span><b style="color:var(--cyan)">3</b>RUNNING</span></div>
+          <div class="deck">
+            <img class="robot" src="../../main/apps/app_codex_status/assets/source/trae_robot_action.png" alt="TRAE robot">
+            <div class="deck-copy"><div class="project">STOPWATCH</div><div class="title">重构任务同步与状态更新</div><div class="detail">正在核对 Agent 事件与手表端任务队列，准备合并状态分支。</div></div>
+            <div class="deck-meta"><span class="model-name">Claude 4 Sonnet</span><span class="tag">HIGH</span><span class="task-index">TASK 2 / 5</span></div>
+          </div>
+          <div class="status-strip">
+            <div class="status-cell"><div class="eyebrow">AGENT</div><div class="status-value"><span class="dot"></span><span data-agent>LukeMac-mini</span></div></div>
+            <div class="status-cell"><div class="eyebrow">VOICE</div><div class="status-value"><span class="dot voice"></span><span data-voice>READY</span></div></div>
+          </div>
+          <div class="page-dots"><i></i><i></i><i></i></div><div class="battery">⚡ 86%</div>
+        </section>
+
+        <section class="variant c" data-variant="C">
+          <div class="brand"><img src="../../main/apps/app_codex_status/assets/source/trae_robot_head.png" alt=""><span>TRAE</span></div><div class="mode">SOLO / IDE</div>
+          <div class="spine"></div>
+          <div class="rail-count pending"><strong data-pending-count>2</strong><span>PENDING</span></div><div class="rail-count running"><strong data-running-count>3</strong><span>RUNNING</span></div>
+          <div class="console">
+            <div class="health-row">
+              <div><div class="eyebrow">AGENT</div><div class="status-value"><span class="dot"></span><span data-agent>LukeMac-mini</span></div></div>
+              <div><div class="eyebrow">VOICE</div><div class="status-value"><span class="dot voice"></span><span data-voice>READY</span></div></div>
+            </div>
+            <div class="task-label" data-pending-label>PENDING TASKS · 2</div>
+            <div class="c-task primary-task"><div class="project" data-c-project>Vault</div><div class="title" data-c-title>安装 Claudian 插件</div><div class="meta"><span data-c-model>GLM-5.2</span><span class="effort-tag" data-c-effort>HIGH</span></div></div>
+            <div class="c-task secondary-task"><div class="project" data-c-project>StopWatch</div><div class="title" data-c-title>确认配套 Agent 发布版本</div><div class="meta"><span data-c-model>Claude 4 Sonnet</span><span class="effort-tag" data-c-effort>MEDIUM</span></div></div>
+            <div class="running-rail"><span>RUNNING</span><span>3 TASKS</span></div>
+          </div>
+          <div class="page-dots"><i></i><i></i><i></i></div><div class="battery">⚡ 86%</div>
+        </section>
+
+        <section class="variant d" data-variant="D">
+          <div class="brand"><img src="../../main/apps/app_codex_status/assets/source/trae_robot_head.png" alt=""><span>TRAE</span></div>
+          <div class="top-health"><div class="mini-health"><span class="dot"></span><span data-agent>LukeMac-mini</span></div><div class="mini-health"><span class="dot voice"></span><span data-voice>READY</span></div></div>
+          <div class="constellation"><div class="ring"></div><img class="robot" src="../../main/apps/app_codex_status/assets/source/trae_robot_idle.png" alt="TRAE robot"><i class="star pending s1"></i><i class="star s2"></i><i class="star pending s3"></i><i class="star s4"></i><span class="star-label l1">API</span><span class="star-label l2">UI</span><span class="star-label l3">SYNC</span><span class="star-label l4">TEST</span></div>
+          <div class="task-focus"><div class="task-head"><span class="project">StopWatch</span><span class="task-count">TASK 2 / 5</span></div><div class="title">重构任务同步与状态更新</div><div class="meta"><span class="model-name">Claude 4 Sonnet</span><span class="tag">HIGH</span><span class="tag" style="color:var(--red)">PENDING 2</span><span class="tag" style="color:var(--cyan)">RUNNING 3</span></div></div>
+          <div class="page-dots"><i></i><i></i><i></i></div><div class="battery">⚡ 86%</div>
+        </section>
+
+        <section class="variant e" data-variant="E">
+          <div class="v2-brand"><img src="../../main/apps/app_codex_status/assets/source/trae_robot_head.png" alt=""><span>TRAE</span></div>
+          <div class="v2-health"><span><i class="dot"></i><span data-agent>LukeMac-mini</span></span><span><i class="dot voice"></i><span data-voice>READY</span></span></div>
+          <div class="state-counts"><div class="state-count pending active"><strong data-pending-count>2</strong><span>PENDING</span></div><div class="state-count running"><strong data-running-count>3</strong><span>RUNNING</span></div></div>
+          <div class="queue-title">PENDING QUEUE</div>
+          <div class="task-list">
+            <article class="task-row primary-task"><div class="project">StopWatch</div><div class="task-title">确认任务同步冲突策略</div><div class="task-meta"><span class="model">Claude 4 Sonnet</span><span class="effort-tag">HIGH</span></div></article>
+            <article class="task-row secondary-task"><div class="project">AgentShell</div><div class="task-title">确认配套 Agent 发布版本</div><div class="task-meta"><span class="model">Gemini 2.5 Pro</span><span class="effort-tag">MEDIUM</span></div></article>
+          </div>
+          <div class="more-line">点击 RUNNING 查看另外 3 项任务</div>
+          <div class="page-dots"><i></i><i></i><i></i></div><div class="battery">⚡ 86%</div>
+        </section>
+
+        <section class="variant f" data-variant="F">
+          <div class="v2-brand"><img src="../../main/apps/app_codex_status/assets/source/trae_robot_head.png" alt=""><span>TRAE</span></div>
+          <div class="v2-health"><span><i class="dot"></i><span data-agent>LukeMac-mini</span></span><span><i class="dot voice"></i><span data-voice>READY</span></span></div>
+          <div class="state-counts"><div class="state-count pending"><strong data-pending-count>2</strong><span>PENDING</span></div><div class="state-count running"><strong data-running-count>3</strong><span>RUNNING</span></div></div>
+          <div class="ledger"><div class="ledger-line"></div>
+            <article class="task-row pending primary-task"><div class="row-head"><span class="project">StopWatch</span></div><div class="task-title">确认任务同步冲突策略</div><div class="task-meta"><span class="model">Claude 4 Sonnet</span><span class="effort-tag">HIGH</span></div></article>
+            <article class="task-row pending secondary-task"><div class="row-head"><span class="project">AgentShell</span></div><div class="task-title">确认配套 Agent 发布版本</div><div class="task-meta"><span class="model">Gemini 2.5 Pro</span><span class="effort-tag">MEDIUM</span></div></article>
+            <article class="task-row running-task"><div class="row-head"><span class="project">StopWatch</span></div><div class="task-title">重构任务同步与状态更新</div><div class="task-meta"><span class="model">Claude 4 Sonnet</span><span class="effort-tag">HIGH</span></div></article>
+          </div>
+          <div class="page-dots"><i></i><i></i><i></i></div><div class="battery">⚡ 86%</div>
+        </section>
+
+        <section class="variant g" data-variant="G">
+          <div class="v2-brand"><img src="../../main/apps/app_codex_status/assets/source/trae_robot_head.png" alt=""><span>TRAE</span></div>
+          <div class="v2-health"><span><i class="dot"></i><span data-agent>LukeMac-mini</span></span><span><i class="dot voice"></i><span data-voice>READY</span></span></div>
+          <div class="state-counts"><div class="state-count pending"><strong data-pending-count>2</strong><span>PENDING</span></div><div class="state-count running"><strong data-running-count>3</strong><span>RUNNING</span></div></div>
+          <div class="matrix-label" data-project-label>ACTIVE PROJECTS · 2</div>
+          <div class="project-stack">
+            <article class="project-card primary-project"><div class="project-head"><span class="project-name">StopWatch</span><span class="project-badges"><i class="mini-badge pending" data-project-pending>P 1</i><i class="mini-badge running" data-project-running>R 2</i></span></div><div class="project-task primary-task"><i></i><div><b>确认任务同步冲突策略</b><div class="task-meta"><span class="model">Claude 4 Sonnet</span><span class="effort-tag">HIGH</span></div></div></div><div class="project-task secondary-task"><i style="background:var(--cyan)"></i><div><b>重构状态更新</b><div class="task-meta"><span class="model">Claude 4 Sonnet</span><span class="effort-tag">HIGH</span></div></div></div></article>
+            <article class="project-card secondary-project"><div class="project-head"><span class="project-name">AgentShell</span><span class="project-badges"><i class="mini-badge pending">P 1</i><i class="mini-badge running">R 1</i></span></div><div class="project-task"><i></i><div><b>确认配套 Agent 发布版本</b><div class="task-meta"><span class="model">Gemini 2.5 Pro</span><span class="effort-tag">MEDIUM</span></div></div></div><div class="project-task"><i></i><div><b>构建 universal2 包</b><div class="task-meta"><span class="model">Claude 4 Sonnet</span><span class="effort-tag">HIGH</span></div></div></div></article>
+          </div>
+          <div class="page-dots"><i></i><i></i><i></i></div><div class="battery">⚡ 86%</div>
+        </section>
+
+        <section class="variant h" data-variant="H">
+          <div class="v2-brand"><img src="../../main/apps/app_codex_status/assets/source/trae_robot_head.png" alt=""><span>TRAE</span></div>
+          <div class="v2-health"><span><i class="dot"></i><span data-agent>LukeMac-mini</span></span><span><i class="dot voice"></i><span data-voice>READY</span></span></div>
+          <div class="inbox-head"><span class="pending-title">PENDING</span><strong data-pending-count>2</strong><span class="running-summary"><b data-running-count>3</b>RUNNING</span></div>
+          <div class="inbox-list">
+            <article class="task-row primary-task"><div class="project">StopWatch</div><div class="task-title">确认任务同步冲突策略</div><div class="task-meta"><span class="model">Claude 4 Sonnet</span><span class="effort-tag">HIGH</span></div></article>
+            <article class="task-row secondary-task"><div class="project">AgentShell</div><div class="task-title">确认配套 Agent 发布版本</div><div class="task-meta"><span class="model">Gemini 2.5 Pro</span><span class="effort-tag">MEDIUM</span></div></article>
+          </div>
+          <div class="running-now"><span class="label">RUNNING</span><span class="copy">3 TASKS</span></div>
+          <div class="page-dots"><i></i><i></i><i></i></div><div class="battery">⚡ 86%</div>
+        </section>
+
+        <section class="variant i" data-variant="I">
+          <div class="v2-brand"><img src="../../main/apps/app_codex_status/assets/source/trae_robot_head.png" alt=""><span>TRAE</span></div>
+          <div class="v2-health"><span><i class="dot"></i><span data-agent>LukeMac-mini</span></span><span><i class="dot voice"></i><span data-voice>READY</span></span></div>
+          <div class="stage-counts"><div class="stage-count pending"><strong data-pending-count>2</strong><span>PENDING</span></div><div class="stage-count running"><strong data-running-count>3</strong><span>RUNNING</span></div></div>
+          <div class="stage-list">
+            <article class="stage-task primary-task"><div class="project">StopWatch</div><div class="task-title">确认任务同步冲突策略</div><div class="task-meta"><span class="model">Claude 4 Sonnet</span><span class="effort-tag">HIGH</span></div></article>
+            <article class="stage-task secondary-task"><div class="project">AgentShell</div><div class="task-title">确认配套 Agent 发布版本</div><div class="task-meta"><span class="model">Gemini 2.5 Pro</span><span class="effort-tag">MEDIUM</span></div></article>
+            <article class="stage-task running-task"><div class="project">StopWatch</div><div class="task-title">重构任务同步与状态更新</div><div class="task-meta"><span class="model">Claude 4 Sonnet</span><span class="effort-tag">HIGH</span></div></article>
+          </div>
+          <div class="page-dots"><i></i><i></i><i></i></div><div class="battery">⚡ 86%</div>
+        </section>
+
+        <section class="variant j" data-variant="J">
+          <div class="v2-brand"><img src="../../main/apps/app_codex_status/assets/source/trae_robot_head.png" alt=""><span>TRAE</span></div>
+          <div class="v2-health"><span><i class="dot"></i><span data-agent>LukeMac-mini</span></span><span><i class="dot voice"></i><span data-voice>READY</span></span></div>
+          <div class="dual-board">
+            <section class="zone pending-zone"><div class="zone-head"><span>PENDING</span><strong data-pending-count>2</strong></div>
+              <article class="zone-task primary-task"><div class="project">StopWatch</div><div class="task-title">确认任务同步冲突策略</div><div class="task-meta"><span class="model">Claude 4 Sonnet</span><span class="effort-tag">HIGH</span></div></article>
+              <article class="zone-task secondary-task"><div class="project">AgentShell</div><div class="task-title">确认配套 Agent 发布版本</div><div class="task-meta"><span class="model">Gemini 2.5 Pro</span><span class="effort-tag">MEDIUM</span></div></article>
+            </section>
+            <section class="zone running-zone"><div class="zone-head"><span>RUNNING</span><strong data-running-count>3</strong></div>
+              <article class="zone-task running-task"><div class="project">StopWatch</div><div class="task-title">重构任务同步与状态更新</div><div class="task-meta"><span class="model">Claude 4 Sonnet</span><span class="effort-tag">HIGH</span></div></article>
+            </section>
+          </div>
+          <div class="page-dots"><i></i><i></i><i></i></div><div class="battery">⚡ 86%</div>
+        </section>
+      </div>
+    </section>
+
+    <aside class="notes">
+      <div class="kicker">TRAE · ROUND DISPLAY</div>
+      <h1 id="direction-title">C — 信号脊柱 · 改</h1>
+      <p id="direction-copy">保留不对称控制台，把机器人和图标放回圆屏安全区，右侧主体改为 Pending 任务队列。</p>
+      <ul class="facts" id="direction-facts"></ul>
+      <div class="research">设计依据：TRAE 的价值集中在可切换 IDE / SOLO、多个 Agent 与子 Agent、灵活模型选择和多任务执行。手表页因此不显示 Codex 式额度条，而强调“谁在工作、用什么模型、当前处理哪项任务”。</div>
+    </aside>
+  </main>
+
+  <nav class="scenario-switch" aria-label="Task scenario">
+    <button data-scenario="single">单任务</button>
+    <button data-scenario="multiple">多任务</button>
+  </nav>
+
+  <nav class="switcher" aria-label="Prototype variants">
+    <button id="prev" aria-label="Previous">←</button>
+    <button class="choice" data-choice="C">C</button><button class="choice" data-choice="E">E</button><button class="choice" data-choice="F">F</button><button class="choice" data-choice="G">G</button><button class="choice" data-choice="H">H</button><button class="choice" data-choice="I">I</button><button class="choice" data-choice="J">J</button>
+    <span class="variant-name" id="variant-name">信号脊柱 · 改</span>
+    <button id="next" aria-label="Next">→</button>
+  </nav>
+
+  <script>
+    const cTasks = [
+      { project:'Vault', title:'安装 Claudian 插件', model:'GLM-5.2', effort:'HIGH' },
+      { project:'StopWatch', title:'确认配套 Agent 发布版本', model:'Claude 4 Sonnet', effort:'MEDIUM' },
+      { project:'AgentShell', title:'同步多个任务的实时状态', model:'Gemini 2.5 Pro', effort:'HIGH' },
+      { project:'StopWatch', title:'验证超长任务名称只在最小字号后省略尾部', model:'Claude 4 Sonnet', effort:'XHIGH' },
+    ];
+    let cTaskOffset = 0;
+    function fitCTaskTitles() {
+      const single = document.body.classList.contains('single-mode');
+      document.querySelectorAll('.c .c-task:not([hidden]) .title').forEach(el => {
+        let size = single ? 28 : 24;
+        el.style.fontSize = `${size}px`;
+        while (size > 20 && el.scrollWidth > el.clientWidth) {
+          size -= 1;
+          el.style.fontSize = `${size}px`;
+        }
+      });
+    }
+    function renderCTaskWindow() {
+      const single = document.body.classList.contains('single-mode');
+      const rows = document.querySelectorAll('.c .c-task');
+      const limit = single ? 1 : 2;
+      cTaskOffset = Math.min(cTaskOffset, Math.max(0, cTasks.length - limit));
+      rows.forEach((row, index) => {
+        row.hidden = index >= limit;
+        if (index >= limit) return;
+        const task = cTasks[cTaskOffset + index];
+        row.querySelector('[data-c-project]').textContent = task.project;
+        row.querySelector('[data-c-title]').textContent = task.title;
+        row.querySelector('[data-c-model]').textContent = task.model;
+        row.querySelector('[data-c-effort]').textContent = task.effort;
+      });
+      requestAnimationFrame(fitCTaskTitles);
+    }
+    function scrollCTasks(delta) {
+      if (document.body.classList.contains('single-mode')) return;
+      const next = Math.max(0, Math.min(cTasks.length - 2, cTaskOffset + delta));
+      if (next === cTaskOffset) return;
+      cTaskOffset = next;
+      renderCTaskWindow();
+    }
+    const cConsole = document.querySelector('.variant.c .console');
+    let cTouchStartY = null;
+    cConsole.addEventListener('pointerdown', event => {
+      if (event.target.closest('.c-task')) cTouchStartY = event.clientY;
+    });
+    cConsole.addEventListener('pointerup', event => {
+      if (cTouchStartY === null) return;
+      const dy = event.clientY - cTouchStartY;
+      cTouchStartY = null;
+      if (Math.abs(dy) >= 36) scrollCTasks(dy < 0 ? 1 : -1);
+    });
+    cConsole.addEventListener('wheel', event => {
+      if (!event.target.closest('.c-task') || Math.abs(event.deltaY) < 8) return;
+      event.preventDefault();
+      scrollCTasks(event.deltaY > 0 ? 1 : -1);
+    }, { passive:false });
+    const directions = {
+      C: { name:'信号脊柱 · 改', title:'C — 信号脊柱 · 改', copy:'保留不对称控制台，移除机器人 GIF，让状态统计和 Pending 任务成为页面主体。', facts:['顶部图标居中，避免圆屏裁切','左侧脊柱专门承载状态数量','任务只保留项目、名称、模型和 Effort'] },
+      E: { name:'状态工作台', title:'E — 状态工作台', copy:'用大号 Pending / Running 统计作为入口，当前状态下的任务使用全宽信息卡。', facts:['状态数量是第一视觉层','单任务时自动放大为主体卡片','多任务时保持项目与任务快速可扫读'] },
+      F: { name:'任务流水账', title:'F — 任务流水账', copy:'把 Pending 与 Running 任务放在同一条时间轴上，项目、任务、模型与 Effort 连续阅读。', facts:['不用切换就能看到多种状态','单任务时扩大时间轴焦点','适合观察任务状态变化'] },
+      G: { name:'项目矩阵', title:'G — 项目矩阵', copy:'先按项目聚合，再在项目内部展示对应任务、模型和 Effort。', facts:['最贴合“各个项目下有哪些任务”','单项目单任务时扩展为大卡片','跨项目管理时效率最高'] },
+      H: { name:'Pending 收件箱', title:'H — Pending 收件箱', copy:'将 Pending 作为必须处理的收件箱，Running 只保留数量摘要。', facts:['Pending 任务最醒目','单任务时使用居中的沉浸式版式','任务内部严格保持四项信息'] },
+      I: { name:'任务舞台', title:'I — 任务舞台', copy:'单任务时让任务成为中央主角；多任务时收拢成同一舞台上的紧凑卡片栈。', facts:['单任务空间利用最充分','多任务仍保留清晰的状态色线索','模型保持普通文字，Effort 统一为标签'] },
+      J: { name:'双区看板', title:'J — 双区看板', copy:'Pending 与 Running 各自占据一个任务区，直接表达任务当前属于哪个状态。', facts:['多状态并列关系最直观','单任务时自动合并为完整宽度','每条任务只出现四项规定信息'] }
+    };
+    const keys = Object.keys(directions);
+    function setVariant(key) {
+      if (!directions[key]) key = 'C';
+      document.querySelectorAll('.variant').forEach(v => v.classList.toggle('active', v.dataset.variant === key));
+      document.querySelectorAll('.choice').forEach(b => b.classList.toggle('active', b.dataset.choice === key));
+      const d = directions[key];
+      document.getElementById('direction-title').textContent = d.title;
+      document.getElementById('direction-copy').textContent = d.copy;
+      document.getElementById('variant-name').textContent = d.name;
+      document.getElementById('direction-facts').innerHTML = d.facts.map(v => `<li><i></i><span>${v}</span></li>`).join('');
+      const url = new URL(location.href); url.searchParams.set('variant', key); history.replaceState({}, '', url);
+    }
+    function cycle(delta) { const current = new URL(location.href).searchParams.get('variant') || 'C'; setVariant(keys[(keys.indexOf(current) + delta + keys.length) % keys.length]); }
+    function setScenario(mode) {
+      if (mode !== 'multiple') mode = 'single';
+      const isSingle = mode === 'single';
+      document.body.classList.toggle('single-mode', isSingle);
+      document.querySelectorAll('[data-scenario]').forEach(b => b.classList.toggle('active', b.dataset.scenario === mode));
+      document.querySelectorAll('[data-pending-count]').forEach(el => { el.textContent = isSingle ? '1' : '2'; });
+      document.querySelectorAll('[data-running-count]').forEach(el => { el.textContent = isSingle ? '0' : '3'; });
+      document.querySelectorAll('[data-pending-label]').forEach(el => { el.textContent = `PENDING TASKS · ${isSingle ? 1 : 2}`; });
+      document.querySelectorAll('[data-project-label]').forEach(el => { el.textContent = `ACTIVE PROJECTS · ${isSingle ? 1 : 2}`; });
+      document.querySelectorAll('[data-project-pending]').forEach(el => { el.textContent = 'P 1'; });
+      document.querySelectorAll('[data-project-running]').forEach(el => { el.textContent = isSingle ? 'R 0' : 'R 2'; });
+      const url = new URL(location.href); url.searchParams.set('tasks', mode); history.replaceState({}, '', url);
+      cTaskOffset = 0;
+      renderCTaskWindow();
+    }
+    document.querySelectorAll('.choice').forEach(b => b.addEventListener('click', () => setVariant(b.dataset.choice)));
+    document.querySelectorAll('[data-scenario]').forEach(b => b.addEventListener('click', () => setScenario(b.dataset.scenario)));
+    document.getElementById('prev').addEventListener('click', () => cycle(-1));
+    document.getElementById('next').addEventListener('click', () => cycle(1));
+    addEventListener('keydown', e => { if (e.key === 'ArrowLeft') cycle(-1); if (e.key === 'ArrowRight') cycle(1); });
+    const initialUrl = new URL(location.href);
+    setVariant(initialUrl.searchParams.get('variant') || 'C');
+    setScenario(initialUrl.searchParams.get('tasks') || 'single');
+    addEventListener('resize', fitCTaskTitles);
+  </script>
+</body>
+</html>

@@ -213,6 +213,79 @@ class TraeStateCollectorTests(unittest.TestCase):
         self.assertEqual(state["trae_tasks"][0]["model"], "OpenRouter 3o")
         self.assertEqual(state["trae_tasks"][0]["effort"], "xhigh")
 
+    def test_real_session_state_accepts_generated_title_log_format(self):
+        workspace = self.workspace_storage / "workspace-real"
+        workspace.mkdir(parents=True)
+        (workspace / "workspace.json").write_text(
+            json.dumps({"folder": "file:///work/Vault"}),
+            encoding="utf-8",
+        )
+        create_state_db(
+            workspace / "state.vscdb",
+            "lukeren_ai-chat:sessionRelation:modelMap",
+            {"session-new": {"solo_coder": "1_-_glm-5.2"}},
+        )
+        self.write_log(
+            "2026-08-30T10:00:00+08:00 generate_session_title: "
+            'session_id: "session-new", generated_title: "Install plugin"'
+        )
+        collector = self.collector(online=True)
+        collector._tracker = FakeTracker(
+            tasks=(
+                TraeTask(
+                    "session-new",
+                    "task-new",
+                    "--",
+                    "Trae task",
+                    "",
+                    "running",
+                    10.0,
+                ),
+            )
+        )
+
+        state = collector.get_state()
+
+        self.assertEqual(state["trae_tasks"][0]["project"], "Vault")
+        self.assertEqual(state["trae_tasks"][0]["title"], "Install plugin")
+
+    def test_current_prefixed_catalog_maps_timing_model_and_default_effort(self):
+        create_state_db(
+            self.workspace_storage.parent / "globalStorage" / "state.vscdb",
+            "2121392057225223_AI.agent.model.model_list_map",
+            {
+                "solo_agent": [
+                    {
+                        "name": "glm-5.2",
+                        "display_name": "GLM-5.2",
+                        "default_reasoning_effort": "high",
+                    }
+                ]
+            },
+        )
+        collector = self.collector(online=True)
+        collector._tracker = FakeTracker(
+            tasks=(
+                TraeTask(
+                    "session-a",
+                    "task-a",
+                    "Vault",
+                    "Trae task",
+                    "",
+                    "running",
+                    10.0,
+                    model="glm-5.2",
+                ),
+            )
+        )
+
+        state = collector.get_state()
+
+        self.assertEqual(state["trae_model"], "GLM-5.2")
+        self.assertEqual(state["trae_effort"], "high")
+        self.assertEqual(state["trae_tasks"][0]["model"], "GLM-5.2")
+        self.assertEqual(state["trae_tasks"][0]["effort"], "high")
+
     def test_real_session_state_does_not_use_newest_unrelated_workspace(self):
         for name, session, model in (
             ("ProjectA", "session-a", "model-a"),

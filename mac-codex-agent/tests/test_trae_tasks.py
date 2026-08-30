@@ -43,7 +43,48 @@ def started_line(session_id, task_id, timestamp=""):
     )
 
 
+def current_timing_model_line(
+    session_id="session-a",
+    task_id="task-a",
+    model="glm-5.2",
+):
+    return (
+        "2026-08-30T20:06:22.451348+08:00 INFO "
+        "TimingCost: TimingCostOriginEvent { data: "
+        "\"{\\\"config_name\\\":\\\"%s\\\","
+        "\\\"provider_model_name\\\":\\\"%s\\\"}\" } "
+        "session_id=%s task_id=%s"
+    ) % (model, model, session_id, task_id)
+
+
 class TraeTaskTests(unittest.TestCase):
+    def test_current_timing_event_correlates_model_to_task(self):
+        event = parse_trae_log_event(current_timing_model_line())
+
+        self.assertIsNotNone(event)
+        self.assertEqual(event.kind, "model")
+        self.assertEqual(event.session_id, "session-a")
+        self.assertEqual(event.task_id, "task-a")
+        self.assertEqual(event.model, "glm-5.2")
+        self.assertIsNone(event.effort)
+
+    def test_correlated_model_event_updates_only_the_matching_task(self):
+        matching = task("a", "running", 1.0)
+        unrelated = task("b", "running", 2.0)
+        event = parse_trae_log_event(current_timing_model_line(task_id="a"))
+
+        updated = apply_trae_log_event(
+            (matching, unrelated),
+            event,
+            now=3.0,
+        )
+
+        by_id = {item.task_id: item for item in updated}
+        self.assertEqual(by_id["a"].model, "glm-5.2")
+        self.assertEqual(by_id["a"].effort, "")
+        self.assertEqual(by_id["a"].updated_at, 1.0)
+        self.assertEqual(by_id["b"].model, "")
+
     def test_listener_start_is_not_a_task_lifecycle_event(self):
         line = (
             "2026-07-26T21:45:43.989576+08:00 "
@@ -346,6 +387,81 @@ class TraeTaskTrackerTests(unittest.TestCase):
             ]["offset"],
             self.log.stat().st_size,
         )
+
+    def test_current_model_event_after_start_updates_running_task(self):
+        self.log.touch()
+        tracker = self.tracker()
+        tracker.refresh((self.log,), now=10.0)
+        self.append(
+            started_line(
+                "session-a",
+                "task-a",
+                "2026-08-30T20:06:20+08:00",
+            ),
+            current_timing_model_line(),
+        )
+
+        snapshot = tracker.refresh((self.log,), now=11.0)
+
+        self.assertEqual(snapshot.model, "glm-5.2")
+        self.assertEqual(snapshot.tasks[0].model, "glm-5.2")
+        self.assertEqual(snapshot.tasks[0].effort, "")
+
+    def test_restart_recovers_correlated_model_beyond_normal_metadata_tail(self):
+        model_line = current_timing_model_line()
+        self.log.write_bytes(
+            model_line.encode("utf-8") + b"\n" + (b"x" * (300 * 1024))
+        )
+        stat = self.log.stat()
+        self.cursor.write_text(
+            json.dumps(
+                {
+                    "version": 2,
+                    "cursors": {
+                        str(self.log): {
+                            "path": str(self.log),
+                            "inode": stat.st_ino,
+                            "offset": stat.st_size,
+                            "mtime_ns": stat.st_mtime_ns,
+                            "model": "",
+                            "effort": "",
+                            "model_updated_at": 0.0,
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        self.ledger.write_text(
+            json.dumps(
+                {
+                    "version": 4,
+                    "model": None,
+                    "effort": None,
+                    "model_updated_at": 0.0,
+                    "revision": 1,
+                    "tasks": [
+                        {
+                            "session_id": "session-a",
+                            "task_id": "task-a",
+                            "project": "Vault",
+                            "title": "Trae task",
+                            "detail": "",
+                            "state": "running",
+                            "updated_at": 1.0,
+                            "model": "",
+                            "effort": "",
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        snapshot = self.tracker().refresh((self.log,), now=2.0)
+
+        self.assertEqual(snapshot.model, "glm-5.2")
+        self.assertEqual(snapshot.tasks[0].model, "glm-5.2")
 
     def test_cursor_survives_tracker_recreation(self):
         self.log.touch()

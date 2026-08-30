@@ -459,8 +459,8 @@ class BleVoiceProbeFirmwareContractTests(unittest.TestCase):
         self.assertNotIn("->handle_button", running)
         self.assertNotIn("->cancel_for_home", running)
         self.assertIn("sync_display_protection_presentation()", running)
-        self.assertIn("update_page_swipe(now)", running)
-        self.assertIn("_voice_status.store", running)
+        self.assertIn("update_page_swipe(touch_now)", running)
+        self.assertIn("_voice_status.exchange", running)
         self.assertLess(
             running.index("_voice_button_dispatcher.dispatch"),
             running.index("close();"),

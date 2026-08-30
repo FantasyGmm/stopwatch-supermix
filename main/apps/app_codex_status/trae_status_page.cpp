@@ -6,12 +6,14 @@
 #include <assets/assets.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstring>
 
 
 LV_FONT_DECLARE(font_puhui_14_1)
 LV_FONT_DECLARE(NotoSansSCBold16Trae)
+LV_FONT_DECLARE(CodexTaskTitle21)
 
 namespace {
 
@@ -40,39 +42,86 @@ lv_obj_t* make_label(
 }
 
 
-lv_obj_t* make_line(lv_obj_t* parent, int x, int y, int width)
+lv_obj_t* make_segment(
+    lv_obj_t* parent,
+    int x,
+    int y,
+    int width,
+    int height,
+    uint32_t color,
+    lv_opa_t opacity
+)
 {
-    lv_obj_t* line = lv_obj_create(parent);
-    lv_obj_set_size(line, width, 1);
-    lv_obj_set_pos(line, x, y);
-    lv_obj_set_style_border_width(line, 0, 0);
-    lv_obj_set_style_pad_all(line, 0, 0);
-    lv_obj_set_style_radius(line, 0, 0);
-    lv_obj_set_style_bg_color(line, lv_color_hex(kDimText), 0);
-    lv_obj_set_style_bg_opa(line, LV_OPA_40, 0);
-    lv_obj_clear_flag(line, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_clear_flag(line, LV_OBJ_FLAG_SCROLLABLE);
-    return line;
+    lv_obj_t* segment = lv_obj_create(parent);
+    lv_obj_set_size(segment, width, height);
+    lv_obj_set_pos(segment, x, y);
+    lv_obj_set_style_border_width(segment, 0, 0);
+    lv_obj_set_style_pad_all(segment, 0, 0);
+    lv_obj_set_style_radius(segment, 0, 0);
+    lv_obj_set_style_bg_color(segment, lv_color_hex(color), 0);
+    lv_obj_set_style_bg_opa(segment, opacity, 0);
+    lv_obj_clear_flag(segment, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(segment, LV_OBJ_FLAG_SCROLLABLE);
+    return segment;
 }
 
 
-lv_obj_t* make_status_dot(
-    lv_obj_t* parent,
-    int x,
-    uint32_t color
-)
+lv_obj_t* make_spine(lv_obj_t* parent)
 {
-    lv_obj_t* dot = lv_obj_create(parent);
-    lv_obj_set_size(dot, kHealthDotSize, kHealthDotSize);
-    lv_obj_set_pos(dot, x, kHealthDotY);
+    return make_segment(
+        parent,
+        kSpineX,
+        kSpineY,
+        kSpineWidth,
+        kSpineHeight,
+        kDimText,
+        LV_OPA_50
+    );
+}
+
+
+lv_obj_t* make_status_dot(lv_obj_t* parent, int x)
+{
+    lv_obj_t* dot = make_segment(
+        parent,
+        x,
+        kStatusDotY,
+        kHealthDotSize,
+        kHealthDotSize,
+        kDimText,
+        LV_OPA_COVER
+    );
     lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_pad_all(dot, 0, 0);
-    lv_obj_set_style_border_width(dot, 0, 0);
-    lv_obj_set_style_bg_color(dot, lv_color_hex(color), 0);
-    lv_obj_set_style_bg_opa(dot, LV_OPA_COVER, 0);
-    lv_obj_clear_flag(dot, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_clear_flag(dot, LV_OBJ_FLAG_SCROLLABLE);
     return dot;
+}
+
+
+lv_obj_t* make_effort_badge(lv_obj_t* parent, lv_obj_t** label_out)
+{
+    lv_obj_t* badge = lv_obj_create(parent);
+    lv_obj_set_size(badge, 48, kEffortBadgeHeight);
+    lv_obj_set_style_radius(badge, 7, 0);
+    lv_obj_set_style_border_width(badge, 1, 0);
+    lv_obj_set_style_border_color(badge, lv_color_hex(0x748197), 0);
+    lv_obj_set_style_border_opa(badge, LV_OPA_60, 0);
+    lv_obj_set_style_bg_opa(badge, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_pad_all(badge, 0, 0);
+    lv_obj_clear_flag(badge, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(badge, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t* label = make_label(
+        badge,
+        "--",
+        0,
+        3,
+        48,
+        &MontserratBold13Trae,
+        kPrimaryText
+    );
+    lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_long_mode(label, LV_LABEL_LONG_MODE_CLIP);
+    *label_out = label;
+    return badge;
 }
 
 
@@ -90,6 +139,21 @@ bool is_active_task(const TraeTask* task)
 }
 
 
+bool has_non_ascii(const char* value)
+{
+    if (value == nullptr) {
+        return false;
+    }
+    while (*value != '\0') {
+        if (static_cast<unsigned char>(*value) >= 0x80) {
+            return true;
+        }
+        ++value;
+    }
+    return false;
+}
+
+
 void set_hidden(lv_obj_t* object, bool hidden)
 {
     if (object == nullptr) {
@@ -103,9 +167,144 @@ void set_hidden(lv_obj_t* object, bool hidden)
 }
 
 
-void style_summary_label(lv_obj_t* label, uint32_t color)
+void set_channel(
+    lv_obj_t* dot,
+    lv_obj_t* value,
+    const TraeChannelState& state
+)
 {
-    lv_obj_set_style_text_color(label, lv_color_hex(color), 0);
+    lv_label_set_text(value, display_or_dash(state.text));
+    lv_obj_set_style_text_color(value, lv_color_hex(state.text_color), 0);
+    lv_obj_set_style_bg_color(dot, lv_color_hex(state.dot_color), 0);
+}
+
+
+void uppercase_short(char* output, size_t output_size, const char* value)
+{
+    if (output == nullptr || output_size == 0) {
+        return;
+    }
+    const char* safe = display_or_dash(value);
+    size_t index = 0;
+    for (; index + 1 < output_size && safe[index] != '\0'; ++index) {
+        output[index] = static_cast<char>(std::toupper(
+            static_cast<unsigned char>(safe[index])
+        ));
+    }
+    output[index] = '\0';
+}
+
+
+struct LabelTypography {
+    const lv_font_t* font;
+    int scale;
+};
+
+
+LabelTypography project_typography(const char* value, bool single)
+{
+    if (has_non_ascii(value)) {
+        return {&font_puhui_14_1, kScale14To17};
+    }
+    return {
+        single ? &MontserratBold17Trae : &MontserratBold13Trae,
+        LV_SCALE_NONE,
+    };
+}
+
+
+LabelTypography title_typography(const char* value, bool single)
+{
+    const lv_font_t* font = nullptr;
+    int base_font_px = 0;
+    if (has_non_ascii(value)) {
+        font = single ? &CodexTaskTitle21 : &NotoSansSCBold16Trae;
+        base_font_px = single ? 21 : 16;
+    } else {
+        font = single ? &MontserratBold28Trae : &MontserratBold24Trae;
+        base_font_px = single ? 28 : 24;
+    }
+    lv_point_t raw_size{};
+    lv_text_get_size(
+        &raw_size,
+        value,
+        font,
+        0,
+        0,
+        LV_COORD_MAX,
+        LV_TEXT_FLAG_NONE
+    );
+    return {
+        font,
+        title_font_scale(
+            raw_size.x,
+            kTaskRowWidth,
+            base_font_px,
+            single ? kSingleTaskTitleMinFontPx
+                   : kMultiTaskTitleMinFontPx,
+            single ? kSingleTaskTitleMaxFontPx
+                   : kMultiTaskTitleMaxFontPx
+        ),
+    };
+}
+
+
+LabelTypography model_typography(const char* value)
+{
+    return has_non_ascii(value)
+               ? LabelTypography{&font_puhui_14_1, kScale14To15}
+               : LabelTypography{&MontserratMedium15Trae, LV_SCALE_NONE};
+}
+
+
+int visual_text_height(
+    const char* text,
+    const LabelTypography& typography
+)
+{
+    lv_point_t size{};
+    lv_text_get_size(
+        &size,
+        text,
+        typography.font,
+        0,
+        0,
+        LV_COORD_MAX,
+        LV_TEXT_FLAG_NONE
+    );
+    return scaled_visual_height(size.y, typography.scale);
+}
+
+
+void set_text_scale(lv_obj_t* label, int scale, int pivot_x = 0)
+{
+    lv_obj_set_style_transform_scale_x(label, scale, 0);
+    lv_obj_set_style_transform_scale_y(label, scale, 0);
+    lv_obj_set_style_transform_pivot_x(label, pivot_x, 0);
+    lv_obj_set_style_transform_pivot_y(label, 0, 0);
+}
+
+
+void apply_left_typography(
+    lv_obj_t* label,
+    const LabelTypography& typography,
+    int visual_width
+)
+{
+    lv_obj_set_style_text_font(label, typography.font, 0);
+    set_text_scale(label, typography.scale);
+    lv_obj_set_width(
+        label,
+        std::max(1, visual_width * LV_SCALE_NONE / typography.scale)
+    );
+}
+
+
+void set_count(lv_obj_t* label, uint16_t count)
+{
+    char text[8];
+    std::snprintf(text, sizeof(text), "%u", static_cast<unsigned>(count));
+    lv_label_set_text(label, text);
 }
 
 }  // namespace
@@ -143,171 +342,176 @@ void TraeStatusPage::init(lv_obj_t* parent)
         "TRAE",
         kBrandX,
         kBrandY,
-        kTelemetryWidth,
-        &MontserratSemiBold26,
+        kConsoleWidth,
+        &MontserratBold29Trae,
         kPrimaryText
     );
 
-    _bt_dot = make_status_dot(_root, kBluetoothDotX, kDimText);
-    _bt_status = make_label(
+    lv_obj_t* agent_caption = make_label(
         _root,
-        "BT OFF",
-        kBluetoothTextX,
-        kHealthLabelY,
-        kBluetoothWidth,
-        &lv_font_montserrat_10,
+        "AGENT",
+        kAgentX,
+        kHealthCaptionY,
+        kAgentWidth,
+        &MontserratMedium13Trae,
         kDimText
     );
-    lv_obj_set_style_text_letter_space(_bt_status, 1, 0);
-    _process_dot = make_status_dot(_root, kProcessDotX, kDimText);
-    _process_status = make_label(
-        _root,
-        "TRAE --",
-        kProcessTextX,
-        kHealthLabelY,
-        kProcessWidth,
-        &lv_font_montserrat_10,
-        kDimText
-    );
-    lv_obj_set_style_text_letter_space(_process_status, 1, 0);
-
-    _robot = lv_image_create(_root);
-    lv_image_set_src(_robot, &trae_robot_idle);
-    lv_image_set_antialias(_robot, false);
-    lv_image_set_pivot(_robot, 0, 0);
-    lv_image_set_scale(_robot, kRobotScale);
-    lv_obj_set_pos(_robot, kRobotX, kRobotY);
-    lv_obj_clear_flag(_robot, LV_OBJ_FLAG_CLICKABLE);
-
-    lv_obj_t* model_caption = make_label(
-        _root,
-        "MODEL",
-        kTelemetryX,
-        kModelCaptionY,
-        kTelemetryWidth,
-        &lv_font_montserrat_14,
-        kDimText
-    );
-    lv_obj_set_style_text_letter_space(model_caption, 3, 0);
-    _model = make_label(
+    lv_obj_set_style_text_letter_space(agent_caption, 2, 0);
+    _agent_dot = make_status_dot(_root, kAgentX);
+    _agent_status = make_label(
         _root,
         "--",
-        kTelemetryX,
-        kModelValueY,
-        kTelemetryWidth,
-        &MontserratSemiBold26,
-        kPrimaryText
-    );
-
-    lv_obj_t* effort_caption = make_label(
-        _root,
-        "EFFORT",
-        kTelemetryX,
-        kEffortCaptionY,
-        kTelemetryWidth,
-        &lv_font_montserrat_14,
-        kDimText
-    );
-    lv_obj_set_style_text_letter_space(effort_caption, 3, 0);
-    _effort = make_label(
-        _root,
-        "--",
-        kTelemetryX,
-        kEffortValueY,
-        kTelemetryWidth,
-        &MontserratSemiBold26,
-        kPrimaryText
-    );
-
-    make_line(_root, kDividerX, kDividerY, kDividerWidth);
-    _pending_label = make_label(
-        _root,
-        "待确认",
-        kPendingAnchorX,
-        kSummaryLabelY,
-        kSummaryAnchorWidth,
-        &NotoSansSCBold16Trae,
-        kDimText
-    );
-    lv_obj_set_style_text_align(_pending_label, LV_TEXT_ALIGN_CENTER, 0);
-    style_summary_label(_pending_label, kDimText);
-    _pending_count = make_label(
-        _root,
-        "0",
-        kPendingAnchorX,
-        kSummaryCountY,
-        kSummaryAnchorWidth,
-        &MontserratSemiBold26,
-        kDimText
-    );
-    lv_obj_set_style_text_align(_pending_count, LV_TEXT_ALIGN_CENTER, 0);
-    _running_label = make_label(
-        _root,
-        "运行中",
-        kRunningAnchorX,
-        kSummaryLabelY,
-        kSummaryAnchorWidth,
-        &NotoSansSCBold16Trae,
-        kDimText
-    );
-    lv_obj_set_style_text_align(_running_label, LV_TEXT_ALIGN_CENTER, 0);
-    style_summary_label(_running_label, kDimText);
-    _running_count = make_label(
-        _root,
-        "0",
-        kRunningAnchorX,
-        kSummaryCountY,
-        kSummaryAnchorWidth,
-        &MontserratSemiBold26,
-        kDimText
-    );
-    lv_obj_set_style_text_align(_running_count, LV_TEXT_ALIGN_CENTER, 0);
-
-    _current_project = make_label(
-        _root,
-        "--",
-        kCurrentProjectX,
-        kCurrentProjectY,
-        kCurrentTextWidth,
-        &lv_font_montserrat_22,
-        kProjectText
-    );
-    lv_obj_set_style_text_align(_current_project, LV_TEXT_ALIGN_CENTER, 0);
-    _current_task = make_label(
-        _root,
-        "--",
-        kCurrentTaskX,
-        kCurrentTaskY,
-        kCurrentTextWidth,
-        &font_puhui_14_1,
-        kPrimaryText
-    );
-    lv_obj_set_style_text_align(_current_task, LV_TEXT_ALIGN_CENTER, 0);
-    _next_caption = make_label(
-        _root,
-        "下一任务",
-        kNextCaptionX,
-        kNextTaskY,
-        kNextCaptionWidth,
-        &font_puhui_14_1,
-        kDimText
-    );
-    _next_task = make_label(
-        _root,
-        "--",
-        kNextTaskX,
-        kNextTaskY,
-        kNextTaskWidth,
-        &font_puhui_14_1,
+        kAgentX + kStatusTextInset,
+        kHealthValueY,
+        kAgentWidth - kStatusTextInset,
+        &MontserratBold15Trae,
         kSecondaryText
     );
 
-    _robot_timer = lv_timer_create(
-        TraeStatusPage::robot_timer_cb,
-        kRobotIdleDurationMs,
-        this
+    lv_obj_t* voice_caption = make_label(
+        _root,
+        "VOICE",
+        kVoiceX,
+        kHealthCaptionY,
+        kVoiceWidth,
+        &MontserratMedium13Trae,
+        kDimText
     );
-    lv_timer_pause(_robot_timer);
+    lv_obj_set_style_text_letter_space(voice_caption, 2, 0);
+    _voice_dot = make_status_dot(_root, kVoiceX);
+    _voice_status = make_label(
+        _root,
+        "--",
+        kVoiceX + kStatusTextInset,
+        kHealthValueY,
+        kVoiceWidth - kStatusTextInset,
+        &MontserratBold15Trae,
+        kSecondaryText
+    );
+
+    make_spine(_root);
+    _pending_count = make_label(
+        _root,
+        "0",
+        kPendingCountX,
+        kPendingCountY,
+        kRailCountWidth,
+        &MontserratBold26Digits,
+        kPending
+    );
+    lv_obj_set_style_text_align(_pending_count, LV_TEXT_ALIGN_RIGHT, 0);
+    _pending_label = make_label(
+        _root,
+        "PENDING",
+        kPendingCountX,
+        kPendingCountY + kRailLabelOffsetY,
+        kRailCountWidth,
+        &MontserratMedium14Trae,
+        kDimText
+    );
+    lv_obj_set_style_text_align(_pending_label, LV_TEXT_ALIGN_RIGHT, 0);
+    _running_count = make_label(
+        _root,
+        "0",
+        kRunningCountX,
+        kRunningCountY,
+        kRailCountWidth,
+        &MontserratBold26Digits,
+        kRunning
+    );
+    lv_obj_set_style_text_align(_running_count, LV_TEXT_ALIGN_RIGHT, 0);
+    _running_label = make_label(
+        _root,
+        "RUNNING",
+        kRunningCountX,
+        kRunningCountY + kRailLabelOffsetY,
+        kRailCountWidth,
+        &MontserratMedium14Trae,
+        kDimText
+    );
+    lv_obj_set_style_text_align(_running_label, LV_TEXT_ALIGN_RIGHT, 0);
+
+    _task_group_label = make_label(
+        _root,
+        "PENDING TASKS • 0",
+        kTaskLabelX,
+        kTaskLabelY,
+        kTaskLabelWidth,
+        &MontserratBold14Trae,
+        kPending
+    );
+    lv_obj_set_style_text_letter_space(_task_group_label, 1, 0);
+
+    for (TaskRow& row : _task_rows) {
+        row.project = make_label(
+            _root,
+            "--",
+            kTaskProjectX,
+            0,
+            kTaskRowWidth,
+            &MontserratBold13Trae,
+            kProjectText
+        );
+        row.title = make_label(
+            _root,
+            "--",
+            kTaskTitleX,
+            0,
+            kTaskRowWidth,
+            &NotoSansSCBold16Trae,
+            kPrimaryText
+        );
+        row.meta = lv_obj_create(_root);
+        lv_obj_set_size(row.meta, kTaskRowWidth, 22);
+        lv_obj_set_style_radius(row.meta, 0, 0);
+        lv_obj_set_style_border_width(row.meta, 0, 0);
+        lv_obj_set_style_pad_all(row.meta, 0, 0);
+        lv_obj_set_style_bg_opa(row.meta, LV_OPA_TRANSP, 0);
+        lv_obj_clear_flag(row.meta, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_clear_flag(row.meta, LV_OBJ_FLAG_SCROLLABLE);
+        row.model = make_label(
+            row.meta,
+            "--",
+            0,
+            3,
+            kTaskModelMaxWidth,
+            &MontserratMedium15Trae,
+            kSecondaryText
+        );
+        row.effort_badge = make_effort_badge(row.meta, &row.effort);
+    }
+
+    _task_divider = make_segment(
+        _root,
+        kTaskLabelX,
+        kTaskDividerY,
+        kTaskLabelWidth,
+        1,
+        kDimText,
+        LV_OPA_30
+    );
+    _running_summary = make_label(
+        _root,
+        "",
+        kTaskLabelX,
+        kRunningSummaryY,
+        kTaskLabelWidth,
+        &MontserratMedium13Trae,
+        kRunning
+    );
+    lv_obj_set_style_text_letter_space(_running_summary, 1, 0);
+    _empty_state = make_label(
+        _root,
+        "",
+        kTaskLabelX,
+        kEmptyStateY,
+        kTaskLabelWidth,
+        &font_puhui_14_1,
+        kSecondaryText
+    );
+    lv_obj_set_style_text_align(_empty_state, LV_TEXT_ALIGN_CENTER, 0);
+    set_text_scale(_empty_state, kScale14To17, kTaskLabelWidth / 2);
+    set_hidden(_empty_state, true);
 }
 
 
@@ -315,6 +519,7 @@ void TraeStatusPage::render(
     const TraeStatusSnapshot& snapshot,
     const TraeTask* task,
     const TraeTask* next_task,
+    const TraeChannelPresentation& channels,
     bool stale,
     bool bluetooth_connected
 )
@@ -323,80 +528,12 @@ void TraeStatusPage::render(
         return;
     }
 
-    const HealthState health = resolve_health_state(
-        bluetooth_connected,
-        stale,
-        snapshot.process_state
-    );
-    lv_label_set_text(_bt_status, bluetooth_health_text(health));
-    lv_obj_set_style_text_color(
-        _bt_status,
-        lv_color_hex(health.bluetooth_live ? kRunning : kDimText),
-        0
-    );
-    lv_obj_set_style_bg_color(
-        _bt_dot,
-        lv_color_hex(health.bluetooth_live ? kRunning : kDimText),
-        0
-    );
-
-    const char* process_text = process_health_text(health.process);
-    uint32_t process_color = kDimText;
-    if (health.process == ProcessHealth::Live) {
-        process_color = kProcessLive;
-    }
-    lv_label_set_text(_process_status, process_text);
-    lv_obj_set_style_text_color(
-        _process_status,
-        lv_color_hex(process_color),
-        0
-    );
-    lv_obj_set_style_bg_color(_process_dot, lv_color_hex(process_color), 0);
+    set_channel(_agent_dot, _agent_status, channels.agent);
+    set_channel(_voice_dot, _voice_status, channels.voice);
+    set_count(_pending_count, snapshot.pending_count);
+    set_count(_running_count, snapshot.running_count);
 
     const bool active_task = is_active_task(task);
-    const char* model = snapshot.model.data();
-    const char* effort = snapshot.effort.data();
-    if (active_task && task->model[0] != '\0') {
-        model = task->model.data();
-    }
-    if (active_task && task->effort[0] != '\0') {
-        effort = task->effort.data();
-    }
-    lv_label_set_text(_model, display_or_dash(model));
-    lv_label_set_text(_effort, display_or_dash(effort));
-
-    char count_text[8];
-    std::snprintf(
-        count_text,
-        sizeof(count_text),
-        "%u",
-        static_cast<unsigned>(snapshot.pending_count)
-    );
-    lv_label_set_text(_pending_count, count_text);
-    std::snprintf(
-        count_text,
-        sizeof(count_text),
-        "%u",
-        static_cast<unsigned>(snapshot.running_count)
-    );
-    lv_label_set_text(_running_count, count_text);
-
-    const bool pending = active_task && task->state == TraeTaskState::Pending;
-    const uint32_t pending_color = pending ? kPending : kDimText;
-    const uint32_t running_color = active_task && !pending ? kRunning : kDimText;
-    style_summary_label(_pending_label, pending_color);
-    lv_obj_set_style_text_color(
-        _pending_count,
-        lv_color_hex(pending_color),
-        0
-    );
-    style_summary_label(_running_label, running_color);
-    lv_obj_set_style_text_color(
-        _running_count,
-        lv_color_hex(running_color),
-        0
-    );
-
     const char* empty_text = empty_state_text(resolve_empty_state(
         bluetooth_connected,
         stale,
@@ -405,97 +542,210 @@ void TraeStatusPage::render(
         snapshot.running_count,
         active_task
     ));
-
     if (empty_text != nullptr) {
-        set_hidden(_current_project, true);
-        set_hidden(_current_task, false);
-        set_hidden(_next_caption, true);
-        set_hidden(_next_task, true);
-        lv_label_set_text(_current_task, empty_text);
-        lv_obj_set_pos(_current_task, kCurrentTaskX, kCurrentTaskY);
-        lv_obj_set_style_text_align(_current_task, LV_TEXT_ALIGN_CENTER, 0);
-        _last_task_id = {};
+        set_hidden(_task_group_label, true);
+        set_task_row_hidden(0, true);
+        set_task_row_hidden(1, true);
+        set_hidden(_task_divider, true);
+        set_hidden(_running_summary, true);
+        lv_label_set_text(_empty_state, empty_text);
+        set_hidden(_empty_state, false);
         return;
     }
 
-    set_hidden(_current_project, false);
-    set_hidden(_current_task, false);
-    lv_obj_set_pos(
-        _current_project,
-        kCurrentProjectX,
-        kCurrentProjectY
+    set_hidden(_empty_state, true);
+    const uint16_t group_count = task->state == TraeTaskState::Pending
+                                     ? snapshot.pending_count
+                                     : snapshot.running_count;
+    char group_text[40];
+    std::snprintf(
+        group_text,
+        sizeof(group_text),
+        "%s • %u",
+        task_group_label(task->state),
+        static_cast<unsigned>(group_count)
     );
-    lv_obj_set_pos(_current_task, kCurrentTaskX, kCurrentTaskY);
-    lv_label_set_text(
-        _current_project,
-        display_or_dash(task->project.data())
-    );
-    const bool ascii_project = std::all_of(
-        task->project.begin(),
-        task->project.end(),
-        [](char character) {
-            return character == '\0' ||
-                   static_cast<unsigned char>(character) < 0x80;
-        }
-    );
-    lv_obj_set_style_text_font(
-        _current_project,
-        ascii_project ? &lv_font_montserrat_22 : &font_puhui_14_1,
+    lv_label_set_text(_task_group_label, group_text);
+    lv_obj_set_style_text_color(
+        _task_group_label,
+        lv_color_hex(task_group_color(task->state)),
         0
     );
-    lv_label_set_text(_current_task, display_or_dash(task->title.data()));
+    set_hidden(_task_group_label, false);
 
-    if (is_active_task(next_task)) {
-        char next_text[128];
-        std::snprintf(
-            next_text,
-            sizeof(next_text),
-            "%s · %s",
-            display_or_dash(next_task->project.data()),
-            display_or_dash(next_task->title.data())
-        );
-        lv_label_set_text(_next_task, next_text);
-        set_hidden(_next_caption, false);
-        set_hidden(_next_task, false);
+    const size_t active_count = static_cast<size_t>(snapshot.pending_count) +
+                                static_cast<size_t>(snapshot.running_count);
+    const TaskLayout layout = resolve_task_layout(active_count);
+    const bool single = layout == TaskLayout::Single;
+    TraeTask fallback;
+    fallback.model = snapshot.model;
+    fallback.effort = snapshot.effort;
+    render_task_row(0, task, fallback, single);
+
+    const bool show_second = !single && is_active_task(next_task);
+    if (show_second) {
+        render_task_row(1, next_task, fallback, false);
     } else {
-        set_hidden(_next_caption, true);
-        set_hidden(_next_task, true);
+        set_task_row_hidden(1, true);
+    }
+    set_hidden(_task_divider, !show_second);
+
+    char summary[40] = {};
+    if (!single && task->state == TraeTaskState::Pending &&
+        snapshot.running_count > 0) {
+        std::snprintf(
+            summary,
+            sizeof(summary),
+            "RUNNING   %u TASKS",
+            static_cast<unsigned>(snapshot.running_count)
+        );
+    } else if (!single && task->state == TraeTaskState::Running &&
+               snapshot.pending_count > 0) {
+        std::snprintf(
+            summary,
+            sizeof(summary),
+            "PENDING   %u TASKS",
+            static_cast<unsigned>(snapshot.pending_count)
+        );
+    }
+    lv_label_set_text(_running_summary, summary);
+    set_hidden(_running_summary, summary[0] == '\0');
+}
+
+
+void TraeStatusPage::render_task_row(
+    size_t index,
+    const TraeTask* task,
+    const TraeTask& fallback,
+    bool single
+)
+{
+    if (index >= _task_rows.size() || !is_active_task(task)) {
+        set_task_row_hidden(index, true);
+        return;
     }
 
-    const bool task_changed = should_trigger_task_action(
-        _active,
-        _last_task_id.data(),
-        task->id.data()
+    TaskRow& row = _task_rows[index];
+    const TaskRowGeometry geometry = single
+                                         ? kSingleTaskRow
+                                         : kMultiTaskRows[index];
+    lv_obj_set_pos(row.project, kTaskProjectX, geometry.project_y);
+    lv_obj_set_pos(row.title, kTaskTitleX, geometry.title_y);
+
+    const char* project = display_or_dash(task->project.data());
+    const char* title = display_or_dash(task->title.data());
+    const char* model = task->model[0] == '\0'
+                            ? display_or_dash(fallback.model.data())
+                            : task->model.data();
+    const char* effort = task->effort[0] == '\0'
+                             ? display_or_dash(fallback.effort.data())
+                             : task->effort.data();
+
+    lv_label_set_text(row.project, project);
+    apply_left_typography(
+        row.project,
+        project_typography(project, single),
+        kTaskRowWidth
     );
-    _last_task_id = task->id;
-    if (task_changed && _robot_timer != nullptr) {
-        set_robot_action(true);
-        lv_timer_set_period(_robot_timer, kRobotActionDurationMs);
-        lv_timer_reset(_robot_timer);
+    lv_label_set_text(row.title, title);
+    const LabelTypography title_style = title_typography(title, single);
+    apply_left_typography(row.title, title_style, kTaskRowWidth);
+    lv_label_set_long_mode(row.title, LV_LABEL_LONG_MODE_DOTS);
+    const int measured_title_height =
+        visual_text_height(title, title_style);
+    const int title_visual_height = single
+                                        ? std::min(
+                                              measured_title_height,
+                                              kSingleTitleMaxHeight
+                                          )
+                                        : measured_title_height;
+    lv_obj_set_height(
+        row.title,
+        std::max(
+            1,
+            title_visual_height * LV_SCALE_NONE / title_style.scale
+        )
+    );
+    lv_obj_set_pos(
+        row.meta,
+        kTaskMetaX,
+        single ? single_task_meta_y(title_visual_height) : geometry.meta_y
+    );
+
+    lv_label_set_text(row.model, model);
+    const LabelTypography model_style = model_typography(model);
+    lv_obj_set_style_text_font(row.model, model_style.font, 0);
+    set_text_scale(row.model, model_style.scale);
+    lv_point_t model_size{};
+    lv_text_get_size(
+        &model_size,
+        model,
+        model_style.font,
+        0,
+        0,
+        LV_COORD_MAX,
+        LV_TEXT_FLAG_NONE
+    );
+    const int model_visual_width = std::max(
+        1,
+        std::min(
+            static_cast<int>(model_size.x) * model_style.scale /
+                LV_SCALE_NONE,
+            kTaskModelMaxWidth
+        )
+    );
+    lv_obj_set_width(
+        row.model,
+        std::max(
+            1,
+            model_visual_width * LV_SCALE_NONE / model_style.scale
+        )
+    );
+
+    char effort_text[34];
+    uppercase_short(effort_text, sizeof(effort_text), effort);
+    lv_label_set_text(row.effort, effort_text);
+    lv_point_t effort_size{};
+    lv_text_get_size(
+        &effort_size,
+        effort_text,
+        &MontserratBold13Trae,
+        0,
+        0,
+        LV_COORD_MAX,
+        LV_TEXT_FLAG_NONE
+    );
+    const int badge_width = std::min(
+        kTaskRowWidth - model_visual_width - kTaskMetaGap,
+        std::max(38, static_cast<int>(effort_size.x) + 2 * kEffortBadgePadX)
+    );
+    lv_obj_set_size(row.effort_badge, badge_width, kEffortBadgeHeight);
+    lv_obj_set_width(row.effort, badge_width);
+    lv_obj_set_pos(
+        row.effort_badge,
+        model_visual_width + kTaskMetaGap,
+        0
+    );
+
+    set_task_row_hidden(index, false);
+}
+
+
+void TraeStatusPage::set_task_row_hidden(size_t index, bool hidden)
+{
+    if (index >= _task_rows.size()) {
+        return;
     }
+    TaskRow& row = _task_rows[index];
+    set_hidden(row.project, hidden);
+    set_hidden(row.title, hidden);
+    set_hidden(row.meta, hidden);
 }
 
 
 void TraeStatusPage::set_active(bool active)
 {
-    if (_active == active) {
-        return;
-    }
     _active = active;
-    if (_robot_timer == nullptr) {
-        return;
-    }
-
-    const RobotActivation activation = resolve_robot_activation(active);
-    set_robot_action(activation.action);
-    lv_timer_set_period(_robot_timer, activation.period_ms);
-    if (activation.paused) {
-        lv_timer_pause(_robot_timer);
-        lv_timer_reset(_robot_timer);
-    } else {
-        lv_timer_reset(_robot_timer);
-        lv_timer_resume(_robot_timer);
-    }
 }
 
 
@@ -507,63 +757,26 @@ bool TraeStatusPage::contains_task_point(int x, int y) const
 }
 
 
-void TraeStatusPage::robot_timer_cb(lv_timer_t* timer)
-{
-    auto* self = static_cast<TraeStatusPage*>(
-        lv_timer_get_user_data(timer)
-    );
-    if (self == nullptr || !self->_active || self->_robot == nullptr) {
-        return;
-    }
-
-    const RobotTimerStep step = resolve_robot_timer_step(
-        self->_robot_action
-    );
-    self->set_robot_action(step.action);
-    lv_timer_set_period(timer, step.period_ms);
-}
-
-
-void TraeStatusPage::set_robot_action(bool action)
-{
-    _robot_action = action;
-    if (_robot != nullptr) {
-        lv_image_set_src(
-            _robot,
-            action ? &trae_robot_action : &trae_robot_idle
-        );
-    }
-}
-
-
 void TraeStatusPage::shutdown()
 {
-    if (_robot_timer != nullptr) {
-        lv_timer_delete(_robot_timer);
-        _robot_timer = nullptr;
-    }
     if (_root != nullptr) {
         lv_obj_delete(_root);
         _root = nullptr;
     }
 
     _brand_icon = nullptr;
-    _bt_dot = nullptr;
-    _bt_status = nullptr;
-    _process_dot = nullptr;
-    _process_status = nullptr;
-    _robot = nullptr;
-    _model = nullptr;
-    _effort = nullptr;
+    _agent_dot = nullptr;
+    _agent_status = nullptr;
+    _voice_dot = nullptr;
+    _voice_status = nullptr;
     _pending_label = nullptr;
     _pending_count = nullptr;
     _running_label = nullptr;
     _running_count = nullptr;
-    _current_project = nullptr;
-    _current_task = nullptr;
-    _next_caption = nullptr;
-    _next_task = nullptr;
-    _last_task_id = {};
+    _task_group_label = nullptr;
+    _task_divider = nullptr;
+    _running_summary = nullptr;
+    _empty_state = nullptr;
+    _task_rows = {};
     _active = false;
-    _robot_action = false;
 }
