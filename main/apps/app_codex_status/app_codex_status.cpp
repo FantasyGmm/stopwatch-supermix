@@ -704,6 +704,10 @@ void AppCodexStatus::onRunning()
 
     if (!_screen_off) {
         LvglLockGuard lock;
+        const uint32_t sampled_touch_ms =
+            GetHAL().lastTouchSampleTimestampMs();
+        const uint32_t touch_now =
+            sampled_touch_ms == 0 ? now : sampled_touch_ms;
         sync_pet_runtime(now);
         if (_agent_panel_dirty) {
             render_agent_panel();
@@ -725,7 +729,7 @@ void AppCodexStatus::onRunning()
         const bool agent_panel_available =
             sync_agent_panel_for_task_mode(task_mode);
         if (agent_panel_available && !consume_auto_dismiss_touch) {
-            update_agent_panel_touch(now);
+            update_agent_panel_touch(touch_now);
         }
         if (consume_auto_dismiss_touch) {
             _agent_panel_model.cancel_touch();
@@ -749,12 +753,12 @@ void AppCodexStatus::onRunning()
             } else {
                 sync_task_focus_visibility();
                 if (task_mode == CodexTaskFocusMode::Status) {
-                    update_page_swipe(now);
+                    update_page_swipe(touch_now);
                 } else {
                     _page_swipe.cancel();
                     _trae_card_tap.cancel();
                     _last_page_touch_state = LV_INDEV_STATE_REL;
-                    update_task_focus_touch(now);
+                    update_task_focus_touch(touch_now);
                 }
             }
         }

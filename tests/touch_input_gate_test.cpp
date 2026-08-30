@@ -1,4 +1,5 @@
 #include "hal/touch_input_gate.h"
+#include "hal/touch_sample_queue.h"
 
 #include "apps/app_codex_status/status_page_swipe_logic.h"
 #include "apps/common/edge_control/edge_control_logic.h"
@@ -185,5 +186,27 @@ int main()
     consumers.update(gate, gate.filterForLvgl(true), 250, 220, 2340);
     consumers.update(gate, gate.filterForLvgl(false), 250, 220, 2400);
     assert(consumers.page_result == StatusPageSwipeResult::Trae);
+
+    // A complete swipe sampled while LVGL is blocked still reaches the real
+    // touch gate and page recognizer as Pressed, latest Move, Released. The
+    // physical timestamps keep the valid swipe inside its duration limit.
+    TouchSampleQueue buffered_swipe;
+    buffered_swipe.push({true, 390, 220, 4000});
+    buffered_swipe.push({true, 300, 220, 4040});
+    buffered_swipe.push({true, 100, 220, 4120});
+    buffered_swipe.push({false, -1, -1, 4140});
+    RawTouchConsumers buffered_consumers;
+    TouchSample buffered_sample;
+    while (buffered_swipe.pop_for_lvgl(buffered_sample)) {
+        buffered_consumers.update(
+            gate,
+            gate.filterForLvgl(buffered_sample.pressed),
+            buffered_sample.x,
+            buffered_sample.y,
+            buffered_sample.timestamp_ms
+        );
+    }
+    assert(buffered_consumers.page_result ==
+           StatusPageSwipeResult::Trae);
     return 0;
 }

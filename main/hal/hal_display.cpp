@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 #include "hal.h"
+#include "touch_sample_queue.h"
 #include "utils/settings/settings.h"
 #include <runtime/power/screen_off_runtime_policy.h>
 #include <mooncake_log.h>
@@ -257,6 +258,87 @@ bool Hal::isDisplayVisible()
 #include "drivers/cst820/cst820.h"
 
 static std::unique_ptr<Cst820> _cst820;
+static portMUX_TYPE _touch_samples_mux = portMUX_INITIALIZER_UNLOCKED;
+static TouchSampleQueue _touch_samples;
+static TouchSample _latest_touch_sample;
+static TouchSample _last_lvgl_touch_sample;
+static std::atomic<uint32_t> _last_lvgl_touch_timestamp_ms{0};
+static std::atomic<bool> _touch_sampler_started{false};
+static std::atomic<uint32_t> _touch_sample_generation{0};
+
+static TouchSample read_touch_hardware()
+{
+    TouchSample sample;
+    sample.timestamp_ms = static_cast<uint32_t>(esp_timer_get_time() / 1000);
+    if (_cst820 && _cst820->read()) {
+        sample.pressed = _cst820->getFingerNum() > 0;
+        if (sample.pressed) {
+            sample.x = _cst820->getX();
+            sample.y = _cst820->getY();
+        }
+    }
+    return sample;
+}
+
+static void publish_touch_sample(
+    const TouchSample& sample,
+    uint32_t generation
+)
+{
+    portENTER_CRITICAL(&_touch_samples_mux);
+    if (generation == _touch_sample_generation.load(
+            std::memory_order_acquire)) {
+        _latest_touch_sample = sample;
+        _touch_samples.push(sample);
+    }
+    portEXIT_CRITICAL(&_touch_samples_mux);
+}
+
+static TouchSample consume_touch_sample()
+{
+    portENTER_CRITICAL(&_touch_samples_mux);
+    TouchSample sample;
+    if (_touch_samples.pop_for_lvgl(sample)) {
+        _last_lvgl_touch_sample = sample;
+    }
+    sample = _last_lvgl_touch_sample;
+    portEXIT_CRITICAL(&_touch_samples_mux);
+    return sample;
+}
+
+static void clear_touch_samples(uint32_t timestamp_ms)
+{
+    portENTER_CRITICAL(&_touch_samples_mux);
+    _touch_sample_generation.fetch_add(1, std::memory_order_acq_rel);
+    _touch_samples.clear();
+    _last_lvgl_touch_sample = {
+        false,
+        -1,
+        -1,
+        timestamp_ms,
+    };
+    _last_lvgl_touch_timestamp_ms.store(
+        timestamp_ms,
+        std::memory_order_release
+    );
+    portEXIT_CRITICAL(&_touch_samples_mux);
+}
+
+static void touch_sampler_task(void*)
+{
+    TickType_t wake_at = xTaskGetTickCount();
+    while (true) {
+        const uint32_t generation = _touch_sample_generation.load(
+            std::memory_order_acquire
+        );
+        const TouchSample sample = read_touch_hardware();
+        publish_touch_sample(sample, generation);
+        vTaskDelayUntil(
+            &wake_at,
+            pdMS_TO_TICKS(touch_sampling_period_ms(sample.pressed))
+        );
+    }
+}
 
 void Hal::touchpad_init()
 {
@@ -268,20 +350,40 @@ void Hal::touchpad_init()
     if (!_cst820->begin(i2c_bus_get_internal_bus_handle(_i2c_bus))) {
         mclog::tagError(_tag, "touchpad init failed");
         _cst820.reset();
+        return;
     }
+
+    const BaseType_t task_created = xTaskCreate(
+        touch_sampler_task,
+        "touch_sampler",
+        4096,
+        nullptr,
+        2,
+        nullptr
+    );
+    if (task_created != pdPASS) {
+        mclog::tagError(_tag, "touch sampler task creation failed");
+        return;
+    }
+    _touch_sampler_started.store(true, std::memory_order_release);
 }
 
 Hal::TouchPoint Hal::getTouchPoint()
 {
-    Hal::TouchPoint point;
-    if (_cst820 && _cst820->read()) {
-        point.num = _cst820->getFingerNum();
-        if (point.num > 0) {
-            point.x = _cst820->getX();
-            point.y = _cst820->getY();
-        }
-    }
-    return point;
+    portENTER_CRITICAL(&_touch_samples_mux);
+    const TouchSample sample = _latest_touch_sample;
+    portEXIT_CRITICAL(&_touch_samples_mux);
+    return {
+        sample.pressed ? 1 : 0,
+        sample.x,
+        sample.y,
+        sample.timestamp_ms,
+    };
+}
+
+uint32_t Hal::lastTouchSampleTimestampMs() const
+{
+    return _last_lvgl_touch_timestamp_ms.load(std::memory_order_acquire);
 }
 
 bool Hal::filterTouchInputForLvgl(bool pressed)
@@ -291,6 +393,9 @@ bool Hal::filterTouchInputForLvgl(bool pressed)
 
 void Hal::armTouchWakeInput()
 {
+    clear_touch_samples(
+        static_cast<uint32_t>(esp_timer_get_time() / 1000)
+    );
     _touch_input_gate.armForScreenOff();
 }
 
@@ -394,14 +499,22 @@ static void lvgl_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
 {
     (void)indev;
 
-    auto tp = GetHAL().getTouchPoint();
-    const bool pressed = GetHAL().filterTouchInputForLvgl(tp.num > 0);
+    const TouchSample sample = _touch_sampler_started.load(
+        std::memory_order_acquire
+    ) ? consume_touch_sample() : read_touch_hardware();
+    _last_lvgl_touch_timestamp_ms.store(
+        sample.timestamp_ms,
+        std::memory_order_release
+    );
+    const bool pressed = GetHAL().filterTouchInputForLvgl(sample.pressed);
+    data->timestamp = sample.timestamp_ms;
+    data->continue_reading = false;
     if (!pressed) {
         data->state = LV_INDEV_STATE_REL;
     } else {
         data->state   = LV_INDEV_STATE_PR;
-        data->point.x = tp.x;
-        data->point.y = tp.y;
+        data->point.x = sample.x;
+        data->point.y = sample.y;
     }
 }
 

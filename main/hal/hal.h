@@ -211,8 +211,10 @@ public:
         int num = 0;
         int x   = -1;
         int y   = -1;
+        uint32_t timestamp_ms = 0;
     };
     TouchPoint getTouchPoint();
+    uint32_t lastTouchSampleTimestampMs() const;
     bool filterTouchInputForLvgl(bool pressed);
     void armTouchWakeInput();
     void releaseTouchWakeInputAfterNextSample();
