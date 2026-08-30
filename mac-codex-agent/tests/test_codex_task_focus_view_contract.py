@@ -1,4 +1,5 @@
 import pathlib
+import re
 import unittest
 
 
@@ -164,6 +165,28 @@ class CodexTaskFocusViewContractTests(unittest.TestCase):
             SDKCONFIG_DEFAULTS.read_text(encoding="utf-8"),
         )
         self.assertNotIn("set_text_scale(paragraph", source)
+
+    def test_detail_reply_font_covers_common_agent_response_glyphs(self):
+        detail_font = DETAIL_FONT.read_text(encoding="utf-8")
+        rendered_codepoints = {
+            int(codepoint, 16)
+            for codepoint in re.findall(r"/\* U\+([0-9A-F]{4,6}) ", detail_font)
+        }
+        required = set(
+            "←↑→↓↔✓"
+            "─│┌┐└┘├┤┬┴┼"
+            "•·●○"
+            "×÷±≤≥≈≠"
+            "篓"
+        )
+
+        missing = sorted(required - {chr(codepoint) for codepoint in rendered_codepoints})
+        self.assertEqual(
+            missing,
+            [],
+            "Codex detail font is missing common Agent response glyphs: "
+            + " ".join(f"U+{ord(char):04X} {char}" for char in missing),
+        )
 
 
 if __name__ == "__main__":
