@@ -38,6 +38,7 @@
 #include "trae_status_page.h"
 #include "input_action_controller.h"
 #include "pinned_microphone_controller.h"
+#include "pinned_microphone_meter.h"
 #include "voice_input_controller.h"
 #include "runtime/services/shared_wifi_service.h"
 #include "runtime/power/screen_off_runtime_policy.h"
@@ -82,10 +83,9 @@ private:
     lv_obj_t* _pinned_microphone_touch_target = nullptr;
     lv_obj_t* _pinned_microphone_connection_dot = nullptr;
     lv_obj_t* _pinned_microphone_connection_label = nullptr;
-    lv_obj_t* _pinned_microphone_capsule = nullptr;
-    lv_obj_t* _pinned_microphone_cup = nullptr;
-    lv_obj_t* _pinned_microphone_stem = nullptr;
-    lv_obj_t* _pinned_microphone_base = nullptr;
+    lv_obj_t* _pinned_microphone_icon = nullptr;
+    std::array<lv_obj_t*, 4> _pinned_microphone_level_left = {};
+    std::array<lv_obj_t*, 4> _pinned_microphone_level_right = {};
     lv_obj_t* _pinned_microphone_prompt_label = nullptr;
     lv_obj_t* _agent_value       = nullptr;
     lv_obj_t* _voice_status_dot  = nullptr;
@@ -169,6 +169,8 @@ private:
     int _current_page            = 1;
     lv_indev_state_t _last_page_touch_state = LV_INDEV_STATE_REL;
     int _last_pinned_microphone_render_state = -1;
+    bool _last_pinned_microphone_meter_visible = false;
+    std::array<uint8_t, 4> _last_pinned_microphone_meter_heights = {};
     lv_indev_state_t _last_agent_touch_state = LV_INDEV_STATE_REL;
     lv_indev_state_t _last_task_touch_state = LV_INDEV_STATE_REL;
     int _agent_panel_drag_start_y = 0;

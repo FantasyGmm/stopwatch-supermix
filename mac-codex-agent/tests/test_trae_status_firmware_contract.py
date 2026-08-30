@@ -218,34 +218,49 @@ class TraeStatusFirmwareContractTests(unittest.TestCase):
             self.assertIn(f"LV_FONT_DECLARE({name})", source)
             self.assertIn(f"&{name}", source)
 
+        state_font = (ROOT / "main/assets/fonts/PinnedMicState22.c").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            "--symbols 轻触开启正在启动音频…收中·关闭等待 Mac 连接语异常重试暂不可用",
+            state_font,
+        )
+
         for token in (
             "_pinned_microphone_touch_target",
             "_pinned_microphone_connection_dot",
             "_pinned_microphone_connection_label",
-            "_pinned_microphone_capsule",
-            "_pinned_microphone_cup",
-            "_pinned_microphone_stem",
-            "_pinned_microphone_base",
+            "_pinned_microphone_icon",
+            "_pinned_microphone_level_left",
+            "_pinned_microphone_level_right",
             "_pinned_microphone_prompt_label",
-            "lv_arc_create(_pinned_microphone_page)",
-            "lv_obj_set_size(_pinned_microphone_touch_target, 194, 194)",
-            "lv_obj_set_pos(_pinned_microphone_touch_target, 136, 126)",
-            "lv_obj_set_size(_pinned_microphone_capsule, 36, 66)",
-            "lv_obj_set_pos(_pinned_microphone_capsule, 215, 168)",
-            "lv_obj_set_size(_pinned_microphone_cup, 62, 62)",
-            "lv_obj_set_pos(_pinned_microphone_cup, 202, 190)",
+            "lv_obj_set_size(_pinned_microphone_touch_target, 232, 194)",
+            "lv_obj_set_pos(_pinned_microphone_touch_target, 117, 122)",
+            "lv_image_set_src(_pinned_microphone_icon, &pinned_microphone_d)",
+            "lv_obj_set_pos(_pinned_microphone_icon, 185, 145)",
             '"固定麦克风",\n        48,\n        &PinnedMicTitle24',
             '"已连接到 Mac",\n        84,\n        &font_puhui_14_1',
             '"轻触开启",\n        333,\n        &PinnedMicState22',
             "lv_obj_set_style_bg_opa(\n        _pinned_microphone_touch_target, LV_OPA_TRANSP, 0)",
-            "lv_obj_set_style_arc_opa(_pinned_microphone_cup, LV_OPA_TRANSP, LV_PART_INDICATOR)",
             "_page_dot_pinned_microphone = make_page_dot(_panel, 213)",
             "_page_dot_codex = make_page_dot(_panel, 229)",
             "_page_dot_trae = make_page_dot(_panel, 245)",
         ):
             self.assertIn(token, header + source)
         self.assertNotIn("_pinned_microphone_beacon", header + source)
+        self.assertNotIn("_pinned_microphone_internal_meter", header + source)
+        self.assertNotIn("_pinned_microphone_capsule", header + source)
+        self.assertNotIn("_pinned_microphone_cup", header + source)
+        self.assertIn("LV_OBJ_FLAG_HIDDEN", source)
         self.assertNotIn("LV_SYMBOL_AUDIO", source)
+
+        asset = (
+            ROOT
+            / "main/apps/app_codex_status/assets/pinned_microphone_d.c"
+        ).read_text(encoding="utf-8")
+        self.assertIn("LV_COLOR_FORMAT_A8", asset)
+        self.assertIn(".header.w = 96", asset)
+        self.assertIn(".header.h = 138", asset)
 
     def test_status_messages_route_to_independent_models_and_freshness(self):
         header = (self.app_root / "app_codex_status.h").read_text(encoding="utf-8")

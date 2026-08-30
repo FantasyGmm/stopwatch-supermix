@@ -6,10 +6,12 @@
 #include "app_codex_status.h"
 #include "codex_status_priority.h"
 #include "assets/codex_pet_assets.h"
+#include "assets/pinned_microphone_d.h"
 #include "codex_ble_transport.h"
 #include "codex_pending_glow_logic.h"
 #include "ble_voice_probe_controller.h"
 #include "voice_input_controller.h"
+#include "pinned_microphone_meter.h"
 #include "agent_panel_presenter.h"
 #include "codex_status_ui_layout.h"
 #include "codex_status_model.h"
@@ -19,6 +21,7 @@
 #include <apps/common/edge_control/global_edge_control_service.h>
 #include <assets/assets.h>
 #include <hal/hal.h>
+#include <hal/audio/stopwatch_audio_backend.h>
 #include <hal/utils/settings/settings.h>
 #include <runtime/display/global_display_protection_service.h>
 #include <runtime/power/low_battery_alert_logic.h>
@@ -1470,8 +1473,8 @@ void AppCodexStatus::create_view()
     lv_obj_set_x(_pinned_microphone_connection_label, 8);
 
     _pinned_microphone_touch_target = lv_obj_create(_pinned_microphone_page);
-    lv_obj_set_size(_pinned_microphone_touch_target, 194, 194);
-    lv_obj_set_pos(_pinned_microphone_touch_target, 136, 126);
+    lv_obj_set_size(_pinned_microphone_touch_target, 232, 194);
+    lv_obj_set_pos(_pinned_microphone_touch_target, 117, 122);
     lv_obj_set_style_radius(
         _pinned_microphone_touch_target, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_pad_all(_pinned_microphone_touch_target, 0, 0);
@@ -1485,37 +1488,45 @@ void AppCodexStatus::create_view()
         LV_EVENT_CLICKED,
         this);
 
-    _pinned_microphone_capsule = lv_obj_create(_pinned_microphone_page);
-    lv_obj_set_size(_pinned_microphone_capsule, 36, 66);
-    lv_obj_set_pos(_pinned_microphone_capsule, 215, 168);
-    lv_obj_set_style_radius(_pinned_microphone_capsule, 18, 0);
-    lv_obj_set_style_pad_all(_pinned_microphone_capsule, 0, 0);
-    lv_obj_set_style_border_width(_pinned_microphone_capsule, 5, 0);
-    lv_obj_set_style_border_color(
-        _pinned_microphone_capsule, lv_color_hex(kEtchedGray), 0);
-    lv_obj_set_style_bg_opa(_pinned_microphone_capsule, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(_pinned_microphone_capsule, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(_pinned_microphone_capsule, LV_OBJ_FLAG_CLICKABLE);
+    _pinned_microphone_icon = lv_image_create(_pinned_microphone_page);
+    lv_image_set_src(_pinned_microphone_icon, &pinned_microphone_d);
+    lv_obj_set_pos(_pinned_microphone_icon, 185, 145);
+    lv_obj_set_style_image_recolor(
+        _pinned_microphone_icon, lv_color_hex(kEtchedGray), 0);
+    lv_obj_set_style_image_recolor_opa(
+        _pinned_microphone_icon, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(_pinned_microphone_icon, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(_pinned_microphone_icon, LV_OBJ_FLAG_CLICKABLE);
 
-    _pinned_microphone_cup = lv_arc_create(_pinned_microphone_page);
-    lv_obj_set_size(_pinned_microphone_cup, 62, 62);
-    lv_obj_set_pos(_pinned_microphone_cup, 202, 190);
-    lv_arc_set_bg_angles(_pinned_microphone_cup, 0, 180);
-    lv_arc_set_value(_pinned_microphone_cup, 0);
-    lv_obj_remove_style(_pinned_microphone_cup, nullptr, LV_PART_KNOB);
-    lv_obj_set_style_arc_width(_pinned_microphone_cup, 5, LV_PART_MAIN);
-    lv_obj_set_style_arc_color(
-        _pinned_microphone_cup, lv_color_hex(kEtchedGray), LV_PART_MAIN);
-    lv_obj_set_style_arc_opa(_pinned_microphone_cup, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_set_style_arc_opa(_pinned_microphone_cup, LV_OPA_TRANSP, LV_PART_INDICATOR);
-    lv_obj_clear_flag(_pinned_microphone_cup, LV_OBJ_FLAG_CLICKABLE);
-
-    _pinned_microphone_stem = make_frame_segment(
-        _pinned_microphone_page, 230, 249, 6, 22, kEtchedGray);
-    _pinned_microphone_base = make_frame_segment(
-        _pinned_microphone_page, 216, 268, 34, 6, kEtchedGray);
-    lv_obj_set_style_radius(_pinned_microphone_stem, 3, 0);
-    lv_obj_set_style_radius(_pinned_microphone_base, 3, 0);
+    constexpr std::array<int, 4> kLevelLeftX = {120, 134, 148, 162};
+    constexpr std::array<int, 4> kLevelRightX = {340, 326, 312, 298};
+    constexpr std::array<int, 4> kLevelHeights = {12, 25, 43, 63};
+    for (std::size_t index = 0; index < _pinned_microphone_level_left.size(); ++index) {
+        const int height = kLevelHeights[index];
+        const int y = 214 - height / 2;
+        _pinned_microphone_level_left[index] = make_frame_segment(
+            _pinned_microphone_page,
+            kLevelLeftX[index],
+            y,
+            6,
+            height,
+            kEtchedGray);
+        _pinned_microphone_level_right[index] = make_frame_segment(
+            _pinned_microphone_page,
+            kLevelRightX[index],
+            y,
+            6,
+            height,
+            kEtchedGray);
+        lv_obj_set_style_radius(
+            _pinned_microphone_level_left[index], 3, 0);
+        lv_obj_set_style_radius(
+            _pinned_microphone_level_right[index], 3, 0);
+        lv_obj_add_flag(
+            _pinned_microphone_level_left[index], LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(
+            _pinned_microphone_level_right[index], LV_OBJ_FLAG_HIDDEN);
+    }
     _pinned_microphone_prompt_label = make_center_label(
         _pinned_microphone_page,
         "轻触开启",
@@ -1572,6 +1583,8 @@ void AppCodexStatus::destroy_view()
     cancel_task_focus_touch();
     _last_page_touch_state = LV_INDEV_STATE_REL;
     _last_pinned_microphone_render_state = -1;
+    _last_pinned_microphone_meter_visible = false;
+    _last_pinned_microphone_meter_heights = {};
 
     if (_pending_glow) {
         _pending_glow->shutdown();
@@ -1611,10 +1624,9 @@ void AppCodexStatus::destroy_view()
     _pinned_microphone_touch_target = nullptr;
     _pinned_microphone_connection_dot = nullptr;
     _pinned_microphone_connection_label = nullptr;
-    _pinned_microphone_capsule = nullptr;
-    _pinned_microphone_cup = nullptr;
-    _pinned_microphone_stem = nullptr;
-    _pinned_microphone_base = nullptr;
+    _pinned_microphone_icon = nullptr;
+    _pinned_microphone_level_left = {};
+    _pinned_microphone_level_right = {};
     _pinned_microphone_prompt_label = nullptr;
     _voice_value    = nullptr;
     _week_pct       = nullptr;
@@ -1698,6 +1710,7 @@ void AppCodexStatus::render_pinned_microphone()
     uint32_t prompt_color = kSignalWhite;
     uint32_t icon_color = kEtchedGray;
     if (active) {
+        prompt_color = kQuotaMint;
         icon_color = kRunningCyan;
     } else if (starting) {
         prompt_color = kBeaconViolet;
@@ -1712,48 +1725,92 @@ void AppCodexStatus::render_pinned_microphone()
     }
     const int render_state =
         (static_cast<int>(state) << 1) | (bluetooth_connected ? 1 : 0);
-    if (render_state == _last_pinned_microphone_render_state) {
-        return;
-    }
-    _last_pinned_microphone_render_state = render_state;
+    if (render_state != _last_pinned_microphone_render_state) {
+        _last_pinned_microphone_render_state = render_state;
 
-    lv_label_set_text(
-        _pinned_microphone_connection_label, status_text.connection);
-    lv_label_set_text(_pinned_microphone_prompt_label, status_text.prompt);
-    lv_obj_set_style_text_color(
-        _pinned_microphone_prompt_label, lv_color_hex(prompt_color), 0);
-    lv_obj_set_style_bg_color(
-        _pinned_microphone_connection_dot,
-        lv_color_hex(
-            error
-                ? kAlertVermilion
-                : (starting
-                       ? kBeaconViolet
-                       : (unavailable ? kEtchedGray : kQuotaMint))),
-        0);
-    if (_pinned_microphone_capsule != nullptr) {
-        lv_obj_set_style_border_color(
-            _pinned_microphone_capsule, lv_color_hex(icon_color), 0);
+        lv_label_set_text(
+            _pinned_microphone_connection_label, status_text.connection);
+        lv_label_set_text(_pinned_microphone_prompt_label, status_text.prompt);
+        lv_obj_set_style_text_color(
+            _pinned_microphone_prompt_label, lv_color_hex(prompt_color), 0);
         lv_obj_set_style_bg_color(
-            _pinned_microphone_capsule,
-            lv_color_hex(active ? 0x07151A : kInstrumentBlack),
+            _pinned_microphone_connection_dot,
+            lv_color_hex(
+                error
+                    ? kAlertVermilion
+                    : (starting
+                           ? kBeaconViolet
+                           : (unavailable ? kEtchedGray : kQuotaMint))),
             0);
-        lv_obj_set_style_bg_opa(
-            _pinned_microphone_capsule, LV_OPA_COVER, 0);
-    }
-    if (_pinned_microphone_cup != nullptr) {
-        lv_obj_set_style_arc_color(
-            _pinned_microphone_cup, lv_color_hex(icon_color), LV_PART_MAIN);
-    }
-    for (lv_obj_t* segment : {
-             _pinned_microphone_stem,
-             _pinned_microphone_base,
-         }) {
-        if (segment != nullptr) {
-            lv_obj_set_style_bg_color(segment, lv_color_hex(icon_color), 0);
+        if (_pinned_microphone_icon != nullptr) {
+            lv_obj_set_style_image_recolor(
+                _pinned_microphone_icon, lv_color_hex(icon_color), 0);
+        }
+        for (std::size_t index = 0;
+             index < _pinned_microphone_level_left.size();
+             ++index) {
+            if (_pinned_microphone_level_left[index] != nullptr) {
+                lv_obj_set_style_bg_color(
+                    _pinned_microphone_level_left[index],
+                    lv_color_hex(icon_color),
+                    0);
+            }
+            if (_pinned_microphone_level_right[index] != nullptr) {
+                lv_obj_set_style_bg_color(
+                    _pinned_microphone_level_right[index],
+                    lv_color_hex(icon_color),
+                    0);
+            }
         }
     }
 
+    PinnedMicrophoneInputLevels levels{};
+    if (active) {
+        levels = GetStopWatchAudioBackend().inputLevels();
+    }
+    const PinnedMicrophoneMeterFrame meter =
+        pinned_microphone_meter_frame(active, levels);
+    if (meter.visible != _last_pinned_microphone_meter_visible) {
+        _last_pinned_microphone_meter_visible = meter.visible;
+        for (std::size_t index = 0;
+             index < _pinned_microphone_level_left.size();
+             ++index) {
+            for (lv_obj_t* segment : {
+                     _pinned_microphone_level_left[index],
+                     _pinned_microphone_level_right[index],
+                 }) {
+                if (segment == nullptr) {
+                    continue;
+                }
+                if (meter.visible) {
+                    lv_obj_clear_flag(segment, LV_OBJ_FLAG_HIDDEN);
+                } else {
+                    lv_obj_add_flag(segment, LV_OBJ_FLAG_HIDDEN);
+                }
+            }
+        }
+    }
+    if (!meter.visible) {
+        _last_pinned_microphone_meter_heights = {};
+        return;
+    }
+    if (meter.heights == _last_pinned_microphone_meter_heights) {
+        return;
+    }
+    _last_pinned_microphone_meter_heights = meter.heights;
+    for (std::size_t index = 0; index < meter.heights.size(); ++index) {
+        const int height = meter.heights[index];
+        const int y = 214 - height / 2;
+        for (lv_obj_t* segment : {
+                 _pinned_microphone_level_left[index],
+                 _pinned_microphone_level_right[index],
+             }) {
+            if (segment != nullptr) {
+                lv_obj_set_size(segment, 6, height);
+                lv_obj_set_y(segment, y);
+            }
+        }
+    }
 }
 
 void AppCodexStatus::pinned_microphone_touch_event_cb(lv_event_t* event)

@@ -581,7 +581,8 @@ run_host_test codex_runtime_session_test \
 run_host_test pinned_microphone_controller_test \
     -std=c++17 -Wall -Wextra -Werror -I. \
     tests/pinned_microphone_controller_test.cpp \
-    main/apps/app_codex_status/pinned_microphone_controller.cpp
+    main/apps/app_codex_status/pinned_microphone_controller.cpp \
+    main/apps/app_codex_status/pinned_microphone_meter.cpp
 
 stage "Production voice input controller host test"
 run_host_test voice_input_controller_test \

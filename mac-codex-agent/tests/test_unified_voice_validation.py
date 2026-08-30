@@ -404,6 +404,7 @@ output.chmod(0o700)
             "pinned_microphone_controller_test": {
                 "tests/pinned_microphone_controller_test.cpp",
                 "main/apps/app_codex_status/pinned_microphone_controller.cpp",
+                "main/apps/app_codex_status/pinned_microphone_meter.cpp",
             },
             "voice_input_controller_test": {
                 "tests/voice_input_controller_test.cpp",

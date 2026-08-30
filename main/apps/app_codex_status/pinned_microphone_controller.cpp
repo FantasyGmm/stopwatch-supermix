@@ -14,7 +14,7 @@ PinnedMicrophoneStatusText pinned_microphone_status_text(
         case PinnedMicrophoneState::Starting:
             return {"已连接到 Mac", "正在启动音频…"};
         case PinnedMicrophoneState::Active:
-            return {"已连接到 Mac", "轻触关闭"};
+            return {"已连接到 Mac", "收音中 · 轻触关闭"};
         case PinnedMicrophoneState::Stopping:
             return {"已连接到 Mac", "正在关闭…"};
         case PinnedMicrophoneState::Error:
