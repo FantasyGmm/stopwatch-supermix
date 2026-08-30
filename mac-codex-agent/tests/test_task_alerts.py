@@ -1427,6 +1427,29 @@ class TaskAlertTrackerTests(unittest.TestCase):
         self.assertEqual(synchronized.revision, initial.revision + 1)
         self.assertEqual(tracker.refresh().revision, synchronized.revision)
 
+    def test_chatgpt_temporary_project_uses_friendly_project_name(self):
+        update_thread_metadata(
+            self.state_db,
+            "thread-a",
+            "/Users/luke/.codex/.chatgpt-projects/"
+            "g-p-6a68bdc85a1c8191a3ac25694c48438e",
+            "安装 skill",
+            2,
+        )
+        tracker = self.tracker()
+        tracker.refresh()
+        append_event(
+            self.rollout,
+            "task_complete",
+            "2026-07-12T00:05:00Z",
+            last_agent_message="Done.",
+        )
+
+        snapshot = tracker.refresh()
+
+        self.assertEqual(snapshot.alerts[0].project, "临时会话")
+        self.assertEqual(snapshot.alerts[0].title, "安装 skill")
+
     def test_codex_thread_name_overrides_full_sqlite_title(self):
         update_thread_metadata(
             self.state_db,

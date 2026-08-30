@@ -213,7 +213,14 @@ class _ThreadInfo:
 
     @property
     def project(self) -> str:
-        name = pathlib.Path(self.cwd.rstrip("/")).name
+        path = pathlib.Path(self.cwd.rstrip("/"))
+        name = path.name
+        if (
+            name.startswith("g-p-")
+            and path.parent.name == ".chatgpt-projects"
+            and path.parent.parent.name == ".codex"
+        ):
+            return "临时会话"
         return name or self.cwd or "--"
 
 
