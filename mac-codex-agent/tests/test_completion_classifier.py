@@ -14,8 +14,8 @@ def classify(message, **kwargs):
 
 
 class CompletionClassifierTests(unittest.TestCase):
-    def test_classifier_version_is_two(self):
-        self.assertEqual(CLASSIFIER_VERSION, 2)
+    def test_classifier_version_is_three(self):
+        self.assertEqual(CLASSIFIER_VERSION, 3)
 
     def test_structured_input_has_highest_priority(self):
         self.assertEqual(
@@ -79,6 +79,32 @@ class CompletionClassifierTests(unittest.TestCase):
                 self.assertEqual(
                     classify(message),
                     ("waiting", "text_required_action"),
+                )
+
+    def test_confirmation_gated_first_person_future_action_is_waiting(self):
+        cases = (
+            "确认后我就直接修改并做七个方案的圆屏截图复核。",
+            "确认后我会处理剩余问题。",
+            "确认后我们再继续实现。",
+            "确认后我将提交修改。",
+        )
+        for message in cases:
+            with self.subTest(message=message):
+                self.assertEqual(
+                    classify(message),
+                    ("waiting", "text_required_action"),
+                )
+
+    def test_confirmation_followed_by_completed_action_is_completed(self):
+        cases = (
+            "方案确认后已继续实现，当前工作已经完成。",
+            "确认后已经完成部署。",
+        )
+        for message in cases:
+            with self.subTest(message=message):
+                self.assertEqual(
+                    classify(message),
+                    ("completed", "completion_only"),
                 )
 
     def test_conditional_courtesy_offers_are_not_actions(self):

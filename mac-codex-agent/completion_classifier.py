@@ -7,7 +7,7 @@ import re
 from typing import Any, FrozenSet, List, Sequence, Tuple
 
 
-CLASSIFIER_VERSION = 2
+CLASSIFIER_VERSION = 3
 
 _MEMORY_CITATION_RE = re.compile(
     r"<oai-mem-citation>.*?</oai-mem-citation>", re.DOTALL | re.IGNORECASE
@@ -35,7 +35,8 @@ _SECOND_PERSON_RE = re.compile(
 )
 _REQUIRED_ACTION_RE = re.compile(
     r"(?:请(?:确认|批准|选择|提供|回复|复核|重试|重新)|"
-    r"确认后(?:继续|我继续|我会继续)|"
+    r"确认后(?:继续|(?:我|我们)(?:继续|(?:就(?:直接)?|会|再|将)"
+    r"[^。！？\n]{1,40}))|"
     r"等待(?:你的|您的)?(?:回复|确认|选择|输入)|"
     r"需要(?:你|您)(?:确认|批准|选择|提供|回复|操作)|"
     r"需要进一步指令|无法继续|"
