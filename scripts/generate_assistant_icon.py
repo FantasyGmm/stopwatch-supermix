@@ -6,6 +6,8 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFilter
 
+from compress_launcher_icons import write_compressed_asset
+
 WORK_SIZE = 800
 OUTPUT_SIZE = 200
 SCALE = WORK_SIZE // OUTPUT_SIZE
@@ -191,51 +193,7 @@ def rgb565_bytes(image):
 
 
 def write_c_asset(path, data):
-    lines = []
-    for offset in range(0, len(data), 16):
-        values = ", ".join(
-            f"0x{value:02x}" for value in data[offset : offset + 16]
-        )
-        lines.append(f"    {values},")
-    path.write_text(
-        """#ifdef __has_include
-#if __has_include("lvgl.h")
-#ifndef LV_LVGL_H_INCLUDE_SIMPLE
-#define LV_LVGL_H_INCLUDE_SIMPLE
-#endif
-#endif
-#endif
-
-#if defined(LV_LVGL_H_INCLUDE_SIMPLE)
-#include "lvgl.h"
-#else
-#include "lvgl/lvgl.h"
-#endif
-
-#ifndef LV_ATTRIBUTE_MEM_ALIGN
-#define LV_ATTRIBUTE_MEM_ALIGN
-#endif
-
-#ifndef LV_ATTRIBUTE_IMAGE_ICON_ASSISTANT
-#define LV_ATTRIBUTE_IMAGE_ICON_ASSISTANT
-#endif
-
-const LV_ATTRIBUTE_MEM_ALIGN LV_ATTRIBUTE_LARGE_CONST LV_ATTRIBUTE_IMAGE_ICON_ASSISTANT uint8_t icon_assistant_map[] = {
-"""
-        + "\n".join(lines)
-        + """
-};
-
-const lv_image_dsc_t icon_assistant = {
-    .header.cf    = LV_COLOR_FORMAT_RGB565,
-    .header.magic = LV_IMAGE_HEADER_MAGIC,
-    .header.w     = 200,
-    .header.h     = 200,
-    .data_size    = 40000 * 2,
-    .data         = icon_assistant_map,
-};
-"""
-    )
+    write_compressed_asset(path, "assistant", data)
 
 
 def main():
