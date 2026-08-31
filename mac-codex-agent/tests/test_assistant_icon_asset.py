@@ -1,9 +1,10 @@
-import re
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+from scripts.compress_launcher_icons import extract_pixels
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -13,8 +14,7 @@ GENERATOR = ROOT / "scripts/generate_assistant_icon.py"
 
 def load_pixels():
     source = ASSET.read_text()
-    body = source.split("icon_assistant_map[] = {", 1)[1].split("};", 1)[0]
-    raw = bytes(int(value, 16) for value in re.findall(r"0x([0-9a-fA-F]{2})", body))
+    raw = extract_pixels(ASSET, "assistant")
     pixels = []
     for offset in range(0, len(raw), 2):
         value = raw[offset] | (raw[offset + 1] << 8)
@@ -91,7 +91,8 @@ class AssistantIconAssetTests(unittest.TestCase):
         self.assertIn(".header.cf    = LV_COLOR_FORMAT_RGB565", self.source)
         self.assertIn(".header.w     = 200", self.source)
         self.assertIn(".header.h     = 200", self.source)
-        self.assertIn(".data_size    = 40000 * 2", self.source)
+        self.assertIn(".header.flags = LV_IMAGE_FLAGS_COMPRESSED", self.source)
+        self.assertIn(".data_size    = sizeof(icon_assistant_map)", self.source)
         self.assertEqual(len(self.raw), 80000)
 
     def test_matches_launcher_family_visual_footprint(self):
