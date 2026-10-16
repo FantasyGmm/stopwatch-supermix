@@ -62,11 +62,11 @@ extern "C" void app_main(void)
     GetMooncake().installApp(std::make_unique<AppLauncher>());
     GetMooncake().installApp(std::make_unique<AppCodexStatus>());
     GetMooncake().installApp(std::make_unique<AppAssistant>());
-    GetMooncake().installApp(std::make_unique<AppClock>());
     GetMooncake().installApp(std::make_unique<AppBadge>());
     GetMooncake().installApp(std::make_unique<AppImu>());
     GetMooncake().installApp(std::make_unique<AppFft>());
     GetMooncake().installApp(std::make_unique<AppSetup>());
+    GetMooncake().installApp(std::make_unique<AppEnvIII>());
 
     // Main loop
     while (1) {

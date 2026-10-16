@@ -1,0 +1,125 @@
+{
+  "valid_public": {
+    "openai": {
+      "models": {
+        "pricing-compat-lastgood": {
+          "cost": {
+            "input": 2.5,
+            "output": 10,
+            "cache_read": 0.25,
+            "cache_write": 2.5,
+            "tiers": [
+              {
+                "input": 4,
+                "output": 15,
+                "cache_read": 0.4,
+                "cache_write": 4,
+                "tier": {"type": "context", "size": 272000}
+              }
+            ]
+          }
+        }
+      }
+    }
+  },
+  "invalid_context_type": {
+    "openai": {
+      "models": {
+        "pricing-compat-lastgood": {
+          "cost": {
+            "input": 1,
+            "output": 5,
+            "tiers": [
+              {
+                "input": 3,
+                "output": 12,
+                "tier": {"type": "contextual", "size": 272000}
+              }
+            ]
+          }
+        }
+      }
+    }
+  },
+  "invalid_context_data": {
+    "openai": {
+      "models": {
+        "pricing-compat-lastgood": {
+          "cost": {
+            "input": 1,
+            "output": 5,
+            "tiers": [
+              {
+                "input": 3,
+                "output": 12,
+                "tier": {"type": "context", "size": "272000"}
+              }
+            ]
+          }
+        }
+      }
+    }
+  },
+  "missing_currency_override": {
+    "version": 1,
+    "models": [
+      {
+        "modelId": "pricing-compat-invalid-currency",
+        "inputCostPerMillion": 9,
+        "outputCostPerMillion": 18
+      }
+    ],
+    "deletedModelIds": []
+  },
+  "unknown_currency_override": {
+    "version": 1,
+    "currency": "CNY",
+    "models": [
+      {
+        "modelId": "pricing-compat-invalid-currency",
+        "inputCostPerMillion": 9,
+        "outputCostPerMillion": 18
+      }
+    ],
+    "deletedModelIds": []
+  },
+  "unknown_currency_cache": {
+    "version": 1,
+    "currency": "CNY",
+    "fetchedAt": 1791936000,
+    "models": [
+      {
+        "modelId": "pricing-compat-invalid-currency",
+        "inputCostPerMillion": 9,
+        "outputCostPerMillion": 18
+      }
+    ],
+    "deletedModelIds": []
+  },
+  "usd_override": {
+    "version": 1,
+    "currency": "USD",
+    "models": [
+      {
+        "modelId": "pricing-compat-valid-override",
+        "displayName": "Pricing compatibility fixture",
+        "inputCostPerMillion": 9,
+        "outputCostPerMillion": 18
+      }
+    ],
+    "deletedModelIds": []
+  },
+  "future_cache": {
+    "version": 1,
+    "currency": "USD",
+    "fetchedAt": 9999999999,
+    "models": [
+      {
+        "modelId": "pricing-compat-future-cache",
+        "inputCostPerMillion": 2,
+        "outputCostPerMillion": 8
+      }
+    ],
+    "deletedModelIds": []
+  }
+}

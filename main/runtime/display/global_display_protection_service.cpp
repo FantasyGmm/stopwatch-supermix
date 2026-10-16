@@ -70,6 +70,7 @@ bool GlobalDisplayProtectionService::init()
     _last_buttons = GetHAL().readButtonPhysicalState();
     _last_wake_reason = DisplayWakeReason::Initialization;
     _initialized = true;
+    syncDisplayRendering();
     return true;
 }
 
@@ -79,6 +80,7 @@ void GlobalDisplayProtectionService::update()
         return;
     }
 
+    syncDisplayRendering();
     const bool display_was_off =
         _logic.state() == DisplayProtectionState::ScreenOff;
     syncUserBrightness();
@@ -133,6 +135,7 @@ void GlobalDisplayProtectionService::update()
     lv_indev_t* indev = GetHAL().lvTouchpad;
     if (indev == nullptr) {
         acceptDecision(_logic.update(now_ms));
+        syncDisplayRendering();
         return;
     }
 
@@ -166,6 +169,7 @@ void GlobalDisplayProtectionService::update()
     acceptDecision(_logic.update(now_ms));
     _last_buttons = buttons;
     _last_touch_state = touch_state;
+    syncDisplayRendering();
 }
 
 void GlobalDisplayProtectionService::applyPendingHardwareUpdate()
@@ -181,6 +185,7 @@ void GlobalDisplayProtectionService::applyPendingHardwareUpdate()
 void GlobalDisplayProtectionService::shutdown()
 {
     _logic.reset(0);
+    releaseDisplayRendering();
     _config = defaultDisplayProtectionConfig();
     _external_power = {};
     _last_wake_reason = DisplayWakeReason::Initialization;
@@ -429,4 +434,90 @@ void GlobalDisplayProtectionService::restoreAndReset(
     _pending_brightness = _restore_brightness;
     _last_wake_reason = reason;
     recalculateAutomaticProtection(now_ms);
+}
+
+void GlobalDisplayProtectionService::syncDisplayRendering()
+{
+    lv_display_t* display = lv_display_get_default();
+    if (_render_display != display) {
+        releaseDisplayRendering();
+        _render_display = display;
+        if (_render_display != nullptr) {
+            lv_display_add_event_cb(
+                _render_display, displayRenderingEvent, LV_EVENT_ALL, this);
+        }
+    }
+    if (_render_display == nullptr) {
+        return;
+    }
+
+    const bool screen_off = _logic.state() == DisplayProtectionState::ScreenOff;
+    if (screen_off == _render_suspended) {
+        return;
+    }
+
+    _render_suspended = screen_off;
+    lv_timer_t* timer = lv_display_get_refr_timer(_render_display);
+    if (screen_off) {
+        // Balance exactly one invalidation disable on wake. Timers and input
+        // sampling remain alive, but invisible animations cannot request draws.
+        lv_display_enable_invalidation(_render_display, false);
+        if (timer != nullptr) {
+            lv_timer_pause(timer);
+        }
+        return;
+    }
+
+    lv_display_enable_invalidation(_render_display, true);
+    // Models/widgets can change while off. Repaint their latest state once,
+    // without waiting for a new BLE revision to arrive after wake.
+    if (lv_obj_t* screen = lv_display_get_screen_active(_render_display)) {
+        lv_obj_invalidate(screen);
+    }
+    if (timer != nullptr) {
+        lv_timer_resume(timer);
+        lv_timer_ready(timer);
+    }
+}
+
+void GlobalDisplayProtectionService::releaseDisplayRendering()
+{
+    if (_render_display == nullptr) {
+        return;
+    }
+    lv_display_remove_event_cb_with_user_data(
+        _render_display, displayRenderingEvent, this);
+    if (_render_suspended) {
+        lv_display_enable_invalidation(_render_display, true);
+        if (lv_timer_t* timer = lv_display_get_refr_timer(_render_display)) {
+            lv_timer_resume(timer);
+        }
+    }
+    _render_display = nullptr;
+    _render_suspended = false;
+}
+
+void GlobalDisplayProtectionService::displayRenderingEvent(lv_event_t* event)
+{
+    auto* self = static_cast<GlobalDisplayProtectionService*>(
+        lv_event_get_user_data(event));
+    if (self == nullptr || lv_event_get_target(event) != self->_render_display) {
+        return;
+    }
+    if (lv_event_get_code(event) == LV_EVENT_DELETE) {
+        self->_render_display = nullptr;
+        self->_render_suspended = false;
+        return;
+    }
+    if (lv_event_get_code(event) != LV_EVENT_REFR_REQUEST ||
+        !self->_render_suspended) {
+        return;
+    }
+
+    // Layout changes can resume the refresh timer even when invalidation is
+    // disabled. Keep those requests asleep too; do not stop the input timers.
+    if (lv_timer_t* timer = lv_display_get_refr_timer(self->_render_display)) {
+        lv_timer_pause(timer);
+    }
+    lv_event_stop_processing(event);
 }

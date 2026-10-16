@@ -48,6 +48,10 @@ private:
     bool automaticProtectionEnabledForPolicy() const;
     void recalculateAutomaticProtection(uint32_t now_ms);
     void restoreAndReset(uint32_t now_ms, DisplayWakeReason reason);
+    // Called only while holding the LVGL lock, unlike the policy entry points.
+    void syncDisplayRendering();
+    void releaseDisplayRendering();
+    static void displayRenderingEvent(lv_event_t* event);
 
     DisplayProtectionLogic _logic;
     DisplayProtectionConfig _config = defaultDisplayProtectionConfig();
@@ -63,6 +67,8 @@ private:
     ButtonPhysicalState _last_buttons{};
     bool _defer_right_button_wake = false;
     bool _initialized = false;
+    lv_display_t* _render_display = nullptr;
+    bool _render_suspended = false;
 };
 
 GlobalDisplayProtectionService& GetGlobalDisplayProtectionService();

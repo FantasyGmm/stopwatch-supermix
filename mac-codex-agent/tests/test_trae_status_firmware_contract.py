@@ -7,11 +7,11 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
-class TraeStatusFirmwareContractTests(unittest.TestCase):
+class CodexStatusFirmwareContractTests(unittest.TestCase):
     def setUp(self):
         self.app_root = ROOT / "main" / "apps" / "app_codex_status"
 
-    def test_watch_uses_a_clipped_three_page_strip_with_shared_footer(self):
+    def test_watch_uses_a_clipped_four_page_strip_with_shared_footer(self):
         header = (self.app_root / "app_codex_status.h").read_text(encoding="utf-8")
         source = (self.app_root / "app_codex_status.cpp").read_text(
             encoding="utf-8"
@@ -24,31 +24,36 @@ class TraeStatusFirmwareContractTests(unittest.TestCase):
             "lv_obj_t* _page_strip",
             "lv_obj_t* _codex_page",
             "lv_obj_t* _pinned_microphone_page",
-            "lv_obj_t* _trae_page_root",
+            "lv_obj_t* _usage_page_root",
+            "lv_obj_t* _host_page_root",
             "lv_obj_t* _page_dot_codex",
             "lv_obj_t* _page_dot_pinned_microphone",
-            "lv_obj_t* _page_dot_trae",
-            "std::unique_ptr<TraeStatusPage> _trae_status_page",
+            "lv_obj_t* _page_dot_usage",
+            "lv_obj_t* _page_dot_host",
             "StatusPageSwipeLogic _page_swipe",
         ):
             self.assertIn(token, header)
 
         for token in (
             "lv_obj_set_size(_panel, 466, 466)",
-            "lv_obj_set_size(_page_strip, 1398, 466)",
+            "lv_obj_set_size(_page_strip, kPageCount * kPageWidth, kPageWidth)",
+            "lv_obj_set_pos(_page_strip, -466, 0)",
             "lv_obj_set_pos(_codex_page, 466, 0)",
             "lv_obj_set_pos(_pinned_microphone_page, 0, 0)",
-            "lv_obj_set_pos(_trae_page_root, 932, 0)",
+            "_usage_page_root = make_status_page_root(_page_strip, 2 * kPageWidth)",
+            "_host_page_root = make_status_page_root(_page_strip, 3 * kPageWidth)",
             "lv_obj_align(_battery_label, LV_ALIGN_TOP_MID, 0, kBatteryY)",
             "lv_obj_set_y(dot, kPageIndicatorY)",
-            "_page_dot_pinned_microphone = make_page_dot(_panel, 213)",
-            "_page_dot_codex = make_page_dot(_panel, 229)",
-            "_page_dot_trae = make_page_dot(_panel, 245)",
+            "_page_dot_pinned_microphone = make_page_dot(_panel, 205)",
+            "_page_dot_codex = make_page_dot(_panel, 221)",
+            "_page_dot_usage = make_page_dot(_panel, 237)",
+            "_page_dot_host = make_page_dot(_panel, 253)",
             "lv_anim_set_duration(&animation, 140)",
             "lv_anim_set_path_cb(&animation, lv_anim_path_ease_out)",
         ):
             self.assertIn(token, source)
 
+        self.assertRegex(source, r"constexpr int kPageCount\s*=\s*4;")
         self.assertIn("constexpr int kPageIndicatorY = 416;", layout)
         self.assertIn("constexpr int kBatteryY = 432;", layout)
         self.assertIn("int _current_page            = 1;", header)
@@ -57,154 +62,116 @@ class TraeStatusFirmwareContractTests(unittest.TestCase):
         strip_create = source.index("_page_strip = lv_obj_create(_panel)")
         self.assertGreater(battery_create, strip_create)
 
-    def test_app_integrates_trae_task_touch_health_and_lifecycle(self):
+    def test_app_removes_trae_page_ui_and_preserves_lifecycle(self):
+        header = (self.app_root / "app_codex_status.h").read_text(encoding="utf-8")
+        source = (self.app_root / "app_codex_status.cpp").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn(
+            "_ble_transport && _ble_transport->connected()",
+            header + source,
+        )
+        for token in (
+            "TraeCardTapLogic",
+            "_trae_status_page",
+            "_trae_page_root",
+            "_page_dot_trae",
+            "_trae_carousel",
+            "render_trae_status",
+        ):
+            self.assertNotIn(token, header + source)
+
+    def test_usage_and_host_pages_render_required_offline_fields(self):
+        source = (self.app_root / "codex_telemetry_pages.cpp").read_text(
+            encoding="utf-8"
+        )
+
+        for text in (
+            '"USAGE"',
+            '"UNAVAILABLE"',
+            '"5H LEFT"',
+            '"7D LEFT"',
+            '"--%"',
+            '"RESET --"',
+            '"ESTIMATED API EQUIVALENT • USD"',
+            '"-- TOKENS"',
+            '"HOST"',
+            '"CPU"',
+            '"MEM"',
+            '"DISK"',
+            '"NETWORK"',
+            '"UP --"',
+            '"DOWN --"',
+        ):
+            self.assertIn(text, source)
+        self.assertEqual(source.count("render({}, 0);"), 2)
+
+    def test_usage_and_host_layout_stays_above_footer(self):
+        layout = (self.app_root / "codex_telemetry_ui_layout.h").read_text(
+            encoding="utf-8"
+        )
+
+        for token in (
+            "kUsageFiveHourY",
+            "kUsageWeekY",
+            "kUsageEstimateY",
+            "kUsageTokensY",
+            "kUsageProviderFirstY",
+            "kUsageProviderSecondY",
+            "kHostCpuY",
+            "kHostMemoryY",
+            "kHostDiskY",
+            "kHostNetworkY",
+            "kContentBottom",
+            "kPageIndicatorY",
+            "static_assert(kContentBottom < kPageIndicatorY)",
+            "static_assert(kHostNetworkY + 43 < kContentBottom)",
+        ):
+            self.assertIn(token, layout)
+
+    def test_telemetry_pages_are_initialized_from_the_snapshot(self):
         header = (self.app_root / "app_codex_status.h").read_text(encoding="utf-8")
         source = (self.app_root / "app_codex_status.cpp").read_text(
             encoding="utf-8"
         )
 
         for token in (
-            "TraeCardTapLogic _trae_card_tap",
-            "_trae_status_page->contains_task_point",
-            "_trae_carousel.next()",
-            "StatusPageSwipeResult::TraeTasksForward",
-            "StatusPageSwipeResult::TraeTasksBackward",
-            "_trae_carousel.scroll_forward()",
-            "_trae_carousel.scroll_backward()",
-            "_trae_status_page->set_active(_current_page == 2 && !_screen_off)",
-            "_ble_transport && _ble_transport->connected()",
+            "CodexUsagePage _usage_status_page",
+            "CodexHostPage _host_status_page",
+            "_usage_status_page.init(_usage_page_root)",
+            "_host_status_page.init(_host_page_root)",
+            "_usage_status_page.render(\n        _telemetry_snapshot.usage",
+            "_host_status_page.render(\n        _telemetry_snapshot.host",
+            "render_telemetry_pages();",
         ):
             self.assertIn(token, header + source)
-        self.assertNotIn("_trae_carousel.manual_next", source)
+        self.assertEqual(
+            source.count("_usage_status_page.render(\n        _telemetry_snapshot.usage"),
+            1,
+        )
+        self.assertEqual(
+            source.count("_host_status_page.render(\n        _telemetry_snapshot.host"),
+            1,
+        )
 
-    def test_trae_page_keeps_model_and_effort_without_quota_widgets(self):
-        header = (self.app_root / "trae_status_page.h").read_text(encoding="utf-8")
-        source = (self.app_root / "trae_status_page.cpp").read_text(
+    def test_telemetry_roots_keep_their_carousel_positions(self):
+        app_source = (self.app_root / "app_codex_status.cpp").read_text(
             encoding="utf-8"
         )
-        layout = (self.app_root / "trae_status_ui_layout.h").read_text(
+        page_source = (self.app_root / "codex_telemetry_pages.cpp").read_text(
             encoding="utf-8"
         )
-        page_contract = header + source + layout
 
         for token in (
-            "class TraeStatusPage",
-            "void init(lv_obj_t* parent)",
-            "void render(",
-            "void set_active(bool active)",
-            "bool contains_task_point(int x, int y) const",
-            "void shutdown()",
-            '"TRAE"',
-            '"AGENT"',
-            '"VOICE"',
-            "row.model",
-            "row.effort_badge",
-            "lv_obj_set_style_border_width",
-            "LV_LABEL_LONG_MODE_DOTS",
+            "lv_obj_set_pos(page, x, 0)",
+            "_usage_page_root = make_status_page_root(_page_strip, 2 * kPageWidth)",
+            "_host_page_root = make_status_page_root(_page_strip, 3 * kPageWidth)",
+            "_usage_status_page.init(_usage_page_root)",
+            "_host_status_page.init(_host_page_root)",
         ):
-            self.assertIn(token, page_contract)
-
-        for forbidden in (
-            "make_signal_mark",
-            "kColumnDividerX",
-            '"已完成"',
-            "lv_bar_create",
-            "make_quota_row",
-            "logo_trae",
-        ):
-            self.assertNotIn(forbidden, source)
-
-    def test_trae_page_renders_y_layout_and_empty_states(self):
-        source = (self.app_root / "trae_status_page.cpp").read_text(
-            encoding="utf-8"
-        )
-        layout = (self.app_root / "trae_status_ui_layout.h").read_text(
-            encoding="utf-8"
-        )
-
-        for text in (
-            '"暂无进行中的任务"',
-            '"等待连接"',
-            '"TRAE 未运行"',
-            '"状态不可用"',
-        ):
-            self.assertIn(text, source + layout)
-
-        for token in (
-            "kBrandIconX",
-            "kAgentX",
-            "kVoiceX",
-            "kSpineX",
-            "kPendingCountY",
-            "kRunningCountY",
-            "kTaskTitleX",
-            "kMultiTaskRows",
-            "kSingleTaskRow",
-        ):
-            self.assertIn(token, layout)
-
-    def test_trae_page_matches_approved_y_visual_contract(self):
-        header = (self.app_root / "trae_status_page.h").read_text(encoding="utf-8")
-        source = (self.app_root / "trae_status_page.cpp").read_text(
-            encoding="utf-8"
-        )
-        layout = (self.app_root / "trae_status_ui_layout.h").read_text(
-            encoding="utf-8"
-        )
-        page_contract = header + source + layout
-
-        for token in (
-            "NotoSansSCBold16Trae",
-            "MontserratBold24Trae",
-            "MontserratBold28Trae",
-            "kAgentX",
-            "kVoiceX",
-            "kPendingCountX",
-            "kRunningCountX",
-            "kTaskProjectX",
-            "kTaskTitleX",
-            "kMultiTaskTitleMinFontPx",
-            "kMultiTaskTitleMaxFontPx",
-            "kSingleTaskTitleMinFontPx",
-            "kSingleTaskTitleMaxFontPx",
-            "title_font_scale",
-            "std::array<TaskRow, 2> _task_rows",
-        ):
-            self.assertIn(token, page_contract)
-
-        for forbidden in (
-            "make_card(",
-            "_cards",
-            "text_outline_stroke",
-            "kCardRadius",
-            "kDeckHintY",
-            "kRobotX",
-            "trae_robot_frames",
-            "manual_next",
-        ):
-            self.assertNotIn(forbidden, page_contract)
-
-        self.assertNotIn("_health_dot", page_contract)
-
-    def test_trae_summary_uses_a_real_subset_cjk_bold_font(self):
-        source = (self.app_root / "trae_status_page.cpp").read_text(
-            encoding="utf-8"
-        )
-        layout = (self.app_root / "trae_status_ui_layout.h").read_text(
-            encoding="utf-8"
-        )
-        font_path = ROOT / "main/assets/fonts/NotoSansSCBold16Trae.c"
-        cmake = (ROOT / "main/CMakeLists.txt").read_text(encoding="utf-8")
-
-        self.assertTrue(font_path.exists())
-        font = font_path.read_text(encoding="utf-8")
-        self.assertIn("NotoSansCJKsc-Bold.otf", font)
-        self.assertIn("--symbols 待确认运行中", font)
-        self.assertIn("assets/fonts/NotoSansSCBold16Trae.c", cmake)
-        self.assertIn("LV_FONT_DECLARE(NotoSansSCBold16Trae)", source)
-        self.assertIn("&NotoSansSCBold16Trae", source)
-        self.assertNotIn("kSummaryLabelOutlineWidth", layout)
-        self.assertNotIn("text_outline_stroke", source)
+            self.assertIn(token, app_source)
+        self.assertNotIn("lv_obj_set_pos(parent, 0, 0)", page_source)
 
     def test_pinned_microphone_matches_locked_type_and_icon_geometry(self):
         header = (self.app_root / "app_codex_status.h").read_text(encoding="utf-8")
@@ -242,9 +209,10 @@ class TraeStatusFirmwareContractTests(unittest.TestCase):
             '"已连接到 Mac",\n        84,\n        &font_puhui_14_1',
             '"轻触开启",\n        333,\n        &PinnedMicState22',
             "lv_obj_set_style_bg_opa(\n        _pinned_microphone_touch_target, LV_OPA_TRANSP, 0)",
-            "_page_dot_pinned_microphone = make_page_dot(_panel, 213)",
-            "_page_dot_codex = make_page_dot(_panel, 229)",
-            "_page_dot_trae = make_page_dot(_panel, 245)",
+            "_page_dot_pinned_microphone = make_page_dot(_panel, 205)",
+            "_page_dot_codex = make_page_dot(_panel, 221)",
+            "_page_dot_usage = make_page_dot(_panel, 237)",
+            "_page_dot_host = make_page_dot(_panel, 253)",
         ):
             self.assertIn(token, header + source)
         self.assertNotIn("_pinned_microphone_beacon", header + source)
@@ -262,7 +230,7 @@ class TraeStatusFirmwareContractTests(unittest.TestCase):
         self.assertIn(".header.w = 96", asset)
         self.assertIn(".header.h = 138", asset)
 
-    def test_status_messages_route_to_independent_models_and_freshness(self):
+    def test_status_messages_keep_trae_parser_compatibility_without_a_page_model(self):
         header = (self.app_root / "app_codex_status.h").read_text(encoding="utf-8")
         source = (self.app_root / "app_codex_status.cpp").read_text(
             encoding="utf-8"
@@ -272,19 +240,13 @@ class TraeStatusFirmwareContractTests(unittest.TestCase):
             "route_status_message(",
             "StatusMessageSource::Trae",
             "parse_trae_status_message",
-            "TraeStatusSnapshot _trae_snapshot",
-            "TraeTaskCarousel _trae_carousel",
-            "_last_trae_status_payload_ms",
-            "kTraeStatusStaleMs",
-            "render_trae_status",
+            "TraeStatusSnapshot snapshot",
         ):
             self.assertIn(token, header + source)
 
+        self.assertNotIn("TraeStatusSnapshot _trae_snapshot", header + source)
+        self.assertNotIn("render_trae_status", header + source)
         self.assertIn("_last_status_payload_ms", header)
-        self.assertNotEqual(
-            source.index("_last_status_payload_ms"),
-            source.index("_last_trae_status_payload_ms"),
-        )
 
     def test_approved_trae_robot_sources_keep_exact_provenance(self):
         expected = {

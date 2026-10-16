@@ -1,6 +1,7 @@
 #include "codex_status_model.h"
 
 #include <cJSON.h>
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 
@@ -190,8 +191,22 @@ bool decode_base64(const char* text, std::vector<uint8_t>& output)
 
 int json_int_or(cJSON* root, const char* key, int fallback)
 {
+    int64_t value = 0;
+    return json_exact_int64(root, key, value) && value >= 0 && value <= INT32_MAX
+        ? static_cast<int>(value)
+        : fallback;
+}
+
+
+int json_percentage_or(cJSON* root, const char* key, int fallback)
+{
     cJSON* item = cJSON_GetObjectItemCaseSensitive(root, key);
-    return cJSON_IsNumber(item) ? static_cast<int>(item->valuedouble) : fallback;
+    if (!cJSON_IsNumber(item) || !std::isfinite(item->valuedouble) ||
+        std::floor(item->valuedouble) != item->valuedouble ||
+        item->valuedouble < 0.0 || item->valuedouble > 100.0) {
+        return fallback;
+    }
+    return static_cast<int>(item->valuedouble);
 }
 
 
@@ -281,7 +296,10 @@ bool parse_alerts(cJSON* root, std::vector<CodexTaskAlert>& alerts)
     return true;
 }
 
-bool parse_task_detail(cJSON* root, CodexTaskDetailEnvelope& output)
+bool parse_task_detail(
+    cJSON* root,
+    CodexTaskDetailEnvelope& output,
+    const CodexTaskDetailEnvelope* native_detail)
 {
     static constexpr const char* kFields[] = {
         "type", "route", "revision", "index", "count", "epoch", "nonce", "sequence", "ciphertext",
@@ -305,11 +323,25 @@ bool parse_task_detail(cJSON* root, CodexTaskDetailEnvelope& output)
         !json_exact_int64(root, "index", index) || index < 0 ||
         !json_exact_int64(root, "count", count) || count < 1 || count > kMaxDetailChunks || index >= count ||
         !json_exact_int64(root, "epoch", epoch) || epoch < 1 || epoch > UINT32_MAX ||
-        !cJSON_IsString(nonce) || nonce->valuestring == nullptr ||
-        !parse_hex64(nonce->valuestring, nonce_value, &parsed.exchange_nonce) || nonce_value == 0 ||
-        !json_exact_int64(root, "sequence", sequence) || sequence < 1 || sequence > UINT32_MAX ||
-        !cJSON_IsString(ciphertext) || ciphertext->valuestring == nullptr ||
-        !decode_base64(ciphertext->valuestring, parsed.ciphertext)) {
+        !json_exact_int64(root, "sequence", sequence) || sequence < 1 || sequence > UINT32_MAX) {
+        return false;
+    }
+    if (native_detail != nullptr) {
+        if (!cJSON_IsNull(nonce) || !cJSON_IsNull(ciphertext)) {
+            return false;
+        }
+        parsed.exchange_nonce = native_detail->exchange_nonce;
+        parsed.ciphertext = native_detail->ciphertext;
+    } else if (!cJSON_IsString(nonce) || nonce->valuestring == nullptr ||
+               !parse_hex64(nonce->valuestring, nonce_value, &parsed.exchange_nonce) ||
+               !cJSON_IsString(ciphertext) || ciphertext->valuestring == nullptr ||
+               !decode_base64(ciphertext->valuestring, parsed.ciphertext)) {
+        return false;
+    }
+    if (!std::any_of(parsed.exchange_nonce.begin(), parsed.exchange_nonce.end(),
+                     [](uint8_t byte) { return byte != 0; }) ||
+        parsed.ciphertext.size() < 8 ||
+        parsed.ciphertext.size() > kMaxDetailCiphertextBytes) {
         return false;
     }
     parsed.route_hex = route->valuestring;
@@ -340,17 +372,30 @@ CodexMessageKind parse_codex_message(const char* data, size_t length, CodexStatu
         return CodexMessageKind::Invalid;
     }
 
+    const CodexMessageKind result = parse_codex_message_object(root, snapshot);
+    cJSON_Delete(root);
+    return result;
+}
+
+
+CodexMessageKind parse_codex_message_object(
+    cJSON* root,
+    CodexStatusSnapshot& snapshot,
+    const CodexTaskDetailEnvelope* native_detail)
+{
+    if (!cJSON_IsObject(root)) {
+        return CodexMessageKind::Invalid;
+    }
+
     const std::string type = json_string_or_empty(root, "type");
     cJSON* source = cJSON_GetObjectItemCaseSensitive(root, "source");
     if (source != nullptr &&
         (!cJSON_IsString(source) || source->valuestring == nullptr ||
          std::strcmp(source->valuestring, "codex") != 0)) {
-        cJSON_Delete(root);
         return CodexMessageKind::Invalid;
     }
     if (type == "chime") {
         const std::string agent = json_string_or_empty(root, "agent");
-        cJSON_Delete(root);
         return agent == "codex" ? CodexMessageKind::Chime : CodexMessageKind::Invalid;
     }
 
@@ -362,34 +407,30 @@ CodexMessageKind parse_codex_message(const char* data, size_t length, CodexStatu
             unix_time_ms < kMinimumUnixMs || unix_time_ms > kMaximumUnixMs ||
             offset_minutes < -kMaximumUtcOffsetMinutes ||
             offset_minutes > kMaximumUtcOffsetMinutes) {
-            cJSON_Delete(root);
             return CodexMessageKind::Invalid;
         }
         snapshot = CodexStatusSnapshot{};
         snapshot.unix_time_ms = unix_time_ms;
         snapshot.utc_offset_minutes = static_cast<int>(offset_minutes);
-        cJSON_Delete(root);
         return CodexMessageKind::TimeSync;
     }
 
     if (type == "task_detail") {
         CodexTaskDetailEnvelope detail;
-        if (!parse_task_detail(root, detail)) {
-            cJSON_Delete(root);
+        if (!parse_task_detail(root, detail, native_detail)) {
             return CodexMessageKind::Invalid;
         }
         CodexStatusSnapshot parsed;
         parsed.task_detail = std::move(detail);
         snapshot = std::move(parsed);
-        cJSON_Delete(root);
         return CodexMessageKind::TaskDetail;
     }
 
     CodexStatusSnapshot parsed;
     parsed.model = json_string_or_empty(root, "codex_model");
     parsed.effort = json_string_or_empty(root, "codex_effort");
-    parsed.five_hour_left_pct = json_int_or(root, "codex_5h_left_pct", -1);
-    parsed.week_left_pct = json_int_or(root, "codex_week_left_pct", -1);
+    parsed.five_hour_left_pct = json_percentage_or(root, "codex_5h_left_pct", -1);
+    parsed.week_left_pct = json_percentage_or(root, "codex_week_left_pct", -1);
     parsed.pending_count = json_nonnegative_int_or(root, "codex_alert_pending", 0);
     parsed.running_count = json_nonnegative_int_or(root, "codex_alert_running", 0);
     parsed.completed_count = json_nonnegative_int_or(root, "codex_alert_completed", 0);
@@ -400,7 +441,6 @@ CodexMessageKind parse_codex_message(const char* data, size_t length, CodexStatu
     const bool has_status = !parsed.model.empty() || !parsed.effort.empty() ||
                             parsed.five_hour_left_pct >= 0 || parsed.week_left_pct >= 0 ||
                             parsed.alerts_valid;
-    cJSON_Delete(root);
     if (malformed_alerts || !has_status) {
         return CodexMessageKind::Invalid;
     }

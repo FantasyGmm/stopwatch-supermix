@@ -166,6 +166,21 @@ bool parse_trae_status_message(
         return false;
     }
 
+    const bool result = parse_trae_status_object(root, received_at_ms, snapshot);
+    cJSON_Delete(root);
+    return result;
+}
+
+
+bool parse_trae_status_object(
+    cJSON* root,
+    uint32_t received_at_ms,
+    TraeStatusSnapshot& snapshot)
+{
+    if (!cJSON_IsObject(root)) {
+        return false;
+    }
+
     TraeStatusSnapshot parsed;
     cJSON* type = cJSON_GetObjectItemCaseSensitive(root, "type");
     cJSON* source = cJSON_GetObjectItemCaseSensitive(root, "source");
@@ -235,7 +250,6 @@ bool parse_trae_status_message(
         }
     }
 
-    cJSON_Delete(root);
     if (!valid) {
         return false;
     }

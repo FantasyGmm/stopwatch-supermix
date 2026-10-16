@@ -8,9 +8,13 @@ enum class StatusPageSwipeResult {
     Codex,
     PinnedMicrophone,
     Trae,
+    Usage,
+    Host,
     OpenTaskDeck,
     TraeTasksForward,
     TraeTasksBackward,
+    PreviousPage,
+    NextPage,
 };
 
 
@@ -36,11 +40,11 @@ private:
     };
 
     bool _active = false;
+    bool _trae_task_candidate = false;
     Axis _axis = Axis::Undecided;
     int _start_x = 0;
     int _start_y = 0;
     int _last_x = 0;
     int _last_y = 0;
     uint32_t _start_ms = 0;
-    bool _trae_task_candidate = false;
 };

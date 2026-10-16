@@ -1,5 +1,18 @@
 # stopwatch-supermix
 
+This fusion branch adds Usage/Host pages and a native Rust Mac Agent.
+Start with [fusion notes](docs/fusion-phase1.md),
+[Rust Agent installation](docs/rust-agent.md),
+[firmware artifacts](docs/firmware-artifacts.md), and
+[validation results](docs/validation.md). Pricing/statistics run on the Mac,
+using the public models.dev JSON catalog. The original Agent shell entry points
+now build Rust; Python Agent sources below remain a historical reference.
+Building and packaging do not flash the watch; installation and device writes
+are separate, explicit operations.
+
+An optional [Unit ENV-III application](docs/env-iii.md) displays local temperature,
+humidity and pressure, with independent sensor detection and automatic recovery.
+
 `stopwatch-supermix` is a custom M5Stack StopWatch firmware that turns the device into a compact launcher for daily tools, a Xiaozhi assistant boot target, and a dedicated Codex status monitor.
 
 This project is based on the M5Stack StopWatch user demo and extends it with:
@@ -7,7 +20,7 @@ This project is based on the M5Stack StopWatch user demo and extends it with:
 - a launcher-first app shell built on Mooncake/LVGL;
 - a Codex status monitor app added as the first launcher app;
 - an in-process Assistant app backed by Xiaozhi/Brookesia services, without rebooting;
-- full-screen utility apps for clock, badge, IMU, FFT, and setup;
+- full-screen utility apps for badge, IMU, FFT, setup, and environmental sensors;
 - capacity-gated build, flash, lifecycle, product-smoke, and recovery tooling.
 
 ## Hardware Target
@@ -26,18 +39,16 @@ The launcher installs apps in this order:
 
 1. Codex status monitor
 2. Assistant
-3. Clock
-4. Badge
-5. IMU
-6. FFT
-7. Setup
+3. Badge
+4. IMU
+5. FFT
+6. Setup
+7. Environment monitor
 
 The Codex app is intentionally placed first so the device can boot into the launcher and quickly open the monitoring dashboard.
 
-Clock opens a three-button selection page for Alarm, Watch Face, and Stopwatch.
-Each feature retains its original display and controls. Hold the upper-left button
-to return from a Clock feature to the selection page; hold both buttons to return
-directly to the launcher.
+Clock, Alarm, Watch Face, and Stopwatch are no longer registered or compiled in
+this fusion profile. RTC/system time and the shared status-bar clock remain.
 
 ## Codex Status Monitor
 
@@ -45,8 +56,8 @@ The Codex monitor is a full-screen dashboard for a local Codex status stream. It
 
 - current Codex model;
 - reasoning effort;
-- remaining 5-hour usage quota;
-- remaining weekly usage quota;
+- remaining weekly usage quota and reset countdown;
+- today's tokens and estimated API-equivalent cost, with per-model details;
 - current-day Codex conversation progress alerts;
 - pending, running, and completed conversation counts with a three-second carousel;
 - battery level and charging state;

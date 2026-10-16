@@ -185,7 +185,7 @@ int main()
     consumers.update(gate, gate.filterForLvgl(true), 300, 220, 2300);
     consumers.update(gate, gate.filterForLvgl(true), 250, 220, 2340);
     consumers.update(gate, gate.filterForLvgl(false), 250, 220, 2400);
-    assert(consumers.page_result == StatusPageSwipeResult::Trae);
+    assert(consumers.page_result == StatusPageSwipeResult::Usage);
 
     // A complete swipe sampled while LVGL is blocked still reaches the real
     // touch gate and page recognizer as Pressed, latest Move, Released. The
@@ -207,6 +207,6 @@ int main()
         );
     }
     assert(buffered_consumers.page_result ==
-           StatusPageSwipeResult::Trae);
+           StatusPageSwipeResult::Usage);
     return 0;
 }

@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+struct cJSON;
 
 enum class CodexTaskState : uint8_t {
     Pending,
@@ -67,3 +68,10 @@ CodexMessageKind parse_codex_message(
     size_t length,
     CodexStatusSnapshot& snapshot
 );
+
+// The caller retains the decoded object. Native bytes are supplied only by the
+// MessagePack decoder; all metadata and business checks remain shared.
+CodexMessageKind parse_codex_message_object(
+    cJSON* root,
+    CodexStatusSnapshot& snapshot,
+    const CodexTaskDetailEnvelope* native_detail = nullptr);

@@ -74,3 +74,4 @@ mac-codex-agent/.native/
 *.pkg
 libstopwatch_voice_audio.dylib
 /artifacts/macos-agent/latest/
+/artifacts/elysia-pet-preview/

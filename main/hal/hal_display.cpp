@@ -10,6 +10,8 @@
 #include <mooncake_log.h>
 #include <M5GFX.h>
 #include <lgfx/v1/panel/Panel_AMOLED.hpp>
+#include <driver/gpio.h>
+#include <freertos/semphr.h>
 #include <smooth_ui_toolkit.hpp>
 #include <uitk/short_namespace.hpp>
 #include <memory>
@@ -27,6 +29,120 @@ static constexpr gpio_num_t cfg_pin_io3  = GPIO_NUM_45;
 static constexpr gpio_num_t cfg_pin_cs   = GPIO_NUM_39;
 static constexpr gpio_num_t cfg_pin_te   = GPIO_NUM_38;
 static constexpr gpio_num_t cfg_pin_rst  = GPIO_NUM_NC;
+static constexpr uint32_t kDisplayTeWaitTimeoutMs = 20;
+
+static SemaphoreHandle_t _display_te_semaphore = nullptr;
+static bool _display_te_sync_enabled = false;
+static uint32_t _display_te_wait_timeouts = 0;
+
+static void display_te_isr(void* arg)
+{
+    auto semaphore = static_cast<SemaphoreHandle_t>(arg);
+    BaseType_t higher_priority_task_woken = pdFALSE;
+    xSemaphoreGiveFromISR(semaphore, &higher_priority_task_woken);
+    if (higher_priority_task_woken == pdTRUE) {
+        portYIELD_FROM_ISR();
+    }
+}
+
+static bool initialize_display_te_sync()
+{
+    if (_display_te_sync_enabled) {
+        return true;
+    }
+
+    _display_te_semaphore = xSemaphoreCreateBinary();
+    if (_display_te_semaphore == nullptr) {
+        mclog::tagWarn(_tag, "failed to create display TE semaphore");
+        return false;
+    }
+
+    const esp_err_t isr_service_result = gpio_install_isr_service(0);
+    if (isr_service_result != ESP_OK &&
+        isr_service_result != ESP_ERR_INVALID_STATE) {
+        mclog::tagWarn(
+            _tag,
+            "failed to install GPIO ISR service for display TE: {}",
+            esp_err_to_name(isr_service_result));
+        vSemaphoreDelete(_display_te_semaphore);
+        _display_te_semaphore = nullptr;
+        return false;
+    }
+
+    gpio_config_t te_config = {};
+    te_config.pin_bit_mask = 1ULL << static_cast<uint32_t>(cfg_pin_te);
+    te_config.mode = GPIO_MODE_INPUT;
+    te_config.pull_up_en = GPIO_PULLUP_ENABLE;
+    te_config.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    te_config.intr_type = GPIO_INTR_DISABLE;
+    const esp_err_t config_result = gpio_config(&te_config);
+    if (config_result != ESP_OK) {
+        mclog::tagWarn(
+            _tag,
+            "failed to configure display TE GPIO: {}",
+            esp_err_to_name(config_result));
+        vSemaphoreDelete(_display_te_semaphore);
+        _display_te_semaphore = nullptr;
+        return false;
+    }
+
+    const esp_err_t handler_result = gpio_isr_handler_add(
+        cfg_pin_te, display_te_isr, _display_te_semaphore);
+    if (handler_result != ESP_OK) {
+        mclog::tagWarn(
+            _tag,
+            "failed to register display TE GPIO handler: {}",
+            esp_err_to_name(handler_result));
+        vSemaphoreDelete(_display_te_semaphore);
+        _display_te_semaphore = nullptr;
+        return false;
+    }
+
+    const esp_err_t intr_type_result =
+        gpio_set_intr_type(cfg_pin_te, GPIO_INTR_POSEDGE);
+    const esp_err_t intr_enable_result = intr_type_result == ESP_OK
+        ? gpio_intr_enable(cfg_pin_te)
+        : intr_type_result;
+    if (intr_enable_result != ESP_OK) {
+        gpio_intr_disable(cfg_pin_te);
+        gpio_isr_handler_remove(cfg_pin_te);
+        mclog::tagWarn(
+            _tag,
+            "failed to enable display TE edge interrupt: {}",
+            esp_err_to_name(intr_enable_result));
+        vSemaphoreDelete(_display_te_semaphore);
+        _display_te_semaphore = nullptr;
+        return false;
+    }
+
+    _display_te_sync_enabled = true;
+    mclog::tagInfo(_tag, "display TE synchronization enabled on GPIO {}",
+                   static_cast<int>(cfg_pin_te));
+    return true;
+}
+
+static void wait_for_display_te()
+{
+    if (!_display_te_sync_enabled || _display_te_semaphore == nullptr) {
+        return;
+    }
+
+    // Discard an edge left over from the previous refresh; each panel write
+    // must start at a new TE boundary.
+    while (xSemaphoreTake(_display_te_semaphore, 0) == pdTRUE) {
+    }
+
+    if (xSemaphoreTake(
+            _display_te_semaphore,
+            pdMS_TO_TICKS(kDisplayTeWaitTimeoutMs)) != pdTRUE) {
+        ++_display_te_wait_timeouts;
+        if (_display_te_wait_timeouts == 1) {
+            mclog::tagWarn(
+                _tag,
+                "display TE edge timed out; continuing without synchronization");
+        }
+    }
+}
 
 class Panel_CO5300 : public lgfx::Panel_AMOLED {
 public:
@@ -171,6 +287,8 @@ void Hal::display_init()
     if (!_display->init()) {
         mclog::tagError(_tag, "display init failed");
         _display.reset();
+    } else {
+        initialize_display_te_sync();
     }
 
     // mclog::tagInfo(_tag, "create full screen canvas");
@@ -489,6 +607,7 @@ static void lvgl_flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px
     gfx.endWrite();
 
     if (lv_display_flush_is_last(disp)) {
+        wait_for_display_te();
         gfx.display();
     }
 

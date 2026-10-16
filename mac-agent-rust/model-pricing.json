@@ -1,0 +1,182 @@
+{
+  "version": 1,
+  "currency": "USD",
+  "source": "https://models.dev/api.json",
+  "verificationSource": "https://developers.openai.com/api/docs/pricing",
+  "fetchedAt": 1792138518,
+  "checkedDate": "2026-10-16",
+  "description": "Offline GPT-6 and GPT-5.6 snapshot from models.dev, using standard API rates per million tokens and its exact context tiers. Runtime public-catalog refresh and explicit user overrides remain independent.",
+  "legacySnapshot": {
+    "source": "https://developers.openai.com/api/docs/pricing",
+    "checkedDate": "2026-10-14",
+    "modelIds": [
+      "gpt-5",
+      "gpt-5-codex",
+      "gpt-5.3-codex"
+    ],
+    "description": "Earlier bundled entries retained unchanged for historical-session compatibility."
+  },
+  "models": [
+    {
+      "modelId": "gpt-6.1-sol",
+      "displayName": "GPT-6.1 Sol",
+      "inputCostPerMillion": "2",
+      "outputCostPerMillion": "10",
+      "cacheReadCostPerMillion": "0.1",
+      "cacheCreationCostPerMillion": "2.5",
+      "contextTiers": [
+        {
+          "aboveInputTokens": 272000,
+          "inputCostPerMillion": "4",
+          "outputCostPerMillion": "15",
+          "cacheReadCostPerMillion": "0.2",
+          "cacheCreationCostPerMillion": "5"
+        }
+      ]
+    },
+    {
+      "modelId": "gpt-6-astra",
+      "displayName": "GPT-6 Astra",
+      "inputCostPerMillion": "10",
+      "outputCostPerMillion": "50",
+      "cacheReadCostPerMillion": "1",
+      "cacheCreationCostPerMillion": "12.5",
+      "contextTiers": [
+        {
+          "aboveInputTokens": 272000,
+          "inputCostPerMillion": "20",
+          "outputCostPerMillion": "75",
+          "cacheReadCostPerMillion": "2",
+          "cacheCreationCostPerMillion": "25"
+        }
+      ]
+    },
+    {
+      "modelId": "gpt-6-sol",
+      "displayName": "GPT-6 Sol",
+      "inputCostPerMillion": "2",
+      "outputCostPerMillion": "10",
+      "cacheReadCostPerMillion": "0.2",
+      "cacheCreationCostPerMillion": "2.5",
+      "contextTiers": [
+        {
+          "aboveInputTokens": 272000,
+          "inputCostPerMillion": "4",
+          "outputCostPerMillion": "15",
+          "cacheReadCostPerMillion": "0.4",
+          "cacheCreationCostPerMillion": "5"
+        }
+      ]
+    },
+    {
+      "modelId": "gpt-6-luna",
+      "displayName": "GPT-6 Luna",
+      "inputCostPerMillion": "0.1",
+      "outputCostPerMillion": "0.5",
+      "cacheReadCostPerMillion": "0.01",
+      "cacheCreationCostPerMillion": "0.125",
+      "contextTiers": [
+        {
+          "aboveInputTokens": 272000,
+          "inputCostPerMillion": "0.2",
+          "outputCostPerMillion": "0.75",
+          "cacheReadCostPerMillion": "0.02",
+          "cacheCreationCostPerMillion": "0.25"
+        }
+      ]
+    },
+    {
+      "modelId": "gpt-5.6-sol",
+      "displayName": "GPT-5.6 Sol",
+      "inputCostPerMillion": "4",
+      "outputCostPerMillion": "20",
+      "cacheReadCostPerMillion": "0.4",
+      "cacheCreationCostPerMillion": "5",
+      "contextTiers": [
+        {
+          "aboveInputTokens": 272000,
+          "inputCostPerMillion": "8",
+          "outputCostPerMillion": "30",
+          "cacheReadCostPerMillion": "0.8",
+          "cacheCreationCostPerMillion": "10"
+        }
+      ]
+    },
+    {
+      "modelId": "gpt-5.6-terra",
+      "displayName": "GPT-5.6 Terra",
+      "inputCostPerMillion": "2",
+      "outputCostPerMillion": "12",
+      "cacheReadCostPerMillion": "0.2",
+      "cacheCreationCostPerMillion": "2.5",
+      "contextTiers": [
+        {
+          "aboveInputTokens": 272000,
+          "inputCostPerMillion": "4",
+          "outputCostPerMillion": "18",
+          "cacheReadCostPerMillion": "0.4",
+          "cacheCreationCostPerMillion": "5"
+        }
+      ]
+    },
+    {
+      "modelId": "gpt-5.6-luna",
+      "displayName": "GPT-5.6 Luna",
+      "inputCostPerMillion": "0.2",
+      "outputCostPerMillion": "1.2",
+      "cacheReadCostPerMillion": "0.02",
+      "cacheCreationCostPerMillion": "0.25",
+      "contextTiers": [
+        {
+          "aboveInputTokens": 272000,
+          "inputCostPerMillion": "0.4",
+          "outputCostPerMillion": "1.8",
+          "cacheReadCostPerMillion": "0.04",
+          "cacheCreationCostPerMillion": "0.5"
+        }
+      ]
+    },
+    {
+      "modelId": "gpt-5.6",
+      "displayName": "GPT-5.6",
+      "inputCostPerMillion": "4",
+      "outputCostPerMillion": "20",
+      "cacheReadCostPerMillion": "0.4",
+      "cacheCreationCostPerMillion": "5",
+      "contextTiers": [
+        {
+          "aboveInputTokens": 272000,
+          "inputCostPerMillion": "8",
+          "outputCostPerMillion": "30",
+          "cacheReadCostPerMillion": "0.8",
+          "cacheCreationCostPerMillion": "10"
+        }
+      ]
+    },
+    {
+      "modelId": "gpt-5",
+      "displayName": "GPT-5",
+      "inputCostPerMillion": "1.25",
+      "outputCostPerMillion": "10",
+      "cacheReadCostPerMillion": "0.125",
+      "cacheCreationCostPerMillion": "1.25"
+    },
+    {
+      "modelId": "gpt-5-codex",
+      "displayName": "GPT-5-Codex",
+      "inputCostPerMillion": "1.25",
+      "outputCostPerMillion": "10",
+      "cacheReadCostPerMillion": "0.125",
+      "cacheCreationCostPerMillion": "1.25"
+    },
+    {
+      "modelId": "gpt-5.3-codex",
+      "displayName": "GPT-5.3-Codex",
+      "inputCostPerMillion": "1.75",
+      "outputCostPerMillion": "14",
+      "cacheReadCostPerMillion": "0.175",
+      "cacheCreationCostPerMillion": "1.75"
+    }
+  ],
+  "deletedModelIds": []
+}

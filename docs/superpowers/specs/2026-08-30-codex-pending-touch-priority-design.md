@@ -1,5 +1,11 @@
 # Codex Pending Touch Priority Design
 
+Historical touch-sampling fix. Its measurements and rejected experiments remain
+relevant, but the unchanged breathing-halo requirement below was superseded on
+2026-10-16: the user requested smoother Pending animation, and the next firmware
+uses a static red ring with small status/count pulses. Independent touch sampling
+and the wake/gesture contracts remain in place.
+
 ## Goal
 
 Keep the original approved Pending red-halo implementation unchanged while

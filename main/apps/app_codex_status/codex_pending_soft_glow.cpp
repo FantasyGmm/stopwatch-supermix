@@ -15,15 +15,14 @@ constexpr lv_opa_t kInactiveOpacity = LV_OPA_60;
 void draw_ring(
     lv_layer_t* layer,
     const lv_area_t& overlay_coords,
-    const codex_pending_glow::RingGeometry& ring,
-    lv_opa_t opacity
+    const codex_pending_glow::RingGeometry& ring
 )
 {
     lv_draw_rect_dsc_t dsc;
     lv_draw_rect_dsc_init(&dsc);
     dsc.bg_opa = LV_OPA_TRANSP;
     dsc.border_color = lv_color_hex(codex_status_ui::kAlertVermilion);
-    dsc.border_opa = opacity;
+    dsc.border_opa = ring.maximum_opacity;
     dsc.border_width = ring.border_width;
     dsc.radius = LV_RADIUS_CIRCLE;
 
@@ -45,6 +44,14 @@ lv_opa_t interpolate_opa(int32_t phase, lv_opa_t minimum, lv_opa_t maximum)
     return static_cast<lv_opa_t>(
         minimum + phase * (maximum - minimum) / 255
     );
+}
+
+void set_opacity_if_changed(lv_obj_t* target, lv_opa_t opacity)
+{
+    if (target != nullptr &&
+        lv_obj_get_style_opa(target, LV_PART_MAIN) != opacity) {
+        lv_obj_set_style_opa(target, opacity, LV_PART_MAIN);
+    }
 }
 
 }  // namespace
@@ -154,20 +161,8 @@ void CodexPendingSoftGlow::apply_phase(int32_t phase)
     lv_obj_t* active_count = _state == CodexTaskState::Pending
                                  ? _pending_count
                                  : _running_count;
-    if (active_label != nullptr) {
-        lv_obj_set_style_opa(active_label, active_opacity, 0);
-    }
-    if (active_count != nullptr) {
-        lv_obj_set_style_opa(active_count, active_opacity, 0);
-    }
-    if (codex_pending_glow::ring_redraw_desired(
-            _last_ring_phase_bucket,
-            _phase,
-            _ring_visible)) {
-        _last_ring_phase_bucket =
-            codex_pending_glow::ring_phase_bucket(_phase);
-        invalidate_ring_segments();
-    }
+    set_opacity_if_changed(active_label, active_opacity);
+    set_opacity_if_changed(active_count, active_opacity);
 }
 
 void CodexPendingSoftGlow::restore_target_opacity()
@@ -179,9 +174,7 @@ void CodexPendingSoftGlow::restore_target_opacity()
         _running_count,
     };
     for (lv_obj_t* target : targets) {
-        if (target != nullptr) {
-            lv_obj_set_style_opa(target, kInactiveOpacity, 0);
-        }
+        set_opacity_if_changed(target, kInactiveOpacity);
     }
 }
 
@@ -194,33 +187,12 @@ void CodexPendingSoftGlow::refresh_ring_visibility()
         lv_obj_remove_flag(_overlay, LV_OBJ_FLAG_HIDDEN);
     } else {
         lv_obj_add_flag(_overlay, LV_OBJ_FLAG_HIDDEN);
-        _last_ring_phase_bucket = -1;
-    }
-}
-
-void CodexPendingSoftGlow::invalidate_ring_segments()
-{
-    if (_overlay == nullptr) {
-        return;
-    }
-
-    lv_area_t coords;
-    lv_obj_get_coords(_overlay, &coords);
-    for (const auto& segment : codex_pending_glow::kInvalidationAreas) {
-        lv_area_t area = {
-            static_cast<lv_coord_t>(coords.x1 + segment.x1),
-            static_cast<lv_coord_t>(coords.y1 + segment.y1),
-            static_cast<lv_coord_t>(coords.x1 + segment.x2),
-            static_cast<lv_coord_t>(coords.y1 + segment.y2),
-        };
-        lv_obj_invalidate_area(_overlay, &area);
     }
 }
 
 void CodexPendingSoftGlow::start()
 {
     _active = true;
-    _last_ring_phase_bucket = -1;
     refresh_ring_visibility();
     restore_target_opacity();
     apply_phase(0);
@@ -245,7 +217,6 @@ void CodexPendingSoftGlow::stop()
         lv_obj_add_flag(_overlay, LV_OBJ_FLAG_HIDDEN);
     }
     restore_target_opacity();
-    _last_ring_phase_bucket = -1;
     _active = false;
 }
 
@@ -279,13 +250,6 @@ void CodexPendingSoftGlow::draw_event_cb(lv_event_t* event)
     lv_obj_get_coords(lv_event_get_target_obj(event), &coords);
     lv_layer_t* layer = lv_event_get_layer(event);
     for (const auto& ring : codex_pending_glow::kRings) {
-        const lv_opa_t opacity = static_cast<lv_opa_t>(
-            codex_pending_glow::opacity_for_phase(
-                self->_phase,
-                ring.minimum_opacity,
-                ring.maximum_opacity
-            )
-        );
-        draw_ring(layer, coords, ring, opacity);
+        draw_ring(layer, coords, ring);
     }
 }

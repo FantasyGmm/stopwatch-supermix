@@ -3,12 +3,12 @@
 #include <cassert>
 
 
-static bool right_to_left_fast_swipe_moves_codex_to_trae()
+static bool right_to_left_fast_swipe_moves_codex_to_usage()
 {
     StatusPageSwipeLogic swipe;
     swipe.press(300, 220, 1000);
     swipe.move(260, 218);
-    return swipe.release(1200, 1) == StatusPageSwipeResult::Trae;
+    return swipe.release(1200, 1) == StatusPageSwipeResult::Usage;
 }
 
 
@@ -21,7 +21,7 @@ static bool right_to_left_fast_swipe_moves_pinned_microphone_to_codex()
 }
 
 
-static bool left_to_right_fast_swipe_moves_trae_to_codex()
+static bool left_to_right_fast_swipe_moves_usage_to_codex()
 {
     StatusPageSwipeLogic swipe;
     swipe.press(160, 220, 1000);
@@ -44,7 +44,7 @@ static bool long_horizontal_drag_moves_page()
     StatusPageSwipeLogic swipe;
     swipe.press(300, 220, 1000);
     swipe.move(199, 240);
-    return swipe.release(1600, 1) == StatusPageSwipeResult::Trae;
+    return swipe.release(1600, 1) == StatusPageSwipeResult::Usage;
 }
 
 
@@ -57,27 +57,25 @@ static bool vertical_drag_does_not_move_page()
 }
 
 
-static void assert_trae_task_vertical_swipes_scroll_one_row()
+static void assert_usage_vertical_swipes_do_not_navigate()
 {
     StatusPageSwipeLogic upward;
     upward.press(220, 260, 1000, true);
     upward.move(222, 220);
     assert(
-        upward.release(1200, 2) ==
-        StatusPageSwipeResult::TraeTasksForward
+        upward.release(1200, 2) == StatusPageSwipeResult::Stay
     );
 
     StatusPageSwipeLogic downward;
     downward.press(220, 220, 1000, true);
     downward.move(218, 260);
     assert(
-        downward.release(1200, 2) ==
-        StatusPageSwipeResult::TraeTasksBackward
+        downward.release(1200, 2) == StatusPageSwipeResult::Stay
     );
 }
 
 
-static void assert_trae_vertical_swipe_requires_task_region_ownership()
+static void assert_removed_page_vertical_candidate_is_ignored()
 {
     StatusPageSwipeLogic outside;
     outside.press(80, 260, 1000, false);
@@ -178,10 +176,10 @@ static void assert_deck_entry_safe_zone_is_inclusive_and_codex_only()
     outside_y.move(233, 370);
     assert(outside_y.release(1200, 1) == StatusPageSwipeResult::Stay);
 
-    StatusPageSwipeLogic trae;
-    trae.press(233, 440, 1000);
-    trae.move(233, 390);
-    assert(trae.release(1200, 2) == StatusPageSwipeResult::Stay);
+    StatusPageSwipeLogic usage;
+    usage.press(233, 440, 1000);
+    usage.move(233, 390);
+    assert(usage.release(1200, 2) == StatusPageSwipeResult::Stay);
 }
 
 
@@ -201,7 +199,7 @@ static void assert_horizontal_owner_preserves_existing_paging()
     swipe.press(233, 440, 1000);
     swipe.move(218, 438);  // Horizontal ownership after the 12 px dead zone.
     swipe.move(180, 360);
-    assert(swipe.release(1200, 1) == StatusPageSwipeResult::Trae);
+    assert(swipe.release(1200, 1) == StatusPageSwipeResult::Usage);
 }
 
 
@@ -219,12 +217,36 @@ static void assert_downward_safe_zone_and_edge_vertical_gestures_stay()
 }
 
 
-static void assert_trae_page_does_not_wrap_left()
+static void assert_host_page_does_not_wrap_left()
 {
     StatusPageSwipeLogic swipe;
     swipe.press(300, 220, 1000);
     swipe.move(250, 220);
-    assert(swipe.release(1200, 2) == StatusPageSwipeResult::Stay);
+    assert(swipe.release(1200, 3) == StatusPageSwipeResult::Stay);
+}
+
+
+static void assert_usage_and_host_follow_codex()
+{
+    StatusPageSwipeLogic codex_to_usage;
+    codex_to_usage.press(300, 220, 1000);
+    codex_to_usage.move(260, 220);
+    assert(codex_to_usage.release(1200, 1) == StatusPageSwipeResult::Usage);
+
+    StatusPageSwipeLogic usage_to_host;
+    usage_to_host.press(300, 220, 1000);
+    usage_to_host.move(260, 220);
+    assert(usage_to_host.release(1200, 2) == StatusPageSwipeResult::Host);
+
+    StatusPageSwipeLogic usage_to_codex;
+    usage_to_codex.press(160, 220, 1000);
+    usage_to_codex.move(200, 220);
+    assert(usage_to_codex.release(1200, 2) == StatusPageSwipeResult::Codex);
+
+    StatusPageSwipeLogic host_to_usage;
+    host_to_usage.press(160, 220, 1000);
+    host_to_usage.move(200, 220);
+    assert(host_to_usage.release(1200, 3) == StatusPageSwipeResult::Usage);
 }
 
 
@@ -240,17 +262,18 @@ static void assert_cancel_clears_active_gesture()
 
 int main()
 {
-    assert(right_to_left_fast_swipe_moves_codex_to_trae());
+    assert(right_to_left_fast_swipe_moves_codex_to_usage());
     assert(right_to_left_fast_swipe_moves_pinned_microphone_to_codex());
-    assert(left_to_right_fast_swipe_moves_trae_to_codex());
+    assert(left_to_right_fast_swipe_moves_usage_to_codex());
     assert(left_to_right_fast_swipe_moves_codex_to_pinned_microphone());
     assert(long_horizontal_drag_moves_page());
     assert(vertical_drag_does_not_move_page());
-    assert_trae_task_vertical_swipes_scroll_one_row();
-    assert_trae_vertical_swipe_requires_task_region_ownership();
+    assert_usage_vertical_swipes_do_not_navigate();
+    assert_removed_page_vertical_candidate_is_ignored();
     assert(short_slow_drag_snaps_back());
     assert_pinned_page_does_not_wrap_right();
-    assert_trae_page_does_not_wrap_left();
+    assert_host_page_does_not_wrap_left();
+    assert_usage_and_host_follow_codex();
     assert_bottom_center_upward_swipe_opens_codex_deck();
     assert_codex_deck_drag_reports_continuous_finger_progress();
     assert_non_entry_gestures_never_report_deck_progress();

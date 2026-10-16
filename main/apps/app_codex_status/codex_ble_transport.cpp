@@ -27,6 +27,11 @@ namespace {
 
 constexpr const char* kTag = "CodexBLE";
 constexpr size_t kMaxFrameSize = 256;
+constexpr std::array<uint8_t, 8> kStatusCodecCapabilities = {
+    'S', 'W', 'C', 1, 0x03, 0, 0x00, 0x08,
+};
+static_assert(kStatusCodecCapabilities.size() <= 20);
+static_assert(kCodexStatusMaxPayloadBytes == 2048);
 constexpr size_t kFrameQueueDepth = 32;
 constexpr size_t kVoiceControlQueueDepth = 8;
 constexpr size_t kProductionVoiceControlQueueDepth = 8;
@@ -183,13 +188,23 @@ int gatt_access(
 )
 {
     if (g_transport == nullptr || context == nullptr ||
-        context->op != BLE_GATT_ACCESS_OP_WRITE_CHR) {
+        (context->op != BLE_GATT_ACCESS_OP_READ_CHR &&
+         context->op != BLE_GATT_ACCESS_OP_WRITE_CHR)) {
         return BLE_ATT_ERR_UNLIKELY;
     }
     if (!g_transport->authorize_gatt(
             connection_handle,
             secure_pairing::AgentGattSurface::Production)) {
         return BLE_ATT_ERR_INSUFFICIENT_AUTHOR;
+    }
+
+    if (context->op == BLE_GATT_ACCESS_OP_READ_CHR) {
+        return os_mbuf_append(
+                   context->om,
+                   kStatusCodecCapabilities.data(),
+                   kStatusCodecCapabilities.size()) == 0
+            ? 0
+            : BLE_ATT_ERR_INSUFFICIENT_RES;
     }
 
     const uint16_t length = OS_MBUF_PKTLEN(context->om);
@@ -404,7 +419,7 @@ const ble_gatt_chr_def kStatusCharacteristics[] = {
         gatt_access,
         nullptr,
         nullptr,
-        BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP,
+        BLE_GATT_CHR_F_READ | BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP,
         0,
         nullptr,
         nullptr,

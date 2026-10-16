@@ -27,13 +27,13 @@ void StatusPageSwipeLogic::press(
 )
 {
     _active = true;
+    _trae_task_candidate = trae_task_candidate;
     _axis = Axis::Undecided;
     _start_x = x;
     _start_y = y;
     _last_x = x;
     _last_y = y;
     _start_ms = now_ms;
-    _trae_task_candidate = trae_task_candidate;
 }
 
 
@@ -83,24 +83,17 @@ StatusPageSwipeResult StatusPageSwipeLogic::release(uint32_t now_ms, int current
     }
 
     _active = false;
+    const bool trae_task_candidate = _trae_task_candidate;
+    _trae_task_candidate = false;
     const int dx = _last_x - _start_x;
     const int dy = _last_y - _start_y;
     const int abs_x = std::abs(dx);
-    const int abs_y = std::abs(dy);
     const uint32_t elapsed_ms = now_ms - _start_ms;
     const bool fast_swipe =
         abs_x >= kFastSwipeMinDistance && elapsed_ms <= kFastSwipeMaxMs;
     const bool long_drag = abs_x >= kDragSwipeMinDistance;
 
     if (_axis == Axis::Vertical) {
-        const bool fast_vertical =
-            abs_y >= kFastSwipeMinDistance && elapsed_ms <= kFastSwipeMaxMs;
-        const bool long_vertical = abs_y >= kDragSwipeMinDistance;
-        if (current_page == 2 && _trae_task_candidate &&
-            (fast_vertical || long_vertical)) {
-            return dy < 0 ? StatusPageSwipeResult::TraeTasksForward
-                          : StatusPageSwipeResult::TraeTasksBackward;
-        }
         const int upward_distance = -dy;
         const bool in_deck_zone =
             _start_x >= kDeckMinX && _start_x <= kDeckMaxX &&
@@ -117,19 +110,13 @@ StatusPageSwipeResult StatusPageSwipeLogic::release(uint32_t now_ms, int current
     if (_axis != Axis::Horizontal || (!fast_swipe && !long_drag)) {
         return StatusPageSwipeResult::Stay;
     }
-    if (dx < 0 && current_page == 0) {
-        return StatusPageSwipeResult::Codex;
+    if (trae_task_candidate && current_page == 4) {
+        return dx < 0
+                   ? StatusPageSwipeResult::TraeTasksForward
+                   : StatusPageSwipeResult::TraeTasksBackward;
     }
-    if (dx < 0 && current_page == 1) {
-        return StatusPageSwipeResult::Trae;
-    }
-    if (dx > 0 && current_page == 2) {
-        return StatusPageSwipeResult::Codex;
-    }
-    if (dx > 0 && current_page == 1) {
-        return StatusPageSwipeResult::PinnedMicrophone;
-    }
-    return StatusPageSwipeResult::Stay;
+    return dx < 0 ? StatusPageSwipeResult::NextPage
+                   : StatusPageSwipeResult::PreviousPage;
 }
 
 

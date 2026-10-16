@@ -19,7 +19,8 @@ std::optional<CodexBleMessage> CodexBleReassembler::push(const uint8_t* data, si
     const uint8_t count = data[5];
     const size_t payload_length = length - kHeaderSize;
 
-    if (version != 1 ||
+    if ((version != static_cast<uint8_t>(CodexStatusEncoding::Json) &&
+         version != static_cast<uint8_t>(CodexStatusEncoding::MessagePack)) ||
         (type != kCodexBleStatusMessage && type != kCodexBleEventMessage) ||
         count == 0 || index >= count) {
         reset();
@@ -29,10 +30,12 @@ std::optional<CodexBleMessage> CodexBleReassembler::push(const uint8_t* data, si
     if (index == 0) {
         reset();
         _active = true;
+        _encoding = static_cast<CodexStatusEncoding>(version);
         _type = type;
         _sequence = sequence;
         _fragment_count = count;
-    } else if (!_active || type != _type || sequence != _sequence ||
+    } else if (!_active || version != static_cast<uint8_t>(_encoding) ||
+               type != _type || sequence != _sequence ||
                count != _fragment_count || index != _next_fragment) {
         reset();
         return std::nullopt;
@@ -53,6 +56,7 @@ std::optional<CodexBleMessage> CodexBleReassembler::push(const uint8_t* data, si
 
     CodexBleMessage message;
     message.type = _type;
+    message.encoding = _encoding;
     message.payload = std::move(_payload);
     reset();
     return message;
@@ -62,6 +66,7 @@ std::optional<CodexBleMessage> CodexBleReassembler::push(const uint8_t* data, si
 void CodexBleReassembler::reset()
 {
     _active = false;
+    _encoding = CodexStatusEncoding::Json;
     _type = 0;
     _fragment_count = 0;
     _next_fragment = 0;

@@ -6,6 +6,7 @@
 #pragma once
 #include "button_input_gate.h"
 #include "external_power_state.h"
+#include "env_sensor_snapshot.h"
 #include "power_led_blink_config.h"
 #include "touch_input_gate.h"
 #include "utils/button/Button_Class.hpp"
@@ -19,9 +20,16 @@
 #include <uitk/short_namespace.hpp>
 #include <smooth_lvgl.hpp>
 #include <i2c_bus.h>
+#include <driver/i2c_master.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #include <string_view>
 #include <array>
 #include <M5GFX.h>
+#include <atomic>
+#include <mutex>
+
+class EnvIIIDriver;
 
 class StopWatchAudioBackend;
 
@@ -184,6 +192,10 @@ public:
     int getPowerLedBlinkIntervalSeconds(bool loadFromSettings = false);
     void updatePowerLed();
 
+    // Port A sensors use HAL-owned hardware and a cached background sampler.
+    bool setEnvMonitoring(bool active);
+    EnvSnapshot getEnvSnapshot();
+
     /* --------------------------------- Display -------------------------------- */
     void setBackLightBrightness(int brightness, bool saveToSettings = false);
     void setTemporaryBackLightBrightness(int brightness);
@@ -323,6 +335,17 @@ private:
     bool _power_led_output_valid = false;
     uint32_t _power_led_next_blink_ms = 0;
     uint32_t _power_led_pulse_end_ms  = 0;
+    i2c_master_bus_handle_t _env_i2c_bus = nullptr;
+    TaskHandle_t _env_task_handle = nullptr;
+    std::atomic<bool> _env_monitoring{false};
+    std::atomic<uint32_t> _env_monitoring_epoch{0};
+    std::mutex _env_control_mutex;
+    std::mutex _env_snapshot_mutex;
+    EnvSnapshot _env_snapshot;
+    struct EnvIIIDriverDeleter {
+        void operator()(EnvIIIDriver* driver) const;
+    };
+    std::unique_ptr<EnvIIIDriver, EnvIIIDriverDeleter> _env_driver;
 
     void i2c_init();
     void i2c_detect();
@@ -340,6 +363,10 @@ private:
     void rtc_init();
     void button_init();
     void fs_init();
+    bool acquireEnvPortPower();
+    bool restoreEnvPortPower();
+    static void envMonitoringTaskEntry(void* param);
+    void envMonitoringTask();
 };
 
 Hal& GetHAL();

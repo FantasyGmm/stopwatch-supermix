@@ -8,10 +8,17 @@
 constexpr uint8_t kCodexBleStatusMessage = 1;
 constexpr uint8_t kCodexBleEventMessage = 2;
 
+enum class CodexStatusEncoding : uint8_t {
+    Json = 1,
+    MessagePack = 2,
+};
+
+constexpr size_t kCodexStatusMaxPayloadBytes = 2048;
 
 struct CodexBleMessage {
     uint8_t type = 0;
     std::string payload;
+    CodexStatusEncoding encoding = CodexStatusEncoding::Json;
 };
 
 
@@ -22,10 +29,11 @@ public:
 
 private:
     static constexpr size_t kHeaderSize = 6;
-    static constexpr size_t kMaxPayloadSize = 2048;
+    static constexpr size_t kMaxPayloadSize = kCodexStatusMaxPayloadBytes;
     static constexpr uint32_t kTimeoutMs = 3000;
 
     bool _active = false;
+    CodexStatusEncoding _encoding = CodexStatusEncoding::Json;
     uint8_t _type = 0;
     uint8_t _fragment_count = 0;
     uint8_t _next_fragment = 0;

@@ -13,6 +13,26 @@ file(GLOB_RECURSE MY_SRCS
     "runtime/*.cpp"
 )
 
+# Keep the retired Clock sources upstream, but leave them out of the firmware.
+list(FILTER MY_SRCS EXCLUDE REGEX "/apps/(app_clock|app_alarm_clock|app_stopwatch|app_watch_face)/")
+list(REMOVE_ITEM MY_SRCS
+    "${CMAKE_CURRENT_SOURCE_DIR}/assets/images/icon_clock.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/assets/images/alarm_icon.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/assets/images/watch_face/classic/classic_hour_hand.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/assets/images/watch_face/classic/classic_minute_hand.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/assets/images/watch_face/classic/classic_second_hand.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/assets/images/watch_face/big_number/big_number_0.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/assets/images/watch_face/big_number/big_number_1.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/assets/images/watch_face/big_number/big_number_2.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/assets/images/watch_face/big_number/big_number_3.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/assets/images/watch_face/big_number/big_number_4.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/assets/images/watch_face/big_number/big_number_5.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/assets/images/watch_face/big_number/big_number_6.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/assets/images/watch_face/big_number/big_number_7.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/assets/images/watch_face/big_number/big_number_8.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/assets/images/watch_face/big_number/big_number_9.c"
+)
+
 if(CONFIG_STOPWATCH_DEBUG_COMMANDS)
     file(GLOB_RECURSE DEBUG_SRCS
         "debug/*.c"

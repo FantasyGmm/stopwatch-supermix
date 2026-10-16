@@ -1,0 +1,200 @@
+#!/bin/bash
+set -euo pipefail
+
+CRATE_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
+STOPWATCH_INSTALLER_SOURCE_ONLY=1 source "$CRATE_DIR/scripts/install.sh"
+STOPWATCH_RELEASE_SOURCE_ONLY=1 source "$CRATE_DIR/scripts/build_release.sh"
+
+FIXTURE_ROOT="$(mktemp -d "$FUSION_ROOT/.packaging-fixture.XXXXXX")"
+TEST_CHILD_PIDS=""
+
+cleanup_fixture() {
+    local pid
+    for pid in $TEST_CHILD_PIDS; do kill "$pid" 2>/dev/null || true; done
+    for pid in $TEST_CHILD_PIDS; do wait "$pid" 2>/dev/null || true; done
+    rm -rf -- "$FIXTURE_ROOT"
+}
+trap cleanup_fixture EXIT
+
+fail() {
+    echo "packaging fixture failed: $*" >&2
+    exit 1
+}
+
+assert_file_equals() {
+    local path="$1" expected="$2" actual
+    [[ -f "$path" ]] || fail "missing file $path"
+    actual="$(<"$path")"
+    [[ "$actual" == "$expected" ]] || fail "$path contained '$actual', expected '$expected'"
+}
+
+test_atomic_app_publish() {
+    local root="$FIXTURE_ROOT/app-publish"
+    local app="$root/$APP_NAME" staging="$root/staging.app" backup="$root/backup"
+    mkdir -p "$app" "$staging"
+    printf 'prior\n' > "$app/version.txt"
+    printf 'fresh\n' > "$staging/version.txt"
+    validate_staged_app() { return 0; }
+    validate_published_app() { return 0; }
+    publish_validated_app "$staging" "$app" "$backup" || fail "app publish failed"
+    assert_file_equals "$app/version.txt" fresh
+    [[ ! -e "$backup" ]] || fail "app backup remained after commit"
+
+    mkdir -p "$staging"
+    printf 'broken\n' > "$staging/version.txt"
+    validate_published_app() { return 73; }
+    if publish_validated_app "$staging" "$app" "$backup"; then fail "invalid app publish succeeded"; fi
+    assert_file_equals "$app/version.txt" fresh
+    [[ ! -e "$staging/version.txt" ]] || fail "failed app publication was not removed"
+    [[ ! -e "$backup" ]] || fail "app backup remained after rollback"
+}
+
+make_release_fixture() {
+    local directory="$1" version="$2" fingerprint="$3"
+    local filename="StopWatch-Codex-Agent-$version.dmg" digest build
+    mkdir -p "$directory"
+    printf 'portable fixture image %s\n' "$version" > "$directory/$filename"
+    digest="$(shasum -a 256 "$directory/$filename" | awk '{print $1}')"
+    build="$((10#${version##*.} + 1))"
+    printf '%s  %s\n' "$digest" "$filename" > "$directory/SHA256SUMS.txt"
+    write_release_metadata "$directory/release.json" "$version" "$fingerprint" \
+        "$filename" "$digest" "0123456789abcdef" "$build"
+}
+
+test_atomic_latest_publish() {
+    local root="$FIXTURE_ROOT/release-publish"
+    local latest="$root/latest" staging="$root/staging"
+    make_release_fixture "$latest" 1.0.1 "$(printf 'a%.0s' {1..64})"
+    printf 'old stale\n' > "$latest/stale.txt"
+    make_release_fixture "$staging" 1.0.2 "$(printf 'b%.0s' {1..64})"
+    validate_release_dir "$staging" || fail "valid staging release rejected"
+    publish_latest_release "$staging" "$latest" || fail "latest release publish failed"
+    [[ ! -e "$staging" ]] || fail "staging release remained after commit"
+    [[ ! -e "$latest/stale.txt" ]] || fail "stale latest content survived replacement"
+    [[ "$(release_metadata_field "$latest/release.json" version)" == "1.0.2" ]] || fail "latest version was not replaced"
+
+    make_release_fixture "$staging" 1.0.3 "$(printf 'c%.0s' {1..64})"
+    mv() {
+        if [[ "$1" == "--" ]]; then shift; fi
+        if [[ "$1" == "$staging" && "$2" == "$latest" ]]; then return 1; fi
+        command mv "$@"
+    }
+    if publish_latest_release "$staging" "$latest"; then fail "injected latest move failure succeeded"; fi
+    unset -f mv
+    [[ "$(release_metadata_field "$latest/release.json" version)" == "1.0.2" ]] || fail "failed latest publish did not restore prior release"
+    validate_release_dir "$latest" || fail "restored latest release is invalid"
+}
+
+test_fingerprint_tracks_packaging_inputs() {
+    local root="$FIXTURE_ROOT/fingerprint"
+    mkdir -p "$root"
+    printf 'one\n' > "$root/agent.rs"
+    printf 'lock one\n' > "$root/Cargo.lock"
+    local first second
+    first="$(release_input_fingerprint "$root" agent.rs Cargo.lock)"
+    printf 'lock two\n' > "$root/Cargo.lock"
+    second="$(release_input_fingerprint "$root" agent.rs Cargo.lock)"
+    [[ "$first" != "$second" ]] || fail "Cargo.lock changes did not affect release fingerprint"
+    [[ "${#first}" == "64" && "${#second}" == "64" ]] || fail "release fingerprint is not SHA-256"
+}
+
+test_real_lockf_exclusion() {
+    local root="$FIXTURE_ROOT/real-lock"
+    local lock_path="$root/publish.lock"
+    local holder_ready="$root/holder-ready"
+    local release_holder="$root/release-holder"
+    local second_acquired="$root/second-acquired"
+    local lockf_path attempts holder_pid second_pid
+    mkdir -p "$root"
+    lockf_path="$(command -v lockf)" || fail "macOS lockf is unavailable"
+
+    "$lockf_path" -s -t 15 "$lock_path" /bin/bash -c '
+        : > "$1"
+        attempts=0
+        while [[ ! -e "$2" && "$attempts" -lt 250 ]]; do
+            sleep 0.02
+            attempts=$((attempts + 1))
+        done
+    ' _ "$holder_ready" "$release_holder" &
+    holder_pid=$!
+    TEST_CHILD_PIDS="$TEST_CHILD_PIDS $holder_pid"
+
+    attempts=0
+    while [[ ! -e "$holder_ready" && "$attempts" -lt 300 ]]; do
+        sleep 0.01
+        attempts=$((attempts + 1))
+    done
+    [[ -e "$holder_ready" ]] || fail "first lockf process did not acquire the lock"
+
+    "$lockf_path" -s -t 15 "$lock_path" /bin/bash -c ': > "$1"' _ "$second_acquired" &
+    second_pid=$!
+    TEST_CHILD_PIDS="$TEST_CHILD_PIDS $second_pid"
+    sleep 0.2
+    [[ ! -e "$second_acquired" ]] || fail "second process entered while first held the lock"
+
+    : > "$release_holder"
+    wait "$holder_pid" || fail "first lockf process failed"
+    wait "$second_pid" || fail "second lockf process failed after lock release"
+    TEST_CHILD_PIDS=""
+    [[ -e "$second_acquired" ]] || fail "second lockf process never acquired the released lock"
+}
+
+test_license_collection() {
+    local root="$FIXTURE_ROOT/license-collection"
+    local cargo_home="$root/cargo-home"
+    local registry="$cargo_home/registry/src/test-index"
+    local resources="$root/app/Contents/Resources"
+    mkdir -p "$registry/demo-with-license-1.0.0" "$registry/demo-without-license-2.0.0"
+    cat > "$root/Cargo.lock" <<'EOF'
+version = 4
+
+[[package]]
+name = "demo-with-license"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+[[package]]
+name = "demo-without-license"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+EOF
+    cat > "$registry/demo-with-license-1.0.0/Cargo.toml" <<'EOF'
+[package]
+name = "demo-with-license"
+version = "1.0.0"
+license = "MIT OR Apache-2.0"
+EOF
+    printf 'Synthetic MIT text\n' > "$registry/demo-with-license-1.0.0/LICENSE-MIT"
+    cat > "$registry/demo-without-license-2.0.0/Cargo.toml" <<'EOF'
+[package]
+name = "demo-without-license"
+version = "2.0.0"
+license = "MIT"
+EOF
+
+    CARGO_HOME="$cargo_home" "$CRATE_DIR/scripts/collect_licenses.sh" \
+        "$root/Cargo.lock" "$resources" || fail "license collector failed"
+    grep -Fq 'demo-with-license 1.0.0' "$resources/THIRD-PARTY-NOTICES.txt" || fail "licensed package absent from inventory"
+    grep -Fq 'demo-without-license 2.0.0' "$resources/THIRD-PARTY-NOTICES.txt" || fail "fallback package absent from inventory"
+    assert_file_equals "$resources/third-party-licenses/demo-with-license-1.0.0/LICENSE-MIT" 'Synthetic MIT text'
+    assert_file_equals "$resources/third-party-licenses/demo-without-license-2.0.0/LICENSE-MIT.txt" 'Synthetic MIT text'
+}
+
+test_upstream_notice_copies() {
+    local resources="$FIXTURE_ROOT/upstream-notices/Contents/Resources"
+    mkdir -p "$resources"
+    copy_upstream_notices "$resources" || fail "upstream notices were not copied"
+    cmp "$PROJECT_ROOT/LICENSE" "$resources/LICENSE" || fail "project license changed in app resources"
+    cmp "$PROJECT_ROOT/third_party_notices/stopwatch-hub-usage.md" \
+        "$resources/third-party-licenses/stopwatch-hub-usage.md" || fail "Hub notice changed in app resources"
+}
+
+test_atomic_app_publish
+test_atomic_latest_publish
+test_fingerprint_tracks_packaging_inputs
+test_real_lockf_exclusion
+test_license_collection
+test_upstream_notice_copies
+echo "Mac Agent packaging shell fixtures: OK"

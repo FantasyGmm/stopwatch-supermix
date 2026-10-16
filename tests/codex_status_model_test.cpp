@@ -100,6 +100,27 @@ int main()
 
     assert(parse(R"({"codex_model":"gpt-5"})", snapshot) == CodexMessageKind::Status);
     assert(snapshot.model == "gpt-5");
+    assert(snapshot.five_hour_left_pct == -1);
+    assert(snapshot.week_left_pct == -1);
+
+    assert(parse(
+        R"({"codex_model":"gpt-5","codex_5h_left_pct":null,"codex_week_left_pct":null})",
+        snapshot
+    ) == CodexMessageKind::Status);
+    assert(snapshot.five_hour_left_pct == -1);
+    assert(snapshot.week_left_pct == -1);
+    assert(parse(
+        R"({"codex_model":"gpt-5","codex_5h_left_pct":101,"codex_week_left_pct":83.5})",
+        snapshot
+    ) == CodexMessageKind::Status);
+    assert(snapshot.five_hour_left_pct == -1);
+    assert(snapshot.week_left_pct == -1);
+    assert(parse(
+        R"({"codex_model":"gpt-5","codex_5h_left_pct":100,"codex_week_left_pct":0})",
+        snapshot
+    ) == CodexMessageKind::Status);
+    assert(snapshot.five_hour_left_pct == 100);
+    assert(snapshot.week_left_pct == 0);
 
     assert(parse(
         R"({"codex_model":"gpt-5","codex_effort":"high","codex_5h_left_pct":91,"codex_week_left_pct":83,"codex_alert_pending":1,"codex_alert_running":1,"codex_alert_completed":7,"codex_alert_revision":12,"codex_alerts":[{"route":"0123456789abcdef","project":"StopWatch","title":"Waiting","state":"pending"},{"route":"fedcba9876543210","project":"Agent","title":"Working","state":"running"}]})",

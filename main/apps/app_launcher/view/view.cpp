@@ -144,7 +144,7 @@ public:
         _last_index    = index;
 
         // Update label
-        _label->setText(_icon_label_texts[index]);
+        set_label_text(index);
         _label->setPos(0, pos_y);
         set_opa(255);
     }
@@ -175,7 +175,7 @@ public:
 
         // If index changed, update label text
         if (_last_index != _current_index) {
-            _label->setText(_icon_label_texts[_current_index]);
+            set_label_text(_current_index);
         }
 
         // Update opacity based on distance when in transition zone
@@ -197,6 +197,13 @@ private:
     int _last_opa      = -1;
 
     std::unique_ptr<Label> _label;
+
+    void set_label_text(int index)
+    {
+        const auto& text = _icon_label_texts[index];
+        _label->setTextFont(text == "环境监测" ? &EnvSensorLauncher26 : &MontserratSemiBold26);
+        _label->setText(text);
+    }
 
     void set_opa(int opa)
     {

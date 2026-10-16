@@ -169,6 +169,6 @@ std::string CodexAlertCarousel::heading() const
         }
     }
     char text[32];
-    std::snprintf(text, sizeof(text), "TASK %d/%d", position, total);
+    std::snprintf(text, sizeof(text), "TASK %d  /  %d", position, total);
     return text;
 }

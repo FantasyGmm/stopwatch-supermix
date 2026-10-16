@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 
+struct cJSON;
 
 enum class TraeTaskState : uint8_t {
     Pending,
@@ -52,3 +53,8 @@ bool parse_trae_status_message(
     uint32_t received_at_ms,
     TraeStatusSnapshot& snapshot
 );
+
+bool parse_trae_status_object(
+    cJSON* root,
+    uint32_t received_at_ms,
+    TraeStatusSnapshot& snapshot);

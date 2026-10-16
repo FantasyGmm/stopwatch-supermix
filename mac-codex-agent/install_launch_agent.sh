@@ -2,6 +2,9 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    exec "$ROOT_DIR/../mac-agent-rust/scripts/install.sh" "$@"
+fi
 VERSION_FILE="$ROOT_DIR/VERSION"
 AGENT_VERSION="${STOPWATCH_AGENT_VERSION:-$(<"$VERSION_FILE")}"
 if [[ ! "$AGENT_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
@@ -724,6 +727,6 @@ main() {
     echo "Log: $LOG_DIR/stopwatch-codex-agent.log"
 }
 
-if [[ "${STOPWATCH_INSTALLER_SOURCE_ONLY:-0}" != "1" ]]; then
+if [[ "${BASH_SOURCE[0]}" == "$0" && "${STOPWATCH_INSTALLER_SOURCE_ONLY:-0}" != "1" ]]; then
     main "$@"
 fi

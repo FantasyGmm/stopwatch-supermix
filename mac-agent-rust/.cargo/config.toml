@@ -1,0 +1,11 @@
+[source.crates-io]
+replace-with = "fusion-sparse"
+
+[source.fusion-sparse]
+registry = "sparse+https://rsproxy.cn/index/"
+
+[net]
+retry = 3
+
+[http]
+timeout = 30

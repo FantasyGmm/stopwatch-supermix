@@ -2,6 +2,9 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    exec "$ROOT_DIR/../mac-agent-rust/scripts/build_release.sh" "$@"
+fi
 PROJECT_ROOT="$(cd "$ROOT_DIR/.." && pwd)"
 VERSION_FILE="$ROOT_DIR/VERSION"
 INSTALLER="$ROOT_DIR/install_launch_agent.sh"
@@ -290,6 +293,6 @@ main() {
     echo "Built $LATEST_DIR/$filename"
 }
 
-if [[ "${STOPWATCH_RELEASE_SOURCE_ONLY:-0}" != "1" ]]; then
+if [[ "${BASH_SOURCE[0]}" == "$0" && "${STOPWATCH_RELEASE_SOURCE_ONLY:-0}" != "1" ]]; then
     main "$@"
 fi

@@ -15,6 +15,7 @@
 #include "agent_panel_presenter.h"
 #include "codex_status_ui_layout.h"
 #include "codex_status_model.h"
+#include "codex_status_codec.h"
 #include "codex_task_detail_crypto.h"
 #include "status_message_router.h"
 #include "trae_status_model.h"
@@ -33,7 +34,6 @@
 #include <mooncake_log.h>
 #include <algorithm>
 #include <array>
-#include <cctype>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
@@ -64,10 +64,9 @@ constexpr int kDefaultServerPort         = 8765;
 constexpr const char* kDefaultBleName    = "StopWatch-Codex";
 constexpr uint32_t kWifiFallbackDelayMs  = 15000;
 constexpr uint32_t kStatusStaleMs        = 10000;
-constexpr uint32_t kTraeStatusStaleMs    = 15000;
 constexpr uint32_t kScreenOffHoldMs      = 2000;
 constexpr int kPageWidth                 = 466;
-constexpr int kPageCount                 = 3;
+constexpr int kMaxPageCount              = 5;
 constexpr int kAgentPanelHiddenY         = agent_panel_ui::kPanelHiddenY;
 constexpr int kAgentPanelVisibleY        = 0;
 constexpr int kTaskSwipeThreshold        = 36;
@@ -258,6 +257,20 @@ lv_obj_t* make_page_dot(lv_obj_t* parent, int x)
     return dot;
 }
 
+lv_obj_t* make_status_page_root(lv_obj_t* parent, int x)
+{
+    lv_obj_t* page = lv_obj_create(parent);
+    lv_obj_set_size(page, kPageWidth, kPageWidth);
+    lv_obj_set_pos(page, x, 0);
+    lv_obj_remove_flag(page, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_radius(page, 0, 0);
+    lv_obj_set_style_border_width(page, 0, 0);
+    lv_obj_set_style_pad_all(page, 0, 0);
+    lv_obj_set_style_bg_color(page, lv_color_hex(kInstrumentBlack), 0);
+    lv_obj_clear_flag(page, LV_OBJ_FLAG_CLICKABLE);
+    return page;
+}
+
 lv_obj_t* make_fixed_label(
     lv_obj_t* parent,
     const char* text,
@@ -276,43 +289,16 @@ lv_obj_t* make_fixed_label(
     return label;
 }
 
-struct TaskBadgeWidgets {
-    lv_obj_t* badge = nullptr;
-    lv_obj_t* label = nullptr;
-};
-
-TaskBadgeWidgets make_task_badge(lv_obj_t* parent, int width)
+void set_label_text_if_changed(lv_obj_t* label, const char* text)
 {
-    lv_obj_t* badge = lv_obj_create(parent);
-    lv_obj_set_size(badge, width, kTaskBadgeHeight);
-    lv_obj_set_style_bg_opa(badge, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(badge, 1, 0);
-    lv_obj_set_style_border_color(badge, lv_color_hex(kEtchedGray), 0);
-    lv_obj_set_style_border_opa(badge, LV_OPA_40, 0);
-    lv_obj_set_style_radius(badge, 8, 0);
-    lv_obj_set_style_pad_all(badge, 0, 0);
-    lv_obj_clear_flag(badge, LV_OBJ_FLAG_SCROLLABLE);
-
-    lv_obj_t* label = lv_label_create(badge);
-    lv_label_set_text(label, "");
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_10, 0);
-    lv_obj_set_style_text_color(label, lv_color_hex(0xCFD8DF), 0);
-    lv_obj_center(label);
-    lv_obj_add_flag(badge, LV_OBJ_FLAG_HIDDEN);
-    return {badge, label};
-}
-
-lv_obj_t* make_task_text(lv_obj_t* parent, int width)
-{
-    lv_obj_t* label = lv_label_create(parent);
-    lv_label_set_text(label, "");
-    lv_obj_set_width(label, width);
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_12, 0);
-    lv_obj_set_style_text_color(label, lv_color_hex(0xCFD8DF), 0);
-    lv_obj_set_style_text_align(label, LV_TEXT_ALIGN_CENTER, 0);
-    lv_label_set_long_mode(label, LV_LABEL_LONG_MODE_CLIP);
-    lv_obj_add_flag(label, LV_OBJ_FLAG_HIDDEN);
-    return label;
+    if (label == nullptr) {
+        return;
+    }
+    const char* current = lv_label_get_text(label);
+    const char* desired = text == nullptr ? "" : text;
+    if (current == nullptr || std::strcmp(current, desired) != 0) {
+        lv_label_set_text(label, desired);
+    }
 }
 
 lv_obj_t* make_channel_dot(lv_obj_t* parent, int x, int y, int size)
@@ -326,56 +312,54 @@ lv_obj_t* make_channel_dot(lv_obj_t* parent, int x, int y, int size)
 void apply_channel_presentation(
     lv_obj_t* dot,
     lv_obj_t* label,
-    const CodexChannelPresentation& presentation)
+    const CodexChannelPresentation& presentation,
+    uint32_t& cached_text_color,
+    uint32_t& cached_dot_color,
+    bool& cached_filled,
+    bool& cache_valid)
 {
     if (dot == nullptr || label == nullptr) {
         return;
     }
-    lv_label_set_text(label, presentation.text);
-    lv_obj_set_style_text_color(
-        label, lv_color_hex(presentation.text_color), 0);
-    lv_obj_set_style_bg_color(
-        dot, lv_color_hex(presentation.dot_color), 0);
-    lv_obj_set_style_bg_opa(
-        dot, presentation.filled ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(dot, presentation.filled ? 0 : 1, 0);
-    lv_obj_set_style_border_color(
-        dot, lv_color_hex(presentation.dot_color), 0);
+    set_label_text_if_changed(label, presentation.text);
+    if (!cache_valid || cached_text_color != presentation.text_color) {
+        lv_obj_set_style_text_color(
+            label, lv_color_hex(presentation.text_color), 0);
+        cached_text_color = presentation.text_color;
+    }
+    if (!cache_valid || cached_dot_color != presentation.dot_color) {
+        lv_obj_set_style_bg_color(
+            dot, lv_color_hex(presentation.dot_color), 0);
+        lv_obj_set_style_border_color(
+            dot, lv_color_hex(presentation.dot_color), 0);
+        cached_dot_color = presentation.dot_color;
+    }
+    if (!cache_valid || cached_filled != presentation.filled) {
+        lv_obj_set_style_bg_opa(
+            dot, presentation.filled ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(dot, presentation.filled ? 0 : 1, 0);
+        cached_filled = presentation.filled;
+    }
+    cache_valid = true;
 }
 
 void apply_agent_presentation(
     lv_obj_t* label,
     const char* text,
-    uint32_t color)
+    uint32_t color,
+    uint32_t& cached_color,
+    bool& cache_valid)
 {
     if (label == nullptr) {
         return;
     }
     const char* safe_text = text == nullptr ? "" : text;
-    lv_point_t measured{};
-    lv_text_get_size(
-        &measured,
-        safe_text,
-        &MontserratSemiBold26,
-        0,
-        0,
-        LV_COORD_MAX,
-        LV_TEXT_FLAG_NONE);
-    const AgentNameFit fit =
-        fit_agent_name(measured.x, kTelemetryWidth);
-    lv_obj_set_style_transform_scale_x(label, fit.scale, 0);
-    lv_obj_set_style_transform_scale_y(label, fit.scale, 0);
-    lv_obj_set_style_transform_pivot_x(label, 0, 0);
-    lv_obj_set_style_transform_pivot_y(label, 0, 0);
-    lv_obj_set_size(
-        label,
-        std::max(1, kTelemetryWidth * 256 / fit.scale),
-        std::max(1, kAgentValueHeight * 256 / fit.scale));
-    lv_label_set_long_mode(
-        label,
-        fit.elide ? LV_LABEL_LONG_MODE_DOTS : LV_LABEL_LONG_MODE_CLIP);
-    lv_label_set_text(label, safe_text);
-    lv_obj_set_style_text_color(label, lv_color_hex(color), 0);
+    set_label_text_if_changed(label, safe_text);
+    if (!cache_valid || cached_color != color) {
+        lv_obj_set_style_text_color(label, lv_color_hex(color), 0);
+        cached_color = color;
+        cache_valid = true;
+    }
 }
 
 const char* battery_symbol(int percent)
@@ -395,24 +379,58 @@ const char* battery_symbol(int percent)
     return LV_SYMBOL_BATTERY_EMPTY;
 }
 
-void copy_short(char* dest, size_t dest_size, const char* source)
+bool trae_task_equal(const TraeTask& lhs, const TraeTask& rhs)
 {
-    if (dest_size == 0) {
-        return;
-    }
-    if (source == nullptr || source[0] == '\0') {
-        std::snprintf(dest, dest_size, "--");
-        return;
-    }
-    std::snprintf(dest, dest_size, "%s", source);
-    dest[dest_size - 1] = '\0';
+    return lhs.id == rhs.id && lhs.project == rhs.project &&
+        lhs.title == rhs.title && lhs.detail == rhs.detail &&
+        lhs.time == rhs.time && lhs.model == rhs.model &&
+        lhs.effort == rhs.effort && lhs.state == rhs.state;
 }
 
-void uppercase_short(char* dest, size_t dest_size, const char* source)
+bool trae_snapshot_equal(
+    const TraeStatusSnapshot& lhs,
+    const TraeStatusSnapshot& rhs)
 {
-    copy_short(dest, dest_size, source);
-    for (size_t i = 0; dest[i] != '\0'; ++i) {
-        dest[i] = static_cast<char>(std::toupper(static_cast<unsigned char>(dest[i])));
+    if (lhs.online != rhs.online || lhs.process_state != rhs.process_state ||
+        lhs.model != rhs.model || lhs.effort != rhs.effort ||
+        lhs.revision != rhs.revision ||
+        lhs.pending_count != rhs.pending_count ||
+        lhs.running_count != rhs.running_count ||
+        lhs.tasks_truncated != rhs.tasks_truncated ||
+        lhs.task_count != rhs.task_count) {
+        return false;
+    }
+    for (size_t index = 0; index < lhs.tasks.size(); ++index) {
+        if (!trae_task_equal(lhs.tasks[index], rhs.tasks[index])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool trae_channel_equal(
+    const TraeChannelState& lhs,
+    const TraeChannelState& rhs)
+{
+    const char* lhs_text = lhs.text == nullptr ? "" : lhs.text;
+    const char* rhs_text = rhs.text == nullptr ? "" : rhs.text;
+    return std::strcmp(lhs_text, rhs_text) == 0 &&
+        lhs.dot_color == rhs.dot_color && lhs.text_color == rhs.text_color;
+}
+
+bool trae_channels_equal(
+    const TraeChannelPresentation& lhs,
+    const TraeChannelPresentation& rhs)
+{
+    return trae_channel_equal(lhs.agent, rhs.agent) &&
+        trae_channel_equal(lhs.voice, rhs.voice);
+}
+
+void copy_task_id(std::array<char, 33>& destination, const TraeTask* task)
+{
+    destination.fill('\0');
+    if (task != nullptr) {
+        destination = task->id;
     }
 }
 
@@ -450,7 +468,6 @@ void AppCodexStatus::onOpen()
     _last_battery_ms = 0;
     _last_network_ms = 0;
     _last_status_payload_ms = 0;
-    _last_trae_status_payload_ms = 0;
     _screen_off_left_press_started_ms = 0;
     _screen_off =
         GetGlobalDisplayProtectionService().snapshot().state ==
@@ -458,7 +475,6 @@ void AppCodexStatus::onOpen()
     _screen_off_runtime_cadence = {};
     _screen_off_voice_policy.reset();
     GetGlobalDisplayProtectionService().setRightButtonWakeDeferred(false);
-    _trae_stale = false;
     _suppress_task_navigation = false;
     {
         std::lock_guard<std::mutex> task_lock(_task_state_mutex);
@@ -495,10 +511,10 @@ void AppCodexStatus::onOpen()
     _wifi_fallback_started = false;
     _ble_was_connected = false;
     _alert_carousel.reset();
-    _trae_snapshot = {};
-    _trae_carousel.reset();
+    _telemetry_snapshot = {};
+    _latest_global_model.clear();
+    _latest_global_effort.clear();
     _page_swipe.cancel();
-    _trae_card_tap.cancel();
     _agent_panel_model = {};
     _agent_panel_dirty = false;
     _agent_switch_pending = false;
@@ -516,9 +532,26 @@ void AppCodexStatus::onOpen()
         _pending_agent_decision = {};
     }
     _current_page = 1;
+    _active_page_order = {{0, 1, 2, 3, -1}};
+    _active_page_count = 4;
+    _agent_inventory_received = false;
+    _inventory_codex_available = true;
+    _inventory_trae_available = false;
+    _page_indicator_count = 0;
+    _page_indicator_slot = -1;
+    _trae_status_received = false;
+    _trae_status_snapshot = {};
+    _trae_rendered_snapshot = {};
+    _trae_rendered_channels = {};
+    _trae_rendered_current_task = {};
+    _trae_rendered_next_task = {};
+    _trae_page_rendered = false;
+    _agent_status_style_valid = false;
+    _voice_status_style_valid = false;
     _last_page_touch_state = LV_INDEV_STATE_REL;
     _last_agent_touch_state = LV_INDEV_STATE_REL;
     _last_task_touch_state = LV_INDEV_STATE_REL;
+    _alert_style_valid = false;
     _server_host     = Settings("codex_status").GetString("host", kDefaultServerHost);
     _transport_mode  = Settings("codex_status").GetString("transport", "auto");
     _ble_name        = Settings("codex_status").GetString("ble_name", kDefaultBleName);
@@ -738,19 +771,16 @@ void AppCodexStatus::onRunning()
             _agent_panel_model.cancel_touch();
             cancel_task_focus_touch();
             _page_swipe.cancel();
-            _trae_card_tap.cancel();
             _last_page_touch_state = LV_INDEV_STATE_REL;
         } else if (agent_panel_available && _agent_panel_model.owns_touch()) {
             cancel_task_focus_touch();
             _page_swipe.cancel();
-            _trae_card_tap.cancel();
             _last_page_touch_state = LV_INDEV_STATE_REL;
         } else {
             if (task_mode != CodexTaskFocusMode::Status &&
                 _agent_panel_model.snapshot().visible) {
                 cancel_task_focus_touch();
                 _page_swipe.cancel();
-                _trae_card_tap.cancel();
                 _last_page_touch_state = LV_INDEV_STATE_REL;
                 sync_task_focus_visibility();
             } else {
@@ -759,7 +789,6 @@ void AppCodexStatus::onRunning()
                     update_page_swipe(touch_now);
                 } else {
                     _page_swipe.cancel();
-                    _trae_card_tap.cancel();
                     _last_page_touch_state = LV_INDEV_STATE_REL;
                     update_task_focus_touch(touch_now);
                 }
@@ -771,18 +800,10 @@ void AppCodexStatus::onRunning()
         } else {
             alert_changed = _alert_carousel.update(now);
         }
-        if (alert_changed) {
+        if (alert_changed && _current_page == 1) {
             render_alert();
         }
-        if (_trae_carousel.update(now)) {
-            render_trae_status();
-        }
-        if (_last_trae_status_payload_ms != 0 &&
-            now - _last_trae_status_payload_ms > kTraeStatusStaleMs) {
-            _last_trae_status_payload_ms = 0;
-            _trae_stale = true;
-            render_trae_status();
-        }
+        render_telemetry_pages();
     }
     AgentPanelDecision agent_decision = {};
     while (take_agent_panel_decision(agent_decision)) {
@@ -798,6 +819,10 @@ void AppCodexStatus::onRunning()
         const uint32_t connection_epoch =
             _ble_transport->connection_epoch();
         if (connection_epoch != _production_voice_connection_epoch) {
+            {
+                LvglLockGuard lock;
+                reset_agent_inventory();
+            }
             codex_pet::PetCleanupSequence::run(
                 [this]() {
                     if (_pet_transfer) {
@@ -924,12 +949,14 @@ void AppCodexStatus::onRunning()
             _runtime_session.begin_connection();
             stop_network_fallback();
             _ble_was_connected = true;
+            _last_status_payload_ms = 0;
+            {
+                LvglLockGuard lock;
+                reset_agent_inventory();
+            }
+            clear_telemetry();
             set_status("BLE WAIT", kTextDim);
             set_host_text(_ble_name.c_str());
-            if (!_screen_off) {
-                LvglLockGuard lock;
-                render_trae_status();
-            }
         } else if (!ble_connected && _ble_was_connected) {
             _production_voice_ready = false;
             _production_voice_capabilities = 0;
@@ -949,25 +976,33 @@ void AppCodexStatus::onRunning()
             }
             _ble_was_connected = false;
             _ble_wait_started_ms = now;
+            _last_status_payload_ms = 0;
+            if (!_ws_connected) {
+                clear_telemetry();
+            } else {
+                LvglLockGuard lock;
+                set_percent(_week_pct, _week_bar, -1);
+            }
             set_status("BLE PAIR", kTextDim);
             set_host_text(_ble_name.c_str());
-            if (!_screen_off) {
-                LvglLockGuard lock;
-                render_trae_status();
-            }
         }
 
-        if (ble_connected && _last_status_payload_ms != 0 &&
+        if ((ble_connected || _ws_connected) && _last_status_payload_ms != 0 &&
             now - _last_status_payload_ms > kStatusStaleMs) {
-            set_status("BLE WAIT", kTextDim);
+            set_status(ble_connected ? "BLE WAIT" : "WAITING", kTextDim);
+            {
+                LvglLockGuard lock;
+                set_percent(_week_pct, _week_bar, -1);
+            }
             _last_status_payload_ms = 0;
         }
 
         CodexBleMessage message;
         while (_ble_transport->take_message(message)) {
-            handle_status_json(
+            handle_status_payload(
                 message.payload.data(),
-                static_cast<int>(message.payload.size()),
+                message.payload.size(),
+                message.encoding,
                 "BLE LIVE"
             );
         }
@@ -994,12 +1029,11 @@ void AppCodexStatus::onRunning()
         update_battery();
     }
 
-    bool voice_status_changed = false;
     {
         std::lock_guard<std::mutex> controller_lock(_task_controller_mutex);
         const VoiceInputUiState voice_status =
             _voice_input ? _voice_input->ui_state() : VoiceInputUiState::Off;
-        voice_status_changed = _voice_status.exchange(voice_status) != voice_status;
+        _voice_status.store(voice_status);
         if (_voice_input) {
             _pinned_microphone_controller.sync(
                 _production_voice_link_usable &&
@@ -1023,10 +1057,6 @@ void AppCodexStatus::onRunning()
     sync_task_voice_readiness();
     if (!_screen_off) {
         render_status();
-        if (voice_status_changed) {
-            LvglLockGuard lock;
-            render_trae_status();
-        }
     }
 }
 
@@ -1203,8 +1233,7 @@ void AppCodexStatus::onClose()
     _pet_allocator.reset();
     _pet_files.reset();
     _alert_carousel.reset();
-    _trae_carousel.reset();
-    _trae_snapshot = {};
+    _telemetry_snapshot = {};
 }
 
 void AppCodexStatus::create_view()
@@ -1220,7 +1249,7 @@ void AppCodexStatus::create_view()
     lv_obj_remove_flag(_panel, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
 
     _page_strip = lv_obj_create(_panel);
-    lv_obj_set_size(_page_strip, 1398, 466);
+    lv_obj_set_size(_page_strip, kMaxPageCount * kPageWidth, kPageWidth);
     lv_obj_set_pos(_page_strip, -466, 0);
     lv_obj_remove_flag(_page_strip, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_radius(_page_strip, 0, 0);
@@ -1247,14 +1276,10 @@ void AppCodexStatus::create_view()
     lv_obj_set_style_bg_color(
         _pinned_microphone_page, lv_color_hex(kInstrumentBlack), 0);
 
-    _trae_page_root = lv_obj_create(_page_strip);
-    lv_obj_set_size(_trae_page_root, 466, 466);
-    lv_obj_set_pos(_trae_page_root, 932, 0);
-    lv_obj_remove_flag(_trae_page_root, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_style_radius(_trae_page_root, 0, 0);
-    lv_obj_set_style_border_width(_trae_page_root, 0, 0);
-    lv_obj_set_style_pad_all(_trae_page_root, 0, 0);
-    lv_obj_set_style_bg_color(_trae_page_root, lv_color_hex(kInstrumentBlack), 0);
+    _usage_page_root = make_status_page_root(_page_strip, 2 * kPageWidth);
+    _host_page_root = make_status_page_root(_page_strip, 3 * kPageWidth);
+    _trae_page_root = make_status_page_root(_page_strip, 4 * kPageWidth);
+    _trae_status_page.init(_trae_page_root);
 
     _pending_glow = std::make_unique<CodexPendingSoftGlow>();
     _pending_glow->init(_codex_page);
@@ -1278,46 +1303,108 @@ void AppCodexStatus::create_view()
     lv_obj_t* agent_caption = make_telemetry_label(
         _codex_page,
         kTelemetryX,
-        kModelCaptionY,
+        kStatusCaptionY,
         kTelemetryWidth,
         "AGENT",
-        &lv_font_montserrat_14,
+        &lv_font_montserrat_12,
         kEtchedGray
     );
-    lv_obj_set_style_text_letter_space(agent_caption, 3, 0);
+    lv_obj_set_style_text_letter_space(agent_caption, 2, 0);
+    lv_obj_set_style_text_align(agent_caption, LV_TEXT_ALIGN_CENTER, 0);
     _agent_value = make_telemetry_label(
+        _codex_page,
+        kAgentStatusX,
+        kStatusValueY,
+        kAgentStatusWidth,
+        "--",
+        &lv_font_montserrat_14,
+        kSignalWhite
+    );
+    lv_obj_set_style_text_align(_agent_value, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_height(_agent_value, kStatusValueHeight);
+    lv_label_set_long_mode(_agent_value, LV_LABEL_LONG_MODE_DOTS);
+
+    lv_obj_t* voice_caption = make_telemetry_label(
+        _codex_page,
+        kVoiceCaptionX,
+        kStatusCaptionY,
+        kVoiceColumnWidth,
+        "VOICE",
+        &lv_font_montserrat_12,
+        kEtchedGray
+    );
+    lv_obj_set_style_text_letter_space(voice_caption, 2, 0);
+    lv_obj_set_style_text_align(voice_caption, LV_TEXT_ALIGN_CENTER, 0);
+
+    lv_obj_t* voice_status_row = lv_obj_create(_codex_page);
+    lv_obj_remove_style_all(voice_status_row);
+    lv_obj_set_pos(voice_status_row, kVoiceCaptionX, kStatusValueY);
+    lv_obj_set_size(voice_status_row, kVoiceColumnWidth, kStatusValueHeight);
+    lv_obj_remove_flag(voice_status_row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_remove_flag(voice_status_row, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_flex_flow(voice_status_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(
+        voice_status_row, LV_FLEX_ALIGN_CENTER,
+        LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(voice_status_row, kVoiceDotGap, 0);
+    _voice_status_dot = make_channel_dot(
+        voice_status_row, 0, 0, kVoiceDotSize);
+    _voice_value = make_telemetry_label(
+        voice_status_row,
+        0,
+        0,
+        LV_SIZE_CONTENT,
+        "--",
+        &lv_font_montserrat_14,
+        kSignalWhite
+    );
+    lv_obj_set_style_max_width(_voice_value, kVoiceStatusWidth, 0);
+    lv_obj_set_style_text_align(_voice_value, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_height(_voice_value, kStatusValueHeight);
+
+    lv_obj_t* model_caption = make_telemetry_label(
+        _codex_page,
+        kTelemetryX,
+        kModelCaptionY,
+        kTelemetryWidth,
+        "MODEL",
+        &lv_font_montserrat_14,
+        kEtchedGray);
+    lv_obj_set_style_text_letter_space(model_caption, 3, 0);
+    _model_value = make_telemetry_label(
         _codex_page,
         kTelemetryX,
         kModelValueY,
         kTelemetryWidth,
         "--",
         &MontserratSemiBold26,
-        kSignalWhite
-    );
-    lv_obj_set_height(_agent_value, kAgentValueHeight);
-    lv_label_set_long_mode(_agent_value, LV_LABEL_LONG_MODE_DOTS);
+        kSignalWhite);
+    lv_label_set_long_mode(_model_value, LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
+    lv_obj_set_style_anim_duration(
+        _model_value, kLongLabelScrollDurationMs, LV_PART_MAIN);
+    lv_obj_set_size(_model_value, kTelemetryWidth, kLargeValueHeight);
 
-    lv_obj_t* voice_caption = make_telemetry_label(
+    lv_obj_t* effort_caption = make_telemetry_label(
         _codex_page,
         kTelemetryX,
         kEffortCaptionY,
         kTelemetryWidth,
-        "VOICE",
+        "EFFORT",
         &lv_font_montserrat_14,
-        kEtchedGray
-    );
-    lv_obj_set_style_text_letter_space(voice_caption, 3, 0);
-    _voice_status_dot = make_channel_dot(
-        _codex_page, kVoiceDotX, kVoiceDotY, kVoiceDotSize);
-    _voice_value = make_telemetry_label(
+        kEtchedGray);
+    lv_obj_set_style_text_letter_space(effort_caption, 3, 0);
+    _effort_value = make_telemetry_label(
         _codex_page,
-        kVoiceValueX,
+        kTelemetryX,
         kEffortValueY,
-        kVoiceValueWidth,
+        kTelemetryWidth,
         "--",
         &MontserratSemiBold26,
-        kSignalWhite
-    );
+        kSignalWhite);
+    lv_label_set_long_mode(_effort_value, LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
+    lv_obj_set_style_anim_duration(
+        _effort_value, kLongLabelScrollDurationMs, LV_PART_MAIN);
+    lv_obj_set_size(_effort_value, kTelemetryWidth, kLargeValueHeight);
 
     _pet_image = lv_image_create(_codex_page);
     lv_image_set_antialias(_pet_image, false);
@@ -1392,44 +1479,22 @@ void AppCodexStatus::create_view()
     _alert_project = make_fixed_label(
         _codex_page,
         "--",
-        kAlertProjectX,
-        kAlertProjectY,
-        kAlertProjectWidth,
+        kProjectNameX,
+        kProjectNameY,
+        kProjectNameWidth,
         &MontserratSemiBold26,
         kBeaconViolet,
         LV_TEXT_ALIGN_CENTER
     );
-    lv_label_set_long_mode(_alert_project, LV_LABEL_LONG_MODE_DOTS);
-    _alert_info_row = lv_obj_create(_codex_page);
-    lv_obj_set_size(_alert_info_row, kTaskInlineWidth, kAlertDetailHeight);
-    lv_obj_set_pos(_alert_info_row, kTaskInlineX, kAlertDetailY);
-    lv_obj_set_style_bg_opa(_alert_info_row, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(_alert_info_row, 0, 0);
-    lv_obj_set_style_pad_all(_alert_info_row, 0, 0);
-    lv_obj_set_style_pad_column(_alert_info_row, kTaskInlineGap, 0);
-    lv_obj_clear_flag(_alert_info_row, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_flex_flow(_alert_info_row, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(
-        _alert_info_row,
-        LV_FLEX_ALIGN_CENTER,
-        LV_FLEX_ALIGN_CENTER,
-        LV_FLEX_ALIGN_CENTER);
-
-    _alert_detail = make_fixed_label(
-        _alert_info_row, "", 0, 0, kTaskNameWidth,
-        &CodexTaskTitle21, kSignalWhite, LV_TEXT_ALIGN_LEFT);
-    lv_obj_set_style_transform_scale_x(_alert_detail, kTaskTitleScale, 0);
-    lv_obj_set_style_transform_scale_y(_alert_detail, kTaskTitleScale, 0);
-    lv_obj_set_style_max_width(_alert_detail, kTaskNameWidth, 0);
-    lv_obj_set_width(_alert_detail, LV_SIZE_CONTENT);
-    lv_label_set_long_mode(_alert_detail, LV_LABEL_LONG_MODE_DOTS);
-    _alert_model_label =
-        make_task_text(_alert_info_row, kTaskModelWidth);
-
-    const TaskBadgeWidgets effort_badge =
-        make_task_badge(_alert_info_row, kTaskEffortWidth);
-    _alert_effort_badge = effort_badge.badge;
-    _alert_effort_label = effort_badge.label;
+    lv_obj_set_height(_alert_project, kProjectNameHeight);
+    lv_label_set_long_mode(
+        _alert_project, LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
+    lv_obj_set_style_anim_duration(
+        _alert_project, kLongLabelScrollDurationMs, LV_PART_MAIN);
+    lv_obj_set_size(
+        _alert_project, kProjectNameWidth, kProjectNameHeight);
+    _alert_project_font_valid = true;
+    _alert_project_non_ascii = false;
     _pending_glow->set_status_targets(
         _pending_label,
         _pending_count,
@@ -1437,12 +1502,10 @@ void AppCodexStatus::create_view()
         _running_count
     );
 
-    _trae_status_page = std::make_unique<TraeStatusPage>();
-    _trae_status_page->init(_trae_page_root);
-    render_trae_status();
-    if (_trae_status_page != nullptr) {
-        _trae_status_page->set_active(_current_page == 2 && !_screen_off);
-    }
+    _usage_status_page.init(_usage_page_root);
+    _host_status_page.init(_host_page_root);
+    render_telemetry_pages();
+    layout_status_pages();
 
     make_center_label(
         _pinned_microphone_page,
@@ -1535,9 +1598,10 @@ void AppCodexStatus::create_view()
         kSignalWhite);
     render_pinned_microphone();
 
-    _page_dot_pinned_microphone = make_page_dot(_panel, 213);
-    _page_dot_codex = make_page_dot(_panel, 229);
-    _page_dot_trae = make_page_dot(_panel, 245);
+    for (lv_obj_t*& dot : _page_dots) {
+        dot = make_page_dot(_panel, 0);
+        lv_obj_add_flag(dot, LV_OBJ_FLAG_HIDDEN);
+    }
     update_page_indicator();
 
     _battery_label = lv_label_create(_panel);
@@ -1579,7 +1643,6 @@ void AppCodexStatus::destroy_view()
     lv_anim_delete(this, agent_panel_animation_cb);
     lv_anim_delete(this, task_deck_animation_cb);
     _page_swipe.cancel();
-    _trae_card_tap.cancel();
     cancel_task_focus_touch();
     _last_page_touch_state = LV_INDEV_STATE_REL;
     _last_pinned_microphone_render_state = -1;
@@ -1590,10 +1653,9 @@ void AppCodexStatus::destroy_view()
         _pending_glow->shutdown();
         _pending_glow.reset();
     }
-    if (_trae_status_page) {
-        _trae_status_page->shutdown();
-        _trae_status_page.reset();
-    }
+    _usage_status_page.shutdown();
+    _host_status_page.shutdown();
+    _trae_status_page.shutdown();
     if (_task_focus_view) {
         _task_focus_view->shutdown();
         _task_focus_view.reset();
@@ -1613,14 +1675,18 @@ void AppCodexStatus::destroy_view()
     }
 
     _agent_value    = nullptr;
+    _model_value    = nullptr;
+    _effort_value   = nullptr;
     _voice_status_dot = nullptr;
     _page_strip     = nullptr;
     _codex_page     = nullptr;
     _pinned_microphone_page = nullptr;
+    _usage_page_root = nullptr;
+    _host_page_root = nullptr;
     _trae_page_root = nullptr;
-    _page_dot_codex = nullptr;
-    _page_dot_pinned_microphone = nullptr;
-    _page_dot_trae  = nullptr;
+    _page_dots = {};
+    _page_indicator_count = 0;
+    _page_indicator_slot = -1;
     _pinned_microphone_touch_target = nullptr;
     _pinned_microphone_connection_dot = nullptr;
     _pinned_microphone_connection_label = nullptr;
@@ -1637,11 +1703,9 @@ void AppCodexStatus::destroy_view()
     _running_count  = nullptr;
     _task_index     = nullptr;
     _alert_project  = nullptr;
-    _alert_info_row = nullptr;
-    _alert_detail   = nullptr;
-    _alert_model_label = nullptr;
-    _alert_effort_badge = nullptr;
-    _alert_effort_label = nullptr;
+    _alert_style_valid = false;
+    _alert_project_font_valid = false;
+    _alert_project_non_ascii = false;
     _battery_label  = nullptr;
     _host_label     = nullptr;
     _pet_image      = nullptr;
@@ -1977,12 +2041,42 @@ void AppCodexStatus::set_status(const char* status, uint32_t color)
     }
     if (!_screen_off) {
         render_status();
-        LvglLockGuard lock;
-        render_trae_status();
     }
 }
 
 void AppCodexStatus::render_status()
+{
+    const CodexStatusChannels channels = current_status_channels();
+    const char* agent_text = channels.connection.text;
+    if (std::strcmp(channels.connection.text, "CONNECTED") == 0 &&
+        _ble_transport != nullptr) {
+        const secure_pairing::AgentRecord* active_agent =
+            _agent_registry.find(_ble_transport->active_fingerprint());
+        if (active_agent != nullptr && active_agent->display_name[0] != '\0') {
+            agent_text = active_agent->display_name.data();
+        }
+    }
+    LvglLockGuard lock;
+    apply_agent_presentation(
+        _agent_value,
+        agent_text,
+        channels.connection.text_color,
+        _agent_status_text_color,
+        _agent_status_style_valid);
+    apply_channel_presentation(
+        _voice_status_dot,
+        _voice_value,
+        channels.voice,
+        _voice_status_text_color,
+        _voice_status_dot_color,
+        _voice_status_filled,
+        _voice_status_style_valid);
+    if (_current_page == 4) {
+        render_trae_status_page(channels);
+    }
+}
+
+CodexStatusChannels AppCodexStatus::current_status_channels()
 {
     std::string base_status;
     bool base_is_error = false;
@@ -1992,7 +2086,7 @@ void AppCodexStatus::render_status()
         base_is_error = _base_status_is_error;
     }
     const VoiceInputUiState voice_state = _voice_status.load();
-    const CodexStatusChannels channels = resolve_codex_status_channels(
+    return resolve_codex_status_channels(
         base_status.c_str(),
         base_is_error,
         voice_state == VoiceInputUiState::Ready,
@@ -2007,20 +2101,63 @@ void AppCodexStatus::render_status()
             kTextDim,
             kSignalWhite,
         });
-    const char* agent_text = channels.connection.text;
-    if (std::strcmp(channels.connection.text, "CONNECTED") == 0 &&
-        _ble_transport != nullptr) {
-        const secure_pairing::AgentRecord* active_agent =
-            _agent_registry.find(_ble_transport->active_fingerprint());
-        if (active_agent != nullptr && active_agent->display_name[0] != '\0') {
-            agent_text = active_agent->display_name.data();
-        }
+}
+
+void AppCodexStatus::render_trae_status_page(
+    const CodexStatusChannels& channels)
+{
+    if (_trae_page_root == nullptr || _current_page != 4 || _screen_off) {
+        return;
     }
-    LvglLockGuard lock;
-    apply_agent_presentation(
-        _agent_value, agent_text, channels.connection.text_color);
-    apply_channel_presentation(
-        _voice_status_dot, _voice_value, channels.voice);
+
+    TraeChannelPresentation trae_channels{
+        {
+            channels.connection.text,
+            channels.connection.dot_color,
+            channels.connection.text_color,
+        },
+        {
+            channels.voice.text,
+            channels.voice.dot_color,
+            channels.voice.text_color,
+        },
+    };
+    const uint32_t now = GetHAL().millis();
+    const bool stale = !_trae_status_received ||
+        now - _trae_status_snapshot.received_at_ms > kStatusStaleMs;
+    const bool bluetooth_connected =
+        _ble_transport != nullptr && _ble_transport->connected();
+    const TraeTask* current = _trae_task_carousel.current();
+    const TraeTask* next = _trae_task_carousel.next();
+    std::array<char, 33> current_id{};
+    std::array<char, 33> next_id{};
+    copy_task_id(current_id, current);
+    copy_task_id(next_id, next);
+
+    if (_trae_page_rendered &&
+        trae_snapshot_equal(_trae_status_snapshot, _trae_rendered_snapshot) &&
+        trae_channels_equal(trae_channels, _trae_rendered_channels) &&
+        stale == _trae_rendered_stale &&
+        bluetooth_connected == _trae_rendered_ble_connected &&
+        current_id == _trae_rendered_current_task &&
+        next_id == _trae_rendered_next_task) {
+        return;
+    }
+
+    _trae_status_page.render(
+        _trae_status_snapshot,
+        current,
+        next,
+        trae_channels,
+        stale,
+        bluetooth_connected);
+    _trae_rendered_snapshot = _trae_status_snapshot;
+    _trae_rendered_channels = trae_channels;
+    _trae_rendered_stale = stale;
+    _trae_rendered_ble_connected = bluetooth_connected;
+    _trae_rendered_current_task = current_id;
+    _trae_rendered_next_task = next_id;
+    _trae_page_rendered = true;
 }
 
 void AppCodexStatus::set_host_text(const char* prefix)
@@ -2039,38 +2176,68 @@ void AppCodexStatus::set_host_text(const char* prefix)
 
 bool AppCodexStatus::handle_status_json(const char* data, int length, const char* live_status)
 {
-    const StatusMessageSource source = route_status_message(
-        data,
-        static_cast<size_t>(length)
-    );
+    return length > 0 && handle_status_payload(
+        data, static_cast<size_t>(length), CodexStatusEncoding::Json, live_status);
+}
+
+bool AppCodexStatus::handle_status_payload(
+    const char* data,
+    size_t length,
+    CodexStatusEncoding encoding,
+    const char* live_status)
+{
+    CodexDecodedStatusPayload decoded;
+    if (!decode_codex_status_payload(data, length, encoding, decoded)) {
+        return false;
+    }
+    cJSON* root = decoded.root.get();
+    const StatusMessageSource source = route_status_object(root);
     if (source == StatusMessageSource::Unknown) {
         return false;
+    }
+    // Detail envelopes have exactly nine fields and no source discriminator.
+    // Never route malformed native envelopes through inventory/TRAE fallbacks.
+    if (decoded.has_native_detail && source != StatusMessageSource::LegacyCodex) {
+        return false;
+    }
+    if (source == StatusMessageSource::AgentInventory) {
+        AgentInventorySnapshot inventory;
+        if (!parse_agent_inventory_object(root, inventory)) {
+            return false;
+        }
+        LvglLockGuard lock;
+        apply_agent_inventory(inventory);
+        return true;
     }
     if (source == StatusMessageSource::Trae) {
         TraeStatusSnapshot snapshot;
         const uint32_t now = GetHAL().millis();
-        if (!parse_trae_status_message(
-                data,
-                static_cast<size_t>(length),
-                now,
-                snapshot
-            )) {
+        if (!parse_trae_status_object(root, now, snapshot)) {
             return false;
         }
-
-        LvglLockGuard lock;
-        _trae_snapshot = snapshot;
-        _last_trae_status_payload_ms = now;
-        _trae_stale = false;
-        _trae_carousel.apply(snapshot, now);
-        render_trae_status();
+        {
+            LvglLockGuard lock;
+            if (!_agent_inventory_received || !_inventory_trae_available) {
+                return false;
+            }
+            _trae_task_carousel.apply(snapshot, now);
+            _trae_status_snapshot = snapshot;
+            _trae_status_received = true;
+            if (_current_page == 4) {
+                render_trae_status_page(current_status_channels());
+            }
+        }
         return true;
     }
 
     CodexStatusSnapshot snapshot;
-    const CodexMessageKind kind = parse_codex_message(data, static_cast<size_t>(length), snapshot);
+    const CodexMessageKind kind = parse_codex_message_object(
+        root, snapshot, decoded.has_native_detail ? &decoded.native_detail : nullptr);
     if (kind == CodexMessageKind::Invalid) {
-        return false;
+        if (decoded.has_native_detail) {
+            return false;
+        }
+        return apply_telemetry_object(root, false);
     }
     if (kind == CodexMessageKind::Chime) {
         GetHAL().playBootSfx();
@@ -2126,6 +2293,8 @@ bool AppCodexStatus::handle_status_json(const char* data, int length, const char
         return true;
     }
 
+    apply_telemetry_object(root, false);
+
     bool task_list_changed = false;
     {
         std::lock_guard<std::mutex> task_lock(_task_state_mutex);
@@ -2149,8 +2318,26 @@ bool AppCodexStatus::handle_status_json(const char* data, int length, const char
     {
         LvglLockGuard lock;
         set_percent(_week_pct, _week_bar, snapshot.week_left_pct);
+        if (_current_page == 2 || _current_page == 3) {
+            render_telemetry_pages();
+        }
+        bool global_model_changed = false;
+        bool global_effort_changed = false;
+        if (!snapshot.model.empty() &&
+            _latest_global_model != snapshot.model) {
+            _latest_global_model = snapshot.model;
+            global_model_changed = true;
+        }
+        if (!snapshot.effort.empty() &&
+            _latest_global_effort != snapshot.effort) {
+            _latest_global_effort = snapshot.effort;
+            global_effort_changed = true;
+        }
 
-        if (_alert_carousel.apply(snapshot, GetHAL().millis())) {
+        const bool alert_changed =
+            _alert_carousel.apply(snapshot, GetHAL().millis());
+        if (_current_page == 1 &&
+            (global_model_changed || global_effort_changed || alert_changed)) {
             render_alert();
         }
     }
@@ -2168,9 +2355,7 @@ bool AppCodexStatus::handle_status_json(const char* data, int length, const char
 void AppCodexStatus::render_alert()
 {
     if (_pending_count == nullptr || _running_count == nullptr ||
-        _task_index == nullptr || _alert_project == nullptr ||
-        _alert_detail == nullptr || _alert_model_label == nullptr ||
-        _alert_effort_badge == nullptr || _alert_effort_label == nullptr) {
+        _task_index == nullptr || _alert_project == nullptr) {
         return;
     }
 
@@ -2188,134 +2373,298 @@ void AppCodexStatus::render_alert()
         "%d",
         std::max(_alert_carousel.running_count(), 0)
     );
-    lv_label_set_text(_pending_count, pending_text);
-    lv_label_set_text(_running_count, running_text);
-    lv_obj_set_style_text_color(
-        _pending_count,
-        lv_color_hex(
-            _alert_carousel.pending_count() > 0 ? kAlertVermilion : kEtchedGray
-        ),
-        0
-    );
-    lv_obj_set_style_text_color(
-        _running_count,
-        lv_color_hex(
-            _alert_carousel.running_count() > 0 ? kRunningCyan : kEtchedGray
-        ),
-        0
-    );
+    set_label_text_if_changed(_pending_count, pending_text);
+    set_label_text_if_changed(_running_count, running_text);
+    const uint32_t pending_color = _alert_carousel.pending_count() > 0
+        ? kAlertVermilion
+        : kEtchedGray;
+    const uint32_t running_color = _alert_carousel.running_count() > 0
+        ? kRunningCyan
+        : kEtchedGray;
+    if (!_alert_style_valid || _pending_count_color != pending_color) {
+        lv_obj_set_style_text_color(
+            _pending_count, lv_color_hex(pending_color), 0);
+        _pending_count_color = pending_color;
+    }
+    if (!_alert_style_valid || _running_count_color != running_color) {
+        lv_obj_set_style_text_color(
+            _running_count, lv_color_hex(running_color), 0);
+        _running_count_color = running_color;
+    }
 
     const std::string heading = _alert_carousel.heading();
     const CodexTaskAlert* alert = _alert_carousel.current();
-    lv_label_set_text(_task_index, heading.c_str());
-    if (alert == nullptr) {
-        lv_label_set_text(_alert_project, "--");
-        lv_obj_set_style_text_font(_alert_project, &MontserratSemiBold26, 0);
-        lv_label_set_text(_alert_detail, "");
-        lv_obj_add_flag(_alert_model_label, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_add_flag(_alert_effort_badge, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_set_style_text_color(_task_index, lv_color_hex(kTextDim), 0);
-        sync_pending_glow();
-        return;
+    set_label_text_if_changed(_task_index, heading.c_str());
+    const char* model = alert != nullptr && !alert->model.empty()
+        ? alert->model.c_str()
+        : (_latest_global_model.empty() ? "--" : _latest_global_model.c_str());
+    const char* effort = alert != nullptr && !alert->effort.empty()
+        ? alert->effort.c_str()
+        : (_latest_global_effort.empty()
+               ? "--"
+               : _latest_global_effort.c_str());
+    set_label_text_if_changed(_model_value, model);
+    set_label_text_if_changed(_effort_value, effort);
+    const char* project = alert == nullptr ? "--" : alert->project.c_str();
+    const bool project_non_ascii = !is_ascii_text(project);
+    const char* current_project = lv_label_get_text(_alert_project);
+    const bool project_changed = current_project == nullptr ||
+        std::strcmp(current_project, project) != 0;
+    if (project_changed) {
+        lv_label_set_text(_alert_project, project);
+        if (!_alert_project_font_valid ||
+            project_non_ascii != _alert_project_non_ascii) {
+            lv_obj_set_style_text_font(
+                _alert_project,
+                project_non_ascii ? &CodexTaskTitle21 : &MontserratSemiBold26,
+                0);
+        }
+        _alert_project_non_ascii = project_non_ascii;
+        _alert_project_font_valid = true;
     }
-
     uint32_t state_color = kCompletedGreen;
-    if (alert->state == CodexTaskState::Pending) {
+    if (alert == nullptr) {
+        state_color = kTextDim;
+    } else if (alert->state == CodexTaskState::Pending) {
         state_color = kCodexRed;
     } else if (alert->state == CodexTaskState::Running) {
         state_color = kRunningCyan;
     }
-    lv_label_set_text(_alert_project, alert->project.c_str());
-    lv_obj_set_style_text_font(
-        _alert_project,
-        is_ascii_text(alert->project.c_str())
-            ? &MontserratSemiBold26
-            : &CodexTaskTitle21,
-        0
-    );
-    lv_label_set_text(_alert_detail, alert->title.c_str());
-    const char* model = codex_task_model_display(alert->model.c_str());
-    if (model[0] == '\0') {
-        lv_obj_add_flag(_alert_model_label, LV_OBJ_FLAG_HIDDEN);
-    } else {
-        lv_label_set_text(_alert_model_label, model);
-        lv_obj_remove_flag(_alert_model_label, LV_OBJ_FLAG_HIDDEN);
+    if (!_alert_style_valid || _task_index_color != state_color) {
+        lv_obj_set_style_text_color(
+            _task_index, lv_color_hex(state_color), 0);
+        _task_index_color = state_color;
     }
-    if (alert->effort.empty()) {
-        lv_obj_add_flag(_alert_effort_badge, LV_OBJ_FLAG_HIDDEN);
-    } else {
-        char effort[12];
-        uppercase_short(effort, sizeof(effort), alert->effort.c_str());
-        lv_label_set_text(_alert_effort_label, effort);
-        lv_obj_remove_flag(_alert_effort_badge, LV_OBJ_FLAG_HIDDEN);
-    }
-    lv_obj_set_style_text_color(
-        _task_index,
-        lv_color_hex(state_color),
-        0
-    );
+    _alert_style_valid = true;
     sync_pending_glow();
 }
 
-void AppCodexStatus::render_trae_status()
+void AppCodexStatus::render_telemetry_pages()
 {
-    if (_trae_status_page == nullptr) {
+    if (_current_page != 2 && _current_page != 3) {
         return;
     }
-    std::string base_status;
-    bool base_is_error = false;
-    {
-        std::lock_guard<std::mutex> lock(_status_mutex);
-        base_status = _base_status;
-        base_is_error = _base_status_is_error;
+    const int64_t now_ms = current_unix_milliseconds();
+    const int64_t now_epoch_seconds = now_ms > 0 ? now_ms / 1000 : 0;
+    expire_codex_telemetry(_telemetry_snapshot, now_epoch_seconds);
+    if (_current_page == 2) {
+        _usage_status_page.render(
+            _telemetry_snapshot.usage,
+            now_epoch_seconds);
+    } else {
+        _host_status_page.render(
+            _telemetry_snapshot.host,
+            now_epoch_seconds);
     }
-    const VoiceInputUiState voice_state = _voice_status.load();
-    const CodexStatusChannels channels = resolve_codex_status_channels(
-        base_status.c_str(),
-        base_is_error,
-        voice_state == VoiceInputUiState::Ready,
-        voice_state == VoiceInputUiState::Starting,
-        voice_state == VoiceInputUiState::Active,
-        voice_state == VoiceInputUiState::Error,
-        CodexStatusPalette{
-            kQuotaMint,
-            kRunningCyan,
-            kBeaconViolet,
-            kCodexRed,
-            kTextDim,
-            kSignalWhite,
-        });
-    const char* agent_text = channels.connection.text;
-    if (std::strcmp(channels.connection.text, "CONNECTED") == 0 &&
-        _ble_transport != nullptr) {
-        const secure_pairing::AgentRecord* active_agent =
-            _agent_registry.find(_ble_transport->active_fingerprint());
-        if (active_agent != nullptr && active_agent->display_name[0] != '\0') {
-            agent_text = active_agent->display_name.data();
+}
+
+int AppCodexStatus::page_slot_for_logical(int page) const
+{
+    for (size_t slot = 0; slot < _active_page_count; ++slot) {
+        if (_active_page_order[slot] == page) {
+            return static_cast<int>(slot);
         }
     }
-    const TraeChannelPresentation presentation = {
-        {
-            agent_text,
-            channels.connection.dot_color,
-            channels.connection.text_color,
-        },
-        {
-            channels.voice.text,
-            channels.voice.dot_color,
-            channels.voice.text_color,
-        },
+    return -1;
+}
+
+bool AppCodexStatus::page_is_available(int page) const
+{
+    return page_slot_for_logical(page) >= 0;
+}
+
+void AppCodexStatus::layout_status_pages()
+{
+    _active_page_order.fill(-1);
+    size_t count = 0;
+    _active_page_order[count++] = 0;
+    const bool codex_available = !_agent_inventory_received ||
+        _inventory_codex_available;
+    if (codex_available) {
+        _active_page_order[count++] = 1;
+    }
+    if (_agent_inventory_received && _inventory_trae_available) {
+        _active_page_order[count++] = 4;
+    }
+    _active_page_order[count++] = 2;
+    _active_page_order[count++] = 3;
+    _active_page_count = count;
+
+    if (_page_strip != nullptr) {
+        lv_obj_set_width(
+            _page_strip,
+            static_cast<int>(_active_page_count) * kPageWidth);
+    }
+    const auto place = [this](lv_obj_t* page, int logical_page) {
+        if (page == nullptr) {
+            return;
+        }
+        const int slot = page_slot_for_logical(logical_page);
+        if (slot < 0) {
+            if (!lv_obj_has_flag(page, LV_OBJ_FLAG_HIDDEN)) {
+                lv_obj_add_flag(page, LV_OBJ_FLAG_HIDDEN);
+            }
+            return;
+        }
+        if (lv_obj_has_flag(page, LV_OBJ_FLAG_HIDDEN)) {
+            lv_obj_clear_flag(page, LV_OBJ_FLAG_HIDDEN);
+        }
+        const int x = slot * kPageWidth;
+        if (lv_obj_get_x(page) != x) {
+            lv_obj_set_x(page, x);
+        }
     };
-    const bool bluetooth_connected =
-        _ble_transport && _ble_transport->connected();
-    _trae_status_page->render(
-        _trae_snapshot,
-        _trae_carousel.current(),
-        _trae_carousel.next(),
-        presentation,
-        _trae_stale,
-        bluetooth_connected
-    );
+    place(_pinned_microphone_page, 0);
+    place(_codex_page, 1);
+    place(_trae_page_root, 4);
+    place(_usage_page_root, 2);
+    place(_host_page_root, 3);
+
+    _trae_status_page.set_active(_current_page == 4);
+    _page_indicator_count = 0;
+    _page_indicator_slot = -1;
+    update_page_indicator();
+}
+
+void AppCodexStatus::apply_agent_inventory(
+    const AgentInventorySnapshot& inventory)
+{
+    const bool availability_changed =
+        inventory.codex != _inventory_codex_available ||
+        inventory.trae != _inventory_trae_available;
+    _agent_inventory_received = true;
+    if (!availability_changed) {
+        return;
+    }
+
+    const int previous_page = _current_page;
+    _inventory_codex_available = inventory.codex;
+    _inventory_trae_available = inventory.trae;
+    if (!_inventory_trae_available) {
+        _trae_status_received = false;
+        _trae_status_snapshot = {};
+        _trae_task_carousel.reset();
+        _trae_page_rendered = false;
+    }
+    rebuild_status_page_layout(previous_page);
+}
+
+void AppCodexStatus::reset_agent_inventory()
+{
+    const int previous_page = _current_page;
+    const bool availability_changed =
+        !_inventory_codex_available || _inventory_trae_available;
+    _agent_inventory_received = false;
+    _inventory_codex_available = true;
+    _inventory_trae_available = false;
+    _trae_status_received = false;
+    _trae_status_snapshot = {};
+    _trae_task_carousel.reset();
+    _trae_page_rendered = false;
+    if (availability_changed) {
+        rebuild_status_page_layout(previous_page);
+    }
+}
+
+void AppCodexStatus::rebuild_status_page_layout(int previous_page)
+{
+    lv_anim_delete(this, page_animation_cb);
+    _page_swipe.cancel();
+    cancel_task_focus_touch();
+    _last_page_touch_state = LV_INDEV_STATE_REL;
+    if (_task_deck_drag_active) {
+        settle_task_deck_entry(false, false);
+    }
+
+    layout_status_pages();
+    const bool page_removed = !page_is_available(previous_page);
+    if (page_removed && previous_page == 1) {
+        lv_anim_delete(this, task_deck_animation_cb);
+        {
+            std::lock_guard<std::mutex> task_lock(_task_state_mutex);
+            _task_focus_mode = CodexTaskFocusMode::Status;
+        }
+        _task_deck_drag_active = false;
+        _task_deck_auto_dismiss_latched = false;
+        if (_task_focus_view != nullptr) {
+            _task_focus_view->set_vertical_offset(kTaskDeckHiddenY);
+            _task_focus_view->set_visible(false);
+        }
+        sync_task_edge_exclusion(CodexTaskFocusMode::Status);
+        sync_task_voice_route();
+    }
+
+    if (page_removed) {
+        if (page_is_available(1)) {
+            _current_page = 1;
+        } else if (page_is_available(4)) {
+            _current_page = 4;
+        } else {
+            _current_page = 2;
+        }
+        _pinned_microphone_controller.page_changed(_current_page);
+    }
+
+    const int slot = page_slot_for_logical(_current_page);
+    if (_page_strip != nullptr && slot >= 0) {
+        lv_obj_set_x(_page_strip, -slot * kPageWidth);
+    }
+    _trae_status_page.set_active(_current_page == 4);
+    update_page_indicator();
+    sync_pending_glow();
+    sync_pet_runtime(GetHAL().millis());
+    (void)sync_agent_panel_for_task_mode(snapshot_task_focus_state().mode);
+    if (_current_page == 1) {
+        render_alert();
+    } else if (_current_page == 2 || _current_page == 3) {
+        render_telemetry_pages();
+    } else if (_current_page == 4) {
+        render_trae_status_page(current_status_channels());
+    }
+}
+
+
+void AppCodexStatus::clear_telemetry()
+{
+    LvglLockGuard lock;
+    _telemetry_snapshot = {};
+    _latest_global_model.clear();
+    _latest_global_effort.clear();
+    if (_current_page == 1) {
+        render_alert();
+    }
+    set_percent(_week_pct, _week_bar, -1);
+    render_telemetry_pages();
+}
+
+
+bool AppCodexStatus::apply_telemetry_object(
+    cJSON* root,
+    bool clear_when_absent)
+{
+    CodexTelemetrySnapshot parsed;
+    const CodexTelemetryParseResult result = parse_codex_telemetry_object(root, parsed);
+    if (result == CodexTelemetryParseResult::NoTelemetry) {
+        if (clear_when_absent) {
+            clear_telemetry();
+            return true;
+        }
+        return false;
+    }
+    if (result != CodexTelemetryParseResult::Parsed) {
+        return false;
+    }
+
+    LvglLockGuard lock;
+    _telemetry_snapshot.version_supported = true;
+    if (parsed.usage.present) {
+        _telemetry_snapshot.usage = parsed.usage;
+    }
+    if (parsed.host.present) {
+        _telemetry_snapshot.host = parsed.host;
+    }
+    render_telemetry_pages();
+    return true;
 }
 
 void AppCodexStatus::render_agent_panel()
@@ -4595,7 +4944,6 @@ void AppCodexStatus::open_task_deck()
         return;
     }
     _page_swipe.cancel();
-    _trae_card_tap.cancel();
     _task_deck_auto_dismiss_latched = false;
     _last_page_touch_state = LV_INDEV_STATE_REL;
     {
@@ -4873,7 +5221,6 @@ void AppCodexStatus::update_page_swipe(uint32_t now_ms)
             settle_task_deck_entry(false, true);
         }
         _page_swipe.cancel();
-        _trae_card_tap.cancel();
         _last_page_touch_state = LV_INDEV_STATE_REL;
         return;
     }
@@ -4891,7 +5238,6 @@ void AppCodexStatus::update_page_swipe(uint32_t now_ms)
             settle_task_deck_entry(false, true);
         }
         _page_swipe.cancel();
-        _trae_card_tap.cancel();
         _last_page_touch_state = LV_INDEV_STATE_REL;
         return;
     }
@@ -4901,31 +5247,20 @@ void AppCodexStatus::update_page_swipe(uint32_t now_ms)
             settle_task_deck_entry(false, true);
         }
         _page_swipe.cancel();
-        _trae_card_tap.cancel();
         _last_page_touch_state = LV_INDEV_STATE_REL;
         return;
     }
     if (state == LV_INDEV_STATE_PR) {
         if (_last_page_touch_state == LV_INDEV_STATE_REL) {
-            const bool task_candidate =
-                _current_page == 2 &&
-                _trae_status_page != nullptr &&
-                _trae_status_page->contains_task_point(point.x, point.y);
             _page_swipe.press(
                 point.x,
                 point.y,
                 now_ms,
-                task_candidate
-            );
-            _trae_card_tap.press(
-                point.x,
-                point.y,
-                now_ms,
-                task_candidate
+                _current_page == 4 &&
+                    _trae_status_page.contains_task_point(point.x, point.y)
             );
         } else {
             _page_swipe.move(point.x, point.y);
-            _trae_card_tap.move(point.x, point.y);
             const int task_drag_offset =
                 _page_swipe.task_deck_drag_offset(1);
             if (_page_swipe.task_deck_drag_active(1) &&
@@ -4952,29 +5287,30 @@ void AppCodexStatus::update_page_swipe(uint32_t now_ms)
     } else if (_last_page_touch_state == LV_INDEV_STATE_PR) {
         const StatusPageSwipeResult result =
             _page_swipe.release(now_ms, _current_page);
-        const bool trae_card_tapped = _trae_card_tap.release(now_ms);
-        if (result == StatusPageSwipeResult::Codex) {
-            set_page(1, true);
-        } else if (result == StatusPageSwipeResult::PinnedMicrophone) {
-            set_page(0, true);
-        } else if (result == StatusPageSwipeResult::Trae) {
-            set_page(2, true);
+        if (result == StatusPageSwipeResult::PreviousPage ||
+            result == StatusPageSwipeResult::NextPage) {
+            const int slot = page_slot_for_logical(_current_page);
+            const int direction = result == StatusPageSwipeResult::NextPage
+                ? 1
+                : -1;
+            const int next_slot = slot + direction;
+            if (next_slot >= 0 &&
+                next_slot < static_cast<int>(_active_page_count)) {
+                set_page(_active_page_order[static_cast<size_t>(next_slot)], true);
+            }
+        } else if (result == StatusPageSwipeResult::TraeTasksForward) {
+            if (_trae_task_carousel.scroll_forward()) {
+                render_trae_status_page(current_status_channels());
+            }
+        } else if (result == StatusPageSwipeResult::TraeTasksBackward) {
+            if (_trae_task_carousel.scroll_backward()) {
+                render_trae_status_page(current_status_channels());
+            }
         } else if (result == StatusPageSwipeResult::OpenTaskDeck) {
             open_task_deck();
             settle_task_deck_entry(true, true);
-        } else if (result == StatusPageSwipeResult::TraeTasksForward) {
-            if (_trae_carousel.scroll_forward()) {
-                render_trae_status();
-            }
-        } else if (result == StatusPageSwipeResult::TraeTasksBackward) {
-            if (_trae_carousel.scroll_backward()) {
-                render_trae_status();
-            }
         } else if (_task_deck_drag_active) {
             settle_task_deck_entry(false, true);
-        } else if (trae_card_tapped) {
-            // Taps keep the current task window stable. TRAE task navigation
-            // is owned exclusively by vertical swipes.
         }
     }
     _last_page_touch_state = state;
@@ -4985,24 +5321,31 @@ void AppCodexStatus::set_page(int page, bool animate)
     if (_page_strip == nullptr) {
         return;
     }
-    page = std::clamp(page, 0, kPageCount - 1);
+    const int slot = page_slot_for_logical(page);
+    if (slot < 0) {
+        return;
+    }
     if (snapshot_task_focus_state().mode != CodexTaskFocusMode::Status) {
         return;
     }
-    const int target_x = -page * kPageWidth;
+    const int target_x = -slot * kPageWidth;
     const int current_x = lv_obj_get_x(_page_strip);
     _page_swipe.cancel();
-    _trae_card_tap.cancel();
     cancel_task_focus_touch();
     _last_page_touch_state = LV_INDEV_STATE_REL;
     _current_page = page;
+    _trae_status_page.set_active(page == 4);
     sync_pending_glow();
     sync_pet_runtime(GetHAL().millis());
     _pinned_microphone_controller.page_changed(page);
     update_page_indicator();
     (void)sync_agent_panel_for_task_mode(CodexTaskFocusMode::Status);
-    if (_trae_status_page != nullptr) {
-        _trae_status_page->set_active(_current_page == 2 && !_screen_off);
+    if (page == 1) {
+        render_alert();
+    } else if (page == 2 || page == 3) {
+        render_telemetry_pages();
+    } else if (page == 4) {
+        render_trae_status_page(current_status_channels());
     }
 
     lv_anim_delete(this, page_animation_cb);
@@ -5023,29 +5366,43 @@ void AppCodexStatus::set_page(int page, bool animate)
 
 void AppCodexStatus::update_page_indicator()
 {
-    if (_page_dot_codex == nullptr ||
-        _page_dot_pinned_microphone == nullptr ||
-        _page_dot_trae == nullptr) {
+    if (_page_dots[0] == nullptr) {
         return;
     }
-    const bool codex_active = _current_page == 1;
-    const bool pinned_active = _current_page == 0;
-    const bool trae_active = _current_page == 2;
-    lv_obj_set_style_bg_opa(
-        _page_dot_codex,
-        codex_active ? LV_OPA_COVER : LV_OPA_TRANSP,
-        0
-    );
-    lv_obj_set_style_bg_opa(
-        _page_dot_pinned_microphone,
-        pinned_active ? LV_OPA_COVER : LV_OPA_TRANSP,
-        0
-    );
-    lv_obj_set_style_bg_opa(
-        _page_dot_trae,
-        trae_active ? LV_OPA_COVER : LV_OPA_TRANSP,
-        0
-    );
+    const bool geometry_changed = _page_indicator_count != _active_page_count;
+    const int active_slot = page_slot_for_logical(_current_page);
+    for (size_t index = 0; index < _page_dots.size(); ++index) {
+        lv_obj_t* dot = _page_dots[index];
+        if (dot == nullptr) {
+            continue;
+        }
+        const bool visible = index < _active_page_count;
+        const bool hidden = lv_obj_has_flag(dot, LV_OBJ_FLAG_HIDDEN);
+        if (visible && hidden) {
+            lv_obj_clear_flag(dot, LV_OBJ_FLAG_HIDDEN);
+        } else if (!visible && !hidden) {
+            lv_obj_add_flag(dot, LV_OBJ_FLAG_HIDDEN);
+        }
+        if (!visible) {
+            continue;
+        }
+        if (geometry_changed) {
+            const int total_width =
+                static_cast<int>(_active_page_count - 1) * 16 + 8;
+            const int start_x = (kPageWidth - total_width) / 2;
+            lv_obj_set_x(dot, start_x + static_cast<int>(index) * 16);
+        }
+        if (geometry_changed || _page_indicator_slot != active_slot) {
+            lv_obj_set_style_bg_opa(
+                dot,
+                static_cast<int>(index) == active_slot
+                    ? LV_OPA_COVER
+                    : LV_OPA_TRANSP,
+                0);
+        }
+    }
+    _page_indicator_count = _active_page_count;
+    _page_indicator_slot = active_slot;
 }
 
 void AppCodexStatus::page_animation_cb(void* target, int32_t x)
@@ -5090,7 +5447,6 @@ void AppCodexStatus::sync_display_protection_presentation()
         _screen_off_left_press_started_ms = 0;
     }
     _page_swipe.cancel();
-    _trae_card_tap.cancel();
     cancel_task_focus_touch();
     _last_page_touch_state = LV_INDEV_STATE_REL;
     sync_pending_glow();
@@ -5101,9 +5457,6 @@ void AppCodexStatus::sync_display_protection_presentation()
         } else {
             lv_timer_resume(_pet_timer);
         }
-    }
-    if (_trae_status_page != nullptr) {
-        _trae_status_page->set_active(_current_page == 2 && !_screen_off);
     }
 }
 
@@ -5155,9 +5508,9 @@ void AppCodexStatus::set_percent(lv_obj_t* label, lv_obj_t* bar, int value)
     }
 
     if (label != nullptr) {
-        lv_label_set_text(label, text);
+        set_label_text_if_changed(label, text);
     }
-    if (bar != nullptr) {
+    if (bar != nullptr && lv_bar_get_value(bar) != value) {
         lv_bar_set_value(bar, value, LV_ANIM_OFF);
     }
 }
@@ -5189,17 +5542,35 @@ void AppCodexStatus::websocket_event_handler(void* handler_args, esp_event_base_
     switch (event_id) {
         case WEBSOCKET_EVENT_CONNECTED:
             self->_ws_connected = true;
+            self->_last_status_payload_ms = 0;
+            self->clear_telemetry();
             self->set_status("WAITING", kTextDim);
             break;
         case WEBSOCKET_EVENT_DISCONNECTED:
             self->_ws_connected = false;
+            if (self->_ble_transport == nullptr ||
+                !self->_ble_transport->connected()) {
+                self->_last_status_payload_ms = 0;
+            }
             if (self->_ws_client != nullptr) {
                 self->set_status("RETRY", kCodexRed);
+            }
+            if (self->_ble_transport == nullptr ||
+                !self->_ble_transport->connected()) {
+                self->clear_telemetry();
             }
             break;
         case WEBSOCKET_EVENT_ERROR:
             self->_ws_connected = false;
+            if (self->_ble_transport == nullptr ||
+                !self->_ble_transport->connected()) {
+                self->_last_status_payload_ms = 0;
+            }
             self->set_status("WS ERR", kCodexRed);
+            if (self->_ble_transport == nullptr ||
+                !self->_ble_transport->connected()) {
+                self->clear_telemetry();
+            }
             break;
         case WEBSOCKET_EVENT_DATA: {
             auto* data = static_cast<esp_websocket_event_data_t*>(event_data);

@@ -50,6 +50,8 @@ std::mutex _bat_level_mutex;
 ExternalPowerTracker _external_power_tracker;
 std::mutex _external_power_mutex;
 std::mutex _pmic_io_mutex;
+bool _env_boost_lease_active = false;
+bool _env_boost_original_enabled = false;
 
 template <typename Operation>
 auto with_pmic_io_lock(Operation&& operation)
@@ -109,6 +111,52 @@ void bat_reading_task(void* param)
 }
 
 }  // namespace
+
+bool Hal::acquireEnvPortPower()
+{
+    if (!_pm1) {
+        return false;
+    }
+
+    return with_pmic_io_lock([&] {
+        uint8_t power_config = 0;
+        if (_pm1->getPowerConfig(&power_config) != M5PM1_OK) {
+            return false;
+        }
+
+        const bool boost_enabled = (power_config & M5PM1_PWR_CFG_BOOST_EN) != 0;
+        if (!_env_boost_lease_active) {
+            _env_boost_original_enabled = boost_enabled;
+        }
+
+        if (!boost_enabled && _pm1->setBoostEnable(true) != M5PM1_OK) {
+            return false;
+        }
+
+        _env_boost_lease_active = true;
+        return true;
+    });
+}
+
+bool Hal::restoreEnvPortPower()
+{
+    if (!_pm1) {
+        return false;
+    }
+
+    return with_pmic_io_lock([&] {
+        if (!_env_boost_lease_active) {
+            return true;
+        }
+
+        if (!_env_boost_original_enabled && _pm1->setBoostEnable(false) != M5PM1_OK) {
+            return false;
+        }
+
+        _env_boost_lease_active = false;
+        return true;
+    });
+}
 
 // PMIC IO
 #define PMG0_RTC_IMU_INT M5PM1_GPIO_NUM_0
