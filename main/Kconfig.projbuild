@@ -1,5 +1,19 @@
 menu "StopWatch Unified Assistant Compatibility"
 
+    config STOPWATCH_STANDALONE_ASSISTANT
+        bool "Build the standalone XiaoZhi Assistant application"
+        default n
+        select BROOKESIA_AGENT_MANAGER_ENABLE_AUTO_REGISTER
+        select BROOKESIA_AGENT_XIAOZHI_ENABLE_AUTO_REGISTER
+        select BROOKESIA_SERVICE_AUDIO_ENABLE_AUTO_REGISTER
+        select BROOKESIA_SERVICE_DEVICE_ENABLE_AUTO_REGISTER
+        select BROOKESIA_SERVICE_NVS_ENABLE_AUTO_REGISTER
+        select BROOKESIA_SERVICE_SNTP_ENABLE_AUTO_REGISTER
+        help
+            Build and start the standalone Assistant app and runtime. Codex BLE
+            voice and shared HAL, audio, and network support remain available
+            when this option is disabled.
+
     config LANGUAGE_ZH_CN
         bool "Use Simplified Chinese for the unified assistant"
         default y
@@ -8,7 +22,9 @@ menu "StopWatch Unified Assistant Compatibility"
 
     config USE_AFE_WAKE_WORD
         bool "Package the AFE wake-word model"
+        depends on STOPWATCH_STANDALONE_ASSISTANT
         default y
+        select SR_WN_WN9_NIHAOXIAOZHI_TTS
         help
             Expose the upstream Xiaozhi asset-generator switch without importing
             Xiaozhi's standalone application Kconfig.

@@ -50,6 +50,17 @@ public:
         _process_spectrum_frame(frame);
     }
 
+    void resetSpectrum(Hal::AudioSpectrumFrame& frame)
+    {
+        _spectrum_time_domain.fill(0.0f);
+        _spectrum_raw_bands.fill(0.0f);
+        _spectrum_smoothed_bands.fill(0.0f);
+        _spectrum_noise_floor.fill(0.0f);
+        _spectrum_samples_ready = 0;
+        _spectrum_normalization_level = 0.03f;
+        frame = {};
+    }
+
     void setVolume(int volume)
     {
         _backend.setVolume(static_cast<uint8_t>(std::clamp(volume, 0, 100)));
@@ -461,7 +472,18 @@ StopWatchAudioBackend& Hal::getAudioBackend()
 
 void Hal::updateAudioSpectrum()
 {
-    _audio_codec.updateSpectrum(_audio_spectrum);
+    if (_audio_spectrum_monitoring) {
+        _audio_codec.updateSpectrum(_audio_spectrum);
+    }
+}
+
+void Hal::setAudioSpectrumMonitoring(bool active)
+{
+    if (_audio_spectrum_monitoring == active) {
+        return;
+    }
+    _audio_spectrum_monitoring = active;
+    _audio_codec.resetSpectrum(_audio_spectrum);
 }
 
 namespace {

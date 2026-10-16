@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-constexpr uint32_t kScreenOffMainLoopDelayMs = 10U;
+constexpr uint32_t kScreenOffMainLoopDelayMs = 25U;
 constexpr uint32_t kScreenOffBackgroundIntervalMs = 50U;
 constexpr uint32_t kActiveLvglRuntimePeriodMs = 10U;
 constexpr uint32_t kScreenOffLvglRuntimePeriodMs = 50U;

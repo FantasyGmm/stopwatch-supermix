@@ -33,6 +33,18 @@ list(REMOVE_ITEM MY_SRCS
     "${CMAKE_CURRENT_SOURCE_DIR}/assets/images/watch_face/big_number/big_number_9.c"
 )
 
+if(NOT CONFIG_STOPWATCH_STANDALONE_ASSISTANT)
+    list(FILTER MY_SRCS EXCLUDE REGEX "/apps/app_assistant/")
+    list(FILTER MY_SRCS EXCLUDE REGEX "/runtime/assistant/")
+    list(REMOVE_ITEM MY_SRCS
+        "${CMAKE_CURRENT_SOURCE_DIR}/runtime/runtime_diagnostics.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/runtime/runtime_supervisor.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/runtime/service_runtime.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/runtime/services/stopwatch_audio_device.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets/images/icon_assistant.c"
+    )
+endif()
+
 if(CONFIG_STOPWATCH_DEBUG_COMMANDS)
     file(GLOB_RECURSE DEBUG_SRCS
         "debug/*.c"
@@ -56,6 +68,8 @@ set(CODEX_CJK_FONT
     "${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/PinnedMicState22.c"
 )
 
+# Keep REQUIRES/PRIV_REQUIRES unset so this app retains ESP-IDF's implicit
+# dependencies on project components, including local/shared integrations.
 idf_component_register(
     SRCS 
         "main.cpp"

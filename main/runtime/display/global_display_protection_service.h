@@ -7,8 +7,13 @@
 
 #include <hal/button_input_gate.h>
 #include <hal/external_power_state.h>
+#include <sdkconfig.h>
 #include <cstdint>
 #include <lvgl.h>
+#include <mutex>
+#if defined(CONFIG_PM_ENABLE) && CONFIG_PM_ENABLE
+#include <esp_pm.h>
+#endif
 
 struct DisplayProtectionSnapshot {
     DisplayProtectionState state = DisplayProtectionState::Active;
@@ -48,6 +53,10 @@ private:
     bool automaticProtectionEnabledForPolicy() const;
     void recalculateAutomaticProtection(uint32_t now_ms);
     void restoreAndReset(uint32_t now_ms, DisplayWakeReason reason);
+    void initializePowerManagement();
+    bool acquireCpuFrequencyMaxLock();
+    void releaseCpuFrequencyMaxLock();
+    void logPowerManagementError(const char* operation, int error_code);
     // Called only while holding the LVGL lock, unlike the policy entry points.
     void syncDisplayRendering();
     void releaseDisplayRendering();
@@ -69,6 +78,15 @@ private:
     bool _initialized = false;
     lv_display_t* _render_display = nullptr;
     bool _render_suspended = false;
+    bool _power_management_error_log_started = false;
+    uint32_t _last_power_management_error_log_ms = 0;
+#if defined(CONFIG_PM_ENABLE) && CONFIG_PM_ENABLE
+    esp_pm_lock_handle_t _cpu_frequency_max_lock = nullptr;
+    bool _cpu_frequency_max_lock_held = false;
+    // PM lock handles are not safe for concurrent operations. The policy is
+    // updated under LVGL's lock, while the hardware phase runs outside it.
+    std::mutex _power_management_mutex;
+#endif
 };
 
 GlobalDisplayProtectionService& GetGlobalDisplayProtectionService();

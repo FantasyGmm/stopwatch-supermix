@@ -8,6 +8,7 @@
 #include <assets/assets.h>
 #include <hal/hal.h>
 #include <mooncake_log.h>
+#include <runtime/display/global_display_protection_service.h>
 #include <array>
 #include <cstdint>
 
@@ -242,7 +243,11 @@ void AppEnvIII::onOpen()
 {
     mclog::tagInfo(getAppInfo().name, "on open");
     _key_manager = std::make_unique<input::KeyManager>();
-    GetHAL().setEnvMonitoring(true);
+    _screen_off_paused =
+        GetGlobalDisplayProtectionService().state() ==
+        DisplayProtectionState::ScreenOff;
+    const bool monitoring_requested = !_screen_off_paused;
+    GetHAL().setEnvMonitoring(monitoring_requested);
     const EnvSnapshot snapshot = GetHAL().getEnvSnapshot();
     const std::uint32_t now = GetHAL().millis();
 
@@ -259,6 +264,18 @@ void AppEnvIII::onRunning()
         return;
     }
 
+    const bool screen_off =
+        GetGlobalDisplayProtectionService().state() ==
+        DisplayProtectionState::ScreenOff;
+    if (screen_off != _screen_off_paused) {
+        _screen_off_paused = screen_off;
+        const bool monitoring_requested = !screen_off;
+        GetHAL().setEnvMonitoring(monitoring_requested);
+    }
+    if (screen_off) {
+        return;
+    }
+
     const EnvSnapshot snapshot = GetHAL().getEnvSnapshot();
     const std::uint32_t now = GetHAL().millis();
 
@@ -272,6 +289,7 @@ void AppEnvIII::onClose()
 {
     mclog::tagInfo(getAppInfo().name, "on close");
     GetHAL().setEnvMonitoring(false);
+    _screen_off_paused = false;
     _key_manager.reset();
 
     LvglLockGuard lock;

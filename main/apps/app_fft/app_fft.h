@@ -25,4 +25,5 @@ public:
 private:
     std::unique_ptr<input::KeyManager> _key_manager;
     std::unique_ptr<view::FftView> _view;
+    bool _screen_off_paused = false;
 };

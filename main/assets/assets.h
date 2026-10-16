@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: MIT
  */
 #pragma once
+#include <sdkconfig.h>
 #include <lvgl.h>
 
 LV_FONT_DECLARE(MontserratSemiBold26);
@@ -38,7 +39,9 @@ LV_FONT_DECLARE(EnvSensorLauncher26);
 LV_IMG_DECLARE(icon_indicator_left);
 LV_IMG_DECLARE(icon_indicator_right);
 LV_IMG_DECLARE(icon_clock);
+#if CONFIG_STOPWATCH_STANDALONE_ASSISTANT
 LV_IMG_DECLARE(icon_assistant);
+#endif
 LV_IMG_DECLARE(icon_setup);
 LV_IMG_DECLARE(icon_imu);
 LV_IMG_DECLARE(icon_fft);

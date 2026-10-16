@@ -157,6 +157,7 @@ void Hal::envMonitoringTask()
                 if (_env_driver != nullptr) {
                     _env_driver->reset();
                 }
+                driver_ready = false;
                 if (power_lease_owned) {
                     if (restoreEnvPortPower()) {
                         power_lease_owned = false;

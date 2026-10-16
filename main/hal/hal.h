@@ -249,6 +249,7 @@ public:
         float peakFrequencyHz                  = 0.0f;
     };
     void updateAudioSpectrum();
+    void setAudioSpectrumMonitoring(bool active);
     const AudioSpectrumFrame& getAudioSpectrum() const
     {
         return _audio_spectrum;
@@ -270,6 +271,7 @@ public:
         float gyroZ  = 0.0f;
     };
     void updateImuData();
+    bool setImuMonitoring(bool active);
     const ImuData& getImuData() const
     {
         return _imu_data;
@@ -323,6 +325,8 @@ private:
     ImuData _imu_data;
     ButtonConfig _btn_config;
     AudioSpectrumFrame _audio_spectrum;
+    bool _audio_spectrum_monitoring = false;
+    bool _imu_monitoring = false;
     int _bl_brightness = 80;
     int _user_bl_brightness = 80;
     uint32_t _bl_brightness_revision = 0;

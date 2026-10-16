@@ -8,6 +8,7 @@
 #include <mooncake.h>
 #include <mooncake_log.h>
 #include <assets/assets.h>
+#include <runtime/display/global_display_protection_service.h>
 #include <smooth_lvgl.hpp>
 #include <algorithm>
 #include <cmath>
@@ -28,11 +29,14 @@ void AppImu::onOpen()
     mclog::tagInfo(getAppInfo().name, "on open");
 
     _key_manager = std::make_unique<input::KeyManager>();
-
-    LvglLockGuard lock;
-
     _yaw           = 0.0f;
     _yaw_last_tick = GetHAL().millis();
+    _screen_off_paused =
+        GetGlobalDisplayProtectionService().state() ==
+        DisplayProtectionState::ScreenOff;
+    GetHAL().setImuMonitoring(!_screen_off_paused);
+
+    LvglLockGuard lock;
 
     _view = std::make_unique<view::ImuView>();
     _view->init(lv_screen_active());
@@ -45,6 +49,18 @@ void AppImu::onRunning()
 {
     if (_key_manager->update() == input::KeyEvent::GoHome) {
         close();
+        return;
+    }
+
+    const bool screen_off =
+        GetGlobalDisplayProtectionService().state() ==
+        DisplayProtectionState::ScreenOff;
+    if (screen_off != _screen_off_paused) {
+        _screen_off_paused = screen_off;
+        GetHAL().setImuMonitoring(!screen_off);
+    }
+    if (screen_off) {
+        _yaw_last_tick = GetHAL().millis();
         return;
     }
 
@@ -83,6 +99,8 @@ void AppImu::onClose()
     mclog::tagInfo(getAppInfo().name, "on close");
 
     _key_manager.reset();
+    GetHAL().setImuMonitoring(false);
+    _screen_off_paused = false;
 
     LvglLockGuard lock;
 

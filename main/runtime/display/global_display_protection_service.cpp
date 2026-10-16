@@ -4,6 +4,9 @@
 #include <hal/hal.h>
 #include <hal/utils/settings/settings.h>
 #include <mooncake_log.h>
+#if defined(CONFIG_PM_ENABLE) && CONFIG_PM_ENABLE
+#include <esp_err.h>
+#endif
 
 #include <algorithm>
 
@@ -26,6 +29,7 @@ bool GlobalDisplayProtectionService::init()
         mclog::tagError(tag, "LVGL input unavailable");
         return false;
     }
+    initializePowerManagement();
 
     const uint32_t now_ms = GetHAL().millis();
     const DisplayProtectionConfig defaults = defaultDisplayProtectionConfig();
@@ -174,16 +178,24 @@ void GlobalDisplayProtectionService::update()
 
 void GlobalDisplayProtectionService::applyPendingHardwareUpdate()
 {
-    if (_pending_brightness < 0) {
+    if (!_initialized) {
         return;
     }
-    GetHAL().setTemporaryBackLightBrightness(_pending_brightness);
-    _pending_brightness = -1;
-    completeTouchGateReleaseAfterHardwareUpdate();
+    if (_pending_brightness >= 0) {
+        GetHAL().setTemporaryBackLightBrightness(_pending_brightness);
+        _pending_brightness = -1;
+        completeTouchGateReleaseAfterHardwareUpdate();
+    }
+    if (_logic.state() == DisplayProtectionState::ScreenOff) {
+        releaseCpuFrequencyMaxLock();
+    } else {
+        acquireCpuFrequencyMaxLock();
+    }
 }
 
 void GlobalDisplayProtectionService::shutdown()
 {
+    acquireCpuFrequencyMaxLock();
     _logic.reset(0);
     releaseDisplayRendering();
     _config = defaultDisplayProtectionConfig();
@@ -201,6 +213,18 @@ void GlobalDisplayProtectionService::shutdown()
     _defer_right_button_wake = false;
     _initialized = false;
     GetHAL().setLvglScreenOffMode(false);
+    releaseCpuFrequencyMaxLock();
+#if defined(CONFIG_PM_ENABLE) && CONFIG_PM_ENABLE
+    std::lock_guard<std::mutex> lock(_power_management_mutex);
+    if (_cpu_frequency_max_lock != nullptr && !_cpu_frequency_max_lock_held) {
+        const esp_err_t result = esp_pm_lock_delete(_cpu_frequency_max_lock);
+        if (result == ESP_OK) {
+            _cpu_frequency_max_lock = nullptr;
+        } else {
+            logPowerManagementError("delete CPU frequency lock", result);
+        }
+    }
+#endif
 }
 
 void GlobalDisplayProtectionService::setKeepAwake(DisplayKeepAwakeReason reason,
@@ -352,6 +376,8 @@ void GlobalDisplayProtectionService::acceptDecision(
     }
     switch (decision.action) {
         case DisplayProtectionAction::Restore:
+            // Hold the maximum CPU frequency before restoring the panel path.
+            acquireCpuFrequencyMaxLock();
             GetHAL().setLvglScreenOffMode(false);
             syncUserBrightness();
             if (restore_display) {
@@ -378,6 +404,101 @@ void GlobalDisplayProtectionService::acceptDecision(
                    static_cast<unsigned>(_logic.state()),
                    static_cast<unsigned>(decision.action),
                    static_cast<unsigned>(_logic.reasonMask()));
+}
+
+void GlobalDisplayProtectionService::initializePowerManagement()
+{
+#if defined(CONFIG_PM_ENABLE) && CONFIG_PM_ENABLE
+    {
+        std::lock_guard<std::mutex> lock(_power_management_mutex);
+        _power_management_error_log_started = false;
+        _last_power_management_error_log_ms = 0;
+        if (_cpu_frequency_max_lock == nullptr) {
+            const esp_pm_config_t config = {
+                .max_freq_mhz = CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ,
+                .min_freq_mhz = 80,
+                .light_sleep_enable = false,
+            };
+            esp_err_t result = esp_pm_configure(&config);
+            if (result != ESP_OK) {
+                logPowerManagementError("configure dynamic frequency", result);
+                return;
+            }
+
+            result = esp_pm_lock_create(ESP_PM_CPU_FREQ_MAX, 0, "display",
+                                        &_cpu_frequency_max_lock);
+            if (result != ESP_OK) {
+                logPowerManagementError("create CPU frequency lock", result);
+                return;
+            }
+        }
+    }
+    acquireCpuFrequencyMaxLock();
+#else
+    _power_management_error_log_started = false;
+    _last_power_management_error_log_ms = 0;
+    mclog::tagWarn(tag,
+                   "CPU dynamic frequency policy unavailable: CONFIG_PM_ENABLE is disabled");
+#endif
+}
+
+bool GlobalDisplayProtectionService::acquireCpuFrequencyMaxLock()
+{
+#if defined(CONFIG_PM_ENABLE) && CONFIG_PM_ENABLE
+    std::lock_guard<std::mutex> lock(_power_management_mutex);
+    if (_cpu_frequency_max_lock == nullptr) {
+        return false;
+    }
+    if (_cpu_frequency_max_lock_held) {
+        return true;
+    }
+
+    const esp_err_t result = esp_pm_lock_acquire(_cpu_frequency_max_lock);
+    if (result != ESP_OK) {
+        logPowerManagementError("acquire CPU frequency lock", result);
+        return false;
+    }
+    _cpu_frequency_max_lock_held = true;
+    return true;
+#else
+    return false;
+#endif
+}
+
+void GlobalDisplayProtectionService::releaseCpuFrequencyMaxLock()
+{
+#if defined(CONFIG_PM_ENABLE) && CONFIG_PM_ENABLE
+    std::lock_guard<std::mutex> lock(_power_management_mutex);
+    if (_cpu_frequency_max_lock == nullptr || !_cpu_frequency_max_lock_held) {
+        return;
+    }
+
+    const esp_err_t result = esp_pm_lock_release(_cpu_frequency_max_lock);
+    if (result != ESP_OK) {
+        logPowerManagementError("release CPU frequency lock", result);
+        return;
+    }
+    _cpu_frequency_max_lock_held = false;
+#endif
+}
+
+void GlobalDisplayProtectionService::logPowerManagementError(
+    const char* operation, int error_code)
+{
+#if defined(CONFIG_PM_ENABLE) && CONFIG_PM_ENABLE
+    const uint32_t now_ms = GetHAL().millis();
+    if (!_power_management_error_log_started ||
+        now_ms - _last_power_management_error_log_ms >= 1000U) {
+        mclog::tagWarn(tag, "PM {} failed: {} ({})", operation,
+                       esp_err_to_name(static_cast<esp_err_t>(error_code)),
+                       error_code);
+        _power_management_error_log_started = true;
+        _last_power_management_error_log_ms = now_ms;
+    }
+#else
+    (void)operation;
+    (void)error_code;
+#endif
 }
 
 void GlobalDisplayProtectionService::suppressWakeButton(bool button_pressed)

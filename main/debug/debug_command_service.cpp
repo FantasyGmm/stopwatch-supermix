@@ -1,14 +1,19 @@
 #include "debug_command_service.h"
 
 #include "debug_app_control.h"
+#include <sdkconfig.h>
+#if CONFIG_STOPWATCH_STANDALONE_ASSISTANT
 #include "debug_assistant_control.h"
+#endif
 
 #include <hal/hal.h>
+#if CONFIG_STOPWATCH_STANDALONE_ASSISTANT
 #include <runtime/assistant/assistant_runtime.h>
 #include <runtime/assistant/assistant_trace.h>
 #include <runtime/runtime_supervisor.h>
-#include <runtime/display/global_display_protection_service.h>
 #include <runtime/services/shared_wifi_service.h>
+#endif
+#include <runtime/display/global_display_protection_service.h>
 
 #include <cinttypes>
 #include <string_view>
@@ -33,6 +38,7 @@ const char* result_name(DebugAppOpenResult result)
     return "BUSY";
 }
 
+#if CONFIG_STOPWATCH_STANDALONE_ASSISTANT
 void log_assistant_status()
 {
     const auto snapshot = GetRuntimeSupervisor().diagnostics();
@@ -51,6 +57,7 @@ void log_assistant_status()
              static_cast<unsigned>(snapshot.psram_free),
              static_cast<unsigned>(snapshot.task_count));
 }
+#endif
 
 void log_display_protection_status()
 {
@@ -133,6 +140,7 @@ void DebugCommandService::dispatchLine()
         return;
     }
     if (command.kind == DebugCommandKind::AppHome) {
+#if CONFIG_STOPWATCH_STANDALONE_ASSISTANT
         auto& assistant = GetAssistantRuntime();
         GetAssistantTrace().record({
             .session_id = assistant.sessionId(),
@@ -143,9 +151,11 @@ void DebugCommandService::dispatchLine()
             .detail = AssistantTraceDetail::ForceHome,
             .result = AssistantTraceResult::Accepted,
         });
+#endif
         ESP_LOGI(tag, "DEBUG APP HOME %s", RequestDebugAppHome() ? "OK" : "BUSY");
         return;
     }
+#if CONFIG_STOPWATCH_STANDALONE_ASSISTANT
     if (command.kind == DebugCommandKind::AssistantHome) {
         ESP_LOGI(tag, "DEBUG ASSISTANT HOME %s",
                  RequestDebugAssistantHome() ? "OK" : "BUSY");
@@ -183,6 +193,7 @@ void DebugCommandService::dispatchLine()
         ESP_LOGI(tag, "DEBUG ASSISTANT WIFI CYCLE %s", cycled ? "OK" : "BUSY");
         return;
     }
+#endif
     if (command.kind == DebugCommandKind::DisplayProtectionStatus) {
         log_display_protection_status();
         return;

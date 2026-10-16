@@ -1,8 +1,11 @@
 #include "global_edge_control_service.h"
 
 #include <hal/hal.h>
+#include <sdkconfig.h>
 #include <runtime/display/global_display_protection_service.h>
+#if CONFIG_STOPWATCH_STANDALONE_ASSISTANT
 #include <runtime/runtime_supervisor.h>
+#endif
 
 namespace {
 GlobalEdgeControlService global_edge_control_service;
@@ -91,9 +94,11 @@ void GlobalEdgeControlService::applyPendingHardwareUpdate()
     } else if (update.side == EdgeControlSide::Volume) {
         GetHAL().setSpeakerVolume(update.value, update.persist);
         _volume_revision++;
+#if CONFIG_STOPWATCH_STANDALONE_ASSISTANT
         if (update.persist) {
             GetRuntimeSupervisor().requestAssistantVolumeSync(update.value);
         }
+#endif
     }
 }
 

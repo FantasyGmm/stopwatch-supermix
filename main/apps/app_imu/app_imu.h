@@ -28,4 +28,5 @@ private:
     std::unique_ptr<input::KeyManager> _key_manager;
     float _yaw              = 0.0f;
     uint32_t _yaw_last_tick = 0;
+    bool _screen_off_paused = false;
 };

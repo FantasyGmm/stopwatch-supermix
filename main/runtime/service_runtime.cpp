@@ -5,9 +5,11 @@
  */
 #include "service_runtime.h"
 #include "services/stopwatch_audio_device.h"
-#include <brookesia/service_manager.hpp>
-#include <mooncake_log.h>
 #include <sdkconfig.h>
+#if CONFIG_STOPWATCH_STANDALONE_ASSISTANT
+#include <brookesia/service_manager.hpp>
+#endif
+#include <mooncake_log.h>
 
 namespace {
 ServiceRuntime service_runtime;
@@ -30,14 +32,16 @@ bool ServiceRuntime::start()
         return false;
     }
 
+#if CONFIG_STOPWATCH_STANDALONE_ASSISTANT
     auto& manager = esp_brookesia::service::ServiceManager::get_instance();
     if (!manager.start()) {
         mclog::tagError(tag, "failed to start Brookesia service manager");
         return false;
     }
+#endif
 
     _started = true;
-#if CONFIG_STOPWATCH_DEBUG_COMMANDS
+#if CONFIG_STOPWATCH_STANDALONE_ASSISTANT && CONFIG_STOPWATCH_DEBUG_COMMANDS
     mclog::tagInfo(tag, "Brookesia service manager started");
 #endif
     return true;

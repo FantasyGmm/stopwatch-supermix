@@ -3,6 +3,7 @@
  *
  * SPDX-License-Identifier: MIT
  */
+#include <sdkconfig.h>
 #include <smooth_ui_toolkit.hpp>
 #include <mooncake_log.h>
 #include <mooncake.h>
@@ -10,11 +11,12 @@
 #include <apps/common/edge_control/global_edge_control_service.h>
 #include <hal/hal.h>
 #include <runtime/power/global_low_battery_alert_service.h>
+#if CONFIG_STOPWATCH_STANDALONE_ASSISTANT
 #include <runtime/service_runtime.h>
 #include <runtime/runtime_supervisor.h>
+#endif
 #include <runtime/display/global_display_protection_service.h>
 #include <runtime/power/screen_off_runtime_policy.h>
-#include <sdkconfig.h>
 #if CONFIG_STOPWATCH_DEBUG_COMMANDS
 #include <debug/debug_command_service.h>
 #endif
@@ -31,7 +33,8 @@ extern "C" void app_main(void)
     // HAL init
     GetHAL().init();
 
-    // Shared service runtime init
+#if CONFIG_STOPWATCH_STANDALONE_ASSISTANT
+    // Assistant service runtime init
     if (!GetServiceRuntime().start()) {
         mclog::tagError("Main", "service runtime unavailable; application startup aborted");
         return;
@@ -40,6 +43,7 @@ extern "C" void app_main(void)
         mclog::tagError("Main", "runtime supervisor unavailable; application startup aborted");
         return;
     }
+#endif
 
     // Setup ui hal
     ui_hal::on_delay([](uint32_t ms) { GetHAL().delay(ms); });
@@ -61,7 +65,9 @@ extern "C" void app_main(void)
     // Install apps
     GetMooncake().installApp(std::make_unique<AppLauncher>());
     GetMooncake().installApp(std::make_unique<AppCodexStatus>());
+#if CONFIG_STOPWATCH_STANDALONE_ASSISTANT
     GetMooncake().installApp(std::make_unique<AppAssistant>());
+#endif
     GetMooncake().installApp(std::make_unique<AppBadge>());
     GetMooncake().installApp(std::make_unique<AppImu>());
     GetMooncake().installApp(std::make_unique<AppFft>());
@@ -75,7 +81,9 @@ extern "C" void app_main(void)
 #if CONFIG_STOPWATCH_DEBUG_COMMANDS
         GetDebugCommandService().update();
 #endif
+#if CONFIG_STOPWATCH_STANDALONE_ASSISTANT
         GetRuntimeSupervisor().update(GetHAL().millis());
+#endif
         GetGlobalLowBatteryAlertService().update();
         {
             LvglLockGuard lock;
