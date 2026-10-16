@@ -17,25 +17,28 @@ partition table.
 
 | Area | Supermix baseline | Hub reference | Fusion result |
 | --- | --- | --- | --- |
-| Firmware app shell | Mooncake/LVGL launcher, Assistant, and StopWatch apps | Separate generated UserDemo checkout and app set | Keeps the original launcher and other apps; the user-retired Clock app (watch faces, alarm and stopwatch) and its private sources/images are excluded from the firmware build. System time, RTC and shared status clocks remain. Codex/TRAE task pages follow the Mac's installed-Agent manifest. |
+| Firmware app shell | Mooncake/LVGL launcher, Assistant, and StopWatch apps | Separate generated UserDemo checkout and app set | Keeps the launcher and utility apps; Clock and standalone Assistant are excluded from the current firmware profile. Codex voice and shared HAL/audio remain. System time, RTC and shared status clocks remain. Codex/TRAE task pages follow the Mac's installed-Agent manifest. |
 | Codex Agent | Python menu bar Agent with task status, BLE, voice/input, and pet support | CC Island bridge and provider/host usage collection | Native Rust Agent preserves the existing workflows; the Python source remains as a comparison baseline, while the packaged app contains no Python runtime or Python source. |
 | Codex tasks | Model, reasoning effort, task alerts, reminders, and protected task details | Different task and provider model | Existing task fields and authenticated detail flow remain; compact usage and host data extend the existing status protocol. |
 | Usage and quota | Existing remaining-quota percentages | Usage, quota windows, resets, and provider collection | Shows 7D quota/reset, today's tokens and API-equivalent USD estimate, and switchable model token/cost/performance details. CC Switch session TPS/TTFT are labeled estimates with sample coverage; unknown prices and timings stay unavailable. |
-| Mac host | No dedicated watch page | CPU, memory, disk, and network statistics | Adds a host display with an independent 15-second expiry. |
+| Mac host | No dedicated watch page | CPU, memory, disk, and network statistics | Host code is retained but its watch page, normal-runtime sampling worker and transmitted fields are temporarily disabled. |
 | Optional providers | No Claude/OpenCode summaries | Provider monitoring concepts | Claude is an explicit-token, read-only GET; OpenCode is an opt-in read-only JSON import. Both are off by default and neither refreshes or writes provider credentials. |
 | BLE and Wi-Fi | Existing secure BLE pairing, encrypted voice, task input, and WebSocket fallback | Hub-specific NUS/HTTP bridge and Wi-Fi service | Negotiates MessagePack status payloads on the existing authenticated RX characteristic; old peers retain JSON. Keeps pairing, voice/input/pet formats, transport and Wi-Fi ownership. No new service or characteristic. |
 | Flash layout | Original 16 MiB single-app layout | Two OTA app slots and Hub storage layout | Retains supermix partitions: NVS at `0x9000`, app at `0x20000`, FAT storage at `0xDE0000`, Assistant assets at `0xEE0000`, and coredump at `0xFA0000`. Hub OTA partitions are excluded. |
 | Build and packaging | ESP-IDF firmware and Python Agent packaging | Hub-specific firmware generation and bridge deployment | Adds the pinned ESP-IDF mirror/build scripts and a universal2 Rust Agent package. Builds do not flash the device. |
 | Optional environmental unit | No ENV-III application | Not imported | Adds the Chinese environment app for temperature, humidity and pressure, independent presence/error handling and automatic reprobe. Port A remains owned by the existing HAL. The simplified page has enlarged readings and no redundant title or normal-state copy. |
 | Pending animation | Breathing red perimeter and status text | Not imported | Keeps a static red perimeter at the existing peak opacity and pulses only the small status/count targets, avoiding continuous large-area halo invalidation. |
-| Screen-off rendering | Slower LVGL/background cadence | Not imported | Suspends display invalidation and refresh while off, keeps input and background transport active, and invalidates one complete frame on wake. Power savings have not been measured. |
+| Screen-off rendering | Slower LVGL/background cadence | Not imported | Suspends display refresh and nonessential sensor/FFT work while off; releases the awake 240 MHz CPU lock for DFS (80 MHz minimum, runnable work can boost), reacquires it before display wake. Input, transport and alerts remain active. No light/deep sleep. Power savings have not been measured. |
 
-The watch carousel is microphone, Codex, optional installed TRAE, Usage, Host.
+The watch carousel is microphone, Codex, optional installed TRAE, Usage.
 TRAE code is retained and its page appears only when the Mac reports it installed.
-Usage/Host keep the root
-positions assigned by the carousel; they do not overlap the microphone page.
+Host's logical ID and implementation remain reserved; no blank page is inserted.
+Usage keeps its assigned carousel position.
 The Mac menu follows the first system language: Chinese variants use Simplified
 Chinese, English uses English, and other languages fall back to English.
+Its Codex submenu is a compact summary, without the conversation list. Watch
+short A/B presses navigate pages; long A submits/queues, long B is push-to-talk,
+and A+B returns Home. Short presses no longer trigger desktop actions.
 
 The complete status payload limit remains 2048 encoded bytes, with legacy JSON
 v1 and negotiated MessagePack v2 framing. `telemetry_v: 1` carries

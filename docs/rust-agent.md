@@ -106,6 +106,13 @@ Accessibility permission is needed for guarded Codex composer actions. The
 Agent does not activate Codex or send a task into an unrecognized or non-editable
 composer.
 
+The Codex submenu shows only model, effort, quota and task counts, not individual
+conversations. On the watch, short A/B presses move to the previous/next page;
+holding A for 300 ms submits/queues the current composer once, and holding B
+continues push-to-talk. Releasing a hold does not turn the page. A+B returns to
+Launcher. These local bindings do not change the authenticated input protocol
+or the Agent's guarded submit implementation.
+
 ## Local data and telemetry
 
 During a normal launch the Agent reads Codex state under `~/.codex` and TRAE
@@ -185,18 +192,22 @@ Claude and OpenCode summaries are optional and disabled by default:
 
 The watch receives the existing Codex/Trae status plus the compact
 `telemetry_v: 1` display fields: quota percentages and resets, today's token
-count and estimate coverage, host CPU/memory/disk/network rates, freshness
+count and estimate coverage, freshness
 statuses, and optional provider quota summaries. Credentials, cookies, prompt
 text, source files, raw session logs, and tool output are not telemetry fields.
 Codex task details continue to use the existing authenticated and encrypted
 detail channel. Unknown values remain unavailable/null; they are not converted
 to full quota or zero.
 
-Usage and quota workers wait 60 seconds after collection; host metrics wait five
-seconds after collection, which also includes 750 ms of sampling windows.
-Each runs independently of task collection. Usage and quota samples expire
-after 120 seconds; host samples expire after 15
-seconds; optional provider samples expire after 120 seconds. New local usage
+Host is temporarily disabled in normal menu bar runtime: no Host worker is
+created, the snapshot and encoded messages omit `host`, and the watch hides its
+Host page. The collector/codec implementation remains available for restoration
+and explicit legacy diagnostic callers; `--collect-once` retains its documented
+host-sampling behavior.
+
+Usage and quota workers wait 60 seconds after collection, independently of task
+collection. Usage and quota samples expire after 120 seconds; optional provider
+samples expire after 120 seconds. New local usage
 collection does not extend quota freshness. The watch must get a fresh status
 after reconnection before showing the data as live.
 
@@ -204,8 +215,8 @@ after reconnection before showing the data as live.
 
 The Usage page displays the 7D quota and reset countdown, today's total tokens
 and API-equivalent USD estimate, and one model's details at a time. Tap the
-on-page arrows to switch models; existing page swipes and buttons keep their
-original meanings. Short project names on the Codex home page are centered;
+on-page arrows to switch models; short A/B presses switch whole app pages, while
+touch swipes retain their meanings. Short project names on the Codex home page are centered;
 long names keep single-line scrolling.
 
 Model details include fresh input, output, cache reads and cache writes, the
@@ -280,7 +291,7 @@ legacy visibility is preserved.
 An optional version-1 `agent_inventory` status message travels over the existing
 BLE status channel before the normal status messages. Older firmware ignores
 its explicit unknown source; older Agents without a manifest retain the watch's
-Mic / Codex / Usage / Host layout. New firmware conditionally inserts supported
+Mic / Codex / Usage layout. New firmware conditionally inserts supported
 Agent pages without blank slots. TRAE implementation remains in the source.
 
 ## Device-write boundary

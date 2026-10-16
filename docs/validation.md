@@ -1,5 +1,37 @@
 # Phase 1 validation record
 
+## Current build and device acceptance (2026-10-16)
+
+Codex menu compaction, temporary Host suspension, A/B page navigation and long-A
+submission, optional standalone-Assistant exclusion, DFS and on-demand utility
+sampling were compiled and deployed with explicit user approval.
+
+- ESP-IDF 5.5.4 clean build and artifact export passed. App: 4,706,672 bytes;
+  assets: 183 bytes; static DIRAM: 148,299 bytes. Original partition/capacity
+  gates passed. Effective configuration enables PM, disables automatic DFS
+  initialization and standalone Assistant/wake-word models; the display service
+  configures an 80 MHz minimum and holds the 240 MHz lock while awake.
+- Agent 1.0.14/build 15 compiled for Apple Silicon and Intel, passed static
+  package/signature checks, and was atomically installed and restarted through
+  the normal macOS app path. Existing pairing authenticated successfully.
+- Firmware `2e2e9a2-dirty` was written via `/dev/cu.usbmodem31201`. All four
+  image writes verified; independent reset showed the new version, TE GPIO38
+  synchronization and Launcher startup without panic.
+- The user confirmed connection, page navigation and screen-off wake are normal
+  after opening Codex. The confirmation question also included Host being hidden.
+
+No tests or runtime self-tests were run. Actual power draw, runtime heap/stack
+high-water marks and voice/desktop input actions were not measured or exercised
+in this update. Artifacts and deployment evidence are under
+`../deliverables/firmware-on-demand-20261016/`,
+`../deliverables/macos-agent-on-demand-20261016/` and the delivery validation logs.
+
+Existing gesture and Xiaozhi contract fixtures still describe the retired
+short-click submission and always-enabled wake-word defaults. They were neither
+modified nor run for this revision.
+
+## Earlier validation history
+
 The user's latest instruction stopped further test additions and test runs.
 The final native changes are compile checked; packaged binaries are not executed
 for runtime self-tests or version smoke tests. Build commands do not install an

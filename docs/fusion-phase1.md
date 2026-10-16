@@ -43,7 +43,8 @@ dependencies and checked patches remain unchanged.
 Hub instead has two 6 MiB OTA slots at `0x20000` and `0x620000`, with storage at
 `0xC20000` and coredump at `0xFF0000`. This layout is not used. The existing
 supermix application gate stays `0x700000`, assets gate `0xA0000`, with the
-original partition and all seven launcher applications retained.
+original partition retained. Clock and the standalone Assistant are now excluded
+from the default profile by later user decisions; Codex voice remains enabled.
 
 ## Status extension contract
 
@@ -65,7 +66,8 @@ text are not telemetry fields.
   epoch seconds; `t` today's tokens; `c` estimated equivalent API USD; `cs`
   estimate coverage (`ok`, `partial`, `unavailable`); `day` local calendar date;
   optional `p` contains up to two provider summaries.
-- `host`: `s`, `at`, `cpu`, `mem`, `disk` (percent), `up` and `down` (KiB/s).
+- `host` (retained protocol, disabled in normal runtime): `s`, `at`, `cpu`,
+  `mem`, `disk` (percent), `up` and `down` (KiB/s).
 - Collection statuses are `ok`, `stale`, `error`, `unavailable`. Unknown values
   are null/absent rather than 100% or zero.
 
@@ -84,8 +86,10 @@ new fields. Unknown extension versions disable telemetry while retaining task
 monitoring. Reconnection requires fresh status data; disconnected data cannot
 appear live.
 
-Page order becomes pinned microphone, Codex tasks, TRAE, Usage, Host. Existing
-button/voice/home/edge controls remain global within the Codex application.
+Current page order is pinned microphone, Codex tasks, optional installed TRAE,
+Usage. Host is hidden without a blank slot and its normal Agent worker/messages
+are disabled. Short A/B presses navigate pages; long A submits once, long B is
+push-to-talk and A+B is Home. Touch and global edge controls are unchanged.
 
 ## Build and operational boundary
 
@@ -97,7 +101,7 @@ runtime. Historical Python sources remain solely as a behavior baseline and
 offline protocol oracles. The original install/release shell entry points
 delegate to the Rust build.
 
-Task polling uses a separate worker from quota, daily usage, host and public
+Task polling uses a separate worker from quota, daily usage and public
 pricing requests. Last-good samples expire independently. Delivery receipts
 coalesce until ledger persistence succeeds; collection failures publish
 unavailable status and disable stale action routes. Reconnection isolates
@@ -114,12 +118,13 @@ All installation and build data resides below
 `scripts/install_idf_mirror.sh` and `scripts/build_fusion.sh`; they do not flash.
 The original installer and release packaging entry points are retained.
 
-This phase uses synthetic collector fixtures, unit/host tests and firmware
-builds. It does not change the real Codex configuration, credentials, installed
-Agent, Bluetooth pairings, or device Flash. Physical display, live BLE, voice,
-touch timing and actual heap/stack high-water marks require device acceptance.
-Before any future device write, explicitly obtain the user's approval and
-save a complete 16 MiB Flash image using the exact connected device port.
+The current menu/button/standby revision was compiled and deployed with user
+approval. The user confirmed connection, page navigation and wake behavior;
+see [validation results](validation.md). No tests were added or run. Actual
+power draw and voice/desktop input actions were not measured or exercised in
+this update. Future device writes require explicit approval, the exact connected
+port and capacity-gated artifacts; a full-Flash backup is optional recovery
+material, not a normal prerequisite.
 
 ## Differences from upstreams
 
@@ -129,9 +134,9 @@ save a complete 16 MiB Flash image using the exact connected device port.
 | Secure pairing / encrypted voice / input | Yes | Different transport | Original supermix behavior retained |
 | Five-hour / weekly quota | Percentage | Percentage and resets | Percentage, resets, independent freshness |
 | Today's tokens / API equivalent estimate | No dedicated page | Yes | Usage page; explicit estimate coverage |
-| CPU / memory / disk / network | No dedicated page | Yes | Host page with expiry |
+| CPU / memory / disk / network | No dedicated page | Yes | Code retained; page, normal collection and messages temporarily disabled |
 | Claude / OpenCode | No | Provider monitoring | Optional isolated modules, default off |
-| Xiaozhi and existing launcher apps | Yes | Different app set | Retained |
+| Xiaozhi and existing launcher apps | Yes | Different app set | Standalone Assistant/Clock excluded from current profile; Codex voice and other utility apps retained |
 | PrintSphere / Hub OTA | No | Yes | Excluded in phase 1 |
 
 Actual validation results and artifact hashes are delivered separately after

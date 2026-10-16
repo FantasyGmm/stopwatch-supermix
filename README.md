@@ -1,6 +1,7 @@
 # stopwatch-supermix
 
-This fusion branch adds Usage/Host pages and a native Rust Mac Agent.
+This fusion branch adds Usage monitoring and a native Rust Mac Agent. Host
+monitoring code is retained but temporarily disabled in the current profile.
 Start with [fusion notes](docs/fusion-phase1.md),
 [Rust Agent installation](docs/rust-agent.md),
 [firmware artifacts](docs/firmware-artifacts.md), and
@@ -13,13 +14,14 @@ are separate, explicit operations.
 An optional [Unit ENV-III application](docs/env-iii.md) displays local temperature,
 humidity and pressure, with independent sensor detection and automatic recovery.
 
-`stopwatch-supermix` is a custom M5Stack StopWatch firmware that turns the device into a compact launcher for daily tools, a Xiaozhi assistant boot target, and a dedicated Codex status monitor.
+`stopwatch-supermix` is a custom M5Stack StopWatch firmware with a compact
+launcher for daily tools and a dedicated Codex status monitor.
 
 This project is based on the M5Stack StopWatch user demo and extends it with:
 
 - a launcher-first app shell built on Mooncake/LVGL;
 - a Codex status monitor app added as the first launcher app;
-- an in-process Assistant app backed by Xiaozhi/Brookesia services, without rebooting;
+- retained Xiaozhi/Brookesia Assistant sources, disabled in the current build;
 - full-screen utility apps for badge, IMU, FFT, setup, and environmental sensors;
 - capacity-gated build, flash, lifecycle, product-smoke, and recovery tooling.
 
@@ -38,17 +40,19 @@ This project is based on the M5Stack StopWatch user demo and extends it with:
 The launcher installs apps in this order:
 
 1. Codex status monitor
-2. Assistant
-3. Badge
-4. IMU
-5. FFT
-6. Setup
-7. Environment monitor
+2. Badge
+3. IMU
+4. FFT
+5. Setup
+6. Environment monitor
 
 The Codex app is intentionally placed first so the device can boot into the launcher and quickly open the monitoring dashboard.
 
 Clock, Alarm, Watch Face, and Stopwatch are no longer registered or compiled in
 this fusion profile. RTC/system time and the shared status-bar clock remain.
+Standalone Assistant is also excluded by default through
+`CONFIG_STOPWATCH_STANDALONE_ASSISTANT=n`; Codex push-to-talk and pinned
+microphone still use the existing shared audio backend.
 
 ## Codex Status Monitor
 
@@ -91,17 +95,24 @@ key and increments its epoch; an authorized Agent that was offline receives
 the new epoch on its next signed connection. Agent names are editable from the
 menu bar app and are signed before the watch stores or displays them.
 
-### Codex Hardware Button
+### Codex Hardware Buttons
 
-Inside the watch Codex app, an upper-right single click submits after the
-300 ms double-click window. A fast double click steers the running turn, or
-sends once when idle. Holding for 300 ms still controls Typeless.
+Inside the watch Codex app:
+
+- short A: previous page; short B: next page;
+- hold A for 300 ms: submit/queue the current Codex composer once;
+- hold B for 300 ms: push-to-talk, release to stop;
+- A+B: return to Launcher.
+
+Short presses, including repeated presses, only navigate. A hold does not also
+turn the page on release. The former two-second A screen-off shortcut is
+replaced by long-A submission; automatic display protection remains available.
 
 These meanings are global across pages and conversation states inside the
 watch Codex app, but do not apply in Launcher or another watch app. A+B Home
 uses a 90 ms arbitration guard; it and a screen-wake press take priority and
 never submit. The authenticated BLE
-input path is independent of voice readiness, so click submission remains
+input path is independent of voice readiness, so long-A submission remains
 available when Typeless or the audio route is unavailable.
 
 Swipe right once from the Codex status page to open **固定麦克风**. Turning its
@@ -184,9 +195,17 @@ When Pending triggers a chime event, the monitor plays the complete built-in
 startup sound at the global speaker volume. Setting volume to zero keeps
 Pending silent.
 
-## Assistant Runtime
+## Optional Assistant Runtime
 
-Assistant runs inside the same firmware process as Launcher and the other Mooncake applications. Opening Assistant starts the Xiaozhi services through `RuntimeSupervisor`; closing it stops the Agent, audio, network, and service bindings asynchronously, releases their owners, and returns to Launcher without rebooting.
+The current profile does not compile/install the standalone Assistant app or
+start its Brookesia/XiaoZhi service runtime. Its sources and pinned dependencies
+remain for an explicit `CONFIG_STOPWATCH_STANDALONE_ASSISTANT=y` build. The
+original assets partition and artifact filename remain unchanged.
+
+When enabled, Assistant runs inside the same firmware process as Launcher and
+the other Mooncake applications. Opening it starts Xiaozhi through
+`RuntimeSupervisor`; closing asynchronously releases its audio, network and
+service bindings before returning to Launcher.
 
 Runtime responsibilities are intentionally separated:
 
@@ -209,6 +228,21 @@ flashes do not create or require a firmware backup.
 ## Navigation
 
 The launcher and apps use the shared key manager. Long-pressing both side buttons triggers the `GoHome` event, which closes the current app and returns to the launcher. In Assistant, the same event starts a one-shot graceful shutdown; the UI remains responsive on `Closing` until the runtime reports `Stopped`.
+
+## Standby and on-demand sampling
+
+While the screen is on, the global display service holds the CPU at 240 MHz.
+Screen-off releases that lock so ESP-IDF can scale down to 80 MHz when idle;
+active work can still boost for BLE and audio. Wake reacquires the lock before
+restoring display hardware. Light sleep, deep sleep and Bluetooth modem sleep
+are not enabled by this change.
+
+IMU, FFT and environmental measurements run only while their own app is open
+and awake. Leaving the app or turning the screen off stops its sampling; being
+on Codex does not start those collectors. Codex voice may still use the shared
+microphone without running FFT analysis. Buttons, touch, BLE task reception,
+low-battery alerts and external-power wake remain active. Power savings have
+not yet been measured on hardware.
 
 ## Repository Structure
 
@@ -294,6 +328,11 @@ Build the isolated unified candidate and enforce its capacity gates:
 ```bash
 ./scripts/build_unified_candidate.sh --clean
 ```
+
+Use a clean configuration for the new Assistant/PM profile. Existing generated
+`sdkconfig.unified` values override defaults; an incremental build with the old
+file can retain disabled PM or enabled wake-word models. The clean entry point
+regenerates it from the tracked defaults.
 
 The release output is written to `build-unified/`. A normal root `idf.py build` now uses the same default single-application partition table, while the release script additionally enforces application/assets capacity gates and emits reproducible metrics.
 The active App regression gate is `0x700000`. It was reviewed on 2026-08-22

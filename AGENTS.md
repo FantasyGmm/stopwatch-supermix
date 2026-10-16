@@ -146,43 +146,45 @@ explicitly changes the decision.
   `managed_components/`, `components/`, and `third_party/` are disposable and
   should not be committed.
 
-## 5. Codex Upper-Right Button Contract
+## 5. Codex Hardware Button Contract
 
 - These semantics are global inside the watch Codex app only. They must not
   leak into Launcher, Assistant, Clock, or other apps.
-- Current gesture contract:
-  - one short click: submit after the 300 ms double-click window;
-  - two short clicks within the window: emit exactly one forced-steer action;
-  - hold for 300 ms: start push-to-talk voice;
+- Current gesture contract (supersedes the old right-click submit binding):
+  - A short click: previous available Codex app page;
+  - B short click: next available Codex app page;
+  - A hold for 300 ms: submit/queue current Codex composer once;
+  - B hold for 300 ms: start push-to-talk voice, release to stop;
   - A+B Home uses its separate 90 ms chord arbitration guard.
+- Short clicks navigate immediately on release, including successive clicks;
+  they never submit or force-steer. Agent submit/force-steer protocol support
+  remains for compatibility. A hold must not also navigate on release.
+- A-long no longer invokes the former two-second screen-off shortcut in Codex;
+  the global display-protection timer still handles automatic screen-off.
 - The old 90 ms voice threshold was wrong: an ordinary deliberate click can
   last about 226 ms and was misclassified as voice. Keep chord arbitration and
   voice-hold timing as separate constants and concepts.
 - The watch, not the Mac Agent, owns physical gesture classification because it
   sees button edges without BLE scheduling jitter. The Agent owns desktop
   meaning because it can inspect Codex state.
-- Single/double-click actions are available at any time in the Codex app. They
-  are not armed by a previous voice session and do not depend on Typeless,
-  BlackHole, or audio readiness.
-- A double click must never emit a single submit first. A second press that
-  turns into a hold cancels the pending click and becomes voice.
+- Page buttons work on the main page strip, not through a task-detail or Agent
+  overlay. Long-A submission is independent of a previous voice session,
+  Typeless, BlackHole, or audio readiness; the Mac's guarded composer policy
+  still applies.
 - Wake consumption, A+B Home, app close, disconnect, and global input
   suppression must clear stale gesture state.
 - Suppression while voice is active must produce exactly one voice cancel; it
   must not leave recording active after the gate resets.
-- Do not infer suppression only from the instantaneous A/B sample. Preserve and
-  consult the edge gate's suppression state so cross-release sequences cannot
-  leave a stale double-click latch.
-- An independent left-button press must not cancel an already completed right
-  single click. Only the actual A+B chord/suppression state has Home priority.
-- Consume the legacy right-button `GoNext` navigation inside the Codex app so a
-  click does not both navigate the carousel and submit. Do not change the
-  shared KeyManager behavior for other apps.
+- Do not infer suppression only from the instantaneous A/B sample. Both edge
+  gates preserve chord suppression until release. Reset both with the actual
+  pressed state on app open, disconnect and epoch change.
+- Consume legacy `GoPrevious`/`GoNext` inside Codex; the local edge gates own
+  short navigation and long actions. Do not change shared KeyManager behavior
+  for other apps. Touch swipes and hardware buttons use the same page-step helper.
 - Use wrap-safe unsigned elapsed-time arithmetic in gesture timing tests.
-- Host tests should cover ordinary 226 ms clicks, the 299/300 ms boundary,
-  single/double click, second-click-to-hold, A+B, independent A, wake, HAL
-  suppression, active-voice cancellation, cross-release, disconnect, and timer
-  wrap.
+- Do not add or run tests or builds unless the user explicitly requests them.
+  Existing legacy single/double-click fixtures describe the retired binding;
+  they do not establish acceptance of this new mapping.
 
 ### Pinned microphone mode
 
@@ -196,7 +198,7 @@ explicitly changes the decision.
 - The latch is session-only. Home/app close, BLE disconnect, Agent/credential
   epoch change, unusable voice link, controller error, or reboot clears it and
   stops/cancels capture exactly once.
-- While pinned, single/double right clicks still submit/steer, but a right hold
+- While pinned, short clicks still navigate and long A can submit; a B hold
   must not create a second voice session.
 
 ## 6. BLE Services, Protocol, and Security
@@ -456,6 +458,17 @@ explicitly changes the decision.
 
 ### Global display protection
 
+- The current profile uses ESP-IDF PM/DFS with an 80 MHz minimum and a 240 MHz
+  maximum. The existing global display service is the sole owner of the awake
+  CPU-frequency lock: acquire before display wake, release after screen-off.
+  Active BLE/audio work may still boost while the display is off. Do not replace
+  this with direct clock writes, light/deep sleep, or global audio shutdown.
+- IMU, FFT and ENV collection is on-demand: only its own open, awake utility app
+  may sample. Close/screen-off stops its sampling; wake resumes only the current
+  utility app. Codex voice may use the microphone but must not run FFT analysis.
+- Standalone Assistant defaults off and its app/runtime are excluded from that
+  build. Keep shared HAL/audio/Wi-Fi and Codex voice intact; Host page/normal Agent
+  telemetry are temporarily disabled but their protocol/code remain available.
 - Display protection is one global service, not a collection of per-app
   timers. Applications may publish keep-awake reasons or request an immediate
   screen-off; they must not each own brightness/protection policy.
