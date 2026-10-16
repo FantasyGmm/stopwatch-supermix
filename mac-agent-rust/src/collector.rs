@@ -74,6 +74,18 @@ impl Collector {
         pricing: Arc<PricingCatalog>,
         ccswitch_database: Option<PathBuf>,
     ) -> Result<Self> {
+        Self::with_ccswitch_usage_and_host_enabled(paths, pricing, ccswitch_database, true)
+    }
+
+    /// Creates a collector with an explicit host-telemetry policy. The normal
+    /// runtime disables host sampling while legacy direct callers keep the
+    /// original host-enabled behavior through `with_ccswitch_usage`.
+    pub fn with_ccswitch_usage_and_host_enabled(
+        paths: AgentPaths,
+        pricing: Arc<PricingCatalog>,
+        ccswitch_database: Option<PathBuf>,
+        host_enabled: bool,
+    ) -> Result<Self> {
         fs::create_dir_all(&paths.state)
             .with_context(|| format!("create agent state directory {}", paths.state.display()))?;
         let thread_names = Arc::new(std::sync::RwLock::new(HashMap::new()));
@@ -93,8 +105,11 @@ impl Collector {
         if let Some(database) = ccswitch_database.as_deref().filter(|path| path.exists()) {
             tracing::info!(path = %database.display(), "Daily usage source: CC Switch local session statistics; models.dev API-equivalent estimate");
         }
-        let telemetry = TelemetrySampler::with_ccswitch_usage(
-            paths.codex.clone(), Arc::clone(&pricing), ccswitch_database,
+        let telemetry = TelemetrySampler::with_ccswitch_usage_and_host_enabled(
+            paths.codex.clone(),
+            Arc::clone(&pricing),
+            ccswitch_database,
+            host_enabled,
         );
         Ok(Self {
             paths,

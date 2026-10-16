@@ -709,15 +709,8 @@ NSString *application_version() {
     [codexRows addObject:item([NSString stringWithFormat:L(@"Effort: %@", @"推理强度：%@"), string_or(codex, @"codex_effort")], nil, self, 202)];
     [codexRows addObject:item([NSString stringWithFormat:L(@"5H Remaining: %@", @"5 小时额度剩余：%@"), number_or(codex, @"codex_5h_left_pct", @"%")], nil, self, 203)];
     [codexRows addObject:item([NSString stringWithFormat:L(@"7D Remaining: %@", @"7 天额度剩余：%@"), number_or(codex, @"codex_week_left_pct", @"%")], nil, self, 204)];
-    [codexRows addObject:[NSMenuItem separatorItem]];
-    NSArray *alerts = [codex[@"codex_alerts"] isKindOfClass:[NSArray class]] ? codex[@"codex_alerts"] : @[];
-    if (!alerts.count) [codexRows addObject:item(L(@"No task alerts", @"没有任务提醒"), nil, self, 205)];
-    for (NSDictionary *alert in alerts) {
-        if (![alert isKindOfClass:[NSDictionary class]]) continue;
-        NSString *row = [NSString stringWithFormat:@"%@ · %@ · %@ · %@",
-            string_or(alert, @"project"), localized_task_state(string_or(alert, @"state", @"unknown")), string_or(alert, @"title"), string_or(alert, @"time")];
-        [codexRows addObject:item(row, nil, self, 205)];
-    }
+    [codexRows addObject:item([NSString stringWithFormat:L(@"Tasks: %@ pending · %@ running · %@ completed", @"任务：%@ 待处理 · %@ 运行中 · %@ 已完成"),
+        number_or(codex, @"codex_alert_pending"), number_or(codex, @"codex_alert_running"), number_or(codex, @"codex_alert_completed")], nil, self, 205)];
     replace_menu_items(self.codexMenu, codexRows);
 
     NSMutableArray<NSMenuItem *> *traeRows = [NSMutableArray array];

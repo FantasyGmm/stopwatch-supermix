@@ -174,8 +174,7 @@ fn failed_snapshot() -> StatusSnapshot {
         trae: json!({"trae_online":false,"trae_process_state":"unknown","trae_model":"--","trae_effort":"--",
             "trae_revision":0,"trae_pending_count":0,"trae_running_count":0,"trae_completed_count":0,"trae_tasks":[]}),
         telemetry: json!({"telemetry_v":1,"usage":{"s":"error","q":"error","at":0,"qa":0,
-            "h":null,"w":null,"hr":null,"wr":null,"t":null,"c":null,"cs":"unavailable","day":""},
-            "host":{"s":"error","at":0,"cpu":null,"mem":null,"disk":null,"up":null,"down":null}}),
+            "h":null,"w":null,"hr":null,"wr":null,"t":null,"c":null,"cs":"unavailable","day":""}}),
         ..StatusSnapshot::default()
     }
 }
@@ -335,8 +334,11 @@ pub fn start(
             while !collector_stop.load(Ordering::Acquire) {
                 let started = Instant::now();
                 if collector.is_none() {
-                    match Collector::with_ccswitch_usage(
-                        worker_paths.clone(), pricing.clone(), ccswitch_database.clone(),
+                    match Collector::with_ccswitch_usage_and_host_enabled(
+                        worker_paths.clone(),
+                        pricing.clone(),
+                        ccswitch_database.clone(),
+                        false,
                     ) {
                         Ok(c) => {
                             collector = Some(

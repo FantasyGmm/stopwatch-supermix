@@ -1,8 +1,8 @@
 //! Bounded, read-only telemetry collectors for Codex usage and the Mac host.
 //!
-//! Collection runs on three persistent workers. A slow quota request therefore
-//! cannot delay task reduction or notification delivery, and a stuck sampler
-//! never causes another worker to be spawned on the next status poll.
+//! Collection is split across persistent workers. A slow quota request cannot
+//! delay task reduction or notification delivery, and a stuck sampler never
+//! causes another worker to be spawned on the next status poll.
 
 use chrono::{DateTime, Local, NaiveDate, NaiveDateTime, Timelike};
 use serde_json::{Map, Value, json};
@@ -121,6 +121,7 @@ pub struct TelemetrySampler {
     state: Arc<RwLock<CacheState>>,
     stop: Arc<AtomicBool>,
     workers: Mutex<Vec<JoinHandle<()>>>,
+    host_enabled: bool,
 }
 
 impl TelemetrySampler {
@@ -133,12 +134,26 @@ impl TelemetrySampler {
         pricing: Arc<PricingCatalog>,
         ccswitch_database: Option<PathBuf>,
     ) -> Self {
+        Self::with_ccswitch_usage_and_host_enabled(
+            codex_root,
+            pricing,
+            ccswitch_database,
+            true,
+        )
+    }
+
+    pub(crate) fn with_ccswitch_usage_and_host_enabled(
+        codex_root: PathBuf,
+        pricing: Arc<PricingCatalog>,
+        ccswitch_database: Option<PathBuf>,
+        host_enabled: bool,
+    ) -> Self {
         let state = Arc::new(RwLock::new(CacheState::default()));
         let stop = Arc::new(AtomicBool::new(false));
         let sessions = codex_root.join("sessions");
         let quota_sessions = sessions.clone();
         let auth = codex_root.join("auth.json");
-        let mut workers = Vec::with_capacity(3);
+        let mut workers = Vec::with_capacity(if host_enabled { 3 } else { 2 });
 
         workers.push(spawn_worker(
             Arc::clone(&state),
@@ -154,17 +169,20 @@ impl TelemetrySampler {
             |state| &mut state.quota,
             move || collect_quota(&quota_sessions, &auth),
         ));
-        workers.push(spawn_worker(
-            Arc::clone(&state),
-            Arc::clone(&stop),
-            HOST_INTERVAL,
-            |state| &mut state.host,
-            collect_host,
-        ));
+        if host_enabled {
+            workers.push(spawn_worker(
+                Arc::clone(&state),
+                Arc::clone(&stop),
+                HOST_INTERVAL,
+                |state| &mut state.host,
+                collect_host,
+            ));
+        }
         Self {
             state,
             stop,
             workers: Mutex::new(workers),
+            host_enabled,
         }
     }
 
@@ -228,7 +246,6 @@ impl TelemetrySampler {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let usage = cache_view(&state.usage, USAGE_TTL);
         let quota = cache_view(&state.quota, QUOTA_TTL);
-        let host = cache_view(&state.host, HOST_TTL);
         let claude = state
             .claude
             .as_ref()
@@ -240,7 +257,6 @@ impl TelemetrySampler {
 
         let usage_sample = usage.value.as_ref();
         let quota_sample = quota.value.as_ref();
-        let host_sample = host.value.as_ref();
         let local_day = Local::now().date_naive().format("%Y-%m-%d").to_string();
         let usage_fresh = usage.age.is_some_and(|age| age <= USAGE_TTL)
             && usage_sample.is_some_and(|sample| sample.day == local_day);
@@ -249,8 +265,6 @@ impl TelemetrySampler {
                 sample.sampled_at <= now
                     && now.saturating_sub(sample.sampled_at) <= QUOTA_TTL.as_secs() as i64
             });
-        let host_fresh = host.age.is_some_and(|age| age <= HOST_TTL);
-
         let usage_status = if usage_fresh {
             usage.status
         } else {
@@ -261,15 +275,8 @@ impl TelemetrySampler {
         } else {
             status_after_expiry(&quota)
         };
-        let host_status = if host_fresh {
-            host.status
-        } else {
-            status_after_expiry(&host)
-        };
-
         let usage_usable = usage_fresh && matches!(usage_status.as_str(), "ok" | "partial");
         let quota_usable = quota_fresh && matches!(quota_status.as_str(), "ok" | "partial");
-        let host_usable = host_fresh && matches!(host_status.as_str(), "ok" | "partial");
         let (tokens, cost, cost_status, day) = match (usage_usable, usage_sample) {
             (true, Some(sample)) => (
                 sample.tokens,
@@ -351,28 +358,40 @@ impl TelemetrySampler {
             }
         }
 
-        let mut host_object = Map::new();
-        host_object.insert("s".into(), json!(wire_status(&host_status)));
-        host_object.insert(
-            "at".into(),
-            json!(host_sample.map_or(now, |s| s.sampled_at)),
-        );
-        for (key, value) in [
-            ("cpu", host_sample.and_then(|s| s.cpu)),
-            ("mem", host_sample.and_then(|s| s.memory)),
-            ("disk", host_sample.and_then(|s| s.disk)),
-            ("up", host_sample.and_then(|s| s.up)),
-            ("down", host_sample.and_then(|s| s.down)),
-        ] {
+        let host_object = self.host_enabled.then(|| {
+            let host = cache_view(&state.host, HOST_TTL);
+            let host_sample = host.value.as_ref();
+            let host_fresh = host.age.is_some_and(|age| age <= HOST_TTL);
+            let host_status = if host_fresh {
+                host.status
+            } else {
+                status_after_expiry(&host)
+            };
+            let host_usable = host_fresh && matches!(host_status.as_str(), "ok" | "partial");
+            let mut host_object = Map::new();
+            host_object.insert("s".into(), json!(wire_status(&host_status)));
             host_object.insert(
-                key.into(),
-                if host_usable {
-                    nullable_number(value)
-                } else {
-                    Value::Null
-                },
+                "at".into(),
+                json!(host_sample.map_or(now, |s| s.sampled_at)),
             );
-        }
+            for (key, value) in [
+                ("cpu", host_sample.and_then(|s| s.cpu)),
+                ("mem", host_sample.and_then(|s| s.memory)),
+                ("disk", host_sample.and_then(|s| s.disk)),
+                ("up", host_sample.and_then(|s| s.up)),
+                ("down", host_sample.and_then(|s| s.down)),
+            ] {
+                host_object.insert(
+                    key.into(),
+                    if host_usable {
+                        nullable_number(value)
+                    } else {
+                        Value::Null
+                    },
+                );
+            }
+            Value::Object(host_object)
+        });
 
         let mut usage_object = usage_object;
         let providers: Vec<Value> = [claude, opencode].into_iter().flatten().collect();
@@ -380,11 +399,13 @@ impl TelemetrySampler {
             usage_object.insert("p".into(), Value::Array(providers));
         }
 
-        json!({
-            "telemetry_v": 1,
-            "usage": Value::Object(usage_object),
-            "host": Value::Object(host_object),
-        })
+        let mut snapshot = Map::new();
+        snapshot.insert("telemetry_v".into(), json!(1));
+        snapshot.insert("usage".into(), Value::Object(usage_object));
+        if let Some(host) = host_object {
+            snapshot.insert("host".into(), host);
+        }
+        Value::Object(snapshot)
     }
 
     pub fn quota_plan(&self) -> Option<String> {
@@ -1587,6 +1608,7 @@ mod tests {
             state: Arc::new(RwLock::new(state)),
             stop: Arc::new(AtomicBool::new(true)),
             workers: Mutex::new(Vec::new()),
+            host_enabled: true,
         }
     }
 
@@ -2054,6 +2076,7 @@ mod tests {
             })),
             stop: Arc::new(AtomicBool::new(true)),
             workers: Mutex::new(Vec::new()),
+            host_enabled: true,
         };
         let value = sample.snapshot();
         let provider = value["usage"]["p"][0].as_object().unwrap();
@@ -2068,6 +2091,7 @@ mod tests {
             state: Arc::new(RwLock::new(CacheState::default())),
             stop: Arc::new(AtomicBool::new(true)),
             workers: Mutex::new(Vec::new()),
+            host_enabled: true,
         };
         assert!(default_sampler.snapshot()["usage"].get("p").is_none());
     }
@@ -2117,6 +2141,7 @@ mod tests {
             state,
             stop,
             workers: Mutex::new(vec![worker]),
+            host_enabled: true,
         };
 
         let before = Instant::now();
@@ -2210,6 +2235,7 @@ mod tests {
             state: Arc::new(RwLock::new(CacheState::default())),
             stop: Arc::new(AtomicBool::new(true)),
             workers: Mutex::new(Vec::new()),
+            host_enabled: true,
         };
         let value = sample.snapshot();
         assert_eq!(value["telemetry_v"], 1);

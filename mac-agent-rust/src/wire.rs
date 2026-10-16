@@ -795,8 +795,6 @@ fn telemetry_status(source: &Value, codec: StatusCodec) -> Result<Value> {
     let fallback_epoch = current_epoch().clamp(MIN_TELEMETRY_EPOCH, MAX_TELEMETRY_EPOCH);
     let usage_at = usage.and_then(|o| o.get("at")).and_then(exact_integer)
         .filter(|v| (MIN_TELEMETRY_EPOCH..=MAX_TELEMETRY_EPOCH).contains(v)).unwrap_or(fallback_epoch);
-    let host_at = host.and_then(|o| o.get("at")).and_then(exact_integer)
-        .filter(|v| (MIN_TELEMETRY_EPOCH..=MAX_TELEMETRY_EPOCH).contains(v)).unwrap_or(usage_at);
     let mut usage_out = Map::new();
     usage_out.insert("s".into(), Value::String(telemetry_state(usage.and_then(|o| o.get("s")))));
     usage_out.insert("q".into(), Value::String(telemetry_state(usage.and_then(|o| o.get("q")))));
@@ -843,17 +841,21 @@ fn telemetry_status(source: &Value, codec: StatusCodec) -> Result<Value> {
         }
     }
 
-    let mut host_out = Map::new();
-    host_out.insert("s".into(), Value::String(telemetry_state(host.and_then(|o| o.get("s")))));
-    host_out.insert("at".into(), Value::from(host_at));
-    for (key, maximum) in [("cpu", 100.0), ("mem", 100.0), ("disk", 100.0), ("up", 1_000_000_000.0), ("down", 1_000_000_000.0)] {
-        host_out.insert(key.into(), bounded_number(host.and_then(|o| o.get(key)), maximum));
-    }
     let mut result = Map::new();
     result.insert("telemetry_v".into(), Value::from(1));
     result.insert("usage".into(), Value::Object(usage_out));
-    result.insert("host".into(), Value::Object(host_out));
-    // Detail must never prevent host, quotas, or task status from being sent.
+    if let Some(host) = host {
+        let host_at = host.get("at").and_then(exact_integer)
+            .filter(|v| (MIN_TELEMETRY_EPOCH..=MAX_TELEMETRY_EPOCH).contains(v)).unwrap_or(usage_at);
+        let mut host_out = Map::new();
+        host_out.insert("s".into(), Value::String(telemetry_state(host.get("s"))));
+        host_out.insert("at".into(), Value::from(host_at));
+        for (key, maximum) in [("cpu", 100.0), ("mem", 100.0), ("disk", 100.0), ("up", 1_000_000_000.0), ("down", 1_000_000_000.0)] {
+            host_out.insert(key.into(), bounded_number(host.get(key), maximum));
+        }
+        result.insert("host".into(), Value::Object(host_out));
+    }
+    // Detail must not crowd out quota data or an explicitly supplied host projection.
     // Account for the selected wire encoding, including its string overhead.
     while compact_len(&result, codec)? > MAX_STATUS_BYTES {
         let Some(usage) = result.get_mut("usage").and_then(Value::as_object_mut) else { break };

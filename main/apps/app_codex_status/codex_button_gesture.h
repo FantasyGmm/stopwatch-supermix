@@ -6,6 +6,8 @@ enum class CodexButtonAction : uint8_t {
     None,
     Submit,
     ForceSteer,
+    PreviousPage,
+    NextPage,
 };
 
 class CodexButtonGesture {

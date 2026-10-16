@@ -172,7 +172,6 @@ private:
     uint32_t _last_network_ms    = 0;
     uint32_t _ble_wait_started_ms = 0;
     uint32_t _last_status_payload_ms = 0;
-    uint32_t _screen_off_left_press_started_ms = 0;
     uint32_t _agent_reset_hold_started_ms = 0;
     uint32_t _agent_panel_notice_until_ms = 0;
     std::string _latest_global_model;
@@ -183,8 +182,8 @@ private:
     bool _ws_connected           = false;
     bool _screen_off             = false;
     int _current_page            = 1;
-    std::array<int, 5> _active_page_order{{0, 1, 2, 3, -1}};
-    size_t _active_page_count = 4;
+    std::array<int, 5> _active_page_order{{0, 1, 2, -1, -1}};
+    size_t _active_page_count = 3;
     bool _agent_inventory_received = false;
     bool _inventory_codex_available = true;
     bool _inventory_trae_available = false;
@@ -373,10 +372,10 @@ private:
     static void task_deck_animation_cb(void* target, int32_t y);
     static void task_deck_animation_completed_cb(lv_anim_t* animation);
     static void pinned_microphone_touch_event_cb(lv_event_t* event);
+    void step_page(int direction);
     void set_page(int page, bool animate);
     void update_page_indicator();
     void sync_display_protection_presentation();
-    void update_screen_off_control(uint32_t now_ms);
     static void page_animation_cb(void* target, int32_t x);
     static void pet_timer_cb(lv_timer_t* timer);
     void handle_action(CodexButtonAction action, uint32_t now_ms) override;

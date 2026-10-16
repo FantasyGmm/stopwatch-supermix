@@ -211,10 +211,10 @@ bool VoiceButtonEdgeGate::is_active() const
     return _state == State::Active;
 }
 
-void VoiceButtonDispatcher::reset(bool right_pressed)
+void VoiceButtonDispatcher::reset(bool right_pressed, bool left_pressed)
 {
     _gate.reset(right_pressed);
-    _gesture.reset();
+    _left_gate.reset(left_pressed);
     _press_pending = false;
     _press_delivered = false;
 }
@@ -229,21 +229,30 @@ VoiceButtonDispatchDecision VoiceButtonDispatcher::dispatch(
     CodexButtonActionSink* action_sink,
     bool input_suppressed)
 {
-    const bool cancel_active_voice = input_suppressed && _gate.is_active();
+    const bool cancel_active_voice =
+        (input_suppressed || woke_screen) && _gate.is_active();
     if (input_suppressed) {
         _gate.reset(right_pressed);
+        _left_gate.reset(left_pressed);
     }
     VoiceButtonAction action = _gate.update(
         left_pressed, right_pressed, woke_screen, go_home, now_ms);
     if (cancel_active_voice && action == VoiceButtonAction::None) {
         action = VoiceButtonAction::CancelVoice;
     }
-    const CodexButtonAction codex_action = _gesture.update(
-        action == VoiceButtonAction::ShortClick,
-        right_pressed,
-        action == VoiceButtonAction::Press,
-        now_ms,
-        input_suppressed || _gate.is_suppressed() || woke_screen || go_home);
+    const VoiceButtonAction left_action = _left_gate.update(
+        right_pressed, left_pressed, woke_screen, go_home, now_ms);
+    CodexButtonAction codex_action = CodexButtonAction::None;
+    if (!input_suppressed && !woke_screen && !go_home &&
+        !_gate.is_suppressed() && !_left_gate.is_suppressed()) {
+        if (action == VoiceButtonAction::ShortClick) {
+            codex_action = CodexButtonAction::NextPage;
+        } else if (left_action == VoiceButtonAction::ShortClick) {
+            codex_action = CodexButtonAction::PreviousPage;
+        } else if (left_action == VoiceButtonAction::Press) {
+            codex_action = CodexButtonAction::Submit;
+        }
+    }
     if (action_sink != nullptr && codex_action != CodexButtonAction::None) {
         action_sink->handle_action(codex_action, now_ms);
     }

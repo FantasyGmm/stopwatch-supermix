@@ -64,9 +64,10 @@ constexpr int kDefaultServerPort         = 8765;
 constexpr const char* kDefaultBleName    = "StopWatch-Codex";
 constexpr uint32_t kWifiFallbackDelayMs  = 15000;
 constexpr uint32_t kStatusStaleMs        = 10000;
-constexpr uint32_t kScreenOffHoldMs      = 2000;
 constexpr int kPageWidth                 = 466;
 constexpr int kMaxPageCount              = 5;
+// Retain the Host implementation and logical ID for a later profile.
+constexpr bool kHostPageEnabled          = false;
 constexpr int kAgentPanelHiddenY         = agent_panel_ui::kPanelHiddenY;
 constexpr int kAgentPanelVisibleY        = 0;
 constexpr int kTaskSwipeThreshold        = 36;
@@ -448,6 +449,17 @@ void AppCodexStatus::handle_action(
     CodexButtonAction action,
     uint32_t now_ms)
 {
+    if (action == CodexButtonAction::PreviousPage ||
+        action == CodexButtonAction::NextPage) {
+        if (!_screen_off && !_suppress_task_navigation) {
+            LvglLockGuard lock;
+            if (!_agent_panel_model.snapshot().visible &&
+                !_agent_panel_model.owns_touch() && !_task_deck_drag_active) {
+                step_page(action == CodexButtonAction::NextPage ? 1 : -1);
+            }
+        }
+        return;
+    }
     if (_input_action_controller) {
         (void)_input_action_controller->enqueue(action, now_ms);
     }
@@ -468,7 +480,6 @@ void AppCodexStatus::onOpen()
     _last_battery_ms = 0;
     _last_network_ms = 0;
     _last_status_payload_ms = 0;
-    _screen_off_left_press_started_ms = 0;
     _screen_off =
         GetGlobalDisplayProtectionService().snapshot().state ==
         DisplayProtectionState::ScreenOff;
@@ -493,7 +504,8 @@ void AppCodexStatus::onOpen()
     if (_input_action_controller) {
         _input_action_controller->disconnect();
     }
-    _voice_button_dispatcher.reset(GetHAL().btnB.isPressed());
+    _voice_button_dispatcher.reset(
+        GetHAL().btnB.isPressed(), GetHAL().btnA.isPressed());
     _production_voice_ready = false;
     {
         std::lock_guard<std::mutex> controller_lock(_task_controller_mutex);
@@ -532,8 +544,8 @@ void AppCodexStatus::onOpen()
         _pending_agent_decision = {};
     }
     _current_page = 1;
-    _active_page_order = {{0, 1, 2, 3, -1}};
-    _active_page_count = 4;
+    _active_page_order = {{0, 1, 2, -1, -1}};
+    _active_page_count = 3;
     _agent_inventory_received = false;
     _inventory_codex_available = true;
     _inventory_trae_available = false;
@@ -655,7 +667,6 @@ void AppCodexStatus::onRunning()
 {
     const uint32_t now = GetHAL().millis();
     GetHAL().updateButtonStates();
-    update_screen_off_control(now);
     const DisplayProtectionState display_state =
         GetGlobalDisplayProtectionService().snapshot().state;
     const bool woke_screen =
@@ -672,7 +683,9 @@ void AppCodexStatus::onRunning()
     if (_key_manager) {
         key_event = _key_manager->update(false);
     }
-    if (key_event == input::KeyEvent::GoNext) {
+    // Codex-local edge gates own both buttons; the shared manager only owns Home.
+    if (key_event == input::KeyEvent::GoNext ||
+        key_event == input::KeyEvent::GoPrevious) {
         key_event = input::KeyEvent::None;
     }
 
@@ -704,7 +717,7 @@ void AppCodexStatus::onRunning()
     if (screen_off_voice_action ==
         CodexScreenOffVoiceAction::WakeDisplay) {
         GetGlobalDisplayProtectionService().wakeFromDeferredButton();
-        _voice_button_dispatcher.reset(right_pressed);
+        _voice_button_dispatcher.reset(right_pressed, left_pressed);
         _suppress_task_navigation = true;
         if (_input_action_controller) {
             _input_action_controller->clear_pending();
@@ -719,7 +732,7 @@ void AppCodexStatus::onRunning()
         key_event == input::KeyEvent::GoHome,
         now,
         voice_sink,
-        this,
+        _screen_off ? nullptr : this,
         global_input_suppressed);
     if (voice_decision == VoiceButtonDispatchDecision::Close) {
         if (_voice_input) {
@@ -728,7 +741,7 @@ void AppCodexStatus::onRunning()
         if (_input_action_controller) {
             _input_action_controller->disconnect();
         }
-        _voice_button_dispatcher.reset(right_pressed);
+        _voice_button_dispatcher.reset(right_pressed, left_pressed);
         close();
         return;
     }
@@ -794,12 +807,7 @@ void AppCodexStatus::onRunning()
                 }
             }
         }
-        bool alert_changed = false;
-        if (_current_page == 1 && key_event == input::KeyEvent::GoPrevious) {
-            alert_changed = _alert_carousel.step(-1, now);
-        } else {
-            alert_changed = _alert_carousel.update(now);
-        }
+        const bool alert_changed = _alert_carousel.update(now);
         if (alert_changed && _current_page == 1) {
             render_alert();
         }
@@ -829,7 +837,7 @@ void AppCodexStatus::onRunning()
                         _pet_transfer->on_disconnect(_pet_connection_epoch);
                     }
                 },
-                [this, connection_epoch, right_pressed, now]() {
+                [this, connection_epoch, right_pressed, left_pressed, now]() {
                     _pet_connection_epoch = connection_epoch;
                     _pet_subscription_generation = 0;
                     _production_voice_connection_epoch = connection_epoch;
@@ -837,7 +845,7 @@ void AppCodexStatus::onRunning()
                     if (_input_action_controller) {
                         _input_action_controller->disconnect();
                     }
-                    _voice_button_dispatcher.reset(right_pressed);
+                    _voice_button_dispatcher.reset(right_pressed, left_pressed);
                     if (_voice_input) {
                         _pinned_microphone_controller.stop_for_safety(
                             *_voice_input, now);
@@ -960,7 +968,7 @@ void AppCodexStatus::onRunning()
         } else if (!ble_connected && _ble_was_connected) {
             _production_voice_ready = false;
             _production_voice_capabilities = 0;
-            _voice_button_dispatcher.reset(right_pressed);
+            _voice_button_dispatcher.reset(right_pressed, left_pressed);
             _runtime_session.handle_disconnect(
                 _pinned_microphone_controller,
                 _task_controller_mutex,
@@ -1277,7 +1285,9 @@ void AppCodexStatus::create_view()
         _pinned_microphone_page, lv_color_hex(kInstrumentBlack), 0);
 
     _usage_page_root = make_status_page_root(_page_strip, 2 * kPageWidth);
-    _host_page_root = make_status_page_root(_page_strip, 3 * kPageWidth);
+    if (kHostPageEnabled) {
+        _host_page_root = make_status_page_root(_page_strip, 3 * kPageWidth);
+    }
     _trae_page_root = make_status_page_root(_page_strip, 4 * kPageWidth);
     _trae_status_page.init(_trae_page_root);
 
@@ -1503,7 +1513,9 @@ void AppCodexStatus::create_view()
     );
 
     _usage_status_page.init(_usage_page_root);
-    _host_status_page.init(_host_page_root);
+    if (kHostPageEnabled) {
+        _host_status_page.init(_host_page_root);
+    }
     render_telemetry_pages();
     layout_status_pages();
 
@@ -2441,7 +2453,8 @@ void AppCodexStatus::render_alert()
 
 void AppCodexStatus::render_telemetry_pages()
 {
-    if (_current_page != 2 && _current_page != 3) {
+    if (_screen_off || (_current_page != 2 &&
+        !(kHostPageEnabled && _current_page == 3))) {
         return;
     }
     const int64_t now_ms = current_unix_milliseconds();
@@ -2487,7 +2500,9 @@ void AppCodexStatus::layout_status_pages()
         _active_page_order[count++] = 4;
     }
     _active_page_order[count++] = 2;
-    _active_page_order[count++] = 3;
+    if (kHostPageEnabled) {
+        _active_page_order[count++] = 3;
+    }
     _active_page_count = count;
 
     if (_page_strip != nullptr) {
@@ -5289,15 +5304,10 @@ void AppCodexStatus::update_page_swipe(uint32_t now_ms)
             _page_swipe.release(now_ms, _current_page);
         if (result == StatusPageSwipeResult::PreviousPage ||
             result == StatusPageSwipeResult::NextPage) {
-            const int slot = page_slot_for_logical(_current_page);
             const int direction = result == StatusPageSwipeResult::NextPage
                 ? 1
                 : -1;
-            const int next_slot = slot + direction;
-            if (next_slot >= 0 &&
-                next_slot < static_cast<int>(_active_page_count)) {
-                set_page(_active_page_order[static_cast<size_t>(next_slot)], true);
-            }
+            step_page(direction);
         } else if (result == StatusPageSwipeResult::TraeTasksForward) {
             if (_trae_task_carousel.scroll_forward()) {
                 render_trae_status_page(current_status_channels());
@@ -5314,6 +5324,16 @@ void AppCodexStatus::update_page_swipe(uint32_t now_ms)
         }
     }
     _last_page_touch_state = state;
+}
+
+void AppCodexStatus::step_page(int direction)
+{
+    const int slot = page_slot_for_logical(_current_page);
+    const int next_slot = slot + direction;
+    if (slot >= 0 && next_slot >= 0 &&
+        next_slot < static_cast<int>(_active_page_count)) {
+        set_page(_active_page_order[static_cast<size_t>(next_slot)], true);
+    }
 }
 
 void AppCodexStatus::set_page(int page, bool animate)
@@ -5444,7 +5464,6 @@ void AppCodexStatus::sync_display_protection_presentation()
     _screen_off_voice_policy.reset();
     if (woke_screen) {
         _suppress_task_navigation = true;
-        _screen_off_left_press_started_ms = 0;
     }
     _page_swipe.cancel();
     cancel_task_focus_touch();
@@ -5457,42 +5476,6 @@ void AppCodexStatus::sync_display_protection_presentation()
         } else {
             lv_timer_resume(_pet_timer);
         }
-    }
-}
-
-void AppCodexStatus::update_screen_off_control(uint32_t now_ms)
-{
-    const bool left_pressed = GetHAL().btnA.isPressed();
-    const bool right_pressed = GetHAL().btnB.isPressed();
-
-    if (!left_pressed && !right_pressed) {
-        _screen_off_left_press_started_ms = 0;
-        return;
-    }
-
-    if (_suppress_task_navigation) {
-        return;
-    }
-
-    if (!left_pressed) {
-        _screen_off_left_press_started_ms = 0;
-        return;
-    }
-
-    if (right_pressed) {
-        _screen_off_left_press_started_ms = 0;
-        return;
-    }
-
-    if (_screen_off_left_press_started_ms == 0) {
-        _screen_off_left_press_started_ms = now_ms;
-        return;
-    }
-
-    if (now_ms - _screen_off_left_press_started_ms >= kScreenOffHoldMs) {
-        GetGlobalDisplayProtectionService().screenOffNow();
-        _suppress_task_navigation = true;
-        _screen_off_left_press_started_ms = 0;
     }
 }
 

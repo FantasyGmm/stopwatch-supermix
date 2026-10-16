@@ -141,7 +141,7 @@ enum class VoiceButtonDispatchDecision : uint8_t {
 
 class VoiceButtonDispatcher {
 public:
-    void reset(bool right_pressed);
+    void reset(bool right_pressed, bool left_pressed = false);
     VoiceButtonDispatchDecision dispatch(
         bool left_pressed,
         bool right_pressed,
@@ -154,7 +154,8 @@ public:
 
 private:
     VoiceButtonEdgeGate _gate;
-    CodexButtonGesture _gesture;
+    // Reuse the same chord/wake suppression for A; its hold submits, not voice.
+    VoiceButtonEdgeGate _left_gate;
     bool _press_pending = false;
     bool _press_delivered = false;
 };
